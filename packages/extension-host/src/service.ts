@@ -27,6 +27,7 @@ import type {
   ExecutionArtifactRef,
 } from "@vibestudio/shared/execution/identity";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import type { EvalAuthorityDelegation } from "@vibestudio/shared/authorityManifest";
 import {
   parseWorkspaceConfigContentWithId,
   resolveDeclaredExtensions,
@@ -116,6 +117,7 @@ interface BuildSystemLike {
   getExecutionArtifact(executionDigest: string): {
     ref: ExecutionArtifactRef;
     requested: readonly CapabilityScope[];
+    delegations: readonly EvalAuthorityDelegation[];
     entries: ArtifactBundleEntry[];
     entryPath(artifactPath: string): string;
   } | null;
@@ -844,7 +846,13 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   private activeProviderContracts(
     entry: RegistryEntry,
-    operation: "invoke" | "invokeProvider" | "invokeProviderStream" | "invokeStream" | "ready"
+    operation:
+      | "activate"
+      | "invoke"
+      | "invokeProvider"
+      | "invokeProviderStream"
+      | "invokeStream"
+      | "ready"
   ): ExtensionProviderContracts {
     const build = entry.activeBundleKey
       ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
@@ -871,6 +879,16 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
           "EPROTO"
         );
       }
+    }
+    for (const provider of this.deps.providerSlots) {
+      if (this.deps.resolveProviderExtensionName(provider) !== entry.name) continue;
+      if (details.providerContracts[provider]) continue;
+      throw new ServiceError(
+        "extensions",
+        operation,
+        `Extension ${entry.name} is selected for providers.${provider} but its active build does not declare that provider contract`,
+        "EPROTO"
+      );
     }
     return details.providerContracts;
   }
@@ -993,6 +1011,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       repoPath: entry.source.repo,
       executionDigest: entry.activeExecutionDigest,
       requested: execution.requested,
+      delegations: execution.delegations,
     };
   }
 
@@ -1679,6 +1698,10 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     }
     const primary = execution.entries.find((artifact) => artifact.role === "primary");
     if (!primary) throw new Error(`Extension execution artifact has no primary entry: ${name}`);
+    // Provider compatibility is an input invariant, not a child-process health
+    // signal. Reject stale approved builds before starting a process so a
+    // deterministic protocol mismatch cannot enter the crash-restart loop.
+    this.activeProviderContracts(entry, "activate");
     const runtimeNodeModulesDir = this.activeRuntimeNodeModulesDir(entry);
     const token = this.deps.tokenManager.ensureToken(name, "extension");
     this.registry.patch(name, { status: "building", lastError: null });

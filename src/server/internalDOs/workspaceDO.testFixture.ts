@@ -177,6 +177,16 @@ export class WorkspaceDOTestable extends WorkspaceDO {
     );
     sql.exec(`CREATE INDEX IF NOT EXISTS idx_context_edges_child ON context_edges(context_id)`);
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS context_cleanups (
+        context_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_error TEXT,
+        durable_objects TEXT NOT NULL DEFAULT '[]'
+      )
+    `);
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS heartbeat_registry (
         name TEXT NOT NULL,
         source TEXT NOT NULL,

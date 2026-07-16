@@ -36,8 +36,14 @@ function GrantCard({
   revoking: boolean;
   onRevoke(): void;
 }) {
+  const revokeLabel = `Revoke ${grant.capability ?? grant.resource ?? grant.callerLabel}`;
   return (
-    <Card size="2">
+    <Card
+      size="2"
+      data-permission-kind={grant.kind}
+      data-permission-capability={grant.capability}
+      data-permission-resource={grant.resource}
+    >
       <Flex justify="between" align="start" gap="3" wrap="wrap">
         <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
           <Flex align="center" gap="2" wrap="wrap">
@@ -66,7 +72,13 @@ function GrantCard({
             Granted {dateLabel(grant.grantedAt)}
           </Text>
         </Flex>
-        <Button color="red" variant="soft" disabled={revoking} onClick={onRevoke}>
+        <Button
+          color="red"
+          variant="soft"
+          disabled={revoking}
+          aria-label={revokeLabel}
+          onClick={onRevoke}
+        >
           {revoking ? <Spinner size="1" /> : <TrashIcon />} {revoking ? "Revoking…" : "Revoke"}
         </Button>
       </Flex>
@@ -126,8 +138,8 @@ function PermissionsPage() {
     >
       <Section>
         <Text size="2" color="gray">
-          “Allow once” decisions do not appear here. Revoking a saved permission makes the app or
-          agent ask again the next time it needs that access.
+          “Allow once” decisions do not appear here. Revoking a saved permission fails closed in
+          work already using it; a later run can ask again when it needs that access.
         </Text>
       </Section>
       {error ? (

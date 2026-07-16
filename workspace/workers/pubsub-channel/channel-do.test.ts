@@ -424,7 +424,8 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, agentId, "do", undefined, "alice", false);
     patchDirectAuthorization(instance, (authorization) => {
       authorization.context.entity = entity;
-      authorization.context.code = code;
+      authorization.context.authorizingOrigin = { kind: "code", principal: code };
+      authorization.context.codeAuthority.executor = { principal: code, requested: [] };
       authorization.context.agentBinding = {
         entity,
         contextId: "ctx-system-alice",
@@ -443,7 +444,9 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, agentId, "do", undefined, "alice", false);
     patchDirectAuthorization(instance, (authorization) => {
       authorization.context.entity = entity;
-      authorization.context.code = `code:test@${"f".repeat(64)}`;
+      const alteredCode = `code:test@${"f".repeat(64)}` as const;
+      authorization.context.authorizingOrigin = { kind: "code", principal: alteredCode };
+      authorization.context.codeAuthority.executor = { principal: alteredCode, requested: [] };
       authorization.context.agentBinding = {
         entity,
         contextId: "ctx-system-alice",

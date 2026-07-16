@@ -985,6 +985,9 @@ export abstract class DurableObjectBase {
     ) {
       return `${method}: host authority attestation is stale or bound to another target`;
     }
+    if (attestation.readOnly === true && declaration.sensitivity !== "read") {
+      return `${method}: EVAL_READ_ONLY — direct method is ${declaration.sensitivity ?? "unclassified"}`;
+    }
     const decision = evaluateAuthority({
       context: attestation.context,
       requirement:
@@ -1070,7 +1073,12 @@ export abstract class DurableObjectBase {
           target: envelope.from,
           delivery: { caller: caller ?? { callerId: "", callerKind: "unknown" } },
           provenance: envelope.provenance ?? [],
-          message: { type: "response", requestId: message?.requestId ?? "", error: denial },
+          message: {
+            type: "response",
+            requestId: message?.requestId ?? "",
+            error: denial,
+            errorCode: denial.includes("EVAL_READ_ONLY") ? "EVAL_READ_ONLY" : "EACCES",
+          },
         } as RpcEnvelope;
       }
       return await connectionless.respond(envelope);

@@ -10,8 +10,60 @@ import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import {
   defineServiceMethods,
+  type MethodAuthorityDescriptor,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+
+export const SHARED_GIT_REMOTE_CAPABILITY = "workspace-shared-git-remote";
+export const GIT_UPSTREAM_CAPABILITY = "workspace-git-upstream";
+
+function preparedGitAuthority(
+  method: string,
+  resolver: string,
+  leaves: Array<"remote" | "upstream">
+): MethodAuthorityDescriptor {
+  const primary = `service:gitInterop.${method}`;
+  return {
+    requirement: requirementForPrincipals(["user", "host", "code"], primary),
+    resource: { kind: "literal", key: primary },
+    prepared: {
+      resolver,
+      leaves: leaves.map((leaf) =>
+        leaf === "remote"
+          ? {
+              capability: SHARED_GIT_REMOTE_CAPABILITY,
+              requirement: requirementForPrincipals(
+                ["host", "user", "code", "entity"],
+                SHARED_GIT_REMOTE_CAPABILITY
+              ),
+              evalAcquisition: {
+                kind: "approval" as const,
+                title: "Configure a shared Git remote",
+                description:
+                  "Review changes to external Git remotes shared by workspace contexts.",
+                operation: { kind: "git", verb: "Configure shared remote" },
+                grantScopes: ["run", "session", "version"] as const,
+              },
+            }
+          : {
+              capability: GIT_UPSTREAM_CAPABILITY,
+              requirement: requirementForPrincipals(
+                ["host", "user", "code", "entity"],
+                GIT_UPSTREAM_CAPABILITY
+              ),
+              evalAcquisition: {
+                kind: "approval" as const,
+                title: "Change Git upstream tracking",
+                description: "Review changes to upstream tracking for this workspace unit.",
+                operation: { kind: "git", verb: "Track external Git remote" },
+                grantScopes: ["run", "session", "version"] as const,
+              },
+            }
+      ),
+    },
+  };
+}
 
 // Access descriptors shared across the gitInterop method group. All four
 // methods mutate workspace config (`meta/vibestudio.yml`) and/or reach the
@@ -462,6 +514,11 @@ export const gitInteropMethods = defineServiceMethods({
       gitRemoteSchema,
     ]),
     returns: gitSharedRemotesSchema,
+    authority: preparedGitAuthority(
+      "setSharedRemote",
+      "gitInterop.setSharedRemote",
+      ["remote"]
+    ),
     access: SHARED_REMOTE_WRITE_ACCESS,
     examples: [
       {
@@ -480,6 +537,11 @@ export const gitInteropMethods = defineServiceMethods({
       z.string().describe('Name of the remote to remove, e.g. "origin".'),
     ]),
     returns: gitSharedRemotesSchema,
+    authority: preparedGitAuthority(
+      "removeSharedRemote",
+      "gitInterop.removeSharedRemote",
+      ["remote"]
+    ),
     access: SHARED_REMOTE_REMOVE_ACCESS,
     examples: [{ args: ["projects/bgkit", "origin"] }],
   },
@@ -491,6 +553,7 @@ export const gitInteropMethods = defineServiceMethods({
       gitUpstreamConfigSchema,
     ]),
     returns: gitUpstreamsSchema,
+    authority: preparedGitAuthority("setUpstream", "gitInterop.setUpstream", ["upstream"]),
     access: UPSTREAM_WRITE_ACCESS,
     examples: [
       {
@@ -508,6 +571,11 @@ export const gitInteropMethods = defineServiceMethods({
       z.string().describe("Workspace-relative repo/unit path the upstream belongs to."),
     ]),
     returns: gitUpstreamsSchema,
+    authority: preparedGitAuthority(
+      "removeUpstream",
+      "gitInterop.removeUpstream",
+      ["upstream"]
+    ),
     access: UPSTREAM_REMOVE_ACCESS,
     examples: [{ args: ["projects/bgkit"] }],
   },
@@ -522,6 +590,11 @@ export const gitInteropMethods = defineServiceMethods({
       ]),
     ]),
     returns: gitDetachUpstreamResultSchema,
+    authority: preparedGitAuthority(
+      "detachUpstream",
+      "gitInterop.detachUpstream",
+      ["upstream", "remote"]
+    ),
     access: UPSTREAM_REMOVE_ACCESS,
     examples: [{ args: ["projects/bgkit", { forgetRemote: true }] }],
   },
@@ -533,6 +606,7 @@ export const gitInteropMethods = defineServiceMethods({
       z.boolean().describe("Whether auto-push should be enabled."),
     ]),
     returns: gitUpstreamsSchema,
+    authority: preparedGitAuthority("setAutoPush", "gitInterop.setAutoPush", ["upstream"]),
     access: UPSTREAM_WRITE_ACCESS,
     examples: [{ args: ["projects/bgkit", true] }],
   },

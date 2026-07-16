@@ -15,12 +15,17 @@
  */
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import type { ContextCleanupRecord } from "@vibestudio/shared/runtime/contextCleanup";
 
 export type StartupReconciliationDispatcher = <T>(method: string, ...args: unknown[]) => Promise<T>;
 
 export interface StartupReconciliationDeps {
   dispatchWorkspaceDO: StartupReconciliationDispatcher;
   entityCache: EntityCache;
+  /** Same idempotent hook used by the steady-state cleanup reaper. */
+  cleanupRetiredEntity?: (record: EntityRecord) => Promise<void>;
+  /** Resume a durable context cleanup before GC can reclaim its entity proof. */
+  cleanupContext?: (record: ContextCleanupRecord) => Promise<void>;
   /** Optional safety-sweep grace window (ms). Default: DO's own DEFAULT_GRACE_MS. */
   gcGraceMs?: number;
   recoverLifecycle?: () => Promise<void>;
@@ -30,6 +35,7 @@ export interface StartupReconciliationDeps {
 export interface StartupReconciliationResult {
   hydratedCount: number;
   incompleteCleanupIds: string[];
+  incompleteContextCleanupIds: string[];
   gcDeletedIds: string[];
   lifecycleRecovered: boolean;
 }
@@ -49,7 +55,9 @@ export async function runStartupReconciliation(
     log.warn("[Bootstrap] entityCache hydrate failed:", err);
   }
 
-  // 2. Reconcile partial cleanups from a prior crash.
+  // 2. Reconcile partial cleanups from a prior crash. Never infer success from
+  // a process restart: hooks include durable credentials, routes, grants, and
+  // storage which can outlive the process that originally owned the runtime.
   const incompleteCleanupIds: string[] = [];
   try {
     const incomplete = await deps.dispatchWorkspaceDO<EntityRecord[]>(
@@ -57,7 +65,9 @@ export async function runStartupReconciliation(
     );
     for (const record of incomplete) {
       incompleteCleanupIds.push(record.id);
+      if (!deps.cleanupRetiredEntity) continue;
       try {
+        await deps.cleanupRetiredEntity(record);
         await deps.dispatchWorkspaceDO<undefined>("entityCleanupComplete", record.id);
       } catch (err) {
         log.warn(`[Bootstrap] entityCleanupComplete failed for ${record.id}:`, err);
@@ -65,6 +75,24 @@ export async function runStartupReconciliation(
     }
   } catch (err) {
     log.warn("[Bootstrap] entityFindIncompleteCleanups failed:", err);
+  }
+
+  const incompleteContextCleanupIds: string[] = [];
+  try {
+    const pending = await deps.dispatchWorkspaceDO<ContextCleanupRecord[]>(
+      "contextCleanupListPending"
+    );
+    for (const record of pending) {
+      incompleteContextCleanupIds.push(record.contextId);
+      if (!deps.cleanupContext) continue;
+      try {
+        await deps.cleanupContext(record);
+      } catch (err) {
+        log.warn(`[Bootstrap] context cleanup failed for ${record.contextId}:`, err);
+      }
+    }
+  } catch (err) {
+    log.warn("[Bootstrap] contextCleanupListPending failed:", err);
   }
 
   // 3. Safety GC sweep.
@@ -87,5 +115,11 @@ export async function runStartupReconciliation(
     }
   }
 
-  return { hydratedCount, incompleteCleanupIds, gcDeletedIds, lifecycleRecovered };
+  return {
+    hydratedCount,
+    incompleteCleanupIds,
+    incompleteContextCleanupIds,
+    gcDeletedIds,
+    lifecycleRecovered,
+  };
 }

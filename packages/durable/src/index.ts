@@ -622,6 +622,7 @@ export abstract class DurableObjectBase {
             type: "response",
             requestId: message?.requestId ?? "",
             error: denial,
+            errorCode: denial.includes("EVAL_READ_ONLY") ? "EVAL_READ_ONLY" : "EACCES",
           },
         } as RpcEnvelope;
       }
@@ -661,6 +662,9 @@ export abstract class DurableObjectBase {
       attestation.expiresAt <= now
     ) {
       return `${method}: host authority attestation is stale or bound to another target`;
+    }
+    if (attestation.readOnly === true && declaration.sensitivity !== "read") {
+      return `${method}: EVAL_READ_ONLY — direct method is ${declaration.sensitivity ?? "unclassified"}`;
     }
     const decision = evaluateAuthority({
       context: attestation.context,

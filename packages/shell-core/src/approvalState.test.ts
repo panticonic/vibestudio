@@ -16,6 +16,7 @@ function approval(approvalId: string): PendingApproval {
     repoPath: "panels/test",
     executionDigest: "ev",
     requestedAt: 1,
+    decisionDeadlineAt: 60_001,
     capability: "workspace-repo-write",
     title: "Write files",
     resource: { type: "git-repo", label: "Repository", value: "panels/test" },

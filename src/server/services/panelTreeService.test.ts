@@ -2,11 +2,63 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  ServiceAccessError,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
-import { createPanelTreeService, type PanelTreeServiceDeps } from "./panelTreeService.js";
+import {
+  createPanelTreeService as createRawPanelTreeService,
+  type PanelTreeServiceDeps,
+} from "./panelTreeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
+import {
+  requestCapabilityPermission,
+  type CapabilityPermissionDeps,
+} from "./capabilityPermission.js";
+import { withTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+
+type PanelTreeTestDeps = PanelTreeServiceDeps & CapabilityPermissionDeps;
+let currentAuthorityDeps: PanelTreeTestDeps | null = null;
+
+const createPanelTreeService = (deps: PanelTreeServiceDeps) =>
+  withTestServiceDispatcher(createRawPanelTreeService(deps));
+
+function withCanonicalAuthority(ctx: ServiceContext, panelHosting = false): ServiceContext {
+  ctx.authorityDecisions = new Map();
+  ctx.authority = {
+    allows: vi.fn(async ({ capability }) => capability === "panel-hosting" && panelHosting),
+    assert: vi.fn(async (input) => {
+      if (!currentAuthorityDeps || !input.challenge || input.acquisition?.kind !== "approval") {
+        throw new Error("test canonical authority adapter is not configured");
+      }
+      const permission = await requestCapabilityPermission(currentAuthorityDeps, {
+        caller: input.authorizingCaller ?? ctx.caller,
+        capability: input.capability,
+        resource: { ...input.challenge.resource, key: input.resourceKey },
+        operation: input.challenge.operation,
+        title: input.challenge.title,
+        description: input.challenge.description,
+        severity: input.challenge.severity,
+        deniedReason: input.challenge.deniedReason,
+        dedupKey: input.challenge.dedupKey,
+        details: input.challenge.details ? [...input.challenge.details] : undefined,
+        signal: input.challenge.signal,
+        allowedDecisions: ["once", ...input.acquisition.grantScopes, "deny", "dismiss"],
+      });
+      if (!permission.allowed) {
+        throw new ServiceAccessError("panelTree", "operation", permission.reason, "EACCES");
+      }
+      if (permission.decision) {
+        ctx.authorityDecisions!.set(input.capability, permission.decision);
+      }
+    }),
+  };
+  return ctx;
+}
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-tree-"));
@@ -17,6 +69,7 @@ function approvalQueueMock(
 ): ApprovalQueue {
   return {
     request: vi.fn(async () => decision),
+    requestCapability: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
@@ -41,41 +94,38 @@ function approvalQueueMock(
 }
 
 function ctx() {
-  return {
+  return withCanonicalAuthority({
     caller: createVerifiedCaller("panel:requester", "panel", {
       callerId: "panel:requester",
       callerKind: "panel",
       repoPath: "panels/requester",
       executionDigest: "a".repeat(64),
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
       ],
     }),
-    authority: {
-      allows: vi.fn(async () => false),
-      assert: vi.fn(async () => undefined),
-    },
-  };
+  });
 }
 
 function panelHostCtx() {
-  return {
-    caller: createVerifiedCaller("@workspace-apps/shell", "app", {
-      callerId: "@workspace-apps/shell",
-      callerKind: "app",
-      repoPath: "apps/shell",
-      executionDigest: "a".repeat(64),
-      requested: [
-        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
-        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
-      ],
-    }),
-    authority: {
-      allows: vi.fn(async ({ capability }) => capability === "panel-hosting"),
-      assert: vi.fn(async () => undefined),
+  return withCanonicalAuthority(
+    {
+      caller: createVerifiedCaller("@workspace-apps/shell", "app", {
+        callerId: "@workspace-apps/shell",
+        callerKind: "app",
+        repoPath: "apps/shell",
+        executionDigest: "a".repeat(64),
+        delegations: [],
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
+      }),
     },
-  };
+    true
+  );
 }
 
 /**
@@ -83,8 +133,8 @@ function panelHostCtx() {
  * `ctx-caller`; any target enriched with a foreign `contextId` (or a foreign
  * `requestedContextId` for create/navigate) that already exists prompts once.
  */
-function treeDeps(overrides: Partial<PanelTreeServiceDeps> = {}): PanelTreeServiceDeps {
-  return {
+function treeDeps(overrides: Partial<PanelTreeTestDeps> = {}): PanelTreeTestDeps {
+  const deps = {
     approvalQueue: approvalQueueMock("session"),
     grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
     contextExists: vi.fn(() => true),
@@ -98,6 +148,7 @@ function treeDeps(overrides: Partial<PanelTreeServiceDeps> = {}): PanelTreeServi
           callerKind: "panel",
           repoPath: "panels/anchor",
           executionDigest: "a".repeat(64),
+          delegations: [],
           requested: [
             { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
             { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -107,6 +158,8 @@ function treeDeps(overrides: Partial<PanelTreeServiceDeps> = {}): PanelTreeServi
     bridge: vi.fn(),
     ...overrides,
   };
+  currentAuthorityDeps = deps;
+  return deps;
 }
 
 describe("panelTreeService", () => {
@@ -127,7 +180,7 @@ describe("panelTreeService", () => {
 
     await expect(service.handler(ctx(), "list", [null])).resolves.toEqual([{ panelId: "panel-1" }]);
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenCalledWith({
       callerId: "panel:requester",
       callerKind: "panel",
@@ -145,7 +198,7 @@ describe("panelTreeService", () => {
 
     await expect(service.handler(ctx(), "roots", [])).resolves.toEqual([{ panelId: "root-1" }]);
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenCalledWith({
       callerId: "panel:requester",
       callerKind: "panel",
@@ -163,7 +216,7 @@ describe("panelTreeService", () => {
       loaded: true,
     });
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenCalledWith({
       callerId: "panel:requester",
       callerKind: "panel",
@@ -183,8 +236,8 @@ describe("panelTreeService", () => {
 
     await expect(service.handler(ctx(), "close", ["target"])).resolves.toBeUndefined();
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         grantResourceKey: contextBoundaryResourceKey("ctx-target", "panel:requester"),
@@ -210,7 +263,7 @@ describe("panelTreeService", () => {
 
     await expect(service.handler(ctx(), "close", ["target"])).resolves.toBeUndefined();
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenLastCalledWith({
       callerId: "panel:requester",
       callerKind: "panel",
@@ -236,7 +289,7 @@ describe("panelTreeService", () => {
 
     await expect(service.handler(panelHostCtx(), "archive", ["target"])).resolves.toBeUndefined();
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenLastCalledWith({
       callerId: "@workspace-apps/shell",
       callerKind: "app",
@@ -258,8 +311,8 @@ describe("panelTreeService", () => {
     await service.handler(ctx(), "close", ["target"]);
 
     // No double-prompt: the second close reuses the remembered grant.
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         grantResourceKey: contextBoundaryResourceKey("ctx-target", "panel:requester"),
@@ -291,8 +344,8 @@ describe("panelTreeService", () => {
     ).resolves.toEqual({ id: "created", title: "Created", kind: "workspace" });
 
     // Exactly one prompt for the single create call.
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         grantResourceKey: contextBoundaryResourceKey("ctx-foreign", "panel:requester"),
@@ -326,7 +379,7 @@ describe("panelTreeService", () => {
       service.handler(ctx(), "create", ["panels/child", { parentId: "parent" }])
     ).resolves.toEqual({ id: "created", title: "Created", kind: "workspace" });
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("validates panel creation sources before approval or bridge mutation", async () => {
@@ -348,7 +401,7 @@ describe("panelTreeService", () => {
       source: "panels/missing",
       options: { parentId: "parent" },
     });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).not.toHaveBeenCalled();
   });
 
@@ -401,7 +454,7 @@ describe("panelTreeService", () => {
       kind: "workspace",
     });
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenCalledTimes(1);
     expect(bridge).toHaveBeenCalledWith({
       callerId: "panel:requester",
@@ -460,7 +513,7 @@ describe("panelTreeService", () => {
       service.handler(ctx(), "setStateArgs", ["requester-slot", { mode: "edit" }])
     ).resolves.toEqual({ mode: "edit" });
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenLastCalledWith({
       callerId: "panel:requester",
       callerKind: "panel",
@@ -500,7 +553,7 @@ describe("panelTreeService", () => {
       ])
     ).resolves.toEqual({ id: "requester-slot", title: "Vault" });
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenLastCalledWith({
       callerId: "panel:requester",
       callerKind: "panel",
@@ -530,7 +583,7 @@ describe("panelTreeService", () => {
 
     // No `contextId` in the navigate options ⇒ no context change ⇒ free, even
     // though the target currently lives in a (foreign, existing) context.
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenLastCalledWith({
       callerId: "panel:requester",
       callerKind: "panel",
@@ -560,8 +613,8 @@ describe("panelTreeService", () => {
     ).resolves.toEqual({ id: "target", title: "Next" });
 
     // Exactly one prompt — keyed on the DESTINATION context (ctx-y), not ctx-x.
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         grantResourceKey: contextBoundaryResourceKey("ctx-y", "panel:requester"),
@@ -600,8 +653,8 @@ describe("panelTreeService", () => {
     expect(bridge).toHaveBeenCalledWith(
       expect.objectContaining({ method: "historyTargetContext", args: ["target", -1] })
     );
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         grantResourceKey: contextBoundaryResourceKey("ctx-y", "panel:requester"),
@@ -628,7 +681,7 @@ describe("panelTreeService", () => {
     );
 
     await service.handler(ctx(), "navigateHistory", ["target", 1]);
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("validates navigation sources before approval or bridge mutation", async () => {
@@ -651,7 +704,7 @@ describe("panelTreeService", () => {
       options: { contextId: "ctx-missing" },
       targetPanelId: "target",
     });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).not.toHaveBeenCalled();
   });
 
@@ -670,8 +723,8 @@ describe("panelTreeService", () => {
       ])
     ).resolves.toBeUndefined();
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         operation: expect.objectContaining({ verb: "Move panel in" }),
@@ -700,20 +753,20 @@ describe("panelTreeService", () => {
     ).resolves.toBeUndefined();
     await expect(service.handler(ctx(), "rebuildPanel", ["target"])).resolves.toBeUndefined();
 
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         operation: expect.objectContaining({ verb: "Take over panel in" }),
       })
     );
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         operation: expect.objectContaining({ verb: "Open DevTools in" }),
       })
     );
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
         operation: expect.objectContaining({ verb: "Rebuild panel in" }),
@@ -732,7 +785,7 @@ describe("panelTreeService", () => {
       ok: true,
     });
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenCalledWith({
       callerId: "panel:requester",
       callerKind: "panel",
@@ -756,7 +809,7 @@ describe("panelTreeService", () => {
       mode: "fixture",
     });
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         grantResourceKey: contextBoundaryResourceKey("ctx-target", "panel:requester"),

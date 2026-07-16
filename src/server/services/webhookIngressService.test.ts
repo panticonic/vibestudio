@@ -34,6 +34,7 @@ function panelCtx(callerId: string): ServiceContext {
       callerKind: "panel",
       repoPath: TARGET.source,
       executionDigest: "ev-test",
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -49,6 +50,7 @@ function _workerCtx(callerId: string): ServiceContext {
       callerKind: "worker",
       repoPath: TARGET.source,
       executionDigest: "ev-test",
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -219,6 +221,7 @@ describe("webhookIngressService — RPC surface", () => {
         callerKind: "do",
         repoPath: "vibestudio/internal",
         executionDigest: "internal",
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -360,6 +363,7 @@ describe("webhookIngressService — RPC surface", () => {
         callerKind: "worker",
         repoPath: "workers/elsewhere",
         executionDigest: "ev-test",
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },

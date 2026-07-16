@@ -72,6 +72,23 @@ describe("GovernanceLog", () => {
     expect(records.map((r) => ("kind" in r ? r.kind : r.approvalKind))).toContain("capability");
   });
 
+  it("persists every approval resolution decision, including eval run grants", async () => {
+    const decisions = ["once", "run", "session", "version", "deny", "dismiss", "submit"] as const;
+    for (const [index, decision] of decisions.entries()) {
+      await log.append(
+        approvalRecord({
+          approvalId: `decision-${decision}`,
+          decision,
+          granted: decision !== "deny" && decision !== "dismiss",
+          resolvedAt: atLocalNoon() + index,
+        })
+      );
+    }
+
+    const records = (await log.query()) as ApprovalProvenanceRecord[];
+    expect(new Set(records.map((record) => record.decision))).toEqual(new Set(decisions));
+  });
+
   it("returns records newest-first", async () => {
     await log.append(approvalRecord({ approvalId: "older", resolvedAt: atLocalNoon() - 2000 }));
     await log.append(approvalRecord({ approvalId: "newer", resolvedAt: atLocalNoon() - 1000 }));

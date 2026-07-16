@@ -32,6 +32,10 @@ import type {
   ContextEdgeByChild,
   ContextEdgeKind,
 } from "@vibestudio/shared/runtime/contextEdges";
+import type {
+  ContextCleanupRecord,
+  DurableObjectCleanupRef,
+} from "@vibestudio/shared/runtime/contextCleanup";
 
 const WORKSPACE_DO_CLASS = "WorkspaceDO";
 
@@ -130,6 +134,11 @@ export class WorkspaceEntityStore {
       : this.dispatch<EntityRecord[]>("entityListActive");
   }
 
+  /** All durable rows for one context, including already-retired records. */
+  listByContext(contextId: string): Promise<EntityRecord[]> {
+    return this.dispatch<EntityRecord[]>("entityListByContext", contextId);
+  }
+
   // --- context-relationship registry (durable edges, no cache mirror) ---
 
   /** Idempotently upsert a context-relationship edge. */
@@ -158,6 +167,38 @@ export class WorkspaceEntityStore {
   /** Delete every inbound edge of a context (teardown). */
   deleteContextEdges(contextId: string): Promise<void> {
     return this.dispatch<undefined>("contextEdgeDeleteByChild", contextId);
+  }
+
+  // --- durable context-cleanup operation ledger ---
+
+  beginContextCleanup(input: {
+    contextId: string;
+    kind: "detach" | "destroy";
+  }): Promise<ContextCleanupRecord> {
+    return this.dispatch<ContextCleanupRecord>("contextCleanupBegin", input);
+  }
+
+  failContextCleanup(contextId: string, error: string): Promise<void> {
+    return this.dispatch<undefined>("contextCleanupFailed", contextId, error);
+  }
+
+  addContextCleanupDurableObject(
+    contextId: string,
+    ref: DurableObjectCleanupRef
+  ): Promise<ContextCleanupRecord> {
+    return this.dispatch<ContextCleanupRecord>("contextCleanupAddDurableObject", contextId, ref);
+  }
+
+  completeContextCleanup(contextId: string): Promise<void> {
+    return this.dispatch<undefined>("contextCleanupComplete", contextId);
+  }
+
+  completeContextCleanups(contextIds: string[]): Promise<void> {
+    return this.dispatch<undefined>("contextCleanupCompleteMany", contextIds);
+  }
+
+  listPendingContextCleanups(): Promise<ContextCleanupRecord[]> {
+    return this.dispatch<ContextCleanupRecord[]>("contextCleanupListPending");
   }
 
   /** The hot cache, for synchronous reads (resolve/resolveActive/resolveContext/…). */

@@ -17,6 +17,7 @@ const panelCaller = (notifications: boolean) =>
     callerKind: "panel",
     repoPath: "panels/test",
     executionDigest: "a".repeat(64),
+    delegations: [],
     requested: [
       {
         capability: "service:notification.show",
@@ -73,6 +74,7 @@ describe("createNotificationService", () => {
           callerKind: "panel",
           repoPath: "panels/test",
           executionDigest: "a".repeat(64),
+          delegations: [],
           requested: [
             {
               capability: "service:notification.show",

@@ -29,6 +29,14 @@ const notificationAuthority = (method: "show" | "dismiss" | "reportAction") => (
       capability: "notifications",
       requirement: requirementForPrincipals(["user", "code"], "notifications"),
       resource: { kind: "literal" as const, key: "platform:notifications" },
+      evalAcquisition: {
+        kind: "approval" as const,
+        title: "Allow eval to show notifications",
+        description:
+          "Evaluated code wants to use the workspace notification surface.",
+        operation: { kind: "notification", verb: method },
+        grantScopes: ["run", "session", "version"] as const,
+      },
     },
   ],
 });

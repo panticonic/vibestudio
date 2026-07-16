@@ -7,6 +7,7 @@
     "buildProfile": "source-only"
   },
   "exports": {
+    "./authority/*": "./src/authority/*.ts",
     "./bindings/*": "./src/bindings/*.ts",
     "./clients/*": "./src/clients/*.ts",
     "./runtime/*": "./src/runtime/*.ts",

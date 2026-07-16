@@ -18,7 +18,7 @@
  * caller is expected to reconnect manually.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
@@ -36,6 +36,7 @@ import type {
   HostTargetSelectionInput,
 } from "@vibestudio/shared/hostTargets";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
+import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import type { HubWorkspaceRoute } from "@vibestudio/service-schemas/hubControl";
 import type {
@@ -50,6 +51,7 @@ import type {
   WorkspaceUnitStatus,
 } from "@vibestudio/service-schemas/workspace";
 import type { ApprovalQueue } from "./approvalQueue.js";
+import { scopedUserlandApprovalOptions } from "./userlandApprovalOptions.js";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { listWorkspaceSkillEntries } from "../vcsHost/workspaceSkills.js";
 
@@ -94,6 +96,8 @@ export interface WorkspaceServiceDeps {
   treeScanner?: WorkspaceTreeScanner;
   getConfig: () => WorkspaceConfig;
   setConfigField: (key: string, value: unknown, ctx: ServiceContext) => void | Promise<void>;
+  /** Exact no-op check against the protected meta/main representation. */
+  wouldSetConfigField?: (key: string, value: unknown) => boolean | Promise<boolean>;
   /** Required hub-owned catalog proxy; children never mutate the catalog. */
   workspaceCatalog: WorkspaceCatalogClient;
   /**
@@ -409,6 +413,10 @@ async function requireWorkspaceApproval(
     summary: string;
     warning?: string;
     details?: WorkspaceApprovalDetail[];
+    /** Complete semantic input used to coalesce only identical operations. */
+    identity?: unknown;
+    severity?: "standard" | "dangerous";
+    defaultAction?: "allow" | "deny";
   }
 ): Promise<void> {
   if (await hasPanelHostingAuthority(ctx)) return;
@@ -422,16 +430,27 @@ async function requireWorkspaceApproval(
       "EACCES"
     );
   }
+  const identityDigest = createHash("sha256")
+    .update(
+      canonicalJson({
+        operation,
+        target: approval.target,
+        identity: approval.identity ?? null,
+      })
+    )
+    .digest("hex");
   const result = await approvalQueue.requestUserland({
     principal,
     ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
     subject: {
-      id: `workspace:${operation}:${safeSubjectSegment(approval.target)}:${randomUUID()}`,
+      id: `workspace:${operation}:${safeSubjectSegment(approval.target)}:${identityDigest}`,
       label: `workspace ${operation}`,
     },
     title: approval.title,
     summary: approval.summary,
     warning: approval.warning,
+    severity: approval.severity,
+    defaultAction: approval.defaultAction,
     details: [
       { label: "Caller", value: principal.callerId },
       { label: "Workspace", value: deps.getConfig().id },
@@ -441,21 +460,10 @@ async function requireWorkspaceApproval(
         value: truncateApprovalValue(detail.value, 1000),
       })),
     ].slice(0, 8),
-    promptOptions: "choices",
-    options: [
-      {
-        value: "allow",
-        label: "Allow",
-        description: "Allow this workspace operation once.",
-        tone: "primary",
-      },
-      {
-        value: "deny",
-        label: "Deny",
-        description: "Block this workspace operation.",
-        tone: "danger",
-      },
-    ],
+    // The host-managed scope choices make Trust version the normal default,
+    // while retaining explicit one-shot and session alternatives.
+    promptOptions: "scoped",
+    options: scopedUserlandApprovalOptions(approval),
   });
   if (result.kind !== "choice" || result.choice !== "allow") {
     throw new ServiceError("workspace", operation, "Workspace operation was denied", "EACCES");
@@ -522,6 +530,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       create: async (ctx, [name, opts]) => {
         await requireWorkspaceApproval(deps, ctx, "create", {
           target: name,
+          identity: opts ?? null,
           title: "Create workspace?",
           summary: "This panel or worker wants to create a new workspace.",
           details: opts?.forkFrom ? [{ label: "Fork from", value: opts.forkFrom }] : undefined,
@@ -535,6 +544,8 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         }
         await requireWorkspaceApproval(deps, ctx, "delete", {
           target: name,
+          severity: "dangerous",
+          defaultAction: "deny",
           title: "Delete workspace?",
           summary: "This panel or worker wants to permanently delete a workspace.",
           warning: "This removes the workspace directory and cannot be undone.",
@@ -560,8 +571,15 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       },
 
       setInitPanels: async (ctx, [initPanels]) => {
+        if (
+          deps.wouldSetConfigField &&
+          !(await deps.wouldSetConfigField("initPanels", initPanels))
+        ) {
+          return;
+        }
         await requireWorkspaceApproval(deps, ctx, "setInitPanels", {
           target: deps.getConfig().id,
+          identity: initPanels,
           title: "Change initial workspace panels?",
           summary: "This panel or worker wants to change the panels opened for this workspace.",
           details: [{ label: "Init panels", value: describeJson(initPanels), format: "markdown" }],
@@ -570,8 +588,10 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       },
 
       setConfigField: async (ctx, [key, value]) => {
+        if (deps.wouldSetConfigField && !(await deps.wouldSetConfigField(key, value))) return;
         await requireWorkspaceApproval(deps, ctx, "setConfigField", {
           target: key,
+          identity: value,
           title: "Change workspace config?",
           summary: "This panel or worker wants to write a field in meta/vibestudio.yml.",
           warning: "Changing workspace config can affect how the workspace starts and runs.",

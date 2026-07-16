@@ -74,6 +74,7 @@ describe("server notification service", () => {
       callerKind: "panel",
       repoPath: "panels/chat",
       executionDigest: "a".repeat(64),
+      delegations: [],
       requested: [
         {
           capability: "service:notification.signalUserInbox",

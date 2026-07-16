@@ -29,6 +29,7 @@ const mobileApproval: PendingUnitBatchApproval = {
   ],
   configWrite: null,
   requestedAt: 1,
+  decisionDeadlineAt: 60_001,
 };
 
 function makeCoordinator(opts: {

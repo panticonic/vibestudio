@@ -125,7 +125,7 @@ export type BuildDiagnosticWire = z.infer<typeof buildDiagnosticSchema>;
  */
 export const repoBuildTargetSchema = z
   .object({
-    target: z.enum(["runtime", "library:panel", "library:worker"]),
+    target: z.enum(["runtime", "library:panel", "library:worker", "library:eval"]),
     exportPath: z.string().optional(),
     buildKey: z.string().optional(),
     artifacts: z
@@ -292,13 +292,13 @@ export const recentBuildEventSchema = z
 
 /**
  * Which execution environment will run a library bundle — selects the module
- * resolution conditions. `worker` covers any workerd isolate, including the eval
- * sandbox (a DO): it must NOT resolve a package's panel entry, whose top-level
- * `initRuntime()` crashes outside a panel. There is intentionally NO default —
- * every library build must state where its bundle will run, so a wrong host can't
- * be chosen silently.
+ * resolution conditions. Eval is a first-class target rather than an alias for
+ * worker: packages such as `@workspace/runtime` expose an injected, run-neutral
+ * eval surface that is intentionally richer than their ordinary worker entry.
+ * There is intentionally NO default — every library build must state where its
+ * bundle will run, so a wrong host cannot be chosen silently.
  */
-export const libraryBuildTargetSchema = z.enum(["panel", "worker"]);
+export const libraryBuildTargetSchema = z.enum(["panel", "worker", "eval"]);
 export type LibraryBuildTarget = z.infer<typeof libraryBuildTargetSchema>;
 
 export const buildMethods = defineServiceMethods({
@@ -326,12 +326,12 @@ export const buildMethods = defineServiceMethods({
           libraryTarget: libraryBuildTargetSchema
             .optional()
             .describe(
-              "Execution host for a library bundle ('panel' or 'worker'); required when library is true."
+              "Execution host for a library bundle ('panel', 'worker', or 'eval'); required when library is true."
             ),
         })
         .refine((o) => !o.library || o.libraryTarget !== undefined, {
           message:
-            "getBuild: a library build requires an explicit libraryTarget ('panel' or 'worker')",
+            "getBuild: a library build requires an explicit libraryTarget ('panel', 'worker', or 'eval')",
         })
         .optional(),
     ]),

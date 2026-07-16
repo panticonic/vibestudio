@@ -19,6 +19,7 @@ import {
   type CanonicalSqliteSchema,
 } from "@vibestudio/sqlite";
 import {
+  APPROVAL_PROVENANCE_DECISIONS,
   governanceRecordTimestamp,
   isApprovalProvenanceRecord,
   isMembershipGovernanceRecord,
@@ -50,7 +51,7 @@ export const ApprovalRecordSchema = z
       "device-code",
       "external-agent",
     ]),
-    decision: z.enum(["once", "session", "version", "deny", "dismiss", "submit"]),
+    decision: z.enum(APPROVAL_PROVENANCE_DECISIONS),
     granted: z.boolean(),
     workspaceId: z.string().min(1),
     resolvedAt: z.number().finite(),

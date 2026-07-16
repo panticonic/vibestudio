@@ -152,7 +152,18 @@ export async function postToDOWithToken(
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`DO dispatch failed (${res.status}): ${text}`);
+    let payload: { error?: unknown; errorCode?: unknown } | null = null;
+    try {
+      payload = JSON.parse(text) as { error?: unknown; errorCode?: unknown };
+    } catch {
+      // Preserve the raw response below when the DO did not return JSON.
+    }
+    const detail = typeof payload?.error === "string" ? payload.error : text;
+    const error = new Error(`DO dispatch failed (${res.status}): ${detail}`) as Error & {
+      code?: string;
+    };
+    if (typeof payload?.errorCode === "string") error.code = payload.errorCode;
+    throw error;
   }
 
   return res.json();
@@ -243,7 +254,7 @@ export function verifyInstanceTokenEnvelope(
 // ---------------------------------------------------------------------------
 
 export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, LifecycleDoDispatcher {
-  private ensureDOFn:
+  private ensureDispatchableDOFn:
     | ((source: string, className: string, objectKey: string) => Promise<void>)
     | null = null;
   private beforeDispatchFn: ((ref: DORef) => Promise<void> | void) | null = null;
@@ -259,8 +270,10 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
    * When a dispatch fails with a retryable error, ensureDO is called to
    * re-register the service and restart workerd before retrying.
    */
-  setEnsureDO(fn: (source: string, className: string, objectKey: string) => Promise<void>): void {
-    this.ensureDOFn = fn;
+  setEnsureDispatchableDO(
+    fn: (source: string, className: string, objectKey: string) => Promise<void>
+  ): void {
+    this.ensureDispatchableDOFn = fn;
   }
 
   setBeforeDispatch(fn: (ref: DORef) => Promise<void> | void): void {
@@ -401,12 +414,13 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     invocationToken?: string
   ): Promise<unknown> {
     await Promise.resolve(this.beforeDispatchFn?.(ref));
+    await this.ensureDispatchableDOFn?.(ref.source, ref.className, ref.objectKey);
 
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
 
-    // `DODispatch.dispatch` is the SERVER's internal service→DO channel (eval.run,
+    // `DODispatch.dispatch` is the SERVER's internal service→DO channel (eval lifecycle,
     // workspace methods, …), so the caller is always the server — stamp it so the
     // DO's converged envelope dispatch surfaces `callerKind: "server"` (e.g. the
     // EvalDO server-only gate). Mirrors dispatchLifecycle/dispatchAlarm.
@@ -429,11 +443,11 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
         invocationToken
       );
     } catch (err) {
-      if (this.ensureDOFn && this.isRetryable(err)) {
+      if (this.ensureDispatchableDOFn && this.isRetryable(err)) {
         console.warn(
-          `[DODispatch] ${doRefKey(ref)}.${method} failed (${err instanceof Error ? err.message : String(err)}), calling ensureDO and retrying`
+          `[DODispatch] ${doRefKey(ref)}.${method} failed (${err instanceof Error ? err.message : String(err)}), restoring the exact DO image and retrying`
         );
-        await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
+        await this.ensureDispatchableDOFn(ref.source, ref.className, ref.objectKey);
         await Promise.resolve(this.beforeDispatchFn?.(ref));
         return await postToDOWithToken(
           ref,
@@ -466,6 +480,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   ): Promise<unknown> {
     const lifecycleMethod = `__lifecycle/${method}`;
     await Promise.resolve(this.beforeDispatchFn?.(ref));
+    await this.ensureDispatchableDOFn?.(ref.source, ref.className, ref.objectKey);
 
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
@@ -487,11 +502,11 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
         serverCaller
       );
     } catch (err) {
-      if (this.ensureDOFn && this.isRetryable(err)) {
+      if (this.ensureDispatchableDOFn && this.isRetryable(err)) {
         console.warn(
-          `[DODispatch] ${doRefKey(ref)}.${lifecycleMethod} failed (${err instanceof Error ? err.message : String(err)}), calling ensureDO and retrying`
+          `[DODispatch] ${doRefKey(ref)}.${lifecycleMethod} failed (${err instanceof Error ? err.message : String(err)}), restoring the exact DO image and retrying`
         );
-        await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
+        await this.ensureDispatchableDOFn(ref.source, ref.className, ref.objectKey);
         await Promise.resolve(this.beforeDispatchFn?.(ref));
         return await postToDOWithToken(
           ref,
@@ -517,6 +532,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   private async dispatchAlarmImpl(ref: DORef): Promise<unknown> {
     await Promise.resolve(this.beforeDispatchFn?.(ref));
+    await this.ensureDispatchableDOFn?.(ref.source, ref.className, ref.objectKey);
 
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
@@ -531,8 +547,8 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     try {
       return await postToDOWithToken(ref, "__alarm", [], buildDeps(), "main", serverCaller);
     } catch (err) {
-      if (this.ensureDOFn && this.isRetryable(err)) {
-        await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
+      if (this.ensureDispatchableDOFn && this.isRetryable(err)) {
+        await this.ensureDispatchableDOFn(ref.source, ref.className, ref.objectKey);
         await Promise.resolve(this.beforeDispatchFn?.(ref));
         return await postToDOWithToken(ref, "__alarm", [], buildDeps(), "main", serverCaller);
       }

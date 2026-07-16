@@ -1,6 +1,7 @@
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import type { EvalAuthorityDelegation } from "@vibestudio/shared/authorityManifest";
 import type { ExtensionInvocation, ExtensionSource, RegistryEntry } from "@vibestudio/extension";
 
 export type { ExtensionInvocation, ExtensionSource, RegistryEntry };
@@ -30,6 +31,7 @@ export interface ExtensionUserlandCaller {
   repoPath: string;
   executionDigest: string;
   requested: readonly CapabilityScope[];
+  delegations: readonly EvalAuthorityDelegation[];
   contextId?: string;
 }
 
@@ -69,6 +71,7 @@ export function invocationFromServiceContext(
           repoPath: identity.repoPath,
           executionDigest: identity.executionDigest,
           requested: identity.requested,
+          delegations: identity.delegations,
           ...(chainContextId ? { contextId: chainContextId } : {}),
         };
     }

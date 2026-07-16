@@ -26,9 +26,13 @@ function deps() {
     approvalQueue: {
       cancelForCaller: vi.fn(),
     },
+    deferrals: {
+      cancelForCaller: vi.fn(),
+    },
     credentialSessionGrantStore: {
       dropForCaller: vi.fn(),
     },
+    revokeAgentCredentials: vi.fn(async () => {}),
     tokenManager: {
       revokeToken: vi.fn(),
     },
@@ -57,7 +61,9 @@ describe("cleanupRuntimeEntity", () => {
       panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
       egressProxy: d.egressProxy,
       approvalQueue: d.approvalQueue,
+      deferrals: d.deferrals,
       credentialSessionGrantStore: d.credentialSessionGrantStore,
+      revokeAgentCredentials: d.revokeAgentCredentials,
       tokenManager: d.tokenManager,
       connectionGrants: d.connectionGrants,
       getFsService: () => d.fsService as never,
@@ -68,11 +74,14 @@ describe("cleanupRuntimeEntity", () => {
     expect(d.panelRuntimeCoordinator.retireRuntimeEntity).toHaveBeenCalledWith("panel:one");
     expect(d.egressProxy.dropCaller).toHaveBeenCalledWith("panel:one");
     expect(d.approvalQueue.cancelForCaller).toHaveBeenCalledWith("panel:one");
+    expect(d.deferrals.cancelForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.credentialSessionGrantStore.dropForCaller).toHaveBeenCalledWith("panel:one");
+    expect(d.revokeAgentCredentials).toHaveBeenCalledWith("panel:one");
     expect(d.connectionGrants.revokeForPrincipal).toHaveBeenCalledWith("panel:one");
     expect(d.fsService.closeHandlesForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.webhookIngress.internal.revokeForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.tokenManager.revokeToken).toHaveBeenCalledWith("panel:one");
+    expect(d.tokenManager.revokeToken).toHaveBeenCalledWith("agent:panel:one");
     expect(d.workerdManager.stopWorker).not.toHaveBeenCalled();
     expect(d.workerdManager.destroyDOEntity).not.toHaveBeenCalled();
   });
@@ -84,6 +93,7 @@ describe("cleanupRuntimeEntity", () => {
       egressProxy: workerDeps.egressProxy,
       approvalQueue: workerDeps.approvalQueue,
       credentialSessionGrantStore: workerDeps.credentialSessionGrantStore,
+      revokeAgentCredentials: workerDeps.revokeAgentCredentials,
       tokenManager: workerDeps.tokenManager,
       connectionGrants: workerDeps.connectionGrants,
       getFsService: () => workerDeps.fsService as never,
@@ -98,6 +108,7 @@ describe("cleanupRuntimeEntity", () => {
       egressProxy: doDeps.egressProxy,
       approvalQueue: doDeps.approvalQueue,
       credentialSessionGrantStore: doDeps.credentialSessionGrantStore,
+      revokeAgentCredentials: doDeps.revokeAgentCredentials,
       tokenManager: doDeps.tokenManager,
       connectionGrants: doDeps.connectionGrants,
       getFsService: () => doDeps.fsService as never,
@@ -107,29 +118,33 @@ describe("cleanupRuntimeEntity", () => {
     expect(doDeps.workerdManager.destroyDOEntity).toHaveBeenCalledWith("do:one");
   });
 
-  it("continues best-effort cleanup when one cleanup step throws", async () => {
+  it("runs every cleanup step but reports aggregate failure so the reaper retries", async () => {
     const d = deps();
     d.fsService.closeHandlesForCaller.mockImplementation(() => {
       throw new Error("fs cleanup failed");
     });
     d.webhookIngress.internal.revokeForCaller.mockRejectedValue(new Error("webhook failed"));
 
-    await expect(
-      cleanupRuntimeEntity(record("panel", "panel:one"), {
-        panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
-        egressProxy: d.egressProxy,
-        approvalQueue: d.approvalQueue,
-        credentialSessionGrantStore: d.credentialSessionGrantStore,
-        tokenManager: d.tokenManager,
-        connectionGrants: d.connectionGrants,
-        getFsService: () => d.fsService as never,
-        getWebhookIngress: () => d.webhookIngress,
-        getWorkerdManager: () => d.workerdManager as never,
-      })
-    ).resolves.toBeUndefined();
+    const cleanup = cleanupRuntimeEntity(record("panel", "panel:one"), {
+      panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
+      egressProxy: d.egressProxy,
+      approvalQueue: d.approvalQueue,
+      credentialSessionGrantStore: d.credentialSessionGrantStore,
+      revokeAgentCredentials: d.revokeAgentCredentials,
+      tokenManager: d.tokenManager,
+      connectionGrants: d.connectionGrants,
+      getFsService: () => d.fsService as never,
+      getWebhookIngress: () => d.webhookIngress,
+      getWorkerdManager: () => d.workerdManager as never,
+    });
+
+    await expect(cleanup).rejects.toThrow(
+      "Runtime entity cleanup was incomplete for panel:one (2 steps failed)"
+    );
 
     expect(d.fsService.closeHandlesForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.webhookIngress.internal.revokeForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.tokenManager.revokeToken).toHaveBeenCalledWith("panel:one");
+    expect(d.tokenManager.revokeToken).toHaveBeenCalledWith("agent:panel:one");
   });
 });

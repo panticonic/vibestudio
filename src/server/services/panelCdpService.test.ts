@@ -2,13 +2,61 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { createTestServiceContext } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import {
+  createVerifiedCaller,
+  ServiceAccessError,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
+import {
+  createTestServiceContext,
+  withTestServiceDispatcher,
+} from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
 import { createPanelCdpService, type PanelCdpServiceDeps } from "./panelCdpService.js";
 import type { PanelAccessPermissionDeps } from "./panelAccessPermission.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
+import {
+  requestCapabilityPermission,
+  type CapabilityPermissionDeps,
+} from "./capabilityPermission.js";
+
+type PanelAccessTestDeps = PanelAccessPermissionDeps & CapabilityPermissionDeps;
+let currentAuthorityDeps: PanelAccessTestDeps | null = null;
+
+function withCanonicalAuthority(ctx: ServiceContext): ServiceContext {
+  ctx.authorityDecisions = new Map();
+  ctx.authority = {
+    allows: vi.fn(async ({ capability }) => capability === "panel-hosting" && false),
+    assert: vi.fn(async (input) => {
+      if (!currentAuthorityDeps || !input.challenge || input.acquisition?.kind !== "approval") {
+        throw new Error("test canonical authority adapter is not configured");
+      }
+      const permission = await requestCapabilityPermission(currentAuthorityDeps, {
+        caller: input.authorizingCaller ?? ctx.caller,
+        capability: input.capability,
+        resource: { ...input.challenge.resource, key: input.resourceKey },
+        operation: input.challenge.operation,
+        title: input.challenge.title,
+        description: input.challenge.description,
+        severity: input.challenge.severity,
+        deniedReason: input.challenge.deniedReason,
+        dedupKey: input.challenge.dedupKey,
+        details: input.challenge.details ? [...input.challenge.details] : undefined,
+        signal: input.challenge.signal,
+        allowedDecisions: ["once", ...input.acquisition.grantScopes, "deny", "dismiss"],
+      });
+      if (!permission.allowed) {
+        throw new ServiceAccessError("panelCdp", "operation", permission.reason, "EACCES");
+      }
+      if (permission.decision) {
+        ctx.authorityDecisions!.set(input.capability, permission.decision);
+      }
+    }),
+  };
+  return ctx;
+}
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-cdp-"));
@@ -19,6 +67,7 @@ function approvalQueueMock(
 ): ApprovalQueue {
   return {
     request: vi.fn(async () => decision),
+    requestCapability: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
@@ -43,32 +92,38 @@ function approvalQueueMock(
 }
 
 function ctx(id = "panel:requester") {
-  return createTestServiceContext(
-    createVerifiedCaller(id, "panel", {
-      callerId: id,
-      callerKind: "panel",
-      repoPath: "panels/requester",
-      executionDigest: "a".repeat(64),
-      requested: [
-        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
-        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
-      ],
-    })
+  return withCanonicalAuthority(
+    createTestServiceContext(
+      createVerifiedCaller(id, "panel", {
+        callerId: id,
+        callerKind: "panel",
+        repoPath: "panels/requester",
+        executionDigest: "a".repeat(64),
+        delegations: [],
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
+      })
+    )
   );
 }
 
 function runtimeCtx(kind: "worker" | "do", id: string) {
-  return createTestServiceContext(
-    createVerifiedCaller(id, kind, {
-      callerId: id,
-      callerKind: kind,
-      repoPath: `workers/${id}`,
-      executionDigest: "a".repeat(64),
-      requested: [
-        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
-        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
-      ],
-    })
+  return withCanonicalAuthority(
+    createTestServiceContext(
+      createVerifiedCaller(id, kind, {
+        callerId: id,
+        callerKind: kind,
+        repoPath: `workers/${id}`,
+        executionDigest: "a".repeat(64),
+        delegations: [],
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
+      })
+    )
   );
 }
 
@@ -78,10 +133,8 @@ function runtimeCtx(kind: "worker" | "do", id: string) {
  * prompts once with `context.boundary`. Same-context / context-less targets are
  * free.
  */
-function accessFields(
-  overrides: Partial<PanelAccessPermissionDeps> = {}
-): PanelAccessPermissionDeps {
-  return {
+function accessFields(overrides: Partial<PanelAccessTestDeps> = {}): PanelAccessTestDeps {
+  const fields = {
     approvalQueue: approvalQueueMock("session"),
     grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
     contextExists: vi.fn(() => true),
@@ -95,6 +148,7 @@ function accessFields(
           callerKind: "panel",
           repoPath: "panels/anchor",
           executionDigest: "a".repeat(64),
+          delegations: [],
           requested: [
             { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
             { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -103,14 +157,16 @@ function accessFields(
     ),
     ...overrides,
   };
+  currentAuthorityDeps = fields;
+  return fields;
 }
 
-type CdpTestDeps = Partial<PanelAccessPermissionDeps> &
+type CdpTestDeps = Partial<PanelAccessTestDeps> &
   Omit<PanelCdpServiceDeps, keyof PanelAccessPermissionDeps>;
 
 /** Merge context-boundary defaults (overridable per test) with the CDP deps. */
 function cdpService(deps: CdpTestDeps) {
-  return createPanelCdpService({ ...accessFields(deps), ...deps });
+  return withTestServiceDispatcher(createPanelCdpService({ ...accessFields(deps), ...deps }));
 }
 
 describe("panelCdpService", () => {
@@ -131,7 +187,7 @@ describe("panelCdpService", () => {
 
     await expect(service.handler(ctx(), "getCdpEndpoint", ["target"])).resolves.toEqual(endpoint);
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         operation: expect.objectContaining({ verb: "Automate panel in" }),
@@ -153,7 +209,7 @@ describe("panelCdpService", () => {
 
     await expect(service.handler(ctx(), "getCdpEndpoint", ["target"])).resolves.toEqual(endpoint);
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(getEndpoint).toHaveBeenCalledWith("target", "panel:requester");
   });
 
@@ -176,14 +232,14 @@ describe("panelCdpService", () => {
     await service.handler(ctx("panel:requester-two"), "getCdpEndpoint", ["target"]);
 
     expect(getEndpoint).toHaveBeenCalledTimes(3);
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.requestCapability).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         grantResourceKey: contextBoundaryResourceKey("ctx-target", "panel:requester-one"),
       })
     );
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         grantResourceKey: contextBoundaryResourceKey("ctx-target", "panel:requester-two"),
@@ -265,7 +321,7 @@ describe("panelCdpService", () => {
         service.handler(runtimeCtx(kind, callerId), "getCdpEndpoint", ["target"])
       ).resolves.toEqual(endpoint);
 
-      expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
         expect.objectContaining({
           capability: CONTEXT_BOUNDARY_CAPABILITY,
           grantResourceKey: contextBoundaryResourceKey("ctx-target", callerId),
@@ -291,7 +347,7 @@ describe("panelCdpService", () => {
 
     await service.handler(ctx(), "getCdpEndpoint", ["shell"]);
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         severity: "severe",
@@ -318,7 +374,7 @@ describe("panelCdpService", () => {
       service.handler(ctx(), "navigate", ["target", "https://example.com"])
     ).resolves.toBeUndefined();
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
     );
     expect(drive).toHaveBeenCalledWith("target", "panel:requester", "navigate", [
@@ -348,7 +404,7 @@ describe("panelCdpService", () => {
       service.handler(ctx(), "navigate", ["chat-panel", "https://example.com"])
     ).resolves.toBeUndefined();
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
     );
     expect(drive).toHaveBeenCalledWith("chat-panel", "panel:requester", "navigate", [
@@ -386,7 +442,7 @@ describe("panelCdpService", () => {
       endpoint
     );
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
     );
     expect(getEndpoint).toHaveBeenCalledWith("chat-panel", "panel:requester");
@@ -407,7 +463,7 @@ describe("panelCdpService", () => {
       service.handler(runtimeCtx("worker", "worker:agent"), "reload", ["target"])
     ).resolves.toBeUndefined();
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(drive).toHaveBeenCalledWith("target", "worker:agent", "reload", []);
   });
 
@@ -442,7 +498,7 @@ describe("panelCdpService", () => {
       capacity: { entries: 1000, errors: 500 },
     });
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
     );
     expect(consoleHistory).toHaveBeenCalledWith("target", "panel:requester", {
@@ -480,7 +536,7 @@ describe("panelCdpService", () => {
       service.handler(ctx(), "navigate", ["target", "file:///etc/passwd"])
     ).rejects.toThrow("Invalid URL");
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(drive).not.toHaveBeenCalled();
   });
 
@@ -504,7 +560,7 @@ describe("panelCdpService", () => {
       service.handler(ctx(), "screenshot", ["target", { format: "png" }])
     ).resolves.toEqual(shot);
     // Cross-context ⇒ the same context-boundary prompt as raw CDP access.
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
     );
     expect(screenshot).toHaveBeenCalledWith("target", "panel:requester", { format: "png" });
@@ -539,7 +595,7 @@ describe("panelCdpService", () => {
     await expect(
       service.handler(createTestServiceContext(agentCaller), "screenshot", ["target", undefined])
     ).resolves.toEqual(shot);
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("agent callers are denied (not prompted, never anchor-substituted) cross-context", async () => {
@@ -579,7 +635,7 @@ describe("panelCdpService", () => {
     await expect(
       service.handler(createTestServiceContext(agentCaller), "screenshot", ["target", undefined])
     ).rejects.toThrow(/agents may only automate panels in their own context/);
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(screenshot).not.toHaveBeenCalled();
   });
 
@@ -601,7 +657,7 @@ describe("panelCdpService", () => {
         ["target"]
       )
     ).resolves.toEqual(endpoint);
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("routes internal host-provider transport without panel target approval", async () => {

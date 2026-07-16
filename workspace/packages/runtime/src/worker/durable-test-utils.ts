@@ -181,26 +181,30 @@ export function createTestDirectAuthority(input: {
           : "host:test-product"
   ) as Principal;
   const context: AuthorizationContext = {
+    authorizingOrigin: { kind: principalKind, principal: subject },
     host: principalKind === "host" ? subject : null,
     actingUser: principalKind === "user" ? subject : null,
     device: null,
     entity: principalKind === "entity" ? subject : null,
     incarnation: principalKind === "code" ? "test-incarnation" : null,
-    code: principalKind === "code" ? subject : null,
-    codeManifest:
-      principalKind === "code"
-        ? {
-            principal: subject,
-            requested: [{ capability, resource: { kind: "exact", key: resourceKey } }],
-          }
-        : null,
+    codeAuthority: {
+      executor:
+        principalKind === "code"
+          ? {
+              principal: subject,
+              requested: [{ capability, resource: { kind: "exact", key: resourceKey } }],
+            }
+          : null,
+      execution: null,
+      initiator: null,
+      delegations: [],
+    },
     deviceOwnership: null,
     ownerChain: [],
     agentBinding:
       principalKind === "entity"
         ? { entity: subject, contextId: "test-context", channelId: "test-channel" }
         : null,
-    delegation: [],
     workspace: { workspaceId: "test-workspace", member: true, role: "member", revision: "1" },
     session: { id: "test-session", audience: resourceKey, version: "1.0.0", expiresAt: now + 5_000 },
   };

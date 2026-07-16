@@ -7,12 +7,22 @@
  */
 
 import { z } from "zod";
-import type { ServiceDefinition } from "./serviceDefinition.js";
-import type { MethodAuthorityDescriptor, MethodSchema } from "./typedServiceClient.js";
+import type { PreparedAuthoritySelection, ServiceDefinition } from "./serviceDefinition.js";
+import type {
+  MethodAuthorityDescriptor,
+  MethodSchema,
+  PreparedAuthorityRequirement,
+} from "./typedServiceClient.js";
 import type { CallerKind, CodeIdentityCallerKind } from "./principalKinds.js";
 import { rpcErrorKindOf, type AuthenticatedCaller } from "@vibestudio/rpc";
 import type { AgentBinding, UserSubject } from "@vibestudio/identity/types";
 import type { AuthorizationContext, AuthorityGrant } from "./authorization.js";
+import type {
+  ApprovalDecision,
+  ApprovalDetailFormat,
+  ApprovalOperationDescriptor,
+} from "./approvals.js";
+import { capabilityPatternCovers } from "./authorityManifest.js";
 import {
   bindMethodCapability,
   evaluateAuthority,
@@ -175,6 +185,8 @@ export interface VerifiedCodeIdentity {
   executionDigest: string;
   /** Immutable requests sealed into the exact execution recipe. */
   requested: readonly import("@vibestudio/rpc").CapabilityScope[];
+  /** Immutable eval-delegation ceiling sealed into the exact execution recipe. */
+  delegations: readonly import("./authorityManifest.js").EvalAuthorityDelegation[];
 }
 
 /**
@@ -328,6 +340,28 @@ export function deferIfNeeded<T>(
 export type ServiceContext = {
   /** Canonical verified identity. Boundary code constructs this once. */
   caller: VerifiedCaller;
+  /** Immutable verified runtime that transported a live eval call. The
+   * dispatcher snapshots this before replacing `caller` with evaluated code,
+   * so methods with multiple authority leaves revalidate the same deputy. */
+  transportCaller?: VerifiedCaller;
+  /** Opaque live eval lease carried by the trusted runtime adapter. The host
+   * coordinator resolves it; handlers never inspect or authorize from it. */
+  evalInvocation?: {
+    runId: string;
+    credential: string;
+    objectKey: string;
+    /** Set only after the host coordinator authenticates the opaque lease. */
+    contextId?: string;
+  };
+  /** Authority-only preparation of a canonical call shape. No handler may run,
+   * and exact-dispatch (`once`) permits are intentionally unavailable. */
+  evalPreauthorization?: boolean;
+  /** Cancellation for a host-only eval preauthorization pass. Authority
+   * challenges must bind their waiters to this signal. */
+  evalPreauthorizationSignal?: AbortSignal;
+  /** Verified root initiator for prompts/audit when a deputy (notably EvalDO)
+   * transports the operation. Domain routing still uses `caller`. */
+  authorizingCaller?: VerifiedCaller;
   /** Complete host-authenticated authority facts for compositional methods. */
   authorization?: AuthorizationContext;
   /**
@@ -340,13 +374,26 @@ export type ServiceContext = {
       capability: string;
       resourceKey: string;
       requirement: import("./authorization.js").AuthorityRequirement;
+      /** How invocation code may satisfy this dynamically prepared leaf. */
+      acquisition?: import("./typedServiceClient.js").EvalCapabilityAcquisition;
+      /** Verified principal on whose behalf a host-mediated operation runs. */
+      authorizingCaller?: VerifiedCaller;
+      /** Host-derived review copy for a state-dependent canonical resource. */
+      challenge?: AuthorityChallengePresentation;
     }): Promise<void>;
     allows(input: {
       capability: string;
       resourceKey: string;
       requirement: import("./authorization.js").AuthorityRequirement;
+      acquisition?: import("./typedServiceClient.js").EvalCapabilityAcquisition;
+      authorizingCaller?: VerifiedCaller;
+      challenge?: AuthorityChallengePresentation;
     }): Promise<boolean>;
   };
+  /** Decisions produced by the canonical pre-handler authority challenge
+   * adapter, available only for result/audit ergonomics. Handlers never use
+   * this map to authorize an effect. */
+  authorityDecisions?: Map<string, "once" | "run" | "session" | "version">;
   /**
    * Upstream userland caller for an extension-originated service call. Set
    * only after the server validates an extension's opaque parent invocation
@@ -383,6 +430,33 @@ export type ServiceContext = {
    */
   body?: ReadableStream<Uint8Array>;
 };
+
+/** Review contract produced alongside a host-derived canonical authority leaf.
+ * The dispatcher still derives and checks the capability, requirement,
+ * resource, and authenticated principal; this contract supplies human review
+ * copy plus any operation-specific restriction on meaningful decisions. */
+export interface AuthorityChallengePresentation {
+  title: string;
+  description?: string;
+  severity?: "standard" | "severe";
+  deniedReason: string;
+  dedupKey?: string | null;
+  resource: { type: string; label: string; value: string };
+  operation: {
+    kind: ApprovalOperationDescriptor["kind"];
+    verb: string;
+    object: { type: string; label: string; value: string };
+    groupKey?: string;
+  };
+  details?: readonly { label: string; value: string; format?: ApprovalDetailFormat }[];
+  /**
+   * Exact decisions meaningful for this operation. This is host-derived policy,
+   * not UI presentation: authority brokers must intersect their ordinary grant
+   * scopes with this set before presenting or accepting a decision.
+   */
+  allowedDecisions?: readonly ApprovalDecision[];
+  signal?: AbortSignal;
+}
 
 export type ServiceHandler = (
   ctx: ServiceContext,
@@ -426,12 +500,12 @@ export class ServiceError extends Error {
  * transports can map this to a 403 / structured RPC error code.
  */
 export class ServiceAccessError extends ServiceError {
-  constructor(service: string, method: string, message?: string) {
+  constructor(service: string, method: string, message?: string, code = "EACCES") {
     super(
       service,
       method,
       message ?? `Authority denied for service '${service}.${method}'`,
-      "EACCES",
+      code,
       undefined,
       "access"
     );
@@ -447,25 +521,69 @@ export class ServiceDispatcher {
   private definitions = new Map<string, ServiceDefinition>();
   private initialized = false;
   private authorityResolver?: (input: {
+    ctx: ServiceContext;
     caller: VerifiedCaller;
     service: string;
     method: string;
     capability: string;
     resourceKey: string;
+    requirement: import("./authorization.js").AuthorityRequirement;
+    acquisition?: import("./typedServiceClient.js").EvalCapabilityAcquisition;
+    challenge?: AuthorityChallengePresentation;
+    preauthorization?: boolean;
+    sensitivity?: import("./serviceAuthority.js").MethodSensitivity;
   }) =>
-    | { context: AuthorizationContext; grants: readonly AuthorityGrant[] }
-    | Promise<{ context: AuthorizationContext; grants: readonly AuthorityGrant[] }>;
+    | {
+        context: AuthorizationContext;
+        grants: readonly AuthorityGrant[];
+        effectiveCaller?: VerifiedCaller;
+        authorizingCaller?: VerifiedCaller;
+        contextId?: string;
+        readOnly?: boolean;
+        decision?: "once" | "run" | "session" | "version";
+      }
+    | Promise<{
+        context: AuthorizationContext;
+        grants: readonly AuthorityGrant[];
+        effectiveCaller?: VerifiedCaller;
+        authorizingCaller?: VerifiedCaller;
+        contextId?: string;
+        readOnly?: boolean;
+        decision?: "once" | "run" | "session" | "version";
+      }>;
 
   setAuthorityResolver(
     resolver: (input: {
+      ctx: ServiceContext;
       caller: VerifiedCaller;
       service: string;
       method: string;
       capability: string;
       resourceKey: string;
+      requirement: import("./authorization.js").AuthorityRequirement;
+      acquisition?: import("./typedServiceClient.js").EvalCapabilityAcquisition;
+      challenge?: AuthorityChallengePresentation;
+      preauthorization?: boolean;
+      sensitivity?: import("./serviceAuthority.js").MethodSensitivity;
     }) =>
-      | { context: AuthorizationContext; grants: readonly AuthorityGrant[] }
-      | Promise<{ context: AuthorizationContext; grants: readonly AuthorityGrant[] }>
+      | {
+          context: AuthorizationContext;
+          grants: readonly AuthorityGrant[];
+          effectiveCaller?: VerifiedCaller;
+          authorizingCaller?: VerifiedCaller;
+          contextId?: string;
+          readOnly?: boolean;
+          decision?: "once" | "run" | "session" | "version";
+        }
+      | Promise<{
+          context: AuthorizationContext;
+          grants: readonly AuthorityGrant[];
+          effectiveCaller?: VerifiedCaller;
+          authorizingCaller?: VerifiedCaller;
+          contextId?: string;
+          readOnly?: boolean;
+          decision?: "once" | "run" | "session" | "version";
+        }>
   ): void {
     this.authorityResolver = resolver;
   }
@@ -486,9 +604,36 @@ export class ServiceDispatcher {
    * definition is returned so callers can detect the replacement.
    */
   registerService(def: ServiceDefinition): ServiceDefinition | undefined {
+    const usedPreparers = new Set<string>();
     for (const [method, schema] of Object.entries(def.methods)) {
       if (!schema.authority && !def.authority) {
         throw new Error(`Service method ${def.name}.${method} has no authority declaration`);
+      }
+      const declaration = schema.authority ?? def.authority;
+      if ("requirement" in declaration && declaration.prepared) {
+        const { resolver, leaves } = declaration.prepared;
+        if (!def.authorityPreparation?.[resolver]) {
+          throw new Error(
+            `Service method ${def.name}.${method} references missing authority preparer ${resolver}`
+          );
+        }
+        if (leaves.length === 0) {
+          throw new Error(
+            `Service method ${def.name}.${method} declares an empty prepared leaf set`
+          );
+        }
+        const capabilities = new Set(leaves.map((leaf) => leaf.capability));
+        if (capabilities.size !== leaves.length) {
+          throw new Error(
+            `Service method ${def.name}.${method} declares duplicate prepared capability leaves`
+          );
+        }
+        usedPreparers.add(resolver);
+      }
+    }
+    for (const resolver of Object.keys(def.authorityPreparation ?? {})) {
+      if (!usedPreparers.has(resolver)) {
+        throw new Error(`Service ${def.name} registers unused authority preparer ${resolver}`);
       }
     }
     const previous = this.definitions.get(def.name);
@@ -591,6 +736,35 @@ export class ServiceDispatcher {
   }
 
   /**
+   * Validate and resolve a call's exact canonical authority leaves without
+   * invoking its handler. Eval start uses this for up-front preauthorization;
+   * eventual dispatch validates and evaluates the call again from live state.
+   */
+  async preauthorize(
+    ctx: ServiceContext,
+    service: string,
+    method: string,
+    args: unknown[]
+  ): Promise<void> {
+    if (!ctx.evalInvocation || ctx.evalPreauthorization !== true) {
+      throw new ServiceError(service, method, "Preauthorization requires a live eval invocation");
+    }
+    const def = this.definitions.get(service);
+    const methodDef = def?.methods[method];
+    if (!def || !methodDef) throw new ServiceError(service, method, "Unknown service method");
+    const normalized = normalizeServiceArgs(args, methodDef.args);
+    const parsed = methodDef.args.safeParse(normalized);
+    if (!parsed.success) {
+      throw new ServiceError(
+        service,
+        method,
+        `Invalid args: ${formatArgsValidationError(parsed.error)}${formatUsageHint(service, method, methodDef)}`
+      );
+    }
+    await this.assertAuthority(ctx, service, method, normalized);
+  }
+
+  /**
    * Enforce the exact same compositional contract for alternate transports
    * whose byte streaming cannot pass through the ordinary handler invocation.
    */
@@ -600,6 +774,7 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[]
   ): Promise<void> {
+    if (ctx.evalInvocation && !ctx.transportCaller) ctx.transportCaller = ctx.caller;
     const serviceDef = this.definitions.get(service);
     const methodDef = serviceDef?.methods[method];
     if (!serviceDef || !methodDef) {
@@ -626,7 +801,14 @@ export class ServiceDispatcher {
           };
     const resourceKey = deriveAuthorityResource(descriptor.resource, args);
     ctx.authority = {
-      assert: ({ capability, resourceKey: dynamicResource, requirement }) =>
+      assert: ({
+        capability,
+        resourceKey: dynamicResource,
+        requirement,
+        acquisition,
+        authorizingCaller,
+        challenge,
+      }) =>
         this.enforceRequirement(
           ctx,
           service,
@@ -634,9 +816,19 @@ export class ServiceDispatcher {
           capability,
           dynamicResource,
           bindMethodCapability(requirement, capability),
-          methodDef
+          methodDef,
+          acquisition,
+          authorizingCaller,
+          challenge
         ),
-      allows: async ({ capability, resourceKey: dynamicResource, requirement }) => {
+      allows: async ({
+        capability,
+        resourceKey: dynamicResource,
+        requirement,
+        acquisition,
+        authorizingCaller,
+        challenge,
+      }) => {
         try {
           await this.enforceRequirement(
             ctx,
@@ -645,11 +837,14 @@ export class ServiceDispatcher {
             capability,
             dynamicResource,
             bindMethodCapability(requirement, capability),
-            methodDef
+            methodDef,
+            acquisition,
+            authorizingCaller,
+            challenge
           );
           return true;
         } catch (error) {
-          if (error instanceof ServiceAccessError) return false;
+          if (isAuthorityDenial(error)) return false;
           throw error;
         }
       },
@@ -661,9 +856,16 @@ export class ServiceDispatcher {
       capabilityName,
       resourceKey,
       bindMethodCapability(descriptor.requirement, capabilityName),
-      methodDef
+      methodDef,
+      "evalAcquisition" in descriptor ? descriptor.evalAcquisition : undefined
     );
     for (const additional of "additional" in descriptor ? (descriptor.additional ?? []) : []) {
+      if (
+        additional.when &&
+        !additional.when.origins.includes(ctx.authorization?.authorizingOrigin.kind ?? "code")
+      ) {
+        continue;
+      }
       const additionalResourceKey = deriveAuthorityResource(additional.resource, args);
       await this.enforceRequirement(
         ctx,
@@ -672,8 +874,63 @@ export class ServiceDispatcher {
         additional.capability,
         additionalResourceKey,
         bindMethodCapability(additional.requirement, additional.capability),
-        methodDef
+        methodDef,
+        additional.evalAcquisition
       );
+    }
+    if ("prepared" in descriptor && descriptor.prepared) {
+      const prepare = serviceDef.authorityPreparation?.[descriptor.prepared.resolver];
+      if (!prepare) {
+        throw new ServiceError(
+          service,
+          method,
+          `Authority preparer '${descriptor.prepared.resolver}' is unavailable`
+        );
+      }
+      const selected = await prepare(ctx, args);
+      const seen = new Set<string>();
+      for (const selection of selected) {
+        const matchingLeaves = descriptor.prepared.leaves.filter((leaf) =>
+          capabilityPatternCovers(leaf.capability, selection.capability)
+        );
+        if (matchingLeaves.length !== 1) {
+          throw new ServiceError(
+            service,
+            method,
+            matchingLeaves.length === 0
+              ? `Authority preparer selected undeclared capability '${selection.capability}'`
+              : `Authority preparer selected ambiguously declared capability '${selection.capability}'`
+          );
+        }
+        const leaf = matchingLeaves[0]!;
+        const selectionKey = `${selection.capability}\u0000${selection.resourceKey}`;
+        if (seen.has(selectionKey)) {
+          throw new ServiceError(
+            service,
+            method,
+            `Authority preparer selected '${selection.capability}' for '${selection.resourceKey}' more than once`
+          );
+        }
+        seen.add(selectionKey);
+        const requirement = resolvePreparedRequirement(
+          service,
+          method,
+          leaf.requirement,
+          selection
+        );
+        await this.enforceRequirement(
+          ctx,
+          service,
+          method,
+          selection.capability,
+          selection.resourceKey,
+          bindMethodCapability(requirement, selection.capability),
+          methodDef,
+          leaf.evalAcquisition,
+          selection.authorizingCaller,
+          selection.challenge
+        );
+      }
     }
 
     // Read-only containment: a caller may request a mode in which only methods
@@ -687,7 +944,8 @@ export class ServiceDispatcher {
         method,
         `Blocked in read-only mode: '${service}.${method}' is not declared read-only ` +
           `(sensitivity ${methodDef?.access?.sensitivity ?? "unknown"}). A read-only caller may ` +
-          `only invoke methods declaring access.sensitivity === "read".`
+          `only invoke methods declaring access.sensitivity === "read".`,
+        "EVAL_READ_ONLY"
       );
     }
   }
@@ -699,20 +957,45 @@ export class ServiceDispatcher {
     capability: string,
     resourceKey: string,
     requirement: import("./authorization.js").AuthorityRequirement,
-    methodDef: MethodSchema
+    methodDef: MethodSchema,
+    acquisition?: import("./typedServiceClient.js").EvalCapabilityAcquisition,
+    authorizingCaller?: VerifiedCaller,
+    challenge?: AuthorityChallengePresentation
   ): Promise<void> {
     const resolver = this.authorityResolver;
     if (!resolver) {
       throw new ServiceError(service, method, "Compositional authority resolver is unavailable");
     }
     const resolved = await resolver({
-      caller: ctx.caller,
+      ctx,
+      caller: authorizingCaller ?? ctx.caller,
       service,
       method,
       capability,
       resourceKey,
+      requirement,
+      ...(acquisition ? { acquisition } : {}),
+      ...(challenge ? { challenge } : {}),
+      ...(ctx.evalPreauthorization ? { preauthorization: true } : {}),
+      ...(methodDef.access?.sensitivity ? { sensitivity: methodDef.access.sensitivity } : {}),
     });
     ctx.authorization = resolved.context;
+    if (ctx.evalInvocation && resolved.contextId) {
+      ctx.evalInvocation.contextId = resolved.contextId;
+    }
+    if (resolved.authorizingCaller) {
+      ctx.authorizingCaller = resolved.authorizingCaller;
+    }
+    // Evaluated code is neither its initiating user/agent nor the EvalDO kernel
+    // that transports its calls. Once the invocation coordinator authenticates
+    // the opaque lease it supplies a host-attested code caller for domain
+    // policy. The root initiator remains separately available for prompts and
+    // user-facing attribution through `authorizingCaller`.
+    if (resolved.effectiveCaller) ctx.caller = resolved.effectiveCaller;
+    if (resolved.readOnly === true) ctx.readOnly = true;
+    if (resolved.decision) {
+      (ctx.authorityDecisions ??= new Map()).set(capability, resolved.decision);
+    }
     const decision = evaluateAuthority({
       context: resolved.context,
       requirement,
@@ -720,10 +1003,24 @@ export class ServiceDispatcher {
       grants: resolved.grants,
     });
     if (!decision.allowed) {
+      const evalCode = ctx.evalInvocation
+        ? decision.code === "relationship" || decision.code === "session"
+          ? "EVAL_RELATIONSHIP_FAILED"
+          : decision.code === "delegation"
+            ? "EVAL_CAPABILITY_NOT_DELEGATED"
+            : decision.code === "denied"
+              ? "EVAL_APPROVAL_DENIED"
+              : decision.code === "missing-grant"
+                ? "EVAL_APPROVAL_REQUIRED"
+                : decision.code === "not-requested"
+                  ? "EVAL_AUTHORITY_CONSTRAINT"
+                  : "EVAL_CAPABILITY_CLOSED"
+        : "EACCES";
       throw new ServiceAccessError(
         service,
         method,
-        `${decision.reason} (${decision.code})${formatAccessHint(methodDef)}`
+        `${decision.reason} (${decision.code})${formatAccessHint(methodDef)}`,
+        evalCode
       );
     }
   }
@@ -764,6 +1061,70 @@ export class ServiceDispatcher {
   }
 }
 
+function isAuthorityDenial(error: unknown): boolean {
+  if (error instanceof ServiceAccessError) return true;
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : "";
+  return code === "EACCES" || code.startsWith("EVAL_");
+}
+
+function resolvePreparedRequirement(
+  service: string,
+  method: string,
+  declaration: PreparedAuthorityRequirement,
+  selection: PreparedAuthoritySelection
+): import("./authorization.js").AuthorityRequirement {
+  if (declaration.kind !== "selected") {
+    if (selection.requirement) {
+      throw new ServiceError(
+        service,
+        method,
+        `Authority preparer replaced the fixed requirement for '${selection.capability}'`
+      );
+    }
+    return declaration;
+  }
+  if (!selection.requirement) {
+    throw new ServiceError(
+      service,
+      method,
+      `Authority preparer omitted the selected requirement for '${selection.capability}'`
+    );
+  }
+  const allowedPrincipals = new Set(declaration.principals);
+  let capabilityLeaves = 0;
+  const validate = (requirement: import("./authorization.js").AuthorityRequirement): void => {
+    if (requirement.kind === "capability") {
+      capabilityLeaves += 1;
+      if (
+        requirement.capability !== selection.capability ||
+        !allowedPrincipals.has(requirement.principal)
+      ) {
+        throw new ServiceError(
+          service,
+          method,
+          `Authority preparer produced an out-of-contract requirement for '${selection.capability}'`
+        );
+      }
+      return;
+    }
+    if (requirement.kind === "all" || requirement.kind === "any") {
+      for (const child of requirement.requirements) validate(child);
+    }
+  };
+  validate(selection.requirement);
+  if (capabilityLeaves === 0) {
+    throw new ServiceError(
+      service,
+      method,
+      `Authority preparer produced no capability leaf for '${selection.capability}'`
+    );
+  }
+  return selection.requirement;
+}
+
 function deriveAuthorityResource(
   derivation: MethodAuthorityDescriptor["resource"],
   args: unknown[]
@@ -779,7 +1140,19 @@ function deriveAuthorityResource(
   if (typeof value !== "string" && typeof value !== "number") {
     throw new Error(`Authority resource must resolve to a string or number`);
   }
-  const rendered = String(value);
+  let rendered = String(value);
+  if (derivation.transform === "url-origin") {
+    const url = new URL(rendered);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("Authority URL resource must use http or https");
+    }
+    rendered = url.origin;
+  } else if (derivation.transform === "external-url-scope") {
+    const url = new URL(rendered);
+    if (url.protocol === "mailto:") rendered = "mailto:";
+    else if (url.protocol === "http:" || url.protocol === "https:") rendered = url.origin;
+    else throw new Error("Authority external URL must use http, https, or mailto");
+  }
   return derivation.prefix ? `${derivation.prefix}${rendered}` : rendered;
 }
 

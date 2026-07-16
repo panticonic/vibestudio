@@ -83,6 +83,39 @@ describe("cleanupReaper.sweep", () => {
     expect(dispatchCalls.some((c) => c.method === "entityCleanupComplete")).toBe(false);
   });
 
+  it("resumes durable context operations in the same sweep", async () => {
+    const contextCleanup = vi.fn(async () => {});
+    const doDispatch = {
+      dispatch: vi.fn(async (_ref: DORef, method: string) => {
+        if (method === "entityFindIncompleteCleanups") return [];
+        if (method === "contextCleanupListPending") {
+          return [
+            {
+              contextId: "ctx-pending",
+              kind: "destroy",
+              createdAt: 1,
+              updatedAt: 1,
+              lastError: "interrupted",
+            },
+          ];
+        }
+        return undefined;
+      }),
+    } as unknown as DODispatch;
+
+    const reaper = createCleanupReaper({
+      doDispatch,
+      workspaceDORef,
+      onRetire: async () => {},
+      onContextCleanup: contextCleanup,
+    });
+
+    expect(await reaper.sweep()).toBe(1);
+    expect(contextCleanup).toHaveBeenCalledWith(
+      expect.objectContaining({ contextId: "ctx-pending", kind: "destroy" })
+    );
+  });
+
   it("skips overlapping sweeps", async () => {
     const incomplete = [makeRecord("panel:slow")];
     let resolveHook: () => void = () => {};

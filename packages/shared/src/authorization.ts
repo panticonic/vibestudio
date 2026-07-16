@@ -146,7 +146,18 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       return { allowed: true, code: "allowed", reason: "all requirements satisfied", requirement };
     }
     if (requirement.kind === "any") {
-      const decisions = requirement.requirements.map(evaluate);
+      const matching = requirement.requirements.filter((child) =>
+        requirementMatchesOrigin(child, input.context.authorizingOrigin.kind)
+      );
+      if (matching.length === 0) {
+        return {
+          allowed: false,
+          code: "missing-principal",
+          reason: `no authority branch admits the ${input.context.authorizingOrigin.kind} origin`,
+          requirement,
+        };
+      }
+      const decisions = matching.map(evaluate);
       const allowed = decisions.find((decision) => decision.allowed);
       return allowed
         ? { allowed: true, code: "allowed", reason: allowed.reason, requirement }
@@ -211,7 +222,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       };
     }
     if (requirement.principal === "code") {
-      const manifest = input.context.codeManifest;
+      const manifest = input.context.codeAuthority.execution ?? input.context.codeAuthority.executor;
       const requested =
         manifest?.principal === principal &&
         manifest.requested.some(
@@ -229,9 +240,13 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         };
       }
     }
+    const grantPrincipal =
+      requirement.principal === "code" && input.context.codeAuthority.execution
+        ? input.context.codeAuthority.initiator?.principal
+        : principal;
     const matching = input.grants.filter(
       (grant) =>
-        grant.subject === principal &&
+        grant.subject === grantPrincipal &&
         capabilityPatternCovers(grant.capability, requirement.capability) &&
         grant.createdAt <= now &&
         (grant.revokedAt === undefined || grant.revokedAt > now) &&
@@ -250,15 +265,20 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       };
     }
     const allowed = matching.some((grant) => grant.effect === "allow");
-    if (allowed && requirement.delegation) {
-      const delegated = input.context.delegation.some(
+    const needsDelegation = Boolean(
+      allowed && requirement.principal === "code" && input.context.codeAuthority.execution
+    );
+    if (allowed && (requirement.delegation || needsDelegation)) {
+      const delegated = input.context.codeAuthority.delegations.some(
         (delegation) =>
           delegation.subject === principal &&
-          delegation.audience === requirement.delegation?.audience &&
-          delegation.audience === input.context.session.audience &&
-          delegation.purpose === requirement.delegation?.purpose &&
+          (requirement.delegation === undefined ||
+            (delegation.audience === requirement.delegation.audience &&
+              delegation.audience === input.context.session.audience &&
+              delegation.purpose === requirement.delegation.purpose)) &&
           (requirement.delegation?.issuer === undefined ||
             delegation.issuer === requirement.delegation.issuer) &&
+          (grantPrincipal === undefined || delegation.issuer === grantPrincipal) &&
           (delegation.revokedAt === undefined || delegation.revokedAt > now) &&
           (delegation.notBefore === undefined || delegation.notBefore <= now) &&
           delegation.expiresAt > now &&
@@ -292,6 +312,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
 }
 
 function principalFor(context: AuthorizationContext, kind: PrincipalKind): Principal | null {
+  if (context.authorizingOrigin.kind !== kind) return null;
   switch (kind) {
     case "host":
       return context.host;
@@ -300,7 +321,7 @@ function principalFor(context: AuthorizationContext, kind: PrincipalKind): Princ
     case "device":
       return context.device;
     case "code":
-      return context.code;
+      return context.authorizingOrigin.principal;
     case "entity":
       return context.entity;
   }
@@ -368,13 +389,13 @@ function builtinRelationship(
     case "agent-binding":
       return context.agentBinding?.entity === context.entity;
     case "code-source": {
-      if (!context.code || value === undefined) return false;
-      const match = /^code:([^@]+)@[0-9a-f]{64}$/.exec(context.code);
+      if (context.authorizingOrigin.kind !== "code" || value === undefined) return false;
+      const match = /^code:([^@]+)@[0-9a-f]{64}$/.exec(context.authorizingOrigin.principal);
       const repoPath = match?.[1];
       return Boolean(repoPath && (value.endsWith("/") ? repoPath.startsWith(value) : repoPath === value));
     }
     case "delegation":
-      return context.delegation.some(
+      return context.codeAuthority.delegations.some(
         (delegation) =>
           (delegation.revokedAt === undefined || delegation.revokedAt > now) &&
           (delegation.notBefore === undefined || delegation.notBefore <= now) &&
@@ -383,6 +404,31 @@ function builtinRelationship(
           (value === undefined || delegation.purpose === value)
       );
   }
+}
+
+function requirementMatchesOrigin(
+  requirement: AuthorityRequirement,
+  origin: AuthorizationContext["authorizingOrigin"]["kind"]
+): boolean {
+  if (requirement.kind === "capability") return requirement.principal === origin;
+  if (requirement.kind === "all") {
+    const capabilities = requirement.requirements.filter((child) =>
+      containsCapabilityRequirement(child)
+    );
+    return capabilities.length === 0 || capabilities.some((child) => requirementMatchesOrigin(child, origin));
+  }
+  if (requirement.kind === "any") {
+    return requirement.requirements.some((child) => requirementMatchesOrigin(child, origin));
+  }
+  return true;
+}
+
+function containsCapabilityRequirement(requirement: AuthorityRequirement): boolean {
+  if (requirement.kind === "capability") return true;
+  if (requirement.kind === "all" || requirement.kind === "any") {
+    return requirement.requirements.some(containsCapabilityRequirement);
+  }
+  return false;
 }
 
 function grantConstraintsMatch(grant: AuthorityGrant, context: AuthorizationContext): boolean {

@@ -407,7 +407,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
 
   /** Seed a forked deep-dive channel's opening analyst turn. The panel calls
    *  this on the freshly-cloned agent after fork(); idempotent via steeringId. */
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async startDeepDive(
     channelId: string,
     args: Record<string, unknown>
@@ -468,7 +468,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   }
 
   /** Entry point for workspace-level `recurring:` jobs (vibestudio.yml). */
-  @rpc({ principals: ["host"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   async runScheduledJob(args: unknown): Promise<{ ok: boolean }> {
     const input = record(args);
     const job = stringArg(input, "job") ?? "briefing";

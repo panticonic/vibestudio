@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PRODUCT_DIRECT_AUTHORITY_CAPABILITIES } from "./productDirectAuthorityCapabilities.generated.js";
+import { productCodeHasCapability } from "./productAuthorityGrants.js";
 
 interface AuthorityRow {
   id: string;
@@ -67,7 +68,9 @@ describe("runtime foundation ledgers", () => {
       ),
     ].sort();
     const actual = authority.rows
-      .filter((row) => row.rpcPlane === "host-service")
+      // Composite requirements add schema-owned leaf rows with `#<leaf>` ids;
+      // the unsuffixed row is the one-to-one method census entry.
+      .filter((row) => row.rpcPlane === "host-service" && !row.id.includes("#"))
       .map((row) => row.id)
       .sort();
     expect(actual).toEqual(expected);
@@ -90,16 +93,44 @@ describe("runtime foundation ledgers", () => {
     );
   });
 
+  it("keeps the eval kernel grant set minimal but lifecycle-complete", () => {
+    const kernel = [
+      "service:blobstore.getText",
+      "service:blobstore.putText",
+      "service:eval.beginCleanup",
+      "service:eval.renew",
+      "service:events.unsubscribeAll",
+      "service:workspace-state.alarmClear",
+      "service:workspace-state.alarmSet",
+    ];
+    for (const capability of kernel) {
+      expect(productCodeHasCapability("product/eval", capability), capability).toBe(true);
+    }
+    // Source/import/build and every user operation travel through a preparation
+    // or run invocation credential. Blobstore is the narrow exception: the
+    // kernel owns immutable run bundles and persistent scope spill records.
+    for (const capability of [
+      "service:build.getBuild",
+      "service:fs.readFile",
+      "service:externalOpen.openExternal",
+    ]) {
+      expect(productCodeHasCapability("product/eval", capability), capability).toBe(false);
+    }
+  });
+
   it("makes every authority decision concrete and reviewable", () => {
     expect(authority.version).toBe(1);
     expect(new Set(authority.rows.map((row) => row.id)).size).toBe(authority.rows.length);
     for (const row of authority.rows) {
-      expect(row.resourceDerivation.kind).toMatch(/literal|argument|direct-target/);
+      expect(row).not.toMatchObject({ sensitivity: "unknown" });
+      expect(row.resourceDerivation.kind).toMatch(/literal|argument|prepared|direct-target/);
       expect(row.currentOutcomes.allowed).not.toBe("");
       expect(row.currentOutcomes.denied).not.toBe("");
       expect(row.predicates.length).toBeGreaterThan(0);
       expect(row.r3aRequirement).not.toMatch(/TODO|unknown|anyOf\(\)/i);
-      expect(row.r3b.review).toBe("unchanged-parity");
+      expect(row.r3b.review).toMatch(
+        /unchanged-parity|schema-owned-additional-leaf|schema-owned-prepared-leaf/
+      );
       expect(row.r3b.change).toBeNull();
       const assertionFile = row.parityAssertion.split("#", 1)[0]!;
       expect(fs.existsSync(path.join(root, assertionFile)), assertionFile).toBe(true);

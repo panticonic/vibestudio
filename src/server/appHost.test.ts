@@ -27,6 +27,7 @@ const testAuthority = (capabilities: readonly string[] = []) => ({
     capability,
     resource: { kind: "prefix" as const, prefix: "" },
   })),
+  delegations: [],
 });
 const TEST_APP_EXECUTION = executionArtifactFixture(
   "apps/shell",
@@ -260,6 +261,7 @@ function panelCaller(callerId = "panel-1") {
     callerKind: "panel",
     repoPath: "panels/test",
     executionDigest: "sourceDigest-panel",
+    delegations: [],
     requested: [
       { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
       { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },

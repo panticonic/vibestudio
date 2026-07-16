@@ -169,7 +169,7 @@ export const WEBHOOKS_MEMBERS = [
 ];
 
 export const EXTENSIONS_MEMBERS = ["use", "invoke", "invokeProvider", "on", "list", "reload"];
-export const APPROVALS_MEMBERS = ["request", "revoke", "list"];
+export const APPROVALS_MEMBERS = ["request", "ask", "revoke", "list"];
 export const NOTIFICATIONS_MEMBERS = ["show", "dismiss"];
 export const PANEL_TREE_MEMBERS = [
   "self",

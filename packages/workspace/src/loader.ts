@@ -10,7 +10,12 @@
 
 import fs from "node:fs";
 import * as path from "path";
-import { getCentralDataPath, getWorkspacesDir, getWorkspaceDir } from "@vibestudio/env-paths";
+import {
+  getCentralDataPath,
+  getWorkspaceReachDir,
+  getWorkspacesDir,
+  getWorkspaceDir,
+} from "@vibestudio/env-paths";
 import YAML from "yaml";
 import dotenv from "dotenv";
 import { z } from "zod";
@@ -68,7 +73,7 @@ const ENV_FILE = ".env";
 const WORKSPACE_DELETE_MAX_RETRIES = 10;
 const WORKSPACE_DELETE_RETRY_DELAY_MS = 100;
 const WORKSPACE_DELETION_MARKER = "deletion.json";
-const WORKSPACE_DELETION_MARKER_VERSION = 1;
+const WORKSPACE_DELETION_MARKER_VERSION = 2;
 
 const ModelConfigSchema = z
   .object({
@@ -643,14 +648,18 @@ export function createAndRegisterWorkspace(
 
 interface StagedWorkspaceDeletion {
   workspaceDir: string;
+  reachDir?: string;
   trashRoot: string;
   trashWorkspaceDir: string;
+  trashReachDir: string;
+  hadReachState: boolean;
 }
 
 interface WorkspaceDeletionMarker {
   version: typeof WORKSPACE_DELETION_MARKER_VERSION;
   name: string;
   workspaceId: string;
+  hadReachState: boolean;
 }
 
 export interface WorkspaceDeletionRecoveryFailure {
@@ -689,7 +698,12 @@ export function deleteAndUnregisterWorkspace(
     );
   }
 
-  const staged = stageWorkspaceDeletion(name, entry.workspaceId, workspaceDir);
+  const staged = stageWorkspaceDeletion(
+    name,
+    entry.workspaceId,
+    workspaceDir,
+    getWorkspaceReachDir(name)
+  );
   let removedWorkspaceId: string | null;
   try {
     removedWorkspaceId = centralData.removeWorkspace(name);
@@ -741,7 +755,9 @@ export function recoverStagedWorkspaceDeletions(
     try {
       const marker = readWorkspaceDeletionMarker(trashRoot);
       const workspaceDir = getWorkspaceDir(marker.name);
+      const reachDir = getWorkspaceReachDir(marker.name);
       const trashWorkspaceDir = path.join(trashRoot, "workspace");
+      const trashReachDir = path.join(trashRoot, "reach");
       const catalogEntry = centralData.getWorkspaceEntry(marker.name);
 
       if (!catalogEntry) {
@@ -754,13 +770,12 @@ export function recoverStagedWorkspaceDeletions(
           `catalog id ${catalogEntry.workspaceId} does not match deletion id ${marker.workspaceId}`
         );
       }
-      if (fs.existsSync(workspaceDir)) {
-        throw new Error(`catalog and live directory already exist for ${marker.name}`);
+      restoreStagedPath(trashWorkspaceDir, workspaceDir, "workspace", marker.name);
+      if (marker.hadReachState) {
+        restoreStagedPath(trashReachDir, reachDir, "workspace reach state", marker.name);
+      } else if (fs.existsSync(trashReachDir) || fs.existsSync(reachDir)) {
+        throw new Error(`unexpected workspace reach state appeared for ${marker.name}`);
       }
-      if (!fs.existsSync(trashWorkspaceDir)) {
-        throw new Error(`staged workspace directory is missing for ${marker.name}`);
-      }
-      fs.renameSync(trashWorkspaceDir, workspaceDir);
       removeWorkspaceTree(trashRoot);
       report.restored.push(marker.name);
     } catch (error) {
@@ -779,7 +794,7 @@ export function recoverStagedWorkspaceDeletions(
 
 /**
  * Delete a deliberately unregistered workspace directory, currently used for
- * the hub's random on-disk ephemeral dev child. Requiring the catalog handle
+ * the hub's random on-disk development checkout. Requiring the catalog handle
  * here prevents this narrow path from becoming an escape hatch around the
  * coordinated registered-workspace deletion above.
  */
@@ -797,22 +812,34 @@ export function deleteUnregisteredWorkspace(
   if (!fs.existsSync(workspaceDir)) return false;
   const staged = stageWorkspaceDeletion(name, `unregistered:${name}`, workspaceDir);
   removeWorkspaceTree(staged.trashRoot);
-  log.info(`[Workspace] Deleted unregistered ephemeral workspace "${name}"`);
+  log.info(`[Workspace] Deleted unregistered development checkout "${name}"`);
   return true;
 }
 
 function stageWorkspaceDeletion(
   name: string,
   workspaceId: string,
-  workspaceDir: string
+  workspaceDir: string,
+  reachDir?: string
 ): StagedWorkspaceDeletion {
   const trashRoot = fs.mkdtempSync(path.join(getWorkspacesDir(), `.delete-${name}-`));
   const trashWorkspaceDir = path.join(trashRoot, "workspace");
+  const trashReachDir = path.join(trashRoot, "reach");
+  const hadReachState = reachDir !== undefined && fs.existsSync(reachDir);
+  const staged: StagedWorkspaceDeletion = {
+    workspaceDir,
+    ...(reachDir ? { reachDir } : {}),
+    trashRoot,
+    trashWorkspaceDir,
+    trashReachDir,
+    hadReachState,
+  };
   try {
     const marker: WorkspaceDeletionMarker = {
       version: WORKSPACE_DELETION_MARKER_VERSION,
       name,
       workspaceId,
+      hadReachState,
     };
     fs.writeFileSync(path.join(trashRoot, WORKSPACE_DELETION_MARKER), JSON.stringify(marker), {
       encoding: "utf-8",
@@ -820,21 +847,59 @@ function stageWorkspaceDeletion(
       flag: "wx",
     });
     fs.renameSync(workspaceDir, trashWorkspaceDir);
+    if (hadReachState) fs.renameSync(reachDir, trashReachDir);
   } catch (error) {
-    removeWorkspaceTree(trashRoot);
+    try {
+      restoreWorkspaceDeletion(staged);
+    } catch (restoreError) {
+      throw new AggregateError(
+        [error, restoreError],
+        `Workspace "${name}" deletion staging failed and its state could not be restored`
+      );
+    }
     throw error;
   }
-  return { workspaceDir, trashRoot, trashWorkspaceDir };
+  return staged;
 }
 
 function restoreWorkspaceDeletion(staged: StagedWorkspaceDeletion): void {
-  if (fs.existsSync(staged.workspaceDir)) {
-    throw new Error(
-      `Cannot restore workspace because its directory was recreated: ${staged.workspaceDir}`
+  restoreStagedPath(
+    staged.trashWorkspaceDir,
+    staged.workspaceDir,
+    "workspace",
+    staged.workspaceDir
+  );
+  if (staged.hadReachState && staged.reachDir) {
+    restoreStagedPath(
+      staged.trashReachDir,
+      staged.reachDir,
+      "workspace reach state",
+      staged.workspaceDir
     );
   }
-  fs.renameSync(staged.trashWorkspaceDir, staged.workspaceDir);
   removeWorkspaceTree(staged.trashRoot);
+}
+
+function restoreStagedPath(
+  stagedPath: string,
+  livePath: string,
+  label: string,
+  workspace: string
+): void {
+  const stagedExists = fs.existsSync(stagedPath);
+  const liveExists = fs.existsSync(livePath);
+  if (stagedExists && liveExists) {
+    throw new Error(`Cannot restore ${label} for ${workspace}: both staged and live paths exist`);
+  }
+  if (!stagedExists && !liveExists) {
+    throw new Error(
+      `Cannot restore ${label} for ${workspace}: both staged and live paths are missing`
+    );
+  }
+  if (stagedExists) {
+    fs.mkdirSync(path.dirname(livePath), { recursive: true });
+    fs.renameSync(stagedPath, livePath);
+  }
 }
 
 function removeWorkspaceTree(target: string): void {
@@ -855,7 +920,7 @@ function readWorkspaceDeletionMarker(trashRoot: string): WorkspaceDeletionMarker
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  if (keys.join(",") !== "name,version,workspaceId") {
+  if (keys.join(",") !== "hadReachState,name,version,workspaceId") {
     throw new Error("workspace deletion marker has an unsupported shape");
   }
   if (record["version"] !== WORKSPACE_DELETION_MARKER_VERSION) {
@@ -868,10 +933,14 @@ function readWorkspaceDeletionMarker(trashRoot: string): WorkspaceDeletionMarker
   if (typeof record["workspaceId"] !== "string" || !record["workspaceId"].trim()) {
     throw new Error("workspace deletion marker workspaceId is required");
   }
+  if (typeof record["hadReachState"] !== "boolean") {
+    throw new Error("workspace deletion marker hadReachState is required");
+  }
   return {
     version: WORKSPACE_DELETION_MARKER_VERSION,
     name: record["name"],
     workspaceId: record["workspaceId"],
+    hadReachState: record["hadReachState"],
   };
 }
 

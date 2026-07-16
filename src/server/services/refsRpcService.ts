@@ -65,6 +65,23 @@ export function createRefsRpcService(deps: RefsRpcServiceDeps): ServiceDefinitio
       "Protected host main refs (repoPath → main): broad read/log access; the updateMains group compare-and-swap is DO-only and invocation-token checked.",
     authority: { principals: ["code", "user", "host"] },
     methods: refsMethods,
+    authorityPreparation: {
+      "refs.updateMains.writer": () => {
+        const capabilityName = "service:refs.updateMains";
+        const writerIdentity = deps.getVcsWriterIdentity();
+        return [
+          {
+            capability: capabilityName,
+            resourceKey: capabilityName,
+            requirement: allOf(
+              capability("code", capabilityName),
+              relationship("entity-self", `entity:${writerIdentity ?? "unbound-vcs-writer"}`),
+              relationship("workspace-member")
+            ),
+          },
+        ];
+      },
+    },
     handler: defineServiceHandler("refs", refsMethods, {
       readMain: (_ctx, [repoPath]) => deps.refs.readMain(repoPath),
       listMains: () => deps.refs.listMains(),
@@ -75,24 +92,9 @@ export function createRefsRpcService(deps: RefsRpcServiceDeps): ServiceDefinitio
         // A panel/app/worker/extension, a non-writer DO, or a re-declared fake
         // `vcs` service (whose identity differs) all fail here.
         const writerIdentity = deps.getVcsWriterIdentity();
-        if (!ctx.authority) throw new Error("refs.updateMains authority evaluator is unavailable");
         if (writerIdentity === null) {
-          await ctx.authority.assert({
-            capability: "service:refs.updateMains",
-            resourceKey: "service:refs.updateMains",
-            requirement: relationship("entity-self", "entity:unbound-vcs-writer"),
-          });
-          throw new Error("Unreachable: an unbound VCS writer cannot satisfy authority");
+          throw new Error("refs.updateMains: no workspace VCS writer is registered");
         }
-        await ctx.authority.assert({
-          capability: "service:refs.updateMains",
-          resourceKey: "service:refs.updateMains",
-          requirement: allOf(
-            capability("code", "service:refs.updateMains"),
-            relationship("entity-self", `entity:${writerIdentity}`),
-            relationship("workspace-member")
-          ),
-        });
 
         // On-behalf-of resolution (§4). The token is a correlation nonce, NOT
         // a credential: identity comes ONLY from the host invocation table.

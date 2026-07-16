@@ -34,21 +34,45 @@ export interface LiveWorkspaceRelationship {
   revision: string;
 }
 
+export type AuthorizationOrigin =
+  | { kind: "code"; principal: Principal }
+  | { kind: "user"; principal: Principal }
+  | { kind: "host"; principal: Principal }
+  | { kind: "device"; principal: Principal }
+  | { kind: "entity"; principal: Principal };
+
+export interface CodeAuthorityChain {
+  executor: {
+    principal: Principal;
+    requested: readonly CapabilityScope[];
+  } | null;
+  execution:
+    | {
+        phase: "preparation" | "run";
+        principal: Principal;
+        runId: string;
+        runDigest: string;
+        requested: readonly CapabilityScope[];
+      }
+    | null;
+  initiator:
+    | { kind: "code" | "interactive-user" | "host"; principal: Principal }
+    | null;
+  delegations: readonly VerifiedDelegation[];
+}
+
 /**
  * Every field is constructed from authenticated transport and live host state.
  * Runtime shape is deliberately absent: routing facts are not authority facts.
  */
 export interface AuthorizationContext {
+  authorizingOrigin: AuthorizationOrigin;
   host: Principal | null;
   actingUser: Principal | null;
   device: Principal | null;
   entity: Principal | null;
   incarnation: string | null;
-  code: Principal | null;
-  codeManifest: {
-    principal: Principal;
-    requested: readonly CapabilityScope[];
-  } | null;
+  codeAuthority: CodeAuthorityChain;
   deviceOwnership: {
     device: Principal;
     user: Principal;
@@ -56,7 +80,6 @@ export interface AuthorizationContext {
   } | null;
   ownerChain: readonly Principal[];
   agentBinding: { entity: Principal; contextId: string; channelId: string } | null;
-  delegation: readonly VerifiedDelegation[];
   workspace: LiveWorkspaceRelationship | null;
   session: {
     id: string;
@@ -149,4 +172,6 @@ export interface DirectAuthorityAttestation {
   expiresAt: number;
   context: AuthorizationContext;
   grants: readonly AuthorityGrant[];
+  /** Host-resolved containment, enforced by the receiver before method entry. */
+  readOnly?: true;
 }

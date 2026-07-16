@@ -17,6 +17,7 @@ import {
   PanelTreeSnapshotSchema,
 } from "@vibestudio/shared/panelContracts";
 import { JsonObjectSchema, JsonValueSchema } from "@vibestudio/shared/wireValues";
+import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
 
 // Access descriptors shared across the panelTree method groups. `callers` is
 // intentionally omitted: the service-level `policy` (see panelTreeService.ts)
@@ -34,6 +35,12 @@ const CLOSE_ACCESS: MethodAccessDescriptor = {
 const ARCHIVE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "destructive",
 };
+const panelContextAuthority = (method: string) =>
+  contextBoundaryAuthority({
+    service: "panelTree",
+    method,
+    principals: ["code", "user", "host"],
+  });
 
 const PanelIdSchema = z.string();
 const StateArgsSchema = z.record(z.unknown());
@@ -162,6 +169,7 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([z.string(), PanelTreeCreateOptionsSchema]),
     returns: CreateResultSchema,
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("create"),
     examples: [{ args: ["panels/chat", { focus: true }] }],
   },
   ensureLoaded: {
@@ -196,24 +204,28 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([PanelIdSchema, StateArgsSchema]),
     returns: JsonObjectSchema,
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("setStateArgs"),
   },
   reload: {
     description: "Reload a panel's view in place, keeping its current snapshot.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("reload"),
   },
   close: {
     description: "Close a panel, removing it (and its subtree) from the tree.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
     access: CLOSE_ACCESS,
+    authority: panelContextAuthority("close"),
   },
   archive: {
     description: "Archive a panel, removing it from the active tree while preserving its history.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
     access: ARCHIVE_ACCESS,
+    authority: panelContextAuthority("archive"),
   },
   archiveOwnedRoots: {
     description: "Internal revocation cleanup: archive every root owned by one account.",
@@ -231,12 +243,14 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("unload"),
   },
   movePanel: {
     description: "Reparent and/or reposition a panel among its siblings (drag-and-drop move).",
     args: z.tuple([MovePanelRequestSchema]),
     returns: z.void(),
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("movePanel"),
     examples: [{ args: [{ panelId: "panel-1", newParentId: null, targetPosition: 0 }] }],
   },
   navigate: {
@@ -245,6 +259,7 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([PanelIdSchema, z.string(), PanelTreeNavigateOptionsSchema]),
     returns: CreateResultSchema.nullable(),
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("navigate"),
     examples: [{ args: ["panel-1", "panels/chat"] }],
   },
   navigateHistory: {
@@ -253,6 +268,7 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([PanelIdSchema, z.union([z.literal(-1), z.literal(1)])]),
     returns: CreateResultSchema.nullable(),
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("navigateHistory"),
     examples: [{ args: ["panel-1", -1] }],
   },
   takeOver: {
@@ -261,24 +277,28 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([PanelIdSchema]),
     returns: PanelFocusResultSchema,
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("takeOver"),
   },
   openDevTools: {
     description: "Open developer tools for a panel, optionally docked to a side or detached.",
     args: z.tuple([PanelIdSchema, z.enum(["detach", "right", "bottom"]).optional()]),
     returns: z.void(),
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("openDevTools"),
   },
   rebuildPanel: {
     description: "Rebuild a panel's runtime artifacts from source without reloading its view.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("rebuildPanel"),
   },
   rebuildAndReload: {
     description: "Rebuild a panel's runtime artifacts from source and then reload its view.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("rebuildAndReload"),
   },
   updatePanelState: {
     description:
@@ -286,6 +306,7 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([PanelIdSchema, PanelNavigationStateSchema]),
     returns: z.void(),
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("updatePanelState"),
   },
   snapshot: {
     description:
@@ -300,6 +321,7 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([PanelIdSchema, z.string(), z.array(z.unknown()).optional()]),
     returns: JsonValueSchema.optional(),
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("callAgent"),
     examples: [{ args: ["panel-1", "_agent.snapshot"] }],
   },
   metadata: {
@@ -321,6 +343,7 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([PanelIdSchema, z.boolean()]),
     returns: z.void(),
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("setCollapsed"),
     examples: [{ args: ["panel-1", true] }],
   },
   expandIds: {
@@ -328,6 +351,7 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([z.array(PanelIdSchema)]),
     returns: z.void(),
     access: WRITE_ACCESS,
+    authority: panelContextAuthority("expandIds"),
     examples: [{ args: [["panel-1", "panel-2"]] }],
   },
 });

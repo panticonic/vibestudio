@@ -19,6 +19,7 @@ const activeEntity: RuntimeEntitySummary = {
   authorityRequests: [
     { capability: "rpc:shell.open", resource: { kind: "exact", key: "workspace" } },
   ],
+  authorityDelegations: [],
 };
 
 describe("verifyPanelCodeIdentity", () => {
@@ -28,6 +29,7 @@ describe("verifyPanelCodeIdentity", () => {
       callerKind: "panel",
       repoPath: panel.source,
       executionDigest: panel.executionDigest,
+      delegations: [],
       requested: activeEntity.authorityRequests,
     });
   });
@@ -37,6 +39,7 @@ describe("verifyPanelCodeIdentity", () => {
     ["source", { source: "panels/other" }],
     ["execution", { executionDigest: "b".repeat(64) }],
     ["sealed authority", { authorityRequests: undefined }],
+    ["sealed delegation", { authorityDelegations: undefined }],
   ])("rejects a mismatched active %s", (_label, override) => {
     expect(() => verifyPanelCodeIdentity(panel, [{ ...activeEntity, ...override }])).toThrow(
       /execution identity changed/

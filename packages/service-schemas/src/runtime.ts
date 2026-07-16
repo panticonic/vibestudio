@@ -10,6 +10,8 @@ import type {
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { DigestSchema } from "./blobstore.js";
 import { CapabilityScopeSchema } from "./build.js";
+import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
+import { EvalAuthorityDelegationSchema } from "./authority/evalDelegation.js";
 
 // Access descriptors carry sensitivity metadata; caller-kind authorization
 // belongs exclusively to the service/method `policy`.
@@ -54,6 +56,7 @@ export const RuntimeEntityHandleSchema = z
       .describe(
         "Capability/resource requests sealed into the exact selected execution; present whenever executionDigest is present."
       ),
+    authorityDelegations: z.array(EvalAuthorityDelegationSchema).readonly().optional(),
     contextId: z.string().describe("Context (working-tree) this entity belongs to."),
     targetId: z
       .string()
@@ -247,6 +250,11 @@ export const runtimeMethods = defineServiceMethods({
       "Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Reuses/reactivates an existing row for the same canonical key. Returns the entity handle (id + runtime targetId).",
     args: z.tuple([CreateEntitySpecSchema]),
     returns: RuntimeEntityHandleSchema,
+    authority: contextBoundaryAuthority({
+      service: "runtime",
+      method: "createEntity",
+      principals: ["code", "user", "host"],
+    }),
     access: {
       sensitivity: "write",
       // Declares the handler's gate (createEntity rejects app for
@@ -296,6 +304,11 @@ export const runtimeMethods = defineServiceMethods({
       }),
     ]),
     returns: z.void(),
+    authority: contextBoundaryAuthority({
+      service: "runtime",
+      method: "retireEntity",
+      principals: ["code", "user", "host"],
+    }),
     access: RETIRE_ACCESS,
     examples: [{ args: [{ id: "do:workers/agent:AgentDO:agent-1", removeContext: true }] }],
   },
@@ -330,6 +343,11 @@ export const runtimeMethods = defineServiceMethods({
           .describe(
             "Capability/resource requests sealed into the active execution; present whenever executionDigest is present."
           ),
+        authorityDelegations: z
+          .array(EvalAuthorityDelegationSchema)
+          .readonly()
+          .optional()
+          .describe("Eval delegation ceiling sealed into the active execution."),
       })
     ),
     access: READ_ACCESS,
@@ -378,7 +396,11 @@ export const runtimeMethods = defineServiceMethods({
     ]),
     returns: WorkspaceContextSchema,
     access: { sensitivity: "write" },
-    authority: { principals: ["user", "host", "code"] },
+    authority: contextBoundaryAuthority({
+      service: "runtime",
+      method: "createContext",
+      principals: ["code", "user", "host"],
+    }),
     examples: [{ args: [{}] }, { args: [{ contextId: "agent-branch-1" }] }],
   },
   cloneContext: {
@@ -408,6 +430,11 @@ export const runtimeMethods = defineServiceMethods({
       }),
     ]),
     returns: CloneContextResultSchema,
+    authority: contextBoundaryAuthority({
+      service: "runtime",
+      method: "cloneContext",
+      principals: ["code", "user", "host"],
+    }),
     access: {
       sensitivity: "write",
       // Reading + duplicating another context's durable state is gated by the
@@ -440,6 +467,11 @@ export const runtimeMethods = defineServiceMethods({
       }),
     ]),
     returns: z.void(),
+    authority: contextBoundaryAuthority({
+      service: "runtime",
+      method: "destroyContext",
+      principals: ["code", "user", "host"],
+    }),
     access: {
       sensitivity: "destructive",
       // Gated by context-boundary, with an ownership bypass: destroying a context
@@ -455,6 +487,38 @@ export const runtimeMethods = defineServiceMethods({
       ],
     },
     examples: [{ args: [{ contextId: "ctx-abc" }] }],
+  },
+  cleanupEvalOwnedContext: {
+    description:
+      "Terminal-lifecycle cleanup for a fresh context durably registered by the exact product EvalDO kernel. The server verifies the caller is that kernel and the supplied root entity belongs to the exact context before recursively destroying the lifecycle subtree. Closed to evaluated invocations and used only after invocation authority is revoked.",
+    args: z.tuple([
+      z
+        .object({
+          contextId: z.string().describe("Fresh context to reclaim."),
+          ownerEntityId: z
+            .string()
+            .describe("Caller-created root entity proving ownership of the fresh context."),
+          recursive: z
+            .boolean()
+            .optional()
+            .describe("Recursively reclaim lifecycle descendants; defaults to true."),
+        })
+        .strict(),
+    ]),
+    returns: z.void(),
+    authority: { principals: ["code"] },
+    access: { sensitivity: "destructive" },
+    examples: [
+      {
+        args: [
+          {
+            contextId: "ctx-child",
+            ownerEntityId: "do:workers/agent:AgentDO:child",
+            recursive: true,
+          },
+        ],
+      },
+    ],
   },
   listOwnedContexts: {
     description:
@@ -524,7 +588,11 @@ export const runtimeMethods = defineServiceMethods({
     ]),
     returns: z.object({ contextId: z.string() }).strict(),
     access: { sensitivity: "write" },
-    authority: { principals: ["user", "host", "code"] },
+    authority: contextBoundaryAuthority({
+      service: "runtime",
+      method: "createSubagentContext",
+      principals: ["code", "user", "host"],
+    }),
     examples: [
       {
         args: [

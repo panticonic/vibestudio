@@ -58,7 +58,7 @@ export class WebhookStoreDO extends DurableObjectBase {
     this.createTables();
   }
 
-  @rpc({ principals: ["host"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   create(
     input: Omit<WebhookIngressSubscription, "subscriptionId" | "createdAt" | "updatedAt">
   ): WebhookIngressSubscription {
@@ -73,7 +73,7 @@ export class WebhookStoreDO extends DurableObjectBase {
     return subscription;
   }
 
-  @rpc({ principals: ["host"] })
+  @rpc({ principals: ["host"], sensitivity: "read" })
   get(subscriptionId: string): WebhookIngressSubscription | null {
     const row = this.sql
       .exec(this.selectSql("WHERE subscription_id = ?"), subscriptionId)
@@ -81,7 +81,7 @@ export class WebhookStoreDO extends DurableObjectBase {
     return row ? this.fromRow(row) : null;
   }
 
-  @rpc({ principals: ["host"] })
+  @rpc({ principals: ["host"], sensitivity: "read" })
   list(ownerCallerId?: string): WebhookIngressSubscription[] {
     const rows = ownerCallerId
       ? this.sql.exec(this.selectSql("WHERE owner_caller_id = ?"), ownerCallerId).toArray()
@@ -89,7 +89,7 @@ export class WebhookStoreDO extends DurableObjectBase {
     return (rows as unknown as WebhookIngressSubscriptionRow[]).map((row) => this.fromRow(row));
   }
 
-  @rpc({ principals: ["host"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   replace(subscription: WebhookIngressSubscription): void {
     this.sql.exec(
       `

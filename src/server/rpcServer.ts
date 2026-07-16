@@ -22,6 +22,7 @@ import {
   type RpcMessage,
   type RpcRequest,
   type RpcResponse,
+  type DirectAuthorityAttestation,
 } from "@vibestudio/rpc";
 import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
 import {
@@ -101,6 +102,13 @@ function parseDOTarget(targetId: string): { source: string; className: string; o
   return { source, className, objectKey };
 }
 
+function evalObjectKeyForCaller(callerId: string): string | null {
+  const parsed = callerId.startsWith("do:") ? parseDOTarget(callerId) : null;
+  return parsed?.source === "product/eval" && parsed.className === "EvalDO"
+    ? parsed.objectKey
+    : null;
+}
+
 /** The server's identity stamped onto response envelopes it returns over /rpc. */
 const SERVER_RESPONDER = { callerId: "main", callerKind: "server" as const };
 
@@ -177,6 +185,7 @@ type RelayCallMeta = {
   requestId?: string;
   idempotencyKey?: string;
   readOnly?: boolean;
+  evalInvocation?: { runId: string; credential: string };
 };
 
 type RelayCallerScope = {
@@ -212,13 +221,18 @@ function resolvePositiveLimit(value: number | undefined, fallback: number, name:
   return value;
 }
 
-function relayCallOptions(
-  meta?: RelayCallMeta
-): { idempotencyKey?: string; readOnly?: boolean } | undefined {
-  if (!meta?.idempotencyKey && !meta?.readOnly) return undefined;
+function relayCallOptions(meta?: RelayCallMeta):
+  | {
+      idempotencyKey?: string;
+      readOnly?: boolean;
+      evalInvocation?: { runId: string; credential: string };
+    }
+  | undefined {
+  if (!meta?.idempotencyKey && !meta?.readOnly && !meta?.evalInvocation) return undefined;
   return {
     ...(meta.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
     ...(meta.readOnly ? { readOnly: true } : {}),
+    ...(meta.evalInvocation ? { evalInvocation: meta.evalInvocation } : {}),
   };
 }
 
@@ -229,11 +243,13 @@ function relayMetaFromEnvelope(envelope?: RpcEnvelope): RelayCallMeta | undefine
     message.type === "request" || message.type === "stream-request" ? message.requestId : undefined;
   const idempotencyKey = envelope.delivery.idempotencyKey;
   const readOnly = envelope.delivery.readOnly === true;
-  if (!requestId && !idempotencyKey && !readOnly) return undefined;
+  const evalInvocation = envelope.delivery.evalInvocation;
+  if (!requestId && !idempotencyKey && !readOnly && !evalInvocation) return undefined;
   return {
     ...(requestId ? { requestId } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(readOnly ? { readOnly: true } : {}),
+    ...(evalInvocation ? { evalInvocation } : {}),
   };
 }
 
@@ -322,6 +338,11 @@ export class RpcServer {
       ),
     logger: console,
   });
+
+  /** Runtime retirement owns cancellation of its detached RPC work. */
+  cancelDeferralsForCaller(callerId: string): number {
+    return this.deferrals.cancelForCaller(callerId);
+  }
   private connections = new ConnectionRegistry({
     onConnectionsChangedListenerError: (error) => {
       log.warn(`connections-changed listener failed: ${(error as Error).message}`);
@@ -446,10 +467,30 @@ export class RpcServer {
         invocationToken: string
       ) => Pick<ExtensionInvocation, "caller" | "chainCaller"> | null;
       resolveExtensionCodeIdentity?: (extensionName: string) => VerifiedCodeIdentity | null;
-      resolveExecutionRequests?: (
-        executionDigest: string
-      ) => readonly import("@vibestudio/rpc").CapabilityScope[] | null;
+      resolveExecutionAuthority?: (executionDigest: string) => {
+        requests: readonly import("@vibestudio/rpc").CapabilityScope[];
+        delegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
+      } | null;
       capabilityGrantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
+      /** Resolve an EvalDO's opaque live invocation lease for a direct
+       * WorkspaceDO dispatch. The result is fresh method/object-bound authority;
+       * the child never receives the parent credential as authority. */
+      resolveEvalDirectAuthority?: (input: {
+        runId: string;
+        credential: string;
+        evalObjectKey: string;
+        source: string;
+        className: string;
+        objectKey: string;
+        method: string;
+        requestId: string;
+        transportCaller: VerifiedCaller;
+      }) => Promise<{
+        authorization: DirectAuthorityAttestation;
+        authorizingCaller: VerifiedCaller;
+        effectiveCaller: VerifiedCaller;
+        readOnly: boolean;
+      }>;
       /**
        * On-behalf-of invocation table for userland vcs-DO dispatches
        * (narrow-host-vcs §4): when a sandboxed caller's relay targets the DO
@@ -587,7 +628,7 @@ export class RpcServer {
           ? resolveCodeIdentity(
               this.deps.entityCache,
               callerId,
-              this.deps.resolveExecutionRequests ?? (() => null)
+              this.deps.resolveExecutionAuthority ?? (() => null)
             )
           : null;
     // An explicitly-passed subject (device/agent credential, §5.1/§5.3) wins;
@@ -678,6 +719,7 @@ export class RpcServer {
         repoPath: invocation.chainCaller.repoPath,
         executionDigest: invocation.chainCaller.executionDigest,
         requested: invocation.chainCaller.requested,
+        delegations: invocation.chainCaller.delegations,
       };
       return {
         caller: createVerifiedCaller(code.callerId, code.callerKind, code),
@@ -1425,10 +1467,20 @@ export class RpcServer {
 
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
+    const evalInvocation = envelope.delivery.evalInvocation;
+    const evalObjectKey = evalInvocation ? evalObjectKeyForCaller(client.caller.runtime.id) : null;
     const ctx = this.serviceContextForRpcMessage(client, request, {
       ...(request.requestId ? { requestId: request.requestId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(readOnly ? { readOnly: true } : {}),
+      ...(evalInvocation
+        ? {
+            evalInvocation: {
+              ...evalInvocation,
+              objectKey: evalObjectKey ?? "invalid-eval-caller",
+            },
+          }
+        : {}),
     });
 
     const dispatcher = this.dispatcher;
@@ -2091,6 +2143,7 @@ export class RpcServer {
     const requestId = message.requestId;
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
+    const evalInvocation = envelope.delivery.evalInvocation;
 
     // Direct service dispatch
     if (targetId === "main") {
@@ -2122,6 +2175,14 @@ export class RpcServer {
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(deferral ? { deferral } : {}),
           ...(readOnly ? { readOnly: true } : {}),
+          ...(evalInvocation
+            ? {
+                evalInvocation: {
+                  ...evalInvocation,
+                  objectKey: evalObjectKeyForCaller(callerId) ?? "invalid-eval-caller",
+                },
+              }
+            : {}),
         },
         agentBinding,
         hostOriginated
@@ -2150,6 +2211,7 @@ export class RpcServer {
         ...(requestId ? { requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
+        ...(evalInvocation ? { evalInvocation } : {}),
       },
       {
         authenticatedCaller,
@@ -2430,36 +2492,58 @@ export class RpcServer {
         callerKind === "panel"
           ? (this.deps.runtimeCoordinator?.getLease(callerId)?.slotId ?? undefined)
           : undefined;
-      const attributedCaller = hostOriginated
-        ? createHostCaller(callerId, "server", { userId: "system", handle: "system" })
-        : relayCallerScope?.invocationCaller.subject
-          ? relayCallerScope.invocationCaller
-          : (relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind));
-      const authenticatedCaller = authenticatedCallerOf(attributedCaller);
-      const authorization = attestDirectRpc({
-        caller: attributedCaller,
-        source: ref.source,
-        className: ref.className,
-        objectKey: ref.objectKey,
-        method,
-        workspaceId: this.deps.workspaceId,
-        workspaceMember:
-          hostOriginated ||
-          !this.deps.membershipGate ||
-          this.deps.membershipGate(attributedCaller.subject),
-        sessionId: meta?.requestId ?? `${callerId}:${method}`,
-        grantCode:
-          !attributedCaller.code ||
-          (this.deps.directCodeGrant?.({
-            caller: attributedCaller,
+      const transportCaller =
+        relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind);
+      const evalAuthority = meta?.evalInvocation
+        ? await this.deps.resolveEvalDirectAuthority?.({
+            ...meta.evalInvocation,
+            evalObjectKey: evalObjectKeyForCaller(callerId) ?? "invalid-eval-caller",
             source: ref.source,
             className: ref.className,
             objectKey: ref.objectKey,
             method,
-          }) ??
-            true),
-        grantStore: this.deps.capabilityGrantStore,
-      });
+            requestId: meta.requestId ?? randomUUID(),
+            transportCaller,
+          })
+        : undefined;
+      if (meta?.evalInvocation && !evalAuthority) {
+        throw createRelayError("Eval invocation authority coordinator is unavailable", "EACCES");
+      }
+      const attributedCaller = evalAuthority
+        ? evalAuthority.effectiveCaller
+        : hostOriginated
+          ? createHostCaller(callerId, "server", { userId: "system", handle: "system" })
+          : relayCallerScope?.invocationCaller.subject
+            ? relayCallerScope.invocationCaller
+            : transportCaller;
+      const authenticatedCaller = authenticatedCallerOf(attributedCaller);
+      const authorization = evalAuthority?.authorization ?? {
+        ...attestDirectRpc({
+          caller: attributedCaller,
+          source: ref.source,
+          className: ref.className,
+          objectKey: ref.objectKey,
+          method,
+          workspaceId: this.deps.workspaceId,
+          workspaceMember:
+            hostOriginated ||
+            !this.deps.membershipGate ||
+            this.deps.membershipGate(attributedCaller.subject),
+          sessionId: meta?.requestId ?? `${callerId}:${method}`,
+          grantCode:
+            !attributedCaller.code ||
+            (this.deps.directCodeGrant?.({
+              caller: attributedCaller,
+              source: ref.source,
+              className: ref.className,
+              objectKey: ref.objectKey,
+              method,
+            }) ??
+              true),
+          grantStore: this.deps.capabilityGrantStore,
+        }),
+        ...(meta?.readOnly ? { readOnly: true as const } : {}),
+      };
       const result = await postToDurableObject(ref, method, args, {
         workerdUrl,
         workerdGatewayToken,
@@ -2471,7 +2555,7 @@ export class RpcServer {
         authorization,
         ...(meta?.requestId ? { requestId: meta.requestId } : {}),
         ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
-        ...(meta?.readOnly ? { readOnly: true } : {}),
+        ...(meta?.readOnly || evalAuthority?.readOnly ? { readOnly: true } : {}),
         ...(invocation ? { invocationToken: invocation.token } : {}),
         ...(callerContextId ? { callerContextId } : {}),
       });

@@ -18,6 +18,7 @@
 import { z } from "zod";
 import type { ServiceAuthorityPolicy, MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { TREE_REF_RE } from "./blobstore.js";
 
 /** Everyone who can hold source can READ mains. The WRITE (`updateMains`) has a
@@ -27,10 +28,9 @@ import { TREE_REF_RE } from "./blobstore.js";
 export const REFS_POLICY: ServiceAuthorityPolicy = {
   principals: ["code", "user", "host"],
 };
-const UPDATE_MAINS_POLICY: ServiceAuthorityPolicy = { principals: ["code"] };
-
 const READ_ACCESS: MethodAccessDescriptor = { sensitivity: "read" };
 const WRITE_ACCESS: MethodAccessDescriptor = { sensitivity: "write" };
+const UPDATE_MAINS_CAPABILITY = "service:refs.updateMains";
 
 /** A ref value: `state:<hex64>` root pointer or `manifest:<hex64>` tree node. */
 export const RefValueSchema = z.string().regex(TREE_REF_RE);
@@ -158,7 +158,23 @@ export const refsMethods = defineServiceMethods({
       "gets a structured policy rejection.",
     args: z.tuple([updateMainsInputSchema]),
     returns: UpdateMainsResultSchema,
-    authority: UPDATE_MAINS_POLICY,
+    authority: {
+      requirement: requirementForPrincipals(["code"], UPDATE_MAINS_CAPABILITY),
+      resource: { kind: "literal", key: UPDATE_MAINS_CAPABILITY },
+      prepared: {
+        resolver: "refs.updateMains.writer",
+        leaves: [
+          {
+            capability: UPDATE_MAINS_CAPABILITY,
+            requirement: { kind: "selected", principals: ["code"] },
+            evalAcquisition: {
+              kind: "closed",
+              reason: "protected main refs are writable only by the exact workspace VCS writer",
+            },
+          },
+        ],
+      },
+    },
     access: WRITE_ACCESS,
   },
 });

@@ -1,67 +1,53 @@
 import { describe, expect, it, vi } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { createTestServiceContext } from "@vibestudio/shared/serviceDispatcherTestUtils";
-import type { ApprovalQueue } from "./approvalQueue.js";
-import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
-  createWorkerdInspectorService,
+  createVerifiedCaller,
+  ServiceAccessError,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
+import {
+  createTestServiceContext,
+  withTestServiceDispatcher,
+} from "@vibestudio/shared/serviceDispatcherTestUtils";
+import {
+  createWorkerdInspectorService as createRawWorkerdInspectorService,
   type WorkerdInspectorServiceDeps,
 } from "./workerdInspectorService.js";
 
-function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-inspector-"));
-}
+const createWorkerdInspectorService = (deps: WorkerdInspectorServiceDeps) =>
+  withTestServiceDispatcher(createRawWorkerdInspectorService(deps));
 
-function createApprovalQueueMock(
-  decision: Awaited<ReturnType<ApprovalQueue["request"]>> = "session"
-): ApprovalQueue {
-  return {
-    request: vi.fn(async () => decision),
-    requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
-    requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
-    requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
-    requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
-    presentDeviceCode: vi.fn(() => ({
-      approvalId: "device-code-test",
-      cancelled: new AbortController().signal,
-      dispose: vi.fn(),
-    })),
-    resolve: vi.fn(),
-    resolveUserland: vi.fn(),
-    requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
-    resolveExternalAgent: vi.fn(),
-    settleExternalAgent: vi.fn(() => 0),
-    resolveExternalAgentByRequest: vi.fn(async () => 0),
-    submitClientConfig: vi.fn(),
-    submitSecretInput: vi.fn(),
-    submitCredentialInput: vi.fn(),
-    listPending: vi.fn(() => []),
-    cancelForCaller: vi.fn(),
-  };
-}
-
-function panelCtx(): ServiceContext {
-  return createTestServiceContext(
+function panelCtx(decision: "session" | "deny" = "session"): ServiceContext {
+  const ctx = createTestServiceContext(
     createVerifiedCaller("panel:panels/chat:1", "panel", {
       callerId: "panel:panels/chat:1",
       callerKind: "panel",
       repoPath: "panels/chat",
       executionDigest: "a".repeat(64),
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
       ],
     })
   );
+  ctx.authority = {
+    assert: vi.fn(async () => {
+      if (decision === "deny") {
+        throw new ServiceAccessError(
+          "workerdInspector",
+          "getEndpoint",
+          "Workerd inspector access denied",
+          "EACCES"
+        );
+      }
+    }),
+    allows: vi.fn(async () => false),
+  };
+  return ctx;
 }
 
 function makeDeps(overrides?: Partial<WorkerdInspectorServiceDeps>): WorkerdInspectorServiceDeps {
   return {
-    approvalQueue: createApprovalQueueMock(),
-    grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
     listTargets: vi.fn(async () => [
       {
         id: "core:user:worker-host",
@@ -82,30 +68,32 @@ describe("workerdInspectorService", () => {
   it("lists targets without approval", async () => {
     const deps = makeDeps();
     const service = createWorkerdInspectorService(deps);
-    const targets = await service.handler(panelCtx(), "listTargets", []);
+    const ctx = panelCtx();
+    const targets = await service.handler(ctx, "listTargets", []);
     expect(targets).toEqual([expect.objectContaining({ targetPath: "core:user:worker-host" })]);
-    expect(deps.approvalQueue.request).not.toHaveBeenCalled();
+    expect(ctx.authority?.assert).not.toHaveBeenCalled();
   });
 
   it("gates getEndpoint behind the workerd.inspector capability approval", async () => {
     const deps = makeDeps();
     const service = createWorkerdInspectorService(deps);
-    const endpoint = await service.handler(panelCtx(), "getEndpoint", ["core:user:worker-host"]);
+    const ctx = panelCtx();
+    const endpoint = await service.handler(ctx, "getEndpoint", ["core:user:worker-host"]);
     expect(endpoint).toEqual({
       wsEndpoint: expect.stringContaining("/workerd-inspector/"),
       token: "tok",
     });
-    expect(deps.approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(deps.approvalQueue.request).toHaveBeenCalledWith(
+    expect(ctx.authority?.assert).toHaveBeenCalledTimes(1);
+    expect(ctx.authority?.assert).toHaveBeenCalledWith(
       expect.objectContaining({ capability: "workerd.inspector" })
     );
   });
 
   it("denies getEndpoint when approval is rejected", async () => {
-    const deps = makeDeps({ approvalQueue: createApprovalQueueMock("deny") });
+    const deps = makeDeps();
     const service = createWorkerdInspectorService(deps);
     await expect(
-      service.handler(panelCtx(), "getEndpoint", ["core:user:worker-host"])
+      service.handler(panelCtx("deny"), "getEndpoint", ["core:user:worker-host"])
     ).rejects.toThrow(/denied/i);
     expect(deps.getEndpoint).not.toHaveBeenCalled();
   });
@@ -123,6 +111,6 @@ describe("workerdInspectorService", () => {
     const service = createWorkerdInspectorService(deps);
     const ctx = createTestServiceContext(createVerifiedCaller("shell:main", "shell"));
     await service.handler(ctx, "getEndpoint", ["core:user:worker-host"]);
-    expect(deps.approvalQueue.request).not.toHaveBeenCalled();
+    expect(deps.getEndpoint).toHaveBeenCalledTimes(1);
   });
 });

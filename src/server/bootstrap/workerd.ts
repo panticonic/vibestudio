@@ -265,12 +265,10 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           sessionId: `host:${method}`,
         })
       );
-      dispatch.setEnsureDO((source, className, objectKey) => {
+      dispatch.setEnsureDispatchableDO((source, className, objectKey) => {
         const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
         const record = deps.entityCache.resolveActive(targetId);
-        return manager.ensureDO(source, className, objectKey, {
-          contextId: record?.contextId,
-        });
+        return manager.ensureDispatchableDurableObject(source, className, objectKey, record);
       });
       return dispatch;
     },

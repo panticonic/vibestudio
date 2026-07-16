@@ -9,6 +9,7 @@ export interface EnvelopeInput {
   caller?: AuthenticatedCaller;
   provenance?: AuthenticatedCaller[];
   idempotencyKey?: string;
+  evalInvocation?: { runId: string; credential: string };
   readOnly?: boolean;
 }
 
@@ -31,6 +32,7 @@ export function envelopeFromMessage(input: EnvelopeInput): RpcEnvelope {
     delivery: {
       caller,
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      ...(input.evalInvocation ? { evalInvocation: input.evalInvocation } : {}),
       ...(input.readOnly ? { readOnly: true } : {}),
     },
     provenance: input.provenance?.length ? input.provenance : [caller],

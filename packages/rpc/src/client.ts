@@ -159,7 +159,11 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
   function makeEnvelope(
     targetId: string,
     message: RpcMessage,
-    options?: { idempotencyKey?: string; readOnly?: boolean },
+    options?: {
+      idempotencyKey?: string;
+      evalInvocation?: { runId: string; credential: string };
+      readOnly?: boolean;
+    },
     provenance: AuthenticatedCaller[] = baseProvenance
   ): RpcEnvelope {
     return {
@@ -168,6 +172,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
       delivery: {
         caller: selfCaller,
         ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+        ...(options?.evalInvocation ? { evalInvocation: options.evalInvocation } : {}),
         ...(options?.readOnly ? { readOnly: true } : {}),
       },
       provenance,
@@ -210,7 +215,11 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
   async function send(
     targetId: string,
     message: RpcMessage,
-    options?: { idempotencyKey?: string; readOnly?: boolean },
+    options?: {
+      idempotencyKey?: string;
+      evalInvocation?: { runId: string; credential: string };
+      readOnly?: boolean;
+    },
     provenance?: AuthenticatedCaller[]
   ): Promise<void> {
     const envelope = makeEnvelope(targetId, message, options, provenance);

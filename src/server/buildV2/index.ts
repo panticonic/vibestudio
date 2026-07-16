@@ -99,7 +99,11 @@ import {
 import { ExecutionArtifactStore } from "../execution/executionArtifactStore.js";
 import { collectArtifactRetentionRoots } from "../execution/artifactRootCollector.js";
 import { createExecutionRecipe } from "./executionRecipe.js";
-import { authorityRequestsFromRecipe } from "@vibestudio/shared/authorityManifest";
+import {
+  authorityDelegationsFromRecipe,
+  authorityRequestsFromRecipe,
+  type EvalAuthorityDelegation,
+} from "@vibestudio/shared/authorityManifest";
 import type { CapabilityScope } from "@vibestudio/rpc";
 
 // ---------------------------------------------------------------------------
@@ -144,6 +148,7 @@ export interface ResolvedExecutionBinding {
   artifact: ExecutionArtifactRef;
   /** Capability/resource requests sealed into this exact execution recipe. */
   requested: readonly CapabilityScope[];
+  delegations: readonly EvalAuthorityDelegation[];
   /** Internal output-cache lookup only; never an execution or authority identity. */
   compilationCacheKey: string;
 }
@@ -152,7 +157,7 @@ export interface ResolvedExecutionBinding {
 // Per-repo build report (push gate contract) — agent-actionable, not a blob.
 // ---------------------------------------------------------------------------
 
-export type RepoBuildTargetKind = "runtime" | "library:panel" | "library:worker";
+export type RepoBuildTargetKind = "runtime" | "library:panel" | "library:worker" | "library:eval";
 
 export interface RepoBuildTarget {
   target: RepoBuildTargetKind;
@@ -323,6 +328,7 @@ export interface BuildSystemV2 extends RepoPushValidator {
   getExecutionArtifact(executionDigest: string): {
     ref: ExecutionArtifactRef;
     requested: readonly CapabilityScope[];
+    delegations: readonly EvalAuthorityDelegation[];
     entries: ArtifactBundleEntry[];
     entryPath(artifactPath: string): string;
   } | null;
@@ -706,6 +712,7 @@ export async function initBuildSystemV2(
       selectorPolicy,
       artifact,
       requested: authorityRequestsFromRecipe(recipe),
+      delegations: authorityDelegationsFromRecipe(recipe),
       compilationCacheKey,
     };
   };
@@ -746,14 +753,21 @@ export async function initBuildSystemV2(
     sourceDigest: string,
     graphAtView: PackageGraph,
     viewStateHash: string,
-    spec: { target: "runtime" } | { target: "library:panel" | "library:worker"; exportPath: string }
+    spec:
+      | { target: "runtime" }
+      | {
+          target: "library:panel" | "library:worker" | "library:eval";
+          exportPath: string;
+        }
   ): Promise<RepoBuildTarget> => {
     const libraryTarget: LibraryBuildTarget | null =
       spec.target === "library:panel"
         ? "panel"
         : spec.target === "library:worker"
           ? "worker"
-          : null;
+          : spec.target === "library:eval"
+            ? "eval"
+            : null;
     const options: BuildUnitOptions | undefined = libraryTarget
       ? {
           library: true,
@@ -833,16 +847,17 @@ export async function initBuildSystemV2(
   };
 
   /**
-   * Infer which library targets a package needs based on its dependents' kinds.
-   * panel/about → library:panel; worker/extension → library:worker; app builds
-   * its own graph but may pull a package as either, so it contributes both.
-   * Falls back to BOTH when no buildable dependents are known.
+   * Infer which ordinary library targets a package needs from its dependents,
+   * then always validate the eval target. Any workspace package can be imported
+   * dynamically by an agent regardless of static reverse dependencies, so eval
+   * compatibility is part of the package push gate rather than a best-effort
+   * property discovered during a live run.
    */
   const libraryTargetsForDependents = (
     pkgName: string,
     graphAtView: PackageGraph
-  ): Set<"library:panel" | "library:worker"> => {
-    const targets = new Set<"library:panel" | "library:worker">();
+  ): Set<"library:panel" | "library:worker" | "library:eval"> => {
+    const targets = new Set<"library:panel" | "library:worker" | "library:eval">(["library:eval"]);
     for (const depName of graphAtView.getReverseDeps(pkgName)) {
       const dep = graphAtView.tryGet(depName);
       if (!dep) continue;
@@ -862,7 +877,7 @@ export async function initBuildSystemV2(
           break;
       }
     }
-    if (targets.size === 0) {
+    if (targets.size === 1) {
       targets.add("library:panel");
       targets.add("library:worker");
     }
@@ -1312,6 +1327,7 @@ export async function initBuildSystemV2(
       return {
         ref: bundle.record.ref,
         requested: authorityRequestsFromRecipe(bundle.record.recipe),
+        delegations: authorityDelegationsFromRecipe(bundle.record.recipe),
         entries: bundle.entries,
         entryPath: (artifactPath: string) =>
           executionArtifacts.artifactPath(executionDigest, artifactPath),

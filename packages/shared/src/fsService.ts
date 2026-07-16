@@ -864,6 +864,8 @@ export class FsService {
    * `.contexts/{contextId}/` working tree for a full logical workspace branch.
    * Repos are materialized on demand under their workspace subtrees. Edit
    * routing maps each path back to its owning repo by section taxonomy.
+   * - evaluated calls: use the context authenticated by the live invocation
+   *   coordinator (never an eval-authored argument)
    * - panel/app/worker/DO callers: look up contextId from EntityCache
    * - agent callers: use the host-verified connection binding
    * - extension callers inside an invocation: use the chained caller context
@@ -876,7 +878,10 @@ export class FsService {
     let contextId: string;
     let panelId: string;
 
-    if (ctx.caller.runtime.kind === "agent") {
+    if (ctx.evalInvocation?.contextId) {
+      contextId = ctx.evalInvocation.contextId;
+      panelId = `eval:${ctx.evalInvocation.runId}`;
+    } else if (ctx.caller.runtime.kind === "agent") {
       const binding = ctx.caller.agentBinding;
       if (!binding) {
         throw new Error("agent fs caller has no entity binding");

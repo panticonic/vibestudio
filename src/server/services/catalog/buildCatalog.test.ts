@@ -161,6 +161,30 @@ describe("buildCatalog", () => {
     expect(wipe.returnsSchema).toBeUndefined();
   });
 
+  it("surfaces reviewed per-leaf eval acquisition without treating it as a grant", () => {
+    const catalog = buildCatalog({
+      definitions: [demo],
+      evalAuthorityForMethod: (service, method) =>
+        service === "demo" && method === "probe"
+          ? [
+              {
+                capability: "service:demo.probe",
+                rpcPlane: "host-service",
+                sensitivity: "read",
+                resourceDerivation: { kind: "literal", key: "service:demo.probe" },
+                acquisition: { kind: "baseline" },
+              },
+            ]
+          : [],
+    });
+    expect(byId(catalog, "service:demo.probe").evalAuthority).toEqual([
+      expect.objectContaining({
+        capability: "service:demo.probe",
+        acquisition: { kind: "baseline" },
+      }),
+    ]);
+  });
+
   it("derives authority principals with method > service precedence", () => {
     const access = (id: string) =>
       (byId(entries, id).access as { principals?: string[] } | undefined) ?? {};

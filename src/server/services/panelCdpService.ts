@@ -3,12 +3,13 @@ import { assertHttpUrl } from "@vibestudio/shared/httpUrl";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { contextBoundaryAuthority } from "@vibestudio/service-schemas/authority/contextBoundary";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,
 } from "./panelAccessPermission.js";
-import { requirePanelAccessPermission } from "./panelAccessPermission.js";
+import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
 
 export interface CdpEndpoint {
   wsEndpoint: string;
@@ -135,34 +136,55 @@ const screenshotResultSchema = z.object({
   height: z.number(),
 });
 
+const panelCdpAuthority = (method: string) =>
+  contextBoundaryAuthority({
+    service: "panelCdp",
+    method,
+    principals: ["user", "host", "code", "entity"],
+  });
+
 const panelCdpMethods = defineServiceMethods({
   getCdpEndpoint: {
     description: "Return a single-use CDP WebSocket endpoint for an approved panel target.",
     args: z.tuple([z.string()]),
+    access: { sensitivity: "admin" },
+    authority: panelCdpAuthority("getCdpEndpoint"),
   },
   navigate: {
     description: "Navigate an approved browser panel target through its active CDP host.",
     args: z.tuple([z.string(), z.string()]),
+    access: { sensitivity: "write" },
+    authority: panelCdpAuthority("navigate"),
   },
   reload: {
     description: "Reload an approved panel target through its active CDP host.",
     args: z.tuple([z.string()]),
+    access: { sensitivity: "write" },
+    authority: panelCdpAuthority("reload"),
   },
   goBack: {
     description: "Drive browser history back on an approved panel target.",
     args: z.tuple([z.string()]),
+    access: { sensitivity: "write" },
+    authority: panelCdpAuthority("goBack"),
   },
   goForward: {
     description: "Drive browser history forward on an approved panel target.",
     args: z.tuple([z.string()]),
+    access: { sensitivity: "write" },
+    authority: panelCdpAuthority("goForward"),
   },
   stop: {
     description: "Stop loading an approved panel target through its active CDP host.",
     args: z.tuple([z.string()]),
+    access: { sensitivity: "write" },
+    authority: panelCdpAuthority("stop"),
   },
   consoleHistory: {
     description: "Read console history from an approved panel target's active CDP host.",
     args: z.tuple([z.string(), consoleHistoryOptionsSchema]),
+    access: { sensitivity: "read" },
+    authority: panelCdpAuthority("consoleHistory"),
   },
   screenshot: {
     description:
@@ -171,6 +193,8 @@ const panelCdpMethods = defineServiceMethods({
       "no CDP WebSocket client needed.",
     args: z.tuple([z.string(), screenshotOptionsSchema]),
     returns: screenshotResultSchema,
+    access: { sensitivity: "read" },
+    authority: panelCdpAuthority("screenshot"),
   },
   "hostProvider.open": {
     description: "Internal shell/server transport: open a streamed CDP host-provider channel.",
@@ -221,18 +245,29 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
     });
   }
 
-  async function requireCdpAccess(
+  async function prepareCdpAccess(
     ctx: ServiceContext,
     method: string,
     panelId: string,
     operation: "cdp" | "navigate" | "reload" | "goBack" | "goForward" | "stop"
+  ) {
+    const target = await requireTarget(panelId);
+    try {
+      return await preparePanelAccessAuthority(deps, ctx, operation, target);
+    } catch (error) {
+      recordAccess(method, ctx, target, {
+        reason: error instanceof Error ? error.message : `Panel ${method} denied`,
+      });
+      throw error;
+    }
+  }
+
+  async function recordCdpAccess(
+    ctx: ServiceContext,
+    method: string,
+    panelId: string
   ): Promise<PanelAccessPermissionTarget> {
     const target = await requireTarget(panelId);
-    const permission = await requirePanelAccessPermission(deps, ctx, operation, target);
-    if (!permission.allowed) {
-      recordAccess(method, ctx, target, { reason: permission.reason ?? `Panel ${method} denied` });
-      throw new Error(permission.reason ?? `Panel ${method} denied`);
-    }
     recordAccess(method, ctx, target);
     return target;
   }
@@ -244,7 +279,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
     args: unknown[]
   ): Promise<unknown> {
     if (method === "navigate") assertHttpUrl(args[0]);
-    await requireCdpAccess(ctx, method, panelId, method);
+    await recordCdpAccess(ctx, method, panelId);
     if (!deps.drive) throw new Error(`Panel CDP driver is not available for ${method}`);
     return deps.drive(panelId, ctx.caller.runtime.id, method, args);
   }
@@ -257,6 +292,26 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
     // same context-boundary permission as sandboxed code callers.
     authority: { principals: ["user", "host", "code", "entity"] },
     methods: panelCdpMethods,
+    authorityPreparation: {
+      "panelCdp.getCdpEndpoint.contextBoundary": (ctx, [panelId]) =>
+        prepareCdpAccess(ctx, "getCdpEndpoint", String(panelId), "cdp"),
+      "panelCdp.navigate.contextBoundary": (ctx, [panelId, url]) => {
+        assertHttpUrl(String(url));
+        return prepareCdpAccess(ctx, "navigate", String(panelId), "navigate");
+      },
+      "panelCdp.reload.contextBoundary": (ctx, [panelId]) =>
+        prepareCdpAccess(ctx, "reload", String(panelId), "reload"),
+      "panelCdp.goBack.contextBoundary": (ctx, [panelId]) =>
+        prepareCdpAccess(ctx, "goBack", String(panelId), "goBack"),
+      "panelCdp.goForward.contextBoundary": (ctx, [panelId]) =>
+        prepareCdpAccess(ctx, "goForward", String(panelId), "goForward"),
+      "panelCdp.stop.contextBoundary": (ctx, [panelId]) =>
+        prepareCdpAccess(ctx, "stop", String(panelId), "stop"),
+      "panelCdp.consoleHistory.contextBoundary": (ctx, [panelId]) =>
+        prepareCdpAccess(ctx, "consoleHistory", String(panelId), "cdp"),
+      "panelCdp.screenshot.contextBoundary": (ctx, [panelId]) =>
+        prepareCdpAccess(ctx, "screenshot", String(panelId), "cdp"),
+    },
     handler: defineServiceHandler("panelCdp", panelCdpMethods, {
       "hostProvider.open": (ctx, [sessionId, hostConnectionId]) => {
         if (!deps.hostProvider) throw new Error("CDP host provider transport is unavailable");
@@ -280,16 +335,16 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         });
       },
       getCdpEndpoint: async (ctx, [panelId]) => {
-        await requireCdpAccess(ctx, "getCdpEndpoint", panelId, "cdp");
+        await recordCdpAccess(ctx, "getCdpEndpoint", panelId);
         return deps.getEndpoint(panelId, ctx.caller.runtime.id);
       },
       consoleHistory: async (ctx, [panelId, options]) => {
-        await requireCdpAccess(ctx, "consoleHistory", panelId, "cdp");
+        await recordCdpAccess(ctx, "consoleHistory", panelId);
         if (!deps.consoleHistory) throw new Error("Panel console history is not available");
         return deps.consoleHistory(panelId, ctx.caller.runtime.id, options);
       },
       screenshot: async (ctx, [panelId, options]) => {
-        await requireCdpAccess(ctx, "screenshot", panelId, "cdp");
+        await recordCdpAccess(ctx, "screenshot", panelId);
         if (!deps.screenshot) throw new Error("Panel screenshot is not available");
         return deps.screenshot(panelId, ctx.caller.runtime.id, options);
       },

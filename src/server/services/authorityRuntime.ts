@@ -47,20 +47,26 @@ export function authorizeVerifiedCaller(
     : null;
   const entityId = caller.agentBinding?.entityId ?? (caller.code ? caller.runtime.id : null);
   const entity = entityId ? (`entity:${entityId}` as const) : null;
+  const authorizingOrigin = caller.hostOriginated
+    ? ({ kind: "host", principal: host! } as const)
+    : code
+      ? ({ kind: "code", principal: code } as const)
+      : entity
+        ? ({ kind: "entity", principal: entity } as const)
+        : ({ kind: "user", principal: actingUser ?? (`user:anonymous` as const) } as const);
   const context: AuthorizationContext = {
+    authorizingOrigin,
     host,
     actingUser,
     device: null,
     entity,
     incarnation: facts.incarnationId ?? null,
-    code,
-    codeManifest:
-      code && caller.code
-        ? {
-            principal: code,
-            requested: caller.code.requested,
-          }
-        : null,
+    codeAuthority: {
+      executor: code && caller.code ? { principal: code, requested: caller.code.requested } : null,
+      execution: null,
+      initiator: null,
+      delegations: [],
+    },
     deviceOwnership: null,
     ownerChain: actingUser ? [actingUser] : [],
     agentBinding:
@@ -71,7 +77,6 @@ export function authorizeVerifiedCaller(
             channelId: caller.agentBinding.channelId,
           }
         : null,
-    delegation: [],
     workspace: {
       workspaceId: facts.workspaceId,
       member: facts.workspaceMember,
@@ -102,6 +107,7 @@ export function authorizeVerifiedCaller(
     principals: authorizingPrincipals,
     capability: facts.capability,
     resourceKey: facts.resourceKey,
+    sessionId: facts.sessionId,
     now,
     grantStore: facts.grantStore,
     grantCode: facts.grantCode,

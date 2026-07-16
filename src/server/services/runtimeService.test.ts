@@ -1,4 +1,7 @@
-import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import {
+  createTestServiceDispatcher,
+  withTestServiceDispatcher,
+} from "@vibestudio/shared/serviceDispatcherTestUtils";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -15,7 +18,12 @@ import {
   type EntityRecord,
   type RuntimeEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
-import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createHostCaller,
+  createVerifiedCaller,
+  ServiceAccessError,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import type { DODispatch } from "../doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
@@ -23,6 +31,45 @@ import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
 import type { ResolvedExecutionBinding } from "../buildV2/index.js";
 import { sha256 } from "@vibestudio/shared/execution/identity";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import { constrainApprovalDecisions, requestCapabilityPermission } from "./capabilityPermission.js";
+
+function attachCanonicalAuthority(
+  ctx: ServiceContext,
+  deps: { approvalQueue: ApprovalQueue; grantStore: CapabilityGrantStore }
+): void {
+  ctx.authorityDecisions = new Map();
+  ctx.authority = {
+    allows: vi.fn(async () => false),
+    assert: vi.fn(async (input) => {
+      if (!input.challenge || input.acquisition?.kind !== "approval") {
+        throw new Error("test canonical authority adapter is not configured");
+      }
+      const permission = await requestCapabilityPermission(deps, {
+        caller: input.authorizingCaller ?? ctx.caller,
+        capability: input.capability,
+        resource: { ...input.challenge.resource, key: input.resourceKey },
+        operation: input.challenge.operation,
+        title: input.challenge.title,
+        description: input.challenge.description,
+        severity: input.challenge.severity,
+        deniedReason: input.challenge.deniedReason,
+        dedupKey: input.challenge.dedupKey,
+        details: input.challenge.details ? [...input.challenge.details] : undefined,
+        signal: input.challenge.signal,
+        allowedDecisions: constrainApprovalDecisions(
+          ["once", ...input.acquisition.grantScopes, "deny", "dismiss"],
+          input.challenge.allowedDecisions
+        ),
+      });
+      if (!permission.allowed) {
+        throw new ServiceAccessError("runtime", "operation", permission.reason, "EACCES");
+      }
+      if (permission.decision) {
+        ctx.authorityDecisions!.set(input.capability, permission.decision);
+      }
+    }),
+  };
+}
 
 function resolvedExecution(source: string, ref?: string, revision = "1"): ResolvedExecutionBinding {
   const selectorPolicy: ResolvedExecutionBinding["selectorPolicy"] = ref?.startsWith("ctx:")
@@ -45,6 +92,7 @@ function resolvedExecution(source: string, ref?: string, revision = "1"): Resolv
       executionDigest: sha256(`execution:${source}:${revision}`),
     },
     requested: [],
+    delegations: [],
     compilationCacheKey: `test:${source}`,
   };
 }
@@ -58,6 +106,7 @@ function approvalQueueMock(
 ): ApprovalQueue {
   return {
     request: vi.fn(async () => decision),
+    requestCapability: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
@@ -182,7 +231,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     entityCache,
   });
 
-  const service = createRuntimeService({
+  const rawService = createRuntimeService({
     entityStore,
     resolveExecutionArtifact,
     resolveExecutionArtifactByDigest,
@@ -196,8 +245,6 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
       destroyDurableStorage,
     },
     contextBoundary: {
-      approvalQueue,
-      grantStore,
       contextExists: (id: string) =>
         contextFolders.existing.has(id) || entityCache.listActive().some((e) => e.contextId === id),
       resolveContextOwnerLabel: (id: string) =>
@@ -207,6 +254,14 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     setEntityTitle: opts.setEntityTitle,
     vcsContexts: opts.vcsContexts,
   });
+  const dispatchedService = withTestServiceDispatcher(rawService);
+  const service = {
+    ...rawService,
+    handler: async (ctx: ServiceContext, method: string, args: unknown[]) => {
+      attachCanonicalAuthority(ctx, { approvalQueue, grantStore });
+      return dispatchedService.handler(ctx, method, args);
+    },
+  };
 
   return {
     instance,
@@ -233,6 +288,7 @@ const panelCaller = (id = "panel:caller", _contextId = "ctx-caller") =>
     callerKind: "panel",
     repoPath: "panels/caller",
     executionDigest: "a".repeat(64),
+    delegations: [],
     requested: [
       { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
       { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -245,18 +301,20 @@ const appCaller = (id = "app:apps/shell:desktop", _contextId = "ctx-caller") =>
     callerKind: "app",
     repoPath: "apps/shell",
     executionDigest: "a".repeat(64),
+    delegations: [],
     requested: [
       { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
       { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
     ],
   });
 
-const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval") =>
+const evalDoCaller = (id = "do:product/eval:EvalDO:eval") =>
   createVerifiedCaller(id, "do", {
     callerId: id,
     callerKind: "do",
-    repoPath: "vibestudio/internal",
+    repoPath: "product/eval",
     executionDigest: "a".repeat(64),
+    delegations: [],
     requested: [
       { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
       { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -271,6 +329,7 @@ const extensionCaller = (id = "extension:agent-launcher") =>
     callerKind: "extension",
     repoPath: "extensions/agent-launcher",
     executionDigest: "a".repeat(64),
+    delegations: [],
     requested: [
       { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
       { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -591,7 +650,7 @@ describe("runtimeService.createEntity context policy", () => {
       doCreateSpec({ contextId: "ctx-caller" }),
     ])) as { contextId: string };
     expect(handle.contextId).toBe("ctx-caller");
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("bypasses approval for server callers in cross-context", async () => {
@@ -600,7 +659,7 @@ describe("runtimeService.createEntity context policy", () => {
       doCreateSpec({ contextId: "ctx-other" }),
     ])) as { contextId: string };
     expect(handle.contextId).toBe("ctx-other");
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("keeps trusted host authority for a panel-tree-mediated server caller", async () => {
@@ -611,7 +670,7 @@ describe("runtimeService.createEntity context policy", () => {
     ])) as EntityRecord;
     expect(handle.contextId).toBe("ctx-other");
     expect(entityCache.resolveActive(handle.id)?.parentId).toBe("panel:tree/about-new");
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("bypasses approval for shell callers in cross-context", async () => {
@@ -620,7 +679,7 @@ describe("runtimeService.createEntity context policy", () => {
       doCreateSpec({ contextId: "ctx-other" }),
     ])) as { contextId: string };
     expect(handle.contextId).toBe("ctx-other");
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("allows cross-context creation into a FRESH (non-existing) context without prompting", async () => {
@@ -641,7 +700,7 @@ describe("runtimeService.createEntity context policy", () => {
       doCreateSpec({ contextId: "ctx-fresh" }),
     ])) as { contextId: string };
     expect(handle.contextId).toBe("ctx-fresh");
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("requests approval for panel callers launching into an EXISTING foreign context", async () => {
@@ -675,7 +734,7 @@ describe("runtimeService.createEntity context policy", () => {
       doCreateSpec({ contextId: "ctx-target" }),
     ])) as { contextId: string };
     expect(handle.contextId).toBe("ctx-target");
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
   });
 
   it("requests approval for app callers in cross-context and grants when allowed", async () => {
@@ -708,7 +767,7 @@ describe("runtimeService.createEntity context policy", () => {
       doCreateSpec({ contextId: "ctx-target" }),
     ])) as { contextId: string };
     expect(handle.contextId).toBe("ctx-target");
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         callerId: "app:apps/shell:desktop",
         callerKind: "app",
@@ -962,7 +1021,9 @@ describe("runtimeService.retireEntity", () => {
       doCreateSpec({ contextId: "ctx-x" }),
     ])) as { id: string };
 
-    await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
+    await expect(
+      service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }])
+    ).rejects.toThrow("hook fail");
     const rec = instance.entityResolve(handle.id);
     expect(rec?.status).toBe("retired");
     expect(rec?.cleanupComplete).toBe(false);
@@ -982,17 +1043,17 @@ describe("runtimeService.retireEntity", () => {
       }),
     ])) as { id: string };
     expect(instance.entityResolve(handle.id)?.parentId).toBe(caller.runtime.id);
-    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+    (approvalQueue.requestCapability as ReturnType<typeof vi.fn>).mockClear();
 
     await service.handler({ caller }, "retireEntity", [{ id: handle.id }]);
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(instance.entityResolve(handle.id)?.status).toBe("retired");
   });
 
   it("prompts with retire-specific copy when a caller retires a foreign entity", async () => {
     const { service, approvalQueue } = await buildDeps({ approvalDecision: "session" });
-    const owner = evalDoCaller("do:vibestudio/internal:EvalDO:owner");
+    const owner = evalDoCaller("do:product/eval:EvalDO:owner");
     const handle = (await service.handler({ caller: owner }, "createEntity", [
       doCreateSpec({
         source: "workers/agent-worker",
@@ -1001,13 +1062,13 @@ describe("runtimeService.retireEntity", () => {
         contextId: "ctx-foreign-retire",
       }),
     ])) as { id: string };
-    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+    (approvalQueue.requestCapability as ReturnType<typeof vi.fn>).mockClear();
 
     await service.handler({ caller: panelCaller("panel:other") }, "retireEntity", [
       { id: handle.id },
     ]);
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: "context.boundary",
         title: "Retire runtime entity in another context",
@@ -1302,6 +1363,30 @@ describe("runtimeService session entities", () => {
     expect(contextFolders.existing.has(handle.contextId)).toBe(false);
   });
 
+  it("durably retries removeContext substrate cleanup instead of swallowing VCS failure", async () => {
+    const dropContext = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("vcs busy"))
+      .mockResolvedValue(undefined);
+    const { service, instance } = await buildDeps({ vcsContexts: { dropContext } });
+    const handle = (await service.handler({ caller: shellCaller }, "createEntity", [
+      sessionSpec({ key: "detach-retry" }),
+    ])) as { id: string; contextId: string };
+
+    await expect(
+      service.handler({ caller: shellCaller }, "retireEntity", [
+        { id: handle.id, removeContext: true },
+      ])
+    ).rejects.toThrow(/Context detach cleanup was incomplete/);
+    expect(instance.contextCleanupListPending()).toMatchObject([
+      { contextId: handle.contextId, kind: "detach" },
+    ]);
+
+    await service.maintenance.retryContextCleanup(handle.contextId);
+    expect(dropContext).toHaveBeenCalledTimes(2);
+    expect(instance.contextCleanupListPending()).toEqual([]);
+  });
+
   it("retire with removeContext keeps the folder when another live entity shares the context", async () => {
     const { service, contextFolders } = await buildDeps();
     const session = (await service.handler({ caller: shellCaller }, "createEntity", [
@@ -1394,6 +1479,7 @@ const workerCaller = (id = "worker:workers/fork:fork", _ctx = "ctx-fork") =>
     callerKind: "worker",
     repoPath: "workers/fork",
     executionDigest: "a".repeat(64),
+    delegations: [],
     requested: [
       { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
       { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -1556,7 +1642,7 @@ describe("runtimeService.cloneContext", () => {
     await seedConversation(service, "ctx-mine");
 
     await service.handler({ caller }, "cloneContext", [{ sourceContextId: "ctx-mine" }]);
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("prompts when cloning a FOREIGN EXISTING context", async () => {
@@ -1577,8 +1663,8 @@ describe("runtimeService.cloneContext", () => {
     await seedConversation(service, "ctx-foreign");
 
     await service.handler({ caller }, "cloneContext", [{ sourceContextId: "ctx-foreign" }]);
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({ capability: "context.boundary" })
     );
   });
@@ -1589,7 +1675,7 @@ describe("runtimeService.cloneContext", () => {
     await service.handler({ caller: serverCaller }, "cloneContext", [
       { sourceContextId: "ctx-foreign2" },
     ]);
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("rolls back (retires clones, deletes cloned storage, drops the new context) on failure", async () => {
@@ -1614,8 +1700,41 @@ describe("runtimeService.cloneContext", () => {
     expect(contextFolders.removeContext).toHaveBeenCalledWith(targetContextId);
     // The one clone that was activated before the failure is gone again.
     expect(entityCache.listActive().some((e) => e.contextId === targetContextId)).toBe(false);
-    // The first DO's already-cloned storage was reclaimed.
-    expect(destroyDurableStorage).toHaveBeenCalledTimes(1);
+    // Both armed storage refs are reclaimed: the failing clone may have written
+    // bytes before returning its error.
+    expect(destroyDurableStorage).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains concrete pre-activation storage identities when clone rollback fails", async () => {
+    const forkContext = vi.fn(async () => {});
+    const cloneDurableStorage = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("clone partially wrote then failed"));
+    const destroyDurableStorage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("storage delete busy"))
+      .mockResolvedValue(undefined);
+    const { service, instance } = await buildDeps({
+      vcsContexts: { forkContext },
+      cloneDurableStorage,
+      destroyDurableStorage,
+    });
+    await seedConversation(service, "ctx-rollback-ledger");
+
+    await expect(
+      service.handler({ caller: serverCaller }, "cloneContext", [
+        { sourceContextId: "ctx-rollback-ledger" },
+      ])
+    ).rejects.toThrow(/durable rollback.*remain pending/);
+
+    const pending = instance.contextCleanupListPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.durableObjects).toHaveLength(2);
+    expect(pending[0]?.durableObjects.every((ref) => ref.key.includes("~clone~"))).toBe(true);
+
+    await service.maintenance.retryContextCleanup(pending[0]!.contextId);
+    expect(instance.contextCleanupListPending()).toEqual([]);
   });
 
   it("returns the context + entity rewiring maps (non-recursive)", async () => {
@@ -1726,7 +1845,66 @@ describe("runtimeService.destroyContext", () => {
     expect(contextFolders.removeContext).toHaveBeenCalledWith("ctx-dead");
   });
 
-  it("is free to destroy a context you fully own (every entity parented to you)", async () => {
+  it("keeps a durable context operation pending and retries storage after partial teardown", async () => {
+    const destroyDurableStorage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("storage busy"))
+      .mockResolvedValue(undefined);
+    const dropContext = vi.fn(async () => {});
+    const { service, instance, contextFolders } = await buildDeps({
+      destroyDurableStorage,
+      vcsContexts: { dropContext },
+    });
+    const entity = await seedDO(service, "ctx-retry", "retry-agent");
+
+    await expect(
+      service.handler({ caller: serverCaller }, "destroyContext", [{ contextId: "ctx-retry" }])
+    ).rejects.toThrow(/Context subtree cleanup was incomplete/);
+
+    expect(instance.entityResolve(entity.id)?.status).toBe("retired");
+    expect(instance.contextCleanupListPending()).toMatchObject([
+      { contextId: "ctx-retry", kind: "destroy" },
+    ]);
+    // Independent substrate cleanup was still attempted.
+    expect(dropContext).toHaveBeenCalledWith("ctx-retry");
+    expect(contextFolders.removeContext).toHaveBeenCalledWith("ctx-retry");
+
+    await service.maintenance.retryContextCleanup("ctx-retry");
+
+    expect(destroyDurableStorage).toHaveBeenCalledTimes(2);
+    expect(instance.contextCleanupListPending()).toEqual([]);
+  });
+
+  it("does not reclaim context substrate until every entity cleanup succeeds", async () => {
+    const onRetire = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("runtime still stopping"))
+      .mockResolvedValue(undefined);
+    const dropContext = vi.fn(async () => {});
+    const { service, instance, destroyDurableStorage, contextFolders } = await buildDeps({
+      onRetire,
+      vcsContexts: { dropContext },
+    });
+    await seedDO(service, "ctx-phase", "phase-agent");
+
+    await expect(
+      service.handler({ caller: serverCaller }, "destroyContext", [{ contextId: "ctx-phase" }])
+    ).rejects.toThrow(/Context subtree cleanup was incomplete/);
+
+    expect(destroyDurableStorage).not.toHaveBeenCalled();
+    expect(dropContext).not.toHaveBeenCalled();
+    expect(contextFolders.removeContext).not.toHaveBeenCalledWith("ctx-phase");
+    expect(instance.contextCleanupListPending()).toHaveLength(1);
+
+    await service.maintenance.retryContextCleanup("ctx-phase");
+
+    expect(destroyDurableStorage).toHaveBeenCalledTimes(1);
+    expect(dropContext).toHaveBeenCalledWith("ctx-phase");
+    expect(contextFolders.removeContext).toHaveBeenCalledWith("ctx-phase");
+    expect(instance.contextCleanupListPending()).toEqual([]);
+  });
+
+  it("is free to destroy a context you fully own", async () => {
     const { service, approvalQueue, instance } = await buildDeps();
     const caller = workerCaller();
     // The caller creates a DO into a FRESH foreign context (free) — it now owns it.
@@ -1740,17 +1918,146 @@ describe("runtimeService.destroyContext", () => {
       },
     ])) as { id: string };
     expect(instance.entityResolve(owned.id)?.parentId).toBe(caller.runtime.id);
-    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+    (approvalQueue.requestCapability as ReturnType<typeof vi.fn>).mockClear();
 
     await service.handler({ caller }, "destroyContext", [{ contextId: "ctx-owned" }]);
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
     expect(instance.entityResolve(owned.id)?.status).toBe("retired");
+  });
+
+  it("attributes eval-launched work to its bound agent and owns the full descendant tree", async () => {
+    const { service, approvalQueue, instance } = await buildDeps();
+    const owner = await seedDO(service, "ctx-orchestrator", "orchestrator");
+    const transportId = "do:product/eval:EvalDO:run-owned-tree";
+    const caller = createVerifiedCaller(
+      transportId,
+      "do",
+      {
+        callerId: transportId,
+        callerKind: "do",
+        repoPath: "eval/run-owned-tree",
+        executionDigest: "b".repeat(64),
+        delegations: [],
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
+      },
+      {
+        entityId: owner.id,
+        contextId: "ctx-orchestrator",
+        channelId: "channel-owner",
+        agentId: "agent-owner",
+        userId: "user-1",
+      }
+    );
+
+    const root = (await service.handler({ caller }, "createEntity", [
+      {
+        kind: "do",
+        source: "workers/agent",
+        className: "AgentDO",
+        key: "root",
+        contextId: "ctx-owned-tree",
+      },
+    ])) as { id: string };
+    const rootCaller = createVerifiedCaller(root.id, "do", {
+      callerId: root.id,
+      callerKind: "do",
+      repoPath: "workers/agent",
+      executionDigest: "c".repeat(64),
+      delegations: [],
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
+    });
+    const child = (await service.handler({ caller: rootCaller }, "createEntity", [
+      {
+        kind: "do",
+        source: "workers/tool",
+        className: "ToolDO",
+        key: "child",
+        contextId: "ctx-owned-tree",
+      },
+    ])) as { id: string };
+
+    expect(instance.entityResolve(root.id)?.parentId).toBe(owner.id);
+    expect(instance.entityResolve(child.id)?.parentId).toBe(root.id);
+    // A partial cleanup may retire an ancestor before a later context-level
+    // retry. Its immutable row must continue to connect the active descendant
+    // to the authenticated owner.
+    await service.handler({ caller }, "retireEntity", [{ id: root.id }]);
+    expect(instance.entityResolve(root.id)?.status).toBe("retired");
+    expect(instance.entityResolve(child.id)?.status).toBe("active");
+    (approvalQueue.requestCapability as ReturnType<typeof vi.fn>).mockClear();
+
+    await service.handler({ caller }, "destroyContext", [{ contextId: "ctx-owned-tree" }]);
+
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
+    expect(instance.entityResolve(root.id)?.status).toBe("retired");
+    expect(instance.entityResolve(child.id)?.status).toBe("retired");
+  });
+
+  it("lets the exact EvalDO kernel reclaim its registered context after initiator retirement", async () => {
+    const { service, contextFolders } = await buildDeps();
+    const initiator = workerCaller();
+    const owned = (await service.handler({ caller: initiator }, "createEntity", [
+      {
+        kind: "do",
+        source: "workers/agent",
+        className: "AgentDO",
+        key: "terminal-child",
+        contextId: "ctx-terminal-child",
+      },
+    ])) as { id: string };
+    await service.handler({ caller: initiator }, "retireEntity", [{ id: owned.id }]);
+
+    await service.handler({ caller: evalDoCaller() }, "cleanupEvalOwnedContext", [
+      {
+        contextId: "ctx-terminal-child",
+        ownerEntityId: owned.id,
+        recursive: true,
+      },
+    ]);
+
+    expect(contextFolders.removeContext).toHaveBeenCalledWith("ctx-terminal-child");
+  });
+
+  it("refuses terminal context cleanup without an exact caller-owned root proof", async () => {
+    const { service } = await buildDeps();
+    const foreign = await seedDO(service, "ctx-foreign-cleanup", "foreign-cleanup");
+
+    await expect(
+      service.handler({ caller: evalDoCaller() }, "cleanupEvalOwnedContext", [
+        {
+          contextId: "ctx-different",
+          ownerEntityId: foreign.id,
+          recursive: true,
+        },
+      ])
+    ).rejects.toThrow(/ownership record does not match caller/);
+  });
+
+  it("refuses the eval-only terminal cleanup leaf to non-kernel code", async () => {
+    const { service } = await buildDeps();
+    const owned = await seedDO(service, "ctx-kernel-only", "kernel-only");
+
+    await expect(
+      service.handler({ caller: workerCaller() }, "cleanupEvalOwnedContext", [
+        {
+          contextId: "ctx-kernel-only",
+          ownerEntityId: owned.id,
+          recursive: true,
+        },
+      ])
+    ).rejects.toThrow(/restricted to the exact EvalDO kernel/);
   });
 
   it("prompts (severe) to destroy a foreign context you do NOT own", async () => {
     const { service, approvalQueue, entityCache } = await buildDeps({
-      approvalDecision: "session",
+      approvalDecision: "once",
     });
     const caller = panelCaller("panel:x", "ctx-caller");
     entityCache._onActivate({
@@ -1768,9 +2075,13 @@ describe("runtimeService.destroyContext", () => {
 
     await service.handler({ caller }, "destroyContext", [{ contextId: "ctx-victim" }]);
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({ capability: "context.boundary", severity: "severe" })
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "context.boundary",
+        severity: "severe",
+        allowedDecisions: ["once", "deny", "dismiss"],
+      })
     );
   });
 
@@ -1880,7 +2191,7 @@ describe("runtimeService context-relationship registry", () => {
           ownerEntityId: "worker:workers/fork:fork",
         },
       ])
-    ).rejects.toThrow(/trusted host callers/i);
+    ).rejects.toThrow(/no authority branch admits the code origin/i);
 
     const owned = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
       { contextId: "ctx-forged-parent", kind: "lifecycle" },
@@ -1932,7 +2243,7 @@ describe("runtimeService.createSubagentContext", () => {
     )) as { contextId: string };
 
     expect(forkContext).toHaveBeenCalledWith("ctx-parent-do", out.contextId);
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("allows the owner DO to create an entity inside its lifecycle child context without approval", async () => {
@@ -1948,14 +2259,14 @@ describe("runtimeService.createSubagentContext", () => {
         targetKey: "run:attach",
       },
     ])) as { contextId: string };
-    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+    (approvalQueue.requestCapability as ReturnType<typeof vi.fn>).mockClear();
 
     const child = (await service.handler({ caller }, "createEntity", [
       doCreateSpec({ key: "child-agent", contextId: childContext.contextId }),
     ])) as { contextId: string };
 
     expect(child.contextId).toBe(childContext.contextId);
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("rejects owner spoofing before forking or recording a lifecycle edge", async () => {
@@ -1994,7 +2305,7 @@ describe("runtimeService.createSubagentContext", () => {
       cleanupComplete: true,
     });
     const owner = await seedDO(service, "ctx-foreign-parent", "owner", caller);
-    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+    (approvalQueue.requestCapability as ReturnType<typeof vi.fn>).mockClear();
 
     await expect(
       service.handler({ caller }, "createSubagentContext", [
@@ -2002,7 +2313,7 @@ describe("runtimeService.createSubagentContext", () => {
       ])
     ).rejects.toThrow(/denied/i);
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({ capability: "context.boundary" })
     );
     expect(forkContext).not.toHaveBeenCalled();

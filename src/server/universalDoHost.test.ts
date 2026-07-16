@@ -51,6 +51,14 @@ export class CounterDO extends DurableObject {
     if (method === "incr") {
       this.ctx.storage.sql.exec("INSERT INTO c (n) VALUES (1)");
     }
+    if (method === "egress") {
+      const response = await fetch("https://example.com/probe", {
+        headers: { "X-Vibestudio-Egress-Caller": "FORGED" },
+      });
+      return new Response(JSON.stringify({ result: await response.json() }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
     const total = [...this.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM c").raw()][0][0];
     return new Response(JSON.stringify({ result: {
       count: total, source: this.env.WORKER_SOURCE, cls: this.env.WORKER_CLASS_NAME, key: userKey,
@@ -91,6 +99,8 @@ function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
 interface Harness {
   manager: WorkerdManager;
   gateway: Server;
+  egress: Server;
+  egressCallers: string[];
   statePath: string;
   dispatch: (
     ref: { source: string; className: string; objectKey: string },
@@ -113,6 +123,14 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
   // holder) so the gateway closure below can reference a `const` manager.
   const portHolder = { value: 0 };
   const executionBundles = new Map<string, ReturnType<typeof executionArtifactFixture>["bundle"]>();
+  const egressCallers: string[] = [];
+  const egress = createServer((req, res) => {
+    const caller = String(req.headers["x-vibestudio-egress-caller"] ?? "");
+    egressCallers.push(caller);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ caller }));
+  });
+  const egressPort = await listen(egress);
 
   const statePath = mkdtempSync(join(tmpdir(), "vibestudio-udo-state-"));
   const deps: WorkerdManagerDeps = {
@@ -132,7 +150,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-ws-")),
     statePath,
     getProxyPort: () => 1,
-    getSharedEgressPort: () => Promise.resolve(59999),
+    getSharedEgressPort: () => Promise.resolve(egressPort),
     registerEgressCaller: () => {},
     unregisterEgressCaller: () => {},
     egressSecret: "universal-do-host-egress-secret",
@@ -151,13 +169,14 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
         return;
       }
       const isVersion = url.startsWith("/_doversion/");
+      const objectKey = new URL(url, "http://gateway").searchParams.get("objectKey") ?? undefined;
       const segs = (
         url.slice((isVersion ? "/_doversion/" : "/_docode/").length).split("?")[0] ?? ""
       ).split("/");
       const source = decodeURIComponent(segs[0] ?? "");
       const className = decodeURIComponent(segs[1] ?? "");
       if (isVersion) {
-        const v = manager.getDoVersion(source, className);
+        const v = manager.getDoVersion(source, className, objectKey);
         if (v === null) {
           res.writeHead(404);
           res.end("nf");
@@ -167,7 +186,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
         res.end(JSON.stringify({ version: v }));
         return;
       }
-      void manager.getDoCode(source, className).then((code) => {
+      void manager.getDoCode(source, className, objectKey).then((code) => {
         if (!code) {
           res.writeHead(404);
           res.end("nf");
@@ -203,7 +222,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
     return ((await res.json()) as { result: unknown }).result;
   };
 
-  return { manager, gateway, statePath, dispatch };
+  return { manager, gateway, egress, egressCallers, statePath, dispatch };
 }
 
 let active: Harness | null = null;
@@ -211,17 +230,48 @@ afterEach(async () => {
   if (active) {
     await active.manager.shutdown();
     await new Promise<void>((r) => active!.gateway.close(() => r()));
+    await new Promise<void>((r) => active!.egress.close(() => r()));
     active = null;
   }
 });
 
+async function launchDurableObject(
+  manager: WorkerdManager,
+  input: { source: string; className: string; key: string; contextId: string }
+): Promise<void> {
+  const execution = await manager.resolveExecution(input.source);
+  await manager.ensureDurableObjectEntity({ ...input, execution });
+}
+
 describe("UniversalDO facet host (real workerd)", () => {
+  it("stamps outbound requests with the exact logical DO identity", async () => {
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, dispatch, egressCallers } = active;
+    const ref = { source: "workers/counter", className: "CounterDO", objectKey: "agent-1" };
+    await launchDurableObject(manager, {
+      source: ref.source,
+      className: ref.className,
+      key: ref.objectKey,
+      contextId: "ctx-agent",
+    });
+
+    await expect(dispatch(ref, "egress")).resolves.toEqual({
+      caller: "do:workers/counter:CounterDO:agent-1",
+    });
+    expect(egressCallers).toEqual(["do:workers/counter:CounterDO:agent-1"]);
+  });
+
   it("loads a userland DO as a facet and persists per-key storage with no restart", async () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager, dispatch } = active;
 
-    // Registering the first userland DO class brings workerd up once.
-    await manager.ensureDOClass("workers/counter", "CounterDO");
+    // Registering the first exact runtime object brings workerd up once.
+    await launchDurableObject(manager, {
+      source: "workers/counter",
+      className: "CounterDO",
+      key: "k1",
+      contextId: "ctx-1",
+    });
     const boot = manager.getBootGeneration();
 
     const ref1 = { source: "workers/counter", className: "CounterDO", objectKey: "k1" };
@@ -235,6 +285,12 @@ describe("UniversalDO facet host (real workerd)", () => {
 
     // A different object key is an isolated facet (its own storage).
     const ref2 = { source: "workers/counter", className: "CounterDO", objectKey: "k2" };
+    await launchDurableObject(manager, {
+      source: ref2.source,
+      className: ref2.className,
+      key: ref2.objectKey,
+      contextId: "ctx-2",
+    });
     expect(await dispatch(ref2, "incr")).toMatchObject({ count: 1, key: "k2" });
     expect(await dispatch(ref1, "get")).toMatchObject({ count: 2 });
 
@@ -246,14 +302,25 @@ describe("UniversalDO facet host (real workerd)", () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager, statePath, dispatch } = active;
 
-    await manager.ensureDOClass("workers/counter", "CounterDO");
     const src = { source: "workers/counter", className: "CounterDO", objectKey: "orig" };
+    await launchDurableObject(manager, {
+      source: src.source,
+      className: src.className,
+      key: src.objectKey,
+      contextId: "ctx-source",
+    });
     await dispatch(src, "incr");
     await dispatch(src, "incr");
     expect(await dispatch(src, "get")).toMatchObject({ count: 2 });
 
     const boot = manager.getBootGeneration();
     const cloned = await manager.cloneDO(src, "fork");
+    await launchDurableObject(manager, {
+      source: cloned.source,
+      className: cloned.className,
+      key: cloned.objectKey,
+      contextId: "ctx-fork",
+    });
     expect(cloned.objectKey).toBe("fork");
     expect(manager.getBootGeneration()).toBe(boot); // clone never restarts
 
@@ -277,9 +344,14 @@ describe("UniversalDO facet host (real workerd)", () => {
   it("forwards a WebSocket upgrade through the facet host (hibernation)", async () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager } = active;
-    await manager.ensureDOClass("workers/counter", "CounterDO");
 
     const ref = { source: "workers/counter", className: "CounterDO", objectKey: "ws-1" };
+    await launchDurableObject(manager, {
+      source: ref.source,
+      className: ref.className,
+      key: ref.objectKey,
+      contextId: "ctx-ws",
+    });
     const port = manager.getPort()!;
     const { default: WebSocket } = await import("ws");
     const key = encodeUniversalKey(ref);
@@ -333,7 +405,12 @@ export default { fetch() { return new Response("h"); } };`;
 
     active = await createHarness({ "workers/wasm": build });
     const { manager, dispatch } = active;
-    await manager.ensureDOClass("workers/wasm", "WasmDO");
+    await launchDurableObject(manager, {
+      source: "workers/wasm",
+      className: "WasmDO",
+      key: "w1",
+      contextId: "ctx-wasm",
+    });
 
     const res = await dispatch(
       { source: "workers/wasm", className: "WasmDO", objectKey: "w1" },
@@ -349,16 +426,45 @@ export default { fetch() { return new Response("h"); } };`;
     });
     const { manager, dispatch } = active;
 
-    await manager.ensureDOClass("workers/counter", "CounterDO");
+    await launchDurableObject(manager, {
+      source: "workers/counter",
+      className: "CounterDO",
+      key: "a",
+      contextId: "ctx-counter",
+    });
     const boot = manager.getBootGeneration();
     await dispatch({ source: "workers/counter", className: "CounterDO", objectKey: "a" }, "incr");
 
     // A genuinely new userland DO class (different source) — no restart.
-    await manager.ensureDOClass("workers/other", "CounterDO");
+    await launchDurableObject(manager, {
+      source: "workers/other",
+      className: "CounterDO",
+      key: "a",
+      contextId: "ctx-other",
+    });
     expect(manager.getBootGeneration()).toBe(boot);
 
     expect(
       await dispatch({ source: "workers/other", className: "CounterDO", objectKey: "a" }, "incr")
     ).toMatchObject({ count: 1, source: "workers/other" });
+  }, 30_000);
+
+  it("cannot reload or dispatch a retired exact object through its class image", async () => {
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, dispatch } = active;
+    const ref = { source: "workers/counter", className: "CounterDO", objectKey: "retired" };
+    await launchDurableObject(manager, {
+      source: ref.source,
+      className: ref.className,
+      key: ref.objectKey,
+      contextId: "ctx-retired",
+    });
+    await expect(dispatch(ref, "incr")).resolves.toMatchObject({ count: 1 });
+
+    await manager.destroyDOEntity("do:workers/counter:CounterDO:retired");
+
+    await expect(dispatch(ref, "get")).rejects.toThrow(
+      "dispatch failed 404: DO class not found: workers/counter:CounterDO"
+    );
   }, 30_000);
 });

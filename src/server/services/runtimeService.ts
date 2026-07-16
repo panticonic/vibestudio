@@ -19,7 +19,7 @@ import {
   type CloneContextResult,
 } from "@vibestudio/service-schemas/runtime";
 import type { ContextEdge, ContextEdgeKind } from "@vibestudio/shared/runtime/contextEdges";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
   buildWorkspaceContext,
   canonicalEntityId,
@@ -32,9 +32,11 @@ import {
   type WorkspaceContext,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
+import type { ContextCleanupRecord } from "@vibestudio/shared/runtime/contextCleanup";
 import type { ResolvedExecutionBinding } from "../buildV2/index.js";
+import { EVAL_DO_SOURCE } from "../internalDOs/productBootManifest.js";
 import {
-  requireContextBoundaryPermission,
+  prepareContextBoundaryAuthority,
   type ContextBoundaryAction,
   type ContextBoundaryDeps,
 } from "./contextBoundary.js";
@@ -151,13 +153,13 @@ export interface RuntimeServiceDeps {
     title: string | undefined,
     options?: { explicit?: boolean }
   ) => void | Promise<void>;
-  /**
-   * Revoke every entity-scoped agent credential + the live agent TokenManager
-   * token for a retired entity. Called
-   * at the end of `retireEntity` so agent credentials never outlive their
-   * entity. Wired in src/server/index.ts to deviceAuthStore + tokenManager.
-   */
-  revokeAgentCredentials?: (entityId: string) => void | Promise<void>;
+}
+
+export interface RuntimeServiceDefinition extends ServiceDefinition {
+  maintenance: {
+    /** Resume one operation from the WorkspaceDO context-cleanup ledger. */
+    retryContextCleanup(contextId: string): Promise<void>;
+  };
 }
 
 /**
@@ -182,7 +184,7 @@ function deriveEntityKey(srcKey: string, targetKey: string, srcId: string): stri
   return `${srcKey}~fork~${h}`;
 }
 
-export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinition {
+export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceDefinition {
   const store = deps.entityStore;
 
   /**
@@ -191,23 +193,21 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
    * a runtime kind or caller id never creates that authority. Runs BEFORE any
    * side effect, so denial is non-destructive.
    */
-  async function gateContextLaunch(
+  async function prepareContextLaunch(
     caller: VerifiedCaller,
     targetContextId: string,
     action: ContextBoundaryAction
-  ): Promise<void> {
-    if (caller.hostOriginated === true) return;
-    const originContextId = await store.resolveContext(caller.runtime.id);
-    if (await callerOwnsLifecycleContext(caller, originContextId, targetContextId)) return;
-    const result = await requireContextBoundaryPermission(deps.contextBoundary, {
+  ) {
+    if (caller.hostOriginated === true) return [];
+    const originContextId =
+      caller.agentBinding?.contextId ?? (await store.resolveContext(caller.runtime.id));
+    if (await callerOwnsLifecycleContext(caller, originContextId, targetContextId)) return [];
+    return prepareContextBoundaryAuthority(deps.contextBoundary, {
       subjectCaller: caller,
       originContextId,
       targetContextId,
       action,
     });
-    if (!result.allowed) {
-      throw new Error(result.reason ?? "Context-boundary denied");
-    }
   }
 
   function isTrustedRuntimeHost(caller: VerifiedCaller): boolean {
@@ -219,8 +219,49 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     throw new Error(`runtime.${method} is restricted to trusted host callers`);
   }
 
+  /**
+   * A delegated call has two authenticated lifecycle principals: the stable
+   * bound agent that owns the work and the exact runtime executing it. New
+   * children are attributed to the stable owner; both roots remain valid when
+   * proving the lineage of work already launched by the live invocation.
+   */
+  function callerLifecyclePrincipalIds(caller: VerifiedCaller): Set<string> {
+    return new Set(
+      caller.agentBinding ? [caller.agentBinding.entityId, caller.runtime.id] : [caller.runtime.id]
+    );
+  }
+
+  function lifecycleParentId(caller: VerifiedCaller): string {
+    return caller.agentBinding?.entityId ?? caller.runtime.id;
+  }
+
   function callerOwnsEntity(caller: VerifiedCaller, entity: EntityRecord): boolean {
-    return caller.runtime.id === entity.id || entity.parentId === caller.runtime.id;
+    const principals = callerLifecyclePrincipalIds(caller);
+    return (
+      principals.has(entity.id) || (entity.parentId != null && principals.has(entity.parentId))
+    );
+  }
+
+  /** True only when every entity is transitively descended from the caller. */
+  function callerOwnsEntityTree(
+    caller: VerifiedCaller,
+    entities: readonly EntityRecord[]
+  ): boolean {
+    if (entities.length === 0) return false;
+    const owned = callerLifecyclePrincipalIds(caller);
+    const unresolved = new Set(entities);
+    let advanced = true;
+    while (unresolved.size > 0 && advanced) {
+      advanced = false;
+      for (const entity of unresolved) {
+        if (owned.has(entity.id) || (entity.parentId != null && owned.has(entity.parentId))) {
+          owned.add(entity.id);
+          unresolved.delete(entity);
+          advanced = true;
+        }
+      }
+    }
+    return unresolved.size === 0;
   }
 
   function bindingFromSpec(spec: RuntimeEntityCreateSpec): RuntimeAgentBindingInput | undefined {
@@ -278,28 +319,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     });
     const edge = edges.find((candidate) => candidate.contextId === targetContextId);
     if (!edge?.ownerEntityId) return false;
-    if (edge.ownerEntityId === caller.runtime.id) return true;
+    if (callerLifecyclePrincipalIds(caller).has(edge.ownerEntityId)) return true;
     const owner = await store.resolveRecord(edge.ownerEntityId);
     return owner ? callerOwnsEntity(caller, owner) : false;
   }
 
-  async function resolveContextPolicy(
-    caller: VerifiedCaller,
-    requested: string | null | undefined,
-    spec: RuntimeEntityCreateSpec
-  ): Promise<string> {
+  function resolveContextPolicy(requested: string | null | undefined): string {
     // Empty/omitted ⇒ a brand-new context (fresh ⇒ free, no gate).
     if (requested == null || requested === "") {
       return randomUUID();
-    }
-    if (!isExtensionOrchestratedCreate(caller, spec)) {
-      await gateContextLaunch(caller, requested, {
-        kind: "runtime",
-        verb: `Create ${spec.kind}`,
-        targetLabel: spec.source,
-        targetLabelName: "Source",
-        groupKey: `context-boundary:${requested}:${spec.source}`,
-      });
     }
     return requested;
   }
@@ -319,6 +347,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   }
 
   async function createEntity(
+    ctx: ServiceContext,
     caller: VerifiedCaller,
     rawSpec: RuntimeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
@@ -340,7 +369,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     // Gate (context-boundary) then prepare+activate. The gate is the ONLY caller
     // of the boundary check on this path; `activateEntity` is gate-free so internal
     // orchestration (cloneContext) can create clones after a single source-gate.
-    const contextId = await resolveContextPolicy(caller, spec.contextId, spec);
+    const contextId = resolveContextPolicy(spec.contextId);
     const agentBinding = await resolveAgentBinding(
       caller,
       "createEntity",
@@ -354,7 +383,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
    * Prepare runtime resources for an entity and commit its durable row — WITHOUT
    * the context-boundary gate. `createEntity` calls this after gating; `cloneContext`
    * calls it per-clone after a single gate on the source context. `parentId` is the
-   * caller, so a cloneContext caller owns (and may freely destroy) the clones.
+   * caller's stable lifecycle principal, so the caller owns the resulting tree.
    */
   async function activateEntity(
     caller: VerifiedCaller,
@@ -366,9 +395,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     let contextId = initialContextId;
     const key = spec.key ?? randomUUID();
 
+    const parentId = lifecycleParentId(caller);
+    const parentRecord =
+      parentId === caller.runtime.id ? null : await store.resolveRecord(parentId);
+    const parentRuntimeKind =
+      parentId === caller.runtime.id ? caller.runtime.kind : parentRecord?.kind;
+
     let canonicalId: string;
     let executionDigest: string | undefined;
     let authorityRequests: ResolvedExecutionBinding["requested"] | undefined;
+    let authorityDelegations: ResolvedExecutionBinding["delegations"] | undefined;
     let targetId: string;
     let existing: EntityRecord | null = null;
 
@@ -392,11 +428,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       });
       executionDigest = execution.artifact.executionDigest;
       authorityRequests = execution.requested;
+      authorityDelegations = execution.delegations;
       targetId = prepared.targetId;
     } else if (spec.kind === "worker") {
       canonicalId = canonicalEntityId({ kind: "worker", source: spec.source, key });
       existing = await store.resolveRecord(canonicalId);
-      const parentKind = caller.runtime.kind;
       const execution =
         exactExecution ?? (await deps.resolveExecutionArtifact(spec.source, spec.ref));
       const prepared = await deps.hooks.prepareWorker({
@@ -409,16 +445,19 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         // Same launch parent recorded on the entity (parentId below), threaded to
         // the worker's PARENT_* env so its `parent` runtime API resolves.
         parent: {
-          parentId: caller.runtime.id,
-          parentEntityId: caller.runtime.id,
+          parentId,
+          parentEntityId: parentId,
           parentKind:
-            parentKind === "panel" || parentKind === "worker" || parentKind === "do"
-              ? parentKind
+            parentRuntimeKind === "panel" ||
+            parentRuntimeKind === "worker" ||
+            parentRuntimeKind === "do"
+              ? parentRuntimeKind
               : undefined,
         },
       });
       executionDigest = execution.artifact.executionDigest;
       authorityRequests = execution.requested;
+      authorityDelegations = execution.delegations;
       targetId = prepared.targetId;
     } else if (spec.kind === "app") {
       canonicalId = canonicalEntityId({ kind: "app", source: spec.source, key });
@@ -431,6 +470,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       });
       executionDigest = execution.artifact.executionDigest;
       authorityRequests = execution.requested;
+      authorityDelegations = execution.delegations;
       targetId = canonicalId;
     } else if (spec.kind === "session") {
       canonicalId = canonicalEntityId({ kind: "session", key });
@@ -474,6 +514,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       });
       executionDigest = execution.artifact.executionDigest;
       authorityRequests = execution.requested;
+      authorityDelegations = execution.delegations;
       targetId = canonicalId;
     }
 
@@ -500,7 +541,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       // Record the verified caller as this entity's launch parent (server-
       // authoritative) so a runtime can later resolve its nearest panel ancestor
       // (e.g. eval launched by an agent inherits the agent's owning panel).
-      parentId: caller.runtime.id,
+      parentId,
       // Attribute the entity to the human whose subject launched it (WP0 §6).
       // For an agent/worker spawning a child, the caller's subject already
       // carries the inherited userId, so lineage propagates. Undefined for a
@@ -518,6 +559,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       source: record.source,
       ...(record.activeExecutionDigest ? { executionDigest: record.activeExecutionDigest } : {}),
       ...(authorityRequests ? { authorityRequests } : {}),
+      ...(authorityDelegations ? { authorityDelegations } : {}),
       contextId: record.contextId,
       targetId,
     };
@@ -529,14 +571,12 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
    * branch. Repo selection remains an operation-level concern on VCS methods.
    */
   async function createContext(
+    ctx: ServiceContext,
     caller: VerifiedCaller,
     args: { contextId?: string }
   ): Promise<WorkspaceContext> {
     // A named, already-existing foreign context is gated (this re-pins its VCS /
     // re-materializes its folder); a fresh/omitted contextId is free.
-    if (args.contextId != null && args.contextId !== "") {
-      await gateContextLaunch(caller, args.contextId, { kind: "runtime", verb: "Set up context" });
-    }
     const contextId = args.contextId ?? randomUUID();
     const context = await setUpContext(contextId);
     await deps.contextFolders.ensureContextFolder(contextId);
@@ -551,45 +591,30 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   async function retireRecord(id: string): Promise<EntityRecord | null> {
     const record = await store.retire(id);
     if (!record) return null;
-    try {
-      await deps.hooks.onRetire(record);
-      await store.cleanupComplete(id);
-    } catch {
-      // Leave cleanup_complete=0; cleanupReaper will retry.
-    }
+    if (record.cleanupComplete) return record;
+    // If either operation fails, the durable row remains cleanup_complete=0
+    // for the reaper and the failure propagates to the caller.
+    await deps.hooks.onRetire(record);
+    await store.cleanupComplete(id);
     return record;
   }
 
   async function retireEntity(
+    ctx: ServiceContext,
     caller: VerifiedCaller,
     id: string,
     removeContext?: boolean
   ): Promise<void> {
-    // Gate BEFORE mutating. Resolve the target's context via the DURABLE store
-    // (the active cache may already be evicting it). A null/unknown/already-
-    // retired target ⇒ the retire below no-ops ⇒ allow.
-    const target = await store.resolveRecord(id);
-    if (target?.status === "active" && !callerOwnsEntity(caller, target)) {
-      await gateContextLaunch(caller, target.contextId, {
-        kind: "runtime",
-        verb: removeContext ? "Retire entity and remove context" : "Retire entity",
-        targetLabel: id,
-        targetLabelName: "Runtime entity",
-        ...(removeContext ? { severity: "severe" as const } : {}),
-      });
-    }
     const record = await retireRecord(id);
     if (!record) return;
-    // Agent credentials follow the entity: revoke outstanding credentials + the
-    // live agent token so a retired entity's bound agent sessions can't
-    // re-authenticate (§3.2).
-    await deps.revokeAgentCredentials?.(id);
     if (removeContext) {
       const live = await store.listActive();
       if (!live.some((e) => e.contextId === record.contextId)) {
-        // Tear down VCS state (caches + ctx heads + pin ref) before the folder.
-        await deps.vcsContexts?.dropContext?.(record.contextId).catch(() => undefined);
-        await deps.contextFolders.removeContext(record.contextId);
+        const cleanup = await store.beginContextCleanup({
+          contextId: record.contextId,
+          kind: "detach",
+        });
+        await executeContextCleanup(cleanup);
       }
     }
   }
@@ -633,6 +658,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
    * context is free; cloning a foreign existing one prompts.
    */
   async function cloneContext(
+    ctx: ServiceContext,
     caller: VerifiedCaller,
     args: {
       sourceContextId: string;
@@ -645,13 +671,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     const recursive = args.recursive === true;
     // `include` scopes the ROOT context only; recursive descendants clone in full.
     const rootInclude = args.include ? new Set(args.include) : null;
-    await gateContextLaunch(caller, sourceContextId, {
-      kind: "runtime",
-      verb: "Clone context",
-      targetLabel: sourceContextId,
-      targetLabelName: "Source context",
-    });
-
     // Resolve the source contexts to clone: the root, plus (recursive) its
     // transitive LIFECYCLE subtree. Lineage (fork) edges are NEVER followed — a
     // forked conversation is provenance, not a subordinate world.
@@ -723,21 +742,36 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       );
     }
 
-    const createdContexts: string[] = [];
-    const created: RuntimeEntityHandle[] = [];
-    const clonedStorage: Array<{ source: string; className: string; key: string }> = [];
     const entities: ClonedEntity[] = [];
     const entityIdMap = new Map<string, string>();
+    const armedCleanup = new Map<string, ContextCleanupRecord>();
+
+    // A crashed prior attempt leaves an exact durable rollback record. Finish
+    // that cleanup before an idempotent retry decides whether the target is a
+    // committed pre-existing clone or a fresh context it must arm.
+    const pendingCleanup = new Map(
+      (await store.listPendingContextCleanups()).map((record) => [record.contextId, record])
+    );
+    for (const targetContextId of newContextIdOf.values()) {
+      if (pendingCleanup.has(targetContextId)) {
+        await retryContextCleanup(targetContextId);
+      }
+    }
     try {
       for (const srcCtx of sourceContexts) {
         const isRoot = srcCtx === sourceContextId;
         const targetCtx = newContextIdOf.get(srcCtx) as string;
+        if (!deps.contextBoundary.contextExists(targetCtx)) {
+          armedCleanup.set(
+            targetCtx,
+            await store.beginContextCleanup({ contextId: targetCtx, kind: "destroy" })
+          );
+        }
         // Fork file state FIRST: pin the new context to the source's working
         // snapshot so clones materialize the source's files, then diverge.
         // Idempotent under retry (gad-store fork + folder guard + upsert storage).
         await deps.vcsContexts?.forkContext?.(srcCtx, targetCtx);
         await deps.contextFolders.ensureContextFolder(targetCtx);
-        createdContexts.push(targetCtx);
 
         for (const src of clonableIn(srcCtx, isRoot ? rootInclude : null)) {
           const newKey = targetKey
@@ -748,6 +782,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
             if (className == null) {
               throw new Error(`cloneContext: DO entity ${src.id} has no className`);
             }
+            if (armedCleanup.has(targetCtx)) {
+              armedCleanup.set(
+                targetCtx,
+                await store.addContextCleanupDurableObject(targetCtx, {
+                  source: src.source.repoPath,
+                  className,
+                  key: newKey,
+                })
+              );
+            }
             // Storage clone must precede activation so the DO reads cloned state on
             // first access. Upsert-safe (skip-if-exists) for targetKey retries.
             await deps.hooks.cloneDurableStorage?.({
@@ -756,7 +800,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
               fromKey: src.key,
               toKey: newKey,
             });
-            clonedStorage.push({ source: src.source.repoPath, className, key: newKey });
           }
           if (!src.activeExecutionDigest) {
             throw new Error(`cloneContext: code-backed entity ${src.id} has no active execution`);
@@ -769,7 +812,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
             undefined,
             exactExecution
           );
-          created.push(handle);
           entityIdMap.set(src.id, handle.id);
           entities.push({
             sourceId: src.id,
@@ -803,16 +845,19 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         ownerContextId: sourceContextId,
         kind: "lineage",
       });
+      // One WorkspaceDO transaction is the clone's rollback-disarm commit
+      // point. Before it, every fresh target remains recoverably provisional;
+      // after it, no reaper can mistake a committed clone for debris.
+      await store.completeContextCleanups([...armedCleanup.keys()]);
     } catch (err) {
-      // Best-effort rollback: retire clones, delete cloned storage, drop every
-      // context created in this call (edges + VCS + folder).
-      for (const h of created) await retireRecord(h.id).catch(() => undefined);
-      for (const s of clonedStorage)
-        await deps.hooks.destroyDurableStorage?.(s).catch(() => undefined);
-      for (const c of createdContexts) {
-        await store.deleteContextEdges(c).catch(() => undefined);
-        await deps.vcsContexts?.dropContext?.(c).catch(() => undefined);
-        await deps.contextFolders.removeContext(c).catch(() => undefined);
+      const rollbackFailures = cleanupFailures(
+        await Promise.allSettled([...armedCleanup.values()].map(executeContextCleanup))
+      );
+      if (rollbackFailures.length > 0) {
+        throw new AggregateError(
+          [err, ...rollbackFailures],
+          `cloneContext failed and ${rollbackFailures.length} durable rollback${rollbackFailures.length === 1 ? "" : "s"} remain pending`
+        );
       }
       throw err instanceof Error ? err : new Error(String(err));
     }
@@ -834,57 +879,102 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     return { contextId: rootNewContextId, entities, contexts, rewired };
   }
 
+  function cleanupFailureMessage(error: unknown): string {
+    return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  }
+
+  function cleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
+    return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  }
+
+  async function throwContextCleanupFailure(
+    record: ContextCleanupRecord,
+    failures: unknown[]
+  ): Promise<never> {
+    const error = new AggregateError(
+      failures,
+      `Context ${record.kind} cleanup was incomplete for ${record.contextId} (${failures.length} step${failures.length === 1 ? "" : "s"} failed)`
+    );
+    try {
+      await store.failContextCleanup(record.contextId, cleanupFailureMessage(error));
+    } catch (ledgerError) {
+      throw new AggregateError(
+        [error, ledgerError],
+        `Context cleanup and durable failure recording both failed for ${record.contextId}`
+      );
+    }
+    throw error;
+  }
+
   /**
-   * Tear a whole context down: retire every entity, reclaim each DO's SQLite
-   * storage, then drop the VCS state + folder. Free for your own context or one you
-   * fully own (every active entity launched by you — e.g. a context you just cloned);
-   * gated (severe) when destroying another agent or panel's existing context.
+   * Resume one durable context-cleanup record. Entity retirement is a strict
+   * first phase: substrate and DO bytes are never reclaimed while an entity's
+   * runtime cleanup is still incomplete. Every operation after that phase is
+   * idempotent and independently attempted so one broken backend cannot starve
+   * the others. The ledger row is the sole success marker.
    */
-  /**
-   * Tear down ONE context: retire its entities, reclaim each DO's storage, drop
-   * its edge rows + VCS state + folder. `gate` is true only for the destroy
-   * ROOT — lifecycle descendants reached via cascade are owned by construction.
-   */
-  async function destroyOneContext(
-    caller: VerifiedCaller,
-    contextId: string,
-    gate: boolean
-  ): Promise<void> {
-    const entities = (await store.listActive()).filter((e) => e.contextId === contextId);
-    if (gate) {
-      // Ownership bypass: a context whose every active entity you launched is
-      // yours to destroy. Otherwise gate (gateContextLaunch still frees your own
-      // context + trusted chrome). An empty context falls through to the gate.
-      const owned = entities.length > 0 && entities.every((e) => e.parentId === caller.runtime.id);
-      if (!owned) {
-        await gateContextLaunch(caller, contextId, {
-          kind: "runtime",
-          verb: "Destroy context",
-          targetLabel: contextId,
-          targetLabelName: "Context",
-          severity: "severe",
-        });
+  async function executeContextCleanup(record: ContextCleanupRecord): Promise<void> {
+    const contextId = record.contextId;
+    const entities = await store.listByContext(contextId);
+
+    if (record.kind === "destroy") {
+      const retirementResults = await Promise.allSettled(
+        entities.map((entity) => retireRecord(entity.id))
+      );
+      const retirementFailures = cleanupFailures(retirementResults);
+      if (retirementFailures.length > 0) {
+        await throwContextCleanupFailure(record, retirementFailures);
       }
     }
-    for (const e of entities) {
-      const rec = await retireRecord(e.id);
-      // DO storage is NOT reclaimed by retire (kept for re-attach) — a full context
-      // destroy is the one path that deletes it.
-      if (rec && rec.kind === "do" && rec.className) {
-        await deps.hooks
-          .destroyDurableStorage?.({
-            source: rec.source.repoPath,
-            className: rec.className,
-            key: rec.key,
-          })
-          .catch(() => undefined);
+
+    const teardown: Array<Promise<unknown>> = [];
+    if (record.kind === "destroy") {
+      // DO storage is deliberately retained by an ordinary entity retirement;
+      // full context destruction is the one operation that reclaims it.
+      const durableObjects = new Map(
+        record.durableObjects.map((ref) => [
+          `${ref.source}\u0000${ref.className}\u0000${ref.key}`,
+          ref,
+        ])
+      );
+      for (const entity of entities) {
+        if (entity.kind !== "do" || !entity.className) {
+          continue;
+        }
+        const ref = {
+          source: entity.source.repoPath,
+          className: entity.className,
+          key: entity.key,
+        };
+        durableObjects.set(`${ref.source}\u0000${ref.className}\u0000${ref.key}`, ref);
+      }
+      if (deps.hooks.destroyDurableStorage) {
+        for (const ref of durableObjects.values()) {
+          teardown.push(deps.hooks.destroyDurableStorage(ref));
+        }
+      } else if (durableObjects.size > 0) {
+        teardown.push(
+          Promise.reject(new Error("Durable Object storage cleanup hook is unavailable"))
+        );
       }
     }
-    // Drop this context's own inbound edges so the registry doesn't accumulate
-    // danglers, then the VCS state + folder.
-    await store.deleteContextEdges(contextId).catch(() => undefined);
-    await deps.vcsContexts?.dropContext?.(contextId).catch(() => undefined);
-    await deps.contextFolders.removeContext(contextId).catch(() => undefined);
+    teardown.push(store.deleteContextEdges(contextId));
+    if (deps.vcsContexts?.dropContext) {
+      teardown.push(deps.vcsContexts.dropContext(contextId));
+    }
+    teardown.push(deps.contextFolders.removeContext(contextId));
+
+    const failures = cleanupFailures(await Promise.allSettled(teardown));
+    if (failures.length > 0) await throwContextCleanupFailure(record, failures);
+    await store.completeContextCleanup(contextId);
+  }
+
+  async function retryContextCleanup(contextId: string): Promise<void> {
+    const record = (await store.listPendingContextCleanups()).find(
+      (candidate) => candidate.contextId === contextId
+    );
+    if (!record) return;
+    await executeContextCleanup(record);
   }
 
   /**
@@ -895,12 +985,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
    * destroys only this context (any lifecycle children are left for the TTL sweep).
    */
   async function destroyContext(
+    ctx: ServiceContext,
     caller: VerifiedCaller,
     args: { contextId: string; recursive?: boolean }
   ): Promise<void> {
     const recursive = args.recursive ?? true;
     const seen = new Set<string>();
-    const teardown = async (contextId: string, gate: boolean): Promise<void> => {
+    const postOrder: string[] = [];
+    const discover = async (contextId: string): Promise<void> => {
       if (seen.has(contextId)) return;
       seen.add(contextId);
       if (recursive) {
@@ -909,11 +1001,63 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           kind: "lifecycle",
         });
         // Post-order: leaves first, then the parent.
-        for (const child of children) await teardown(child.contextId, false);
+        for (const child of children) await discover(child.contextId);
       }
-      await destroyOneContext(caller, contextId, gate);
+      postOrder.push(contextId);
     };
-    await teardown(args.contextId, true);
+    void ctx;
+    void caller;
+    await discover(args.contextId);
+
+    // Arm the complete subtree before the first destructive side effect. A
+    // crash between child and parent teardown therefore cannot orphan the
+    // undispatched remainder of the cascade.
+    const records: ContextCleanupRecord[] = [];
+    for (const contextId of postOrder) {
+      records.push(await store.beginContextCleanup({ contextId, kind: "destroy" }));
+    }
+    const failures = cleanupFailures(
+      await Promise.allSettled(records.map((record) => executeContextCleanup(record)))
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `Context subtree cleanup was incomplete for ${args.contextId} (${failures.length} context${failures.length === 1 ? "" : "s"} failed)`
+      );
+    }
+  }
+
+  /**
+   * Reclaim a fresh context after the authored invocation that created it is
+   * already terminal. Only the exact product EvalDO kernel can call this
+   * eval-closed leaf; the immutable root record verifies the context identity
+   * even after retirement. Evaluated code never receives this cleanup path.
+   */
+  async function cleanupEvalOwnedContext(
+    ctx: ServiceContext,
+    caller: VerifiedCaller,
+    args: { contextId: string; ownerEntityId: string; recursive?: boolean }
+  ): Promise<void> {
+    const evalKernelPrefix = `do:${EVAL_DO_SOURCE}:EvalDO:`;
+    if (
+      caller.code?.repoPath !== EVAL_DO_SOURCE ||
+      caller.runtime.kind !== "do" ||
+      !caller.runtime.id.startsWith(evalKernelPrefix)
+    ) {
+      throw new Error("runtime.cleanupEvalOwnedContext is restricted to the exact EvalDO kernel");
+    }
+    const owner = await store.resolveRecord(args.ownerEntityId);
+    if (!owner || owner.contextId !== args.contextId) {
+      throw new Error(
+        `runtime.cleanupEvalOwnedContext ownership record does not match caller ${caller.runtime.id}: ` +
+          `owner=${args.ownerEntityId}, requestedContext=${args.contextId}, ` +
+          `recordContext=${owner?.contextId ?? "missing"}`
+      );
+    }
+    await destroyContext(ctx, caller, {
+      contextId: args.contextId,
+      recursive: args.recursive,
+    });
   }
 
   /**
@@ -991,6 +1135,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   }
 
   async function createSubagentContext(
+    ctx: ServiceContext,
     caller: VerifiedCaller,
     args: {
       parentContextId: string;
@@ -999,14 +1144,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     }
   ): Promise<{ contextId: string }> {
     await assertSubagentOwnerAllowed(caller, args);
-    await gateContextLaunch(caller, args.parentContextId, {
-      kind: "runtime",
-      verb: "Create subagent context",
-      targetLabel: args.ownerEntityId,
-      targetLabelName: "Owner entity",
-      groupKey: `context-boundary:subagent:${args.parentContextId}:${args.ownerEntityId}`,
-    });
-
     const contextId = deriveContextId(args.targetKey);
     // Order mirrors cloneContext: fork file state, then materialize the folder.
     await deps.vcsContexts?.forkContext?.(args.parentContextId, contextId);
@@ -1051,6 +1188,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           ? {
               executionDigest: execution.artifact.executionDigest,
               authorityRequests: execution.requested,
+              authorityDelegations: execution.delegations,
             }
           : {}),
       };
@@ -1066,23 +1204,109 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     description: "Runtime entity creation and retirement",
     authority: { principals: ["code", "user", "host"] },
     methods: runtimeMethods,
+    authorityPreparation: {
+      "runtime.createEntity.contextBoundary": async (ctx, [rawSpec]) => {
+        const spec = rawSpec as RuntimeEntityCreateSpec;
+        const requested = spec.contextId;
+        if (
+          requested == null ||
+          requested === "" ||
+          isExtensionOrchestratedCreate(ctx.caller, spec)
+        ) {
+          return [];
+        }
+        return prepareContextLaunch(ctx.caller, requested, {
+          kind: "runtime",
+          verb: `Create ${spec.kind}`,
+          targetLabel: spec.source,
+          targetLabelName: "Source",
+          groupKey: `context-boundary:${requested}:${spec.source}`,
+        });
+      },
+      "runtime.retireEntity.contextBoundary": async (ctx, [rawInput]) => {
+        const input = rawInput as { id: string; removeContext?: boolean };
+        const target = await store.resolveRecord(input.id);
+        if (!target || target.status !== "active" || callerOwnsEntity(ctx.caller, target))
+          return [];
+        return prepareContextLaunch(ctx.caller, target.contextId, {
+          kind: "runtime",
+          verb: input.removeContext ? "Retire entity and remove context" : "Retire entity",
+          targetLabel: input.id,
+          targetLabelName: "Runtime entity",
+          ...(input.removeContext ? { severity: "severe" as const } : {}),
+        });
+      },
+      "runtime.createContext.contextBoundary": (ctx, [rawInput]) => {
+        const contextId = (rawInput as { contextId?: string }).contextId;
+        return contextId
+          ? prepareContextLaunch(ctx.caller, contextId, {
+              kind: "runtime",
+              verb: "Set up context",
+            })
+          : [];
+      },
+      "runtime.cloneContext.contextBoundary": (ctx, [rawInput]) => {
+        const sourceContextId = (rawInput as { sourceContextId: string }).sourceContextId;
+        return prepareContextLaunch(ctx.caller, sourceContextId, {
+          kind: "runtime",
+          verb: "Clone context",
+          targetLabel: sourceContextId,
+          targetLabelName: "Source context",
+        });
+      },
+      "runtime.destroyContext.contextBoundary": async (ctx, [rawInput]) => {
+        const contextId = (rawInput as { contextId: string }).contextId;
+        // Immutable retired rows remain part of the lineage proof. This keeps
+        // cleanup retries owned after an earlier attempt retired an ancestor
+        // but failed before reclaiming the rest of the context substrate.
+        const entities = await store.listByContext(contextId);
+        if (callerOwnsEntityTree(ctx.caller, entities)) {
+          return [];
+        }
+        return prepareContextLaunch(ctx.caller, contextId, {
+          kind: "runtime",
+          verb: "Destroy context",
+          targetLabel: contextId,
+          targetLabelName: "Context",
+          severity: "severe",
+        });
+      },
+      "runtime.createSubagentContext.contextBoundary": async (ctx, [rawInput]) => {
+        const input = rawInput as {
+          parentContextId: string;
+          ownerEntityId: string;
+          targetKey: string;
+        };
+        await assertSubagentOwnerAllowed(ctx.caller, input);
+        return prepareContextLaunch(ctx.caller, input.parentContextId, {
+          kind: "runtime",
+          verb: "Create subagent context",
+          targetLabel: input.ownerEntityId,
+          targetLabelName: "Owner entity",
+          groupKey: `context-boundary:subagent:${input.parentContextId}:${input.ownerEntityId}`,
+        });
+      },
+    },
     handler: defineServiceHandler("runtime", runtimeMethods, {
-      createEntity: (ctx, [spec]) => createEntity(ctx.caller, spec),
+      createEntity: (ctx, [spec]) => createEntity(ctx, ctx.caller, spec),
       retireEntity: async (ctx, [{ id, removeContext }]) => {
-        await retireEntity(ctx.caller, id, removeContext);
+        await retireEntity(ctx, ctx.caller, id, removeContext);
       },
       listEntities: (_ctx, [input]) => listEntities(input?.kind),
       resolveContext: (_ctx, [id]) => resolveContext(id),
-      createContext: (ctx, [{ contextId }]) => createContext(ctx.caller, { contextId }),
-      cloneContext: (ctx, [cloneArgs]) => cloneContext(ctx.caller, cloneArgs),
+      createContext: (ctx, [{ contextId }]) => createContext(ctx, ctx.caller, { contextId }),
+      cloneContext: (ctx, [cloneArgs]) => cloneContext(ctx, ctx.caller, cloneArgs),
       destroyContext: async (ctx, [{ contextId, recursive }]) => {
-        await destroyContext(ctx.caller, { contextId, recursive });
+        await destroyContext(ctx, ctx.caller, { contextId, recursive });
+      },
+      cleanupEvalOwnedContext: async (ctx, [cleanupArgs]) => {
+        await cleanupEvalOwnedContext(ctx, ctx.caller, cleanupArgs);
       },
       listOwnedContexts: (_ctx, [listArgs]) => listOwnedContexts(listArgs),
       recordContextEdge: async (ctx, [edgeArgs]) => {
         await recordContextEdge(ctx.caller, edgeArgs);
       },
-      createSubagentContext: (ctx, [subArgs]) => createSubagentContext(ctx.caller, subArgs),
+      createSubagentContext: (ctx, [subArgs]) => createSubagentContext(ctx, ctx.caller, subArgs),
       setTitle: async (ctx, [title, options]) => {
         // Access is enforced by the per-method policy on `runtimeMethods.setTitle`
         // (principals: panel/app/worker/do), checked by the dispatcher before this
@@ -1093,5 +1317,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         });
       },
     }),
+    maintenance: {
+      retryContextCleanup,
+    },
   };
 }

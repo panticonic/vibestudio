@@ -21,7 +21,7 @@
     "headless-host": "VIBESTUDIO_HEADLESS_HOST=1 node scripts/run-electron.mjs --headless-host",
     "server": "node dist/server.mjs",
     "server:dev": "NODE_ENV=development node dist/server.mjs",
-    "server:live": "tsx src/server/index.ts",
+    "server:live": "node build.mjs --source-server-prereqs && tsx src/server/index.ts",
     "system-test": "pnpm cli system-test",
     "dedupe:content-store": "node --import tsx scripts/dedupe-content-store.mjs",
     "pack": "pnpm build && electron-builder --dir",

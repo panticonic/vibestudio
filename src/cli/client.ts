@@ -39,6 +39,7 @@ import { contextCommands } from "./contextCommands.js";
 import { panelCommands } from "./panelCommands.js";
 import { systemTestCommands } from "./systemTestCommands.js";
 import { runtimeFoundationCommands } from "./runtimeFoundationCommands.js";
+import { approvalCommands } from "./approvalCommands.js";
 import { remoteHost } from "./remoteHeadlessHost.js";
 import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
 import { runClaudeGroup } from "./claude/index.js";
@@ -886,6 +887,7 @@ const commandRegistry: CliCommand[] = [
   ...contextCommands,
   ...panelCommands,
   ...systemTestCommands,
+  ...approvalCommands,
   ...runtimeFoundationCommands,
 ];
 
@@ -901,6 +903,7 @@ const GROUP_ORDER = [
   "context",
   "panel",
   "system-test",
+  "approval",
   "runtime-foundations",
 ];
 

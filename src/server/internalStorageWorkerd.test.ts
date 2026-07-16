@@ -186,12 +186,31 @@ async function createWorkerdHarness(
   );
   activeLoaderServers.push(loaderServer);
 
+  const preparedRefs = new Set<string>();
+  const ensureDurableObject = async (ref: DORef): Promise<void> => {
+    const refKey = `${ref.source}:${ref.className}/${ref.objectKey}`;
+    if (preparedRefs.has(refKey)) return;
+    if (ref.source === WORKSPACE_DO_SOURCE) {
+      await manager.ensureDOClass(ref.source, ref.className);
+    } else {
+      const execution = await manager.resolveExecution(ref.source);
+      await manager.ensureDurableObjectEntity({
+        source: ref.source,
+        execution,
+        className: ref.className,
+        key: ref.objectKey,
+        contextId: `test:${refKey}`,
+      });
+    }
+    preparedRefs.add(refKey);
+  };
+
   const callDurableObject = async (
     ref: DORef,
     method: string,
     ...args: unknown[]
   ): Promise<unknown> => {
-    await manager.ensureDO(ref.source, ref.className, ref.objectKey);
+    await ensureDurableObject(ref);
     const port = manager.getPort();
     if (!port) throw new Error("workerd port is not available");
     return postToDurableObject(ref, method, args, {
@@ -202,10 +221,14 @@ async function createWorkerdHarness(
     });
   };
 
-  return { manager, tokenManager, callDurableObject };
+  return { manager, tokenManager, callDurableObject, ensureDurableObject };
 }
 
-function createDODispatch(manager: WorkerdManager, tokenManager: TokenManager): DODispatch {
+function createDODispatch(
+  manager: WorkerdManager,
+  tokenManager: TokenManager,
+  ensureDurableObject: (ref: DORef) => Promise<void>
+): DODispatch {
   const dispatch = new DODispatch();
   dispatch.setTokenManager(tokenManager);
   dispatch.setGetWorkerdGatewayToken(() => manager.getWorkerdGatewayToken());
@@ -215,8 +238,8 @@ function createDODispatch(manager: WorkerdManager, tokenManager: TokenManager): 
     if (!port) throw new Error("workerd port is not available");
     return `http://127.0.0.1:${port}`;
   });
-  dispatch.setEnsureDO((source, className, objectKey) =>
-    manager.ensureDO(source, className, objectKey)
+  dispatch.setEnsureDispatchableDO((source, className, objectKey) =>
+    ensureDurableObject({ source, className, objectKey })
   );
   dispatch.setAuthorityAttester(testHostAttestation);
   return dispatch;
@@ -303,7 +326,7 @@ describe("internal storage DOs under workerd", () => {
   });
 
   // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind
-  // the unbounded-eval.run design: real workerd does NOT cap a DO `fetch` handler
+  // the unbounded held-eval design: real workerd does NOT cap a DO `fetch` handler
   // the way it caps a regular Worker (~30s). Held 35s here and returned cleanly,
   // proving workerd itself is not the short cap in this path. The relay's bare
   // `fetch` adds undici's ~300s `headersTimeout`, defeatable with a custom
@@ -416,65 +439,86 @@ describe("internal storage DOs under workerd", () => {
     expect(result["started_at"]).toBeDefined();
   }, 240_000);
 
-  it("launches the exact EvalDO product seed with its declared unsafe-eval capability", async () => {
+  it("launches the exact EvalDO product seed with its declared lifecycle authority", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([{ source: EVAL_DO_SOURCE, className: "EvalDO" }]);
     const ref = { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey: "capability-probe" };
-    // Product-seed registration is metadata-only. Running a concrete object
-    // crosses UniversalDO's loader boundary and makes EvalDO read the binding
-    // before it asks the deliberately minimal harness for its engine bundle.
-    const result = (await harness.callDurableObject(ref, "run", {
-      code: "1 + 1",
-      runId: "unsafe-eval-probe",
-    })) as { success: boolean; error?: string };
-    expect(result.success).toBe(false);
-    expect(result.error).toBeDefined();
-    expect(result.error).not.toContain("UNSAFE_EVAL binding not configured");
+    const result = (await harness.callDurableObject(ref, "accept", {
+      runId: "authority-probe",
+      startIntentDigest: "a".repeat(64),
+      deadlineAt: null,
+    })) as { runId: string; status: string; needsStart: boolean };
+    expect(result).toMatchObject({
+      runId: "authority-probe",
+      status: "accepted",
+      needsStart: true,
+    });
+    const configDir = (manager as unknown as { configDir: string }).configDir;
+    const config = readFileSync(join(configDir, "config.capnp"), "utf8");
+    expect(config).toMatch(
+      /className = "EvalDO",[\s\S]*?uniqueKey = "product_eval:EvalDO",[\s\S]*?preventEviction = true/
+    );
     expect(manager.getBootGeneration()).toBeGreaterThanOrEqual(1);
   });
 
-  it("EvalDO durable job queue: startRun idempotent, getRun reflects status, reset cancels (preserving runs)", async () => {
-    // The EvalDO's SQLite-only job-queue surface (startRun/getRun/reset) — no sandbox engine, so it
-    // runs end-to-end under real workerd. `callDurableObject` dispatches as a `server` caller, which
-    // the server-only EvalDO requires.
+  it("EvalDO durable lifecycle: accept is digest-idempotent and reset preserves terminal handles", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([{ source: EVAL_DO_SOURCE, className: "EvalDO" }]);
     const ref = { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey: "job-queue-test" };
 
-    // startRun inserts a pending row and returns it.
+    const digest = "a".repeat(64);
     expect(
-      await harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "1+1" })
-    ).toEqual({
+      await harness.callDurableObject(ref, "accept", {
+        runId: "run-1",
+        startIntentDigest: digest,
+        deadlineAt: null,
+      })
+    ).toMatchObject({
       runId: "run-1",
-      status: "pending",
+      status: "accepted",
+      startIntentDigest: digest,
+      needsStart: true,
     });
 
-    // Idempotent on runId: a re-dispatch (crash-replay / deferRedrive) returns the EXISTING row —
-    // never inserts a second run, even with different args.
     expect(
-      await harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "DIFFERENT" })
-    ).toEqual({ runId: "run-1", status: "pending" });
+      await harness.callDurableObject(ref, "accept", {
+        runId: "run-1",
+        startIntentDigest: digest,
+        deadlineAt: null,
+      })
+    ).toMatchObject({ runId: "run-1", status: "accepted", needsStart: false });
 
-    // getRun reflects the durable status; an unknown runId reports 'unknown'.
-    expect(await harness.callDurableObject(ref, "getRun", "run-1")).toMatchObject({
-      status: "pending",
+    await expect(
+      harness.callDurableObject(ref, "accept", {
+        runId: "run-1",
+        startIntentDigest: "b".repeat(64),
+        deadlineAt: null,
+      })
+    ).rejects.toMatchObject({ code: "EVAL_IDEMPOTENCY_CONFLICT" });
+
+    expect(await harness.callDurableObject(ref, "get", "run-1")).toMatchObject({
+      status: "accepted",
+      startIntentDigest: digest,
     });
-    expect(await harness.callDurableObject(ref, "getRun", "nope")).toEqual({ status: "unknown" });
+    await expect(harness.callDurableObject(ref, "get", "nope")).rejects.toThrow(/unknown run/u);
 
-    // reset cancels the pending run AND preserves the runs table (getRun still finds it as cancelled).
-    expect(await harness.callDurableObject(ref, "reset")).toEqual({ ok: true });
-    expect(await harness.callDurableObject(ref, "getRun", "run-1")).toMatchObject({
+    expect(await harness.callDurableObject(ref, "reset")).toEqual({ status: "reset" });
+    expect(await harness.callDurableObject(ref, "get", "run-1")).toMatchObject({
       status: "cancelled",
     });
 
-    // A fresh run after reset is independent.
     expect(
-      await harness.callDurableObject(ref, "startRun", { runId: "run-2", code: "2+2" })
-    ).toEqual({
+      await harness.callDurableObject(ref, "accept", {
+        runId: "run-2",
+        startIntentDigest: "c".repeat(64),
+        deadlineAt: null,
+      })
+    ).toMatchObject({
       runId: "run-2",
-      status: "pending",
+      status: "accepted",
+      needsStart: true,
     });
   }, 30_000);
 
@@ -515,6 +559,15 @@ describe("internal storage DOs under workerd", () => {
     };
     expect(retired.status).toBe("retired");
 
+    // GC must not erase the retry proof until the host-owned retirement hooks
+    // have actually completed.
+    const premature = (await harness.callDurableObject(ref, "entityGc", {
+      all: true,
+      graceMs: 0,
+    })) as string[];
+    expect(premature).toEqual([]);
+    await harness.callDurableObject(ref, "entityCleanupComplete", record.id);
+
     const deleted = (await harness.callDurableObject(ref, "entityGc", {
       all: true,
       graceMs: 0,
@@ -544,7 +597,7 @@ describe("internal storage DOs under workerd", () => {
       },
     });
     manager = harness.manager;
-    const doDispatch = createDODispatch(manager, harness.tokenManager);
+    const doDispatch = createDODispatch(manager, harness.tokenManager, harness.ensureDurableObject);
     const lifecycleDriver = new LifecycleDriver({
       workerdManager: manager,
       doDispatch,
@@ -639,7 +692,7 @@ describe("internal storage DOs under workerd", () => {
       },
     });
     manager = harness.manager;
-    const doDispatch = createDODispatch(manager, harness.tokenManager);
+    const doDispatch = createDODispatch(manager, harness.tokenManager, harness.ensureDurableObject);
     const alarmDriver = new AlarmDriver({ doDispatch, workspaceId: "workspace-alarm" });
     const workspaceRef = {
       source: WORKSPACE_DO_SOURCE,

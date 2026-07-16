@@ -77,6 +77,7 @@ function panelCaller() {
     callerKind: "panel",
     repoPath: "panels/test",
     executionDigest: "c".repeat(64),
+    delegations: [],
     requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
   });
 }
@@ -84,7 +85,11 @@ function panelCaller() {
 function approvalQueue(decision: "once" | "session" | "version" | "repo" | "deny") {
   return {
     request: vi.fn(async () => decision),
-  } as unknown as ApprovalQueue & { request: ReturnType<typeof vi.fn> };
+    requestCapability: vi.fn(async () => decision),
+  } as unknown as ApprovalQueue & {
+    request: ReturnType<typeof vi.fn>;
+    requestCapability: ReturnType<typeof vi.fn>;
+  };
 }
 
 function gateDeps(opts: { decision?: "once" | "session" | "version" | "repo" | "deny" } = {}) {
@@ -173,7 +178,7 @@ describe("createMainAdvanceApprovalGate", () => {
       candidate({ repoPath: "apps/shell", changedPaths: ["apps/shell/index.tsx"] })
     );
 
-    expect(deps.approvalQueue.request).toHaveBeenCalledWith(
+    expect(deps.approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "capability",
         callerId: "panel-1",
@@ -220,7 +225,7 @@ describe("createMainAdvanceApprovalGate", () => {
       })
     );
 
-    expect(deps.approvalQueue.request).not.toHaveBeenCalled();
+    expect(deps.approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("does not let meta session grants skip mixed workspace changes", async () => {
@@ -277,7 +282,7 @@ describe("createMainAdvanceApprovalGate", () => {
       })
     );
 
-    expect(deps.approvalQueue.request).not.toHaveBeenCalled();
+    expect(deps.approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("forwards the diff-review payload onto the workspace-repo-write prompt", async () => {
@@ -299,7 +304,7 @@ describe("createMainAdvanceApprovalGate", () => {
       candidate({ repoPath: "apps/shell", changedPaths: ["apps/shell/index.tsx"], diffReview })
     );
 
-    expect(deps.approvalQueue.request).toHaveBeenCalledWith(
+    expect(deps.approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "capability", diffReview })
     );
   });
@@ -345,7 +350,7 @@ describe("createMainAdvanceApprovalGate", () => {
 
       await gate.approveRepoDeletion(deletionCandidate);
 
-      expect(deps.approvalQueue.request).toHaveBeenCalledWith(
+      expect(deps.approvalQueue.requestCapability).toHaveBeenCalledWith(
         expect.objectContaining({
           kind: "capability",
           capability: "workspace-repo-delete",
@@ -368,7 +373,11 @@ describe("createMainAdvanceApprovalGate", () => {
       deps.capabilityGrantStore.grant(
         "workspace-repo-write",
         "workspace-source-change:main",
-        { callerId: "panel-1", repoPath: "panels/test", executionDigest: "c".repeat(64) },
+        {
+          principal: `code:panels/test@${"c".repeat(64)}`,
+          sessionId: "panel-1",
+          code: { repoPath: "panels/test", executionDigest: "c".repeat(64) },
+        },
         "session"
       );
       const gate = createMainAdvanceApprovalGate(deps);
@@ -376,7 +385,7 @@ describe("createMainAdvanceApprovalGate", () => {
       // The deletion must STILL prompt (and here be denied) — the write grant
       // does not cover the distinct `workspace-repo-delete` capability.
       await expect(gate.approveRepoDeletion(deletionCandidate)).rejects.toThrow(/denied/);
-      expect(deps.approvalQueue.request).toHaveBeenCalledTimes(1);
+      expect(deps.approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -692,7 +701,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       const bigBody = "x".repeat(1024 * 1024 + 16); // > 1 MiB → tooLarge
       const next = await stageTree(blobsDir, [
         { path: "text.txt", body: "hi\n" },
-        { path: "bin.dat", body: "a b\n" },
+        { path: "bin.dat", body: "a\0b\n" },
         { path: "big.txt", body: bigBody },
       ]);
 
@@ -747,7 +756,7 @@ describe("createMainAdvanceApprovalGate build-status line", () => {
     );
 
     expect(calls).toEqual(["state:next"]);
-    const request = deps.approvalQueue.request.mock.calls[0]![0] as {
+    const request = deps.approvalQueue.requestCapability.mock.calls[0]![0] as {
       details: Array<{ label: string; value: string }>;
     };
     expect(request.details).toContainEqual({ label: "Built", value: "failed" });
@@ -759,7 +768,7 @@ describe("createMainAdvanceApprovalGate build-status line", () => {
     await gate.approve(
       candidate({ repoPath: "apps/shell", changedPaths: ["apps/shell/index.tsx"] })
     );
-    const request = deps.approvalQueue.request.mock.calls[0]![0] as {
+    const request = deps.approvalQueue.requestCapability.mock.calls[0]![0] as {
       details: Array<{ label: string; value: string }>;
     };
     expect(request.details).toContainEqual({ label: "Built", value: "not validated" });

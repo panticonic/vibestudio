@@ -25,6 +25,7 @@ function panelCtx(callerId = "panel-1") {
       callerKind: "panel",
       repoPath: "panels/test",
       executionDigest: "sourceDigest-test",
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -40,6 +41,7 @@ function doCtx(callerId = "do:workers/agent-worker:AiChatWorker:agent-1") {
       callerKind: "do",
       repoPath: "workers/agent-worker",
       executionDigest: "sourceDigest-agent",
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -88,7 +90,7 @@ function makeHost(
     dependencies: overrides.candidateExternalDeps ?? {},
     internalDeps: ["@workspace/runtime"],
     manifest: {
-      authority: { requests: [] },
+      authority: { requests: [], delegations: [] },
       displayName: "Git Tools",
       extension: {
         activationEvents: ["*"],
@@ -106,7 +108,7 @@ function makeHost(
       name: extensionNode.name,
       version: "1.0.0",
       vibestudio: {
-        authority: { requests: [] },
+        authority: { requests: [], delegations: [] },
         displayName: "Git Tools",
         extension: {
           activationEvents: ["*"],
@@ -900,6 +902,32 @@ describe("ExtensionHost reconcileDeclared", () => {
 });
 
 describe("ExtensionHost activation", () => {
+  it("rejects an incompatible approved provider contract before starting the child", async () => {
+    const { host, extensionNode } = makeHost({
+      hostProviderContracts: { devHost: ["evalStart"] },
+      activeProviderContracts: { devHost: { methods: ["eval"] } },
+    });
+    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await expect(host.activate(extensionNode.name)).rejects.toMatchObject({ code: "EPROTO" });
+
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("rejects an approved build missing its selected provider contract before spawning", async () => {
+    const { host, extensionNode } = makeHost({
+      providerSlots: ["devHost"],
+      resolveProviderExtensionName: (provider) =>
+        provider === "devHost" ? "@workspace-extensions/git-tools" : null,
+      activeProviderContracts: {},
+    });
+    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await expect(host.activate(extensionNode.name)).rejects.toMatchObject({ code: "EPROTO" });
+
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it("starts the approved active bundle without rebuilding the current ref", async () => {
     const { host, buildSystem, extensionNode } = makeHost();
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);

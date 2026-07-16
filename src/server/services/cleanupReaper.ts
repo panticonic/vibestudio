@@ -8,12 +8,14 @@
  */
 
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import type { ContextCleanupRecord } from "@vibestudio/shared/runtime/contextCleanup";
 import type { DoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
 
 export interface CleanupReaperDeps {
   doDispatch: DoDispatcher;
   workspaceDORef: DORef;
   onRetire: (record: EntityRecord) => Promise<void>;
+  onContextCleanup?: (record: ContextCleanupRecord) => Promise<void>;
   intervalMs?: number;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
@@ -48,6 +50,20 @@ export function createCleanupReaper(deps: CleanupReaperDeps): CleanupReaper {
           processed += 1;
         } catch (err) {
           deps.logger?.warn(`cleanupReaper: retry failed for ${record.id}:`, err);
+        }
+      }
+      if (deps.onContextCleanup) {
+        const contexts = (await deps.doDispatch.dispatch(
+          deps.workspaceDORef,
+          "contextCleanupListPending"
+        )) as ContextCleanupRecord[];
+        for (const record of contexts) {
+          try {
+            await deps.onContextCleanup(record);
+            processed += 1;
+          } catch (err) {
+            deps.logger?.warn(`cleanupReaper: context retry failed for ${record.contextId}:`, err);
+          }
         }
       }
       return processed;

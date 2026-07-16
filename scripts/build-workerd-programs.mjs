@@ -1,6 +1,7 @@
 import * as esbuild from "esbuild";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const entries = {
   router: "src/server/workerdPrograms/router.ts",
@@ -60,4 +61,9 @@ export async function buildWorkerdPrograms(options = {}) {
     workerHost: readOutput(outputNames.workerHost),
     universalDo: readOutput(outputNames.universalDo),
   };
+}
+
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  await buildWorkerdPrograms();
 }

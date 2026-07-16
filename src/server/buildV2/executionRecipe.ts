@@ -11,6 +11,8 @@ import { getSealedBuildEnvironment } from "./sourceClosure.js";
 import type { GraphNode } from "./packageGraph.js";
 import type { BuildUnitOptions } from "./builder.js";
 import {
+  authorityDelegationsAsBuildValue,
+  authorityDelegationsFromManifest,
   authorityRequestsAsBuildValue,
   authorityRequestsFromManifest,
 } from "@vibestudio/shared/authorityManifest";
@@ -81,6 +83,15 @@ export function createExecutionRecipe(
       node.kind === "app"
         ? authorityRequestsAsBuildValue(
             authorityRequestsFromManifest(node.manifest, `Executable unit ${node.relativePath}`)
+          )
+        : [],
+    authorityDelegations:
+      node.kind === "panel" ||
+      node.kind === "worker" ||
+      node.kind === "extension" ||
+      node.kind === "app"
+        ? authorityDelegationsAsBuildValue(
+            authorityDelegationsFromManifest(node.manifest, `Executable unit ${node.relativePath}`)
           )
         : [],
   };

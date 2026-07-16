@@ -25,6 +25,10 @@ export interface StartupPathDiagnostics {
   appRoot: string;
 }
 
+export function workspaceServerLogPath(workspaceDirectory: string): string {
+  return path.join(workspaceDirectory, "state", "logs", "server-log.jsonl");
+}
+
 export function formatUnknownError(error: unknown): string {
   if (error instanceof Error) return error.stack ?? error.message;
   return String(error);
@@ -39,7 +43,7 @@ export function resolveStartupErrorPaths(
   return {
     directory,
     reportPath: path.join(directory, "startup-error.json"),
-    ...(workspaceDirectory ? { serverLogPath: path.join(directory, "logs", "server.log") } : {}),
+    ...(workspaceDirectory ? { serverLogPath: workspaceServerLogPath(workspaceDirectory) } : {}),
   };
 }
 

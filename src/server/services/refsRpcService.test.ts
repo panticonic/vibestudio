@@ -37,6 +37,7 @@ function panelCaller(id = "chat-1") {
     callerKind: "panel",
     repoPath: "panels/chat",
     executionDigest: "ev-1",
+    delegations: [],
     requested: [
       { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
       { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },

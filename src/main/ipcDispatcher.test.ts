@@ -481,6 +481,7 @@ describe("IpcDispatcher", () => {
         callerKind: "app",
         repoPath: "apps/shell",
         executionDigest: "e".repeat(64),
+        delegations: [],
         requested: [
           {
             capability: "service:electron-test.getInfo",

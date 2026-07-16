@@ -23,14 +23,24 @@ export type ApprovalProvenanceKind =
   | "device-code"
   | "external-agent";
 
-/** The terminal decision recorded on a resolution (§5). */
-export type ApprovalProvenanceDecision =
-  | "once"
-  | "session"
-  | "version"
-  | "deny"
-  | "dismiss"
-  | "submit";
+/**
+ * The terminal decisions recorded on a resolution (§5).
+ *
+ * Keep this runtime value authoritative for both the TypeScript contract and
+ * the durable governance validator. Approval transports may add decision
+ * scopes (such as eval's run-local grant) without silently making those
+ * resolutions impossible to persist.
+ */
+export const APPROVAL_PROVENANCE_DECISIONS = [
+  "once",
+  "run",
+  "session",
+  "version",
+  "deny",
+  "dismiss",
+  "submit",
+] as const;
+export type ApprovalProvenanceDecision = (typeof APPROVAL_PROVENANCE_DECISIONS)[number];
 
 /** The surface the resolver acted from (§5). */
 export type ResolvedVia = "shell" | "mobile-notification" | "app" | "server";

@@ -17,7 +17,7 @@ describe("startup diagnostics policy", () => {
     expect(resolveStartupErrorPaths("/config/vibestudio", "/workspaces/demo")).toEqual({
       directory: "/workspaces/demo/state",
       reportPath: "/workspaces/demo/state/startup-error.json",
-      serverLogPath: "/workspaces/demo/state/logs/server.log",
+      serverLogPath: "/workspaces/demo/state/logs/server-log.jsonl",
     });
   });
 
@@ -30,7 +30,7 @@ describe("startup diagnostics policy", () => {
       failedAt: "2026-07-13T12:00:00.000Z",
       message: "server failed",
       detail: "Error: server failed\n    at startup",
-      logPath: "/workspaces/demo/state/logs/server.log",
+      logPath: "/workspaces/demo/state/logs/server-log.jsonl",
     });
   });
 

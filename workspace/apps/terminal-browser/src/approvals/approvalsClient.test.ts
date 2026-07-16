@@ -12,6 +12,7 @@ function startupUnitApproval(): PendingApproval {
     repoPath: "meta",
     executionDigest: "ev-startup",
     requestedAt: 1,
+    decisionDeadlineAt: 60_001,
     trigger: "startup",
     title: "Approve workspace units",
     description: "Approve privileged units before launch.",
@@ -45,6 +46,7 @@ function runtimeApproval(): PendingApproval {
     repoPath: "panels/chat",
     executionDigest: "ev-runtime",
     requestedAt: 2,
+    decisionDeadlineAt: 60_002,
     capability: "externalOpen",
     title: "Open external URL",
   };
@@ -59,6 +61,7 @@ function metaChangeAppApproval(): PendingApproval {
     repoPath: "meta",
     executionDigest: "ev-meta-change",
     requestedAt: 3,
+    decisionDeadlineAt: 60_003,
     trigger: "meta-change",
     title: "Approve workspace app change",
     description: "Approve app target added by a live meta change.",

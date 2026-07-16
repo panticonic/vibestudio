@@ -155,6 +155,7 @@ interface AppAvailablePayload {
   buildKey: string | null;
   executionDigest: string | null;
   authorityRequests: readonly CapabilityScope[];
+  authorityDelegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
   previousBuildKey: string | null;
   previousSourceDigest: string | null;
   canRollback: boolean;
@@ -195,6 +196,7 @@ interface BuildSystemLike {
   getExecutionArtifact(executionDigest: string): {
     ref: ExecutionArtifactRef;
     requested: readonly CapabilityScope[];
+    delegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
     entries: ArtifactBundleEntry[];
     entryPath(artifactPath: string): string;
   } | null;
@@ -1436,6 +1438,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       buildKey: entry.activeBundleKey,
       executionDigest: entry.activeExecutionDigest,
       authorityRequests: execution.requested,
+      authorityDelegations: execution.delegations,
       previousBuildKey: opts.previousBuildKey ?? null,
       previousSourceDigest: opts.previousSourceDigest ?? null,
       canRollback: entry.previousVersions.length > 0,
@@ -2224,7 +2227,12 @@ function launchReadyResult(
   entry: AppRegistryEntry,
   available?: Pick<
     AppAvailablePayload,
-    "artifactRoute" | "capabilities" | "executionDigest" | "authorityRequests" | "adoptionPolicy"
+    | "artifactRoute"
+    | "capabilities"
+    | "executionDigest"
+    | "authorityRequests"
+    | "authorityDelegations"
+    | "adoptionPolicy"
   >
 ): HostTargetLaunchResult {
   return {
@@ -2240,6 +2248,7 @@ function launchReadyResult(
           capabilities: available.capabilities,
           executionDigest: available.executionDigest,
           authorityRequests: available.authorityRequests,
+          authorityDelegations: available.authorityDelegations,
           adoptionPolicy: available.adoptionPolicy,
         }
       : {}),

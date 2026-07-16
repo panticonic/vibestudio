@@ -529,7 +529,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * server has already verified and decoded the Cloud Pub/Sub envelope; Gmail
    * interpretation and fanout stay here.
    */
-  @rpc({ principals: ["host"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   async onWebhookDelivery(event: WebhookDeliveryEvent): Promise<{ synced: string[] }> {
     if (event.payload.type !== "cloud-pubsub") return { synced: [] };
     const data = record(event.payload.dataJson);
@@ -566,7 +566,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { synced: [...synced] };
   }
 
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   registerPushTarget(input: {
     emailAddress: string;
     source: string;
@@ -593,7 +593,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { registered: true };
   }
 
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   unregisterPushTarget(input: {
     emailAddress: string;
     source: string;
@@ -631,7 +631,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * Sync every channel bound to that address now; the follow-up alarm runs
    * the triage/wake pipeline.
    */
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async onGmailPushNotification(payload: { emailAddress: string; historyId: string }): Promise<{
     synced: string[];
   }> {
@@ -786,13 +786,13 @@ export class GmailAgentWorker extends AgentWorkerBase {
     );
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async getAttentionPrefs(channelId: string): Promise<GmailAttentionPrefs> {
     this.assertSubscribedChannel(channelId);
     return this.handlers.getAttentionPrefs(channelId);
   }
 
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async setAttentionPrefs(
     channelId: string,
     args: unknown

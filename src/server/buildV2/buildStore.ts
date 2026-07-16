@@ -15,6 +15,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import * as esbuild from "esbuild";
 import { getCentralDataPath, getUserDataPath } from "@vibestudio/env-paths";
 import { assertPresent } from "../../lintHelpers";
 import {
@@ -208,7 +209,12 @@ function linkBuildTreeSync(sourceDir: string, targetDir: string): void {
 
 function publishSharedBuild(key: string, sourceDir: string): void {
   const sharedDir = getSharedBuildDir(key);
-  if (!sharedDir || fs.existsSync(path.join(sharedDir, "metadata.json"))) return;
+  if (!sharedDir) return;
+  if (fs.existsSync(path.join(sharedDir, "metadata.json"))) {
+    if (readBuildDir(sharedDir)) return;
+    discardRejectedBuildDir(sharedDir);
+    if (readBuildDir(sharedDir)) return;
+  }
 
   const tmpDir = `${sharedDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
   try {
@@ -288,6 +294,17 @@ function artifactIntegrity(entry: BuildArtifactInput): string {
   return `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+function artifactContentIntegrity(entry: {
+  encoding: BuildArtifactEncoding;
+  content: string;
+}): string {
+  const bytes =
+    entry.encoding === "base64"
+      ? Buffer.from(entry.content, "base64")
+      : Buffer.from(entry.content, "utf-8");
+  return `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
+}
+
 function integrityHex(integrity: string): string | null {
   const match = /^sha256-([a-f0-9]{64})$/.exec(integrity);
   return match?.[1] ?? null;
@@ -360,10 +377,43 @@ function metadataForEntries(
   };
 }
 
-export function has(key: string): boolean {
-  if (fs.existsSync(path.join(getBuildDir(key), "metadata.json"))) return true;
-  const sharedDir = getSharedBuildDir(key);
-  return sharedDir !== null && fs.existsSync(path.join(sharedDir, "metadata.json"));
+const parsedWorkerArtifacts = new Set<string>();
+
+function validateWorkerArtifact(
+  metadata: BuildMetadata,
+  artifacts: BuildArtifactWithContent[]
+): void {
+  if (metadata.kind !== "worker") return;
+  const primary = artifacts.find((entry) => entry.role === "primary");
+  if (!primary) throw new Error(`Worker build ${metadata.name} has no primary artifact`);
+  if (primary.encoding !== "utf8") {
+    throw new Error(`Worker build ${metadata.name} primary artifact is not UTF-8 JavaScript`);
+  }
+  const integrity = primary.integrity;
+  if (integrity && parsedWorkerArtifacts.has(integrity)) return;
+  try {
+    esbuild.transformSync(primary.content, {
+      loader: "js",
+      format: "esm",
+      target: "esnext",
+      sourcefile: primary.path,
+      logLevel: "silent",
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Worker build ${metadata.name} contains invalid JavaScript: ${detail}`);
+  }
+  if (integrity) parsedWorkerArtifacts.add(integrity);
+}
+
+function validateArtifactPath(entryPath: string): void {
+  if (
+    entryPath.length === 0 ||
+    path.isAbsolute(entryPath) ||
+    entryPath.split(/[\\/]/).includes("..")
+  ) {
+    throw new Error(`Invalid build artifact path: ${entryPath}`);
+  }
 }
 
 function readBuildDir(dir: string): BuildResult | null {
@@ -381,11 +431,28 @@ function readBuildDir(dir: string): BuildResult | null {
     }
     const manifestPath = path.join(dir, "artifacts.json");
     if (!fs.existsSync(manifestPath)) return null;
-    const artifacts = (
-      JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as BuildArtifactManifestEntry[]
-    )
-      .filter((entry) => fs.existsSync(path.join(dir, entry.path)))
-      .map((entry) => ({ ...entry, content: readArtifactContent(dir, entry) }));
+    const manifest = JSON.parse(
+      fs.readFileSync(manifestPath, "utf-8")
+    ) as BuildArtifactManifestEntry[];
+    if (!Array.isArray(manifest) || manifest.length === 0) {
+      throw new Error("Artifact manifest is empty");
+    }
+    const artifacts = manifest.map((entry) => {
+      validateArtifactPath(entry.path);
+      if (entry.encoding !== "utf8" && entry.encoding !== "base64") {
+        throw new Error(`Invalid artifact encoding for ${entry.path}`);
+      }
+      if (!entry.integrity || !integrityHex(entry.integrity)) {
+        throw new Error(`Missing or invalid artifact integrity for ${entry.path}`);
+      }
+      const content = readArtifactContent(dir, entry);
+      const actualIntegrity = artifactContentIntegrity({ encoding: entry.encoding, content });
+      if (actualIntegrity !== entry.integrity) {
+        throw new Error(`Artifact integrity mismatch for ${entry.path}`);
+      }
+      return { ...entry, content };
+    });
+    validateWorkerArtifact(metadata, artifacts);
     const artifactManifest = artifacts.map(({ content: _content, ...entry }) => entry);
     return {
       dir,
@@ -393,16 +460,68 @@ function readBuildDir(dir: string): BuildResult | null {
       metadata: metadataForEntries(metadata, artifactManifest),
       artifacts,
     };
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[buildStore] Rejected build cache ${dir}: ${error instanceof Error ? error.message : String(error)}`
+    );
     return null;
   }
+}
+
+/**
+ * Move a rejected immutable entry out of the cache namespace before deleting
+ * it. Revalidate after the rename: if another process repaired the path between
+ * our failed read and the rename, restore that valid entry instead of deleting
+ * it.
+ */
+function discardRejectedBuildDir(dir: string): void {
+  const rejectedDir = `${dir}.rejected.${crypto.randomBytes(16).toString("hex")}`;
+  try {
+    fs.renameSync(dir, rejectedDir);
+  } catch (error) {
+    if (isFileSystemErrorCode(error, ["ENOENT"])) return;
+    warnCleanupFailure(dir, error);
+    return;
+  }
+
+  if (readBuildDir(rejectedDir)) {
+    try {
+      fs.renameSync(rejectedDir, dir);
+      return;
+    } catch (error) {
+      if (!isFileSystemErrorCode(error, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) {
+        warnCleanupFailure(rejectedDir, error);
+        return;
+      }
+    }
+  }
+
+  try {
+    fs.rmSync(rejectedDir, { recursive: true, force: true });
+  } catch (error) {
+    warnCleanupFailure(rejectedDir, error);
+  }
+}
+
+function readOrDiscardBuildDir(dir: string): BuildResult | null {
+  if (!fs.existsSync(path.join(dir, "metadata.json"))) return null;
+  const build = readBuildDir(dir);
+  if (build) return build;
+  discardRejectedBuildDir(dir);
+  return readBuildDir(dir);
+}
+
+export function has(key: string): boolean {
+  if (readOrDiscardBuildDir(getBuildDir(key))) return true;
+  const sharedDir = getSharedBuildDir(key);
+  return sharedDir !== null && readOrDiscardBuildDir(sharedDir) !== null;
 }
 
 const reportedSharedBuildHits = new Set<string>();
 
 export function get(key: string): BuildResult | null {
   const localDir = getBuildDir(key);
-  const local = readBuildDir(localDir);
+  const local = readOrDiscardBuildDir(localDir);
   if (local) {
     publishSharedBuild(key, localDir);
     return local;
@@ -410,7 +529,7 @@ export function get(key: string): BuildResult | null {
 
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return null;
-  const shared = readBuildDir(sharedDir);
+  const shared = readOrDiscardBuildDir(sharedDir);
   if (shared && !reportedSharedBuildHits.has(key)) {
     reportedSharedBuildHits.add(key);
     console.info(`[BuildCache] Reused shared build ${shared.metadata.name} (${key.slice(0, 12)})`);
@@ -477,14 +596,6 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
   const metadataPath = path.join(dir, "metadata.json");
   const artifactPoolDir = getSharedArtifactPoolDir();
 
-  // Write to temp first, then rename atomically. Use crypto.randomBytes for
-  // an unpredictable name — `${Date.now()}.${process.pid}` is guessable and
-  // invites local symlink races (a co-tenant pre-creates the tmp path as a
-  // symlink before our mkdirSync, redirecting our writes).
-  const tmpDir = `${dir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
-
-  fs.mkdirSync(tmpDir, { recursive: true });
-
   const entries = artifacts.entries.map((entry) => ({
     ...entry,
     encoding: entry.encoding ?? "utf8",
@@ -493,10 +604,18 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
   if (entries.length === 0) {
     throw new Error(`Build ${key} has no artifact entries`);
   }
+  for (const entry of entries) validateArtifactPath(entry.path);
+  validateWorkerArtifact(metadata, entries);
+
+  // Write to temp first, then rename atomically. Use crypto.randomBytes for
+  // an unpredictable name — `${Date.now()}.${process.pid}` is guessable and
+  // invites local symlink races (a co-tenant pre-creates the tmp path as a
+  // symlink before our mkdirSync, redirecting our writes).
+  const tmpDir = `${dir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
+
+  fs.mkdirSync(tmpDir, { recursive: true });
+
   for (const entry of entries) {
-    if (path.isAbsolute(entry.path) || entry.path.split(/[\\/]/).includes("..")) {
-      throw new Error(`Invalid build artifact path: ${entry.path}`);
-    }
     const targetPath = path.join(tmpDir, entry.path);
     writeArtifactFile(targetPath, entry, artifactPoolDir);
   }

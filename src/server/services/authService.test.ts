@@ -367,6 +367,7 @@ describe("auth service connection grants", () => {
         ],
         configWrite: null,
         requestedAt: 1,
+        decisionDeadlineAt: 60_001,
       },
     ] satisfies PendingUnitBatchApproval[];
     const authService = createAuthService({
@@ -449,6 +450,7 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
       callerKind: "extension",
       repoPath: "extensions/agent-launcher",
       executionDigest: "a".repeat(64),
+      delegations: [],
       requested: [
         {
           capability: "service:auth.mintAgentCredential",
@@ -550,7 +552,9 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
           "mintAgentCredential",
           [{ entityId: "e", channelId: "ch" }]
         )
-      ).rejects.toThrow(/authenticated code principal|exact code or host principal/i);
+      ).rejects.toThrow(
+        /no authority branch admits the (?:user|entity) origin \(missing-principal\)|requires an exact code or host principal/i
+      );
     }
   });
 });

@@ -75,6 +75,25 @@ export function createWorkerService(deps: {
   }) => Promise<void>;
 }): ServiceDefinition {
   const { buildSystem, workspaceDecls } = deps;
+  const dynamicUserlandLeaf = {
+    capability: "userland-service:*",
+    requirement: {
+      kind: "selected" as const,
+      principals: ["host", "user", "code", "entity"] as const,
+    },
+    evalAcquisition: { kind: "baseline" as const },
+  };
+  const preparedUserlandAuthority = (method: "resolveService" | "resolveDurableObject") => {
+    const capability = `service:workers.${method}`;
+    return {
+      requirement: requirementForPrincipals(["user", "host", "code"], capability),
+      resource: { kind: "literal" as const, key: capability },
+      prepared: {
+        resolver: `workers.${method}.userland`,
+        leaves: [dynamicUserlandLeaf],
+      },
+    };
+  };
 
   const methods = {
     listSources: {
@@ -82,18 +101,24 @@ export function createWorkerService(deps: {
         "List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers)",
       args: z.tuple([]),
       returns: z.array(WorkerSourceSchema),
+      access: { sensitivity: "read" as const },
     },
     listServices: {
       description: "List manifest-declared userland services",
       args: z.tuple([]),
+      access: { sensitivity: "read" as const },
     },
     resolveService: {
       description: "Resolve a userland service by name or protocol",
       args: z.tuple([z.string(), z.string().nullable().optional()]),
+      access: { sensitivity: "read" as const },
+      authority: preparedUserlandAuthority("resolveService"),
     },
     resolveDurableObject: {
       description: "Resolve a Durable Object RPC target by source/class/key",
       args: z.tuple([z.string(), z.string(), z.string()]),
+      access: { sensitivity: "read" as const },
+      authority: preparedUserlandAuthority("resolveDurableObject"),
     },
   };
 
@@ -102,6 +127,40 @@ export function createWorkerService(deps: {
     description: "Worker discovery and userland service resolution",
     authority: { principals: ["user", "host", "code"] },
     methods,
+    authorityPreparation: {
+      "workers.resolveService.userland": async (ctx, [query, objectKey]) => {
+        const { service } = await resolveUserlandServiceForCaller(
+          ctx,
+          String(query),
+          objectKey == null ? null : String(objectKey)
+        );
+        const capability = `userland-service:${service.name}`;
+        return [
+          {
+            capability,
+            resourceKey:
+              service.kind === "durable-object" ? service.targetId : service.routeBasePath,
+            requirement: requirementForPrincipals(service.authority.principals, capability),
+          },
+        ];
+      },
+      "workers.resolveDurableObject.userland": async (ctx, [source, className, objectKey]) => {
+        const scoped = await resolveDurableObjectForCaller(ctx, String(source), String(className));
+        const targetId = `do:${String(source)}:${String(className)}:${String(objectKey)}`;
+        return scoped.decls.services
+          .filter(
+            (service) => service.source === source && service.durableObject?.className === className
+          )
+          .map((service) => {
+            const capability = `userland-service:${service.name}`;
+            return {
+              capability,
+              resourceKey: targetId,
+              requirement: requirementForPrincipals(service.authority.principals, capability),
+            };
+          });
+      },
+    },
     handler: defineServiceHandler("workers", methods, {
       listSources: () => {
         const graph = buildSystem.getGraph();
@@ -133,12 +192,6 @@ export function createWorkerService(deps: {
       resolveService: async (ctx, [query, objectKey]) => {
         const scoped = await resolveUserlandServiceForCaller(ctx, query, objectKey);
         const service = scoped.service;
-        await assertUserlandServiceAuthority(
-          ctx,
-          service.name,
-          service.authority.principals,
-          service.kind === "durable-object" ? service.targetId : service.routeBasePath
-        );
         if (service.kind === "durable-object") {
           const singleton = scoped.decls.singletons.find(service.source, service.className);
           const contextId = singleton?.contextId ?? scoped.contextId;
@@ -159,13 +212,6 @@ export function createWorkerService(deps: {
       resolveDurableObject: async (ctx, [source, className, objectKey]) => {
         const scoped = await resolveDurableObjectForCaller(ctx, source, className);
         const targetId = `do:${source}:${className}:${objectKey}`;
-        await assertDurableObjectBackingServiceAuthority(
-          ctx,
-          scoped.decls,
-          source,
-          className,
-          targetId
-        );
         const singleton = scoped.decls.singletons.find(source, className);
         const contextId = singleton?.contextId ?? scoped.contextId;
         const buildRef = singleton?.contextId
@@ -324,39 +370,4 @@ function assertDurableObjectDeclared(
       (route) => route.source === source && route.durableObject?.className === className
     );
   if (!declared) throw new Error(missingDurableObjectMessage(source, className));
-}
-
-async function assertDurableObjectBackingServiceAuthority(
-  ctx: ServiceContext,
-  decls: WorkspaceDeclarations,
-  source: string,
-  className: string,
-  resourceKey: string
-): Promise<void> {
-  const services = decls.services.filter(
-    (service) => service.source === source && service.durableObject?.className === className
-  );
-  for (const service of services) {
-    await assertUserlandServiceAuthority(
-      ctx,
-      service.name,
-      service.authority.principals,
-      resourceKey
-    );
-  }
-}
-
-async function assertUserlandServiceAuthority(
-  ctx: ServiceContext,
-  serviceName: string,
-  principals: Parameters<typeof requirementForPrincipals>[0],
-  resourceKey: string
-): Promise<void> {
-  if (!ctx.authority) throw new Error("Compositional authority context is unavailable");
-  const capability = `userland-service:${serviceName}`;
-  await ctx.authority.assert({
-    capability,
-    resourceKey,
-    requirement: requirementForPrincipals(principals, capability),
-  });
 }

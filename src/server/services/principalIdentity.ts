@@ -6,6 +6,7 @@ import {
 } from "@vibestudio/shared/principalKinds";
 import type { UserSubject } from "@vibestudio/identity/types";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import type { EvalAuthorityDelegation } from "@vibestudio/shared/authorityManifest";
 
 export interface ResolvedCodeIdentity {
   callerId: string;
@@ -13,6 +14,7 @@ export interface ResolvedCodeIdentity {
   repoPath: string;
   executionDigest: string;
   requested: readonly CapabilityScope[];
+  delegations: readonly EvalAuthorityDelegation[];
 }
 
 /**
@@ -25,7 +27,10 @@ export interface ResolvedCodeIdentity {
 export function resolveCodeIdentity(
   entityCache: Pick<EntityCache, "resolveActive">,
   callerId: string,
-  resolveRequests: (executionDigest: string) => readonly CapabilityScope[] | null
+  resolveAuthority: (executionDigest: string) => {
+    requests: readonly CapabilityScope[];
+    delegations: readonly EvalAuthorityDelegation[];
+  } | null
 ): ResolvedCodeIdentity | null {
   const record = entityCache.resolveActive(callerId);
   if (!record) return null;
@@ -33,14 +38,15 @@ export function resolveCodeIdentity(
   const callerKind = callerKindForPrincipalKind(record.kind);
   if (!isCodeIdentityCallerKind(callerKind)) return null;
   if (!record.activeExecutionDigest) return null;
-  const requested = resolveRequests(record.activeExecutionDigest);
-  if (!requested) return null;
+  const authority = resolveAuthority(record.activeExecutionDigest);
+  if (!authority) return null;
   return {
     callerId,
     callerKind,
     repoPath: record.source.repoPath,
     executionDigest: record.activeExecutionDigest,
-    requested,
+    requested: authority.requests,
+    delegations: authority.delegations,
   };
 }
 

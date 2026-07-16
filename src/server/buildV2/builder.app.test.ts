@@ -49,7 +49,7 @@ describe("buildUnit app builds", () => {
         version: "0.1.0",
         private: true,
         vibestudio: {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           app: {
             target: "electron",
             renderer: "index.ts",
@@ -143,7 +143,7 @@ describe("buildUnit app builds", () => {
         version: "0.1.0",
         private: true,
         vibestudio: {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           app: {
             target: "terminal",
             entry: "index.ts",
@@ -209,7 +209,7 @@ describe("buildUnit app builds", () => {
         version: "0.1.0",
         private: true,
         vibestudio: {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           app: {
             target: "react-native",
             renderer: "index.tsx",
@@ -339,7 +339,7 @@ describe("buildUnit app builds", () => {
         private: true,
         type: "module",
         vibestudio: {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           title: "FS Panel",
           entry: "index.ts",
         },
@@ -398,7 +398,7 @@ describe("buildUnit app builds", () => {
         version: "0.1.0",
         private: true,
         vibestudio: {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           app: {
             target: "dist",
             distDir: "dist",

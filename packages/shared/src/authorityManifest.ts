@@ -8,6 +8,16 @@ export interface UnitAuthorityManifest {
    * A trailing `*` is the only supported capability wildcard.
    */
   requests: readonly CapabilityScope[];
+  /** Maximum host authority this exact artifact may delegate to evaluated code. */
+  delegations: readonly EvalAuthorityDelegation[];
+}
+
+export type EvalDelegationPurpose = "agentic-code-execution" | "tool-eval" | "test-eval";
+
+export interface EvalAuthorityDelegation {
+  audience: "eval";
+  purpose: EvalDelegationPurpose;
+  capabilities: readonly CapabilityScope[];
 }
 
 export const NO_AUTHORITY_REQUESTS: readonly CapabilityScope[] = Object.freeze([]);
@@ -20,8 +30,8 @@ export function parseAuthorityRequests(
     throw new Error(`${label} must be an object with a requests array`);
   }
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).length !== 1 || !Array.isArray(record["requests"])) {
-    throw new Error(`${label} must contain exactly one requests array`);
+  if (!Array.isArray(record["requests"])) {
+    throw new Error(`${label} must contain a requests array`);
   }
   const seen = new Set<string>();
   const requests = record["requests"].map((request, index) => {
@@ -51,6 +61,69 @@ export function parseAuthorityRequests(
   );
 }
 
+export function parseAuthorityDelegations(
+  value: unknown,
+  label = "vibestudio.authority"
+): readonly EvalAuthorityDelegation[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object with a delegations array`);
+  }
+  const raw = (value as Record<string, unknown>)["delegations"];
+  if (!Array.isArray(raw)) throw new Error(`${label} must contain a delegations array`);
+  const seen = new Set<string>();
+  const delegations = raw.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`${label}.delegations[${index}] must be an eval delegation`);
+    }
+    const record = entry as Record<string, unknown>;
+    if (
+      Object.keys(record).some(
+        (key) => key !== "audience" && key !== "purpose" && key !== "capabilities"
+      ) ||
+      record["audience"] !== "eval" ||
+      !["agentic-code-execution", "tool-eval", "test-eval"].includes(
+        String(record["purpose"])
+      ) ||
+      !Array.isArray(record["capabilities"])
+    ) {
+      throw new Error(`${label}.delegations[${index}] has an invalid shape`);
+    }
+    const capabilities = parseAuthorityRequests(
+      { requests: record["capabilities"] },
+      `${label}.delegations[${index}].capabilities`
+    );
+    const delegation = {
+      audience: "eval",
+      purpose: record["purpose"] as EvalDelegationPurpose,
+      capabilities,
+    } satisfies EvalAuthorityDelegation;
+    const key = JSON.stringify(delegation);
+    if (seen.has(key)) throw new Error(`${label}.delegations contains a duplicate declaration`);
+    seen.add(key);
+    return delegation;
+  });
+  return Object.freeze(
+    delegations.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+  );
+}
+
+export function parseUnitAuthorityManifest(
+  value: unknown,
+  label = "vibestudio.authority"
+): UnitAuthorityManifest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  if (keys.join(",") !== "delegations,requests") {
+    throw new Error(`${label} must contain exactly requests and delegations arrays`);
+  }
+  return Object.freeze({
+    requests: parseAuthorityRequests(value, label),
+    delegations: parseAuthorityDelegations(value, label),
+  });
+}
+
 export function authorityRequestsFromManifest(
   manifest: { authority?: unknown },
   label: string
@@ -58,7 +131,17 @@ export function authorityRequestsFromManifest(
   if (manifest.authority === undefined) {
     throw new Error(`${label} must declare vibestudio.authority.requests`);
   }
-  return parseAuthorityRequests(manifest.authority, `${label} vibestudio.authority`);
+  return parseUnitAuthorityManifest(manifest.authority, `${label} vibestudio.authority`).requests;
+}
+
+export function authorityDelegationsFromManifest(
+  manifest: { authority?: unknown },
+  label: string
+): readonly EvalAuthorityDelegation[] {
+  if (manifest.authority === undefined) {
+    throw new Error(`${label} must declare vibestudio.authority.delegations`);
+  }
+  return parseUnitAuthorityManifest(manifest.authority, `${label} vibestudio.authority`).delegations;
 }
 
 export function authorityRequestsFromRecipe(recipe: BuildRecipe): readonly CapabilityScope[] {
@@ -69,6 +152,19 @@ export function authorityRequestsFromRecipe(recipe: BuildRecipe): readonly Capab
   return parseAuthorityRequests(
     { requests: raw },
     `execution recipe ${recipe.target} authorityRequests`
+  );
+}
+
+export function authorityDelegationsFromRecipe(
+  recipe: BuildRecipe
+): readonly EvalAuthorityDelegation[] {
+  const raw = recipe.options["authorityDelegations"];
+  if (!Array.isArray(raw)) {
+    throw new Error("Execution recipe is missing immutable authority delegations");
+  }
+  return parseAuthorityDelegations(
+    { delegations: raw },
+    `execution recipe ${recipe.target} authorityDelegations`
   );
 }
 
@@ -90,6 +186,16 @@ export function authorityRequestsAsBuildValue(
                 : { kind: "network", value: "*" },
     })
   );
+}
+
+export function authorityDelegationsAsBuildValue(
+  delegations: readonly EvalAuthorityDelegation[]
+): readonly CanonicalBuildValue[] {
+  return delegations.map((delegation) => ({
+    audience: delegation.audience,
+    purpose: delegation.purpose,
+    capabilities: authorityRequestsAsBuildValue(delegation.capabilities),
+  }));
 }
 
 export function capabilityPatternCovers(pattern: string, capability: string): boolean {

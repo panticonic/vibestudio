@@ -17,7 +17,7 @@ import { createServerLogStore } from "./services/serverLogStore.js";
 import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
 import { DEV_HOST_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/devHost";
 import { domainHash, sha256 } from "@vibestudio/shared/execution/identity";
-import { createHash, randomBytes, randomUUID } from "crypto";
+import { createHash, generateKeyPairSync, randomBytes, randomUUID } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { createHostCaller } from "@vibestudio/shared/serviceDispatcher";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
@@ -33,6 +33,8 @@ import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
 import { createGitInteropProviderInvoker } from "./gitInteropProviderInvoker.js";
 import {
   authorizeVerifiedCaller,
+  directAuthorityAudience,
+  directAuthorityCapability,
   verifiedCallerHasAuthority,
 } from "./services/authorityRuntime.js";
 import { getProductExecutionArtifact } from "./internalDOs/productBootManifest.js";
@@ -124,7 +126,7 @@ Options:
   --bootstrap-workspace <name>
                            Register and use an existing workspace for first-run pairing
   --ready-file <path>      Write structured readiness JSON to this file
-  --ephemeral              Use a disposable dev workspace (deleted on shutdown)
+  --ephemeral              Use a disposable dev checkout (deleted on shutdown)
   --host <hostname>        External hostname (also sets bind to 0.0.0.0)
   --bind-host <addr>       Explicit bind address (default: 127.0.0.1, or 0.0.0.0 with --host)
   --serve-panels           Enable panel HTTP serving
@@ -578,6 +580,19 @@ async function main() {
     }));
   const connectionGrants = new ConnectionGrantService({ entityCache });
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
+  const managedDevEvalRecipient =
+    process.env["VIBESTUDIO_MANAGED_DEV_PARENT_HOST_ID"] &&
+    process.env["VIBESTUDIO_MANAGED_DEV_PARENT_AUTHORITY_KEY"]
+      ? (() => {
+          const pair = generateKeyPairSync("x25519");
+          return {
+            publicKey: pair.publicKey.export({ type: "spki", format: "der" }).toString("base64url"),
+            privateKey: pair.privateKey
+              .export({ type: "pkcs8", format: "der" })
+              .toString("base64url"),
+          };
+        })()
+      : null;
   // Build version this server was launched from. The desktop spawner stamps
   // VIBESTUDIO_APP_VERSION; attach-or-spawn compares it against the current app
   // build and stops-and-respawns on mismatch (converge to current version).
@@ -824,6 +839,21 @@ async function main() {
     autoApprove:
       process.env["NODE_ENV"] === "development" && process.env["VIBESTUDIO_AUTO_APPROVE"] === "1",
   });
+  const { EvalInvocationCoordinator } = await import("./services/evalInvocationCoordinator.js");
+  const { resolveEvalDirectSurface } = await import("./services/evalDirectSurface.js");
+  const evalInvocationCoordinator = new EvalInvocationCoordinator({
+    approvalQueue,
+    grantStore: capabilityGrantStore,
+    onChallenge: async (challenge) => {
+      const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+      const { EVAL_DO_SOURCE } = await import("./internalDOs/productBootManifest.js");
+      await doDispatch.dispatch(
+        { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey: challenge.objectKey },
+        "authorityChallenge",
+        challenge
+      );
+    },
+  });
   const { ServerUnitApprovalCoordinator } = await import("./unitApprovalCoordinator.js");
   const unitApprovalCoordinator = new ServerUnitApprovalCoordinator({
     approvalQueue,
@@ -859,7 +889,13 @@ async function main() {
       panelRuntimeCoordinator: panelRuntimeCoordinatorForCleanup,
       egressProxy,
       approvalQueue,
+      deferrals: {
+        cancelForCaller: (callerId) => rpcServerForGateway?.cancelDeferralsForCaller(callerId) ?? 0,
+      },
       credentialSessionGrantStore,
+      revokeAgentCredentials: async (entityId) => {
+        await callHubInternal("agent-credential/revoke-entity", { entityId });
+      },
       tokenManager,
       connectionGrants,
       entityTitleService,
@@ -1090,8 +1126,6 @@ async function main() {
   // A context "exists" (holds state to intrude on) if it has an active entity
   // or a materialized folder; owner label feeds the approval copy.
   const contextBoundaryDeps = {
-    approvalQueue,
-    grantStore: capabilityGrantStore,
     contextExists: (contextId: string): boolean => {
       if (entityCache.listActive().some((e) => e.contextId === contextId)) return true;
       try {
@@ -1297,20 +1331,191 @@ async function main() {
   // ===========================================================================
 
   const dispatcher = new ServiceDispatcher();
-  dispatcher.setAuthorityResolver(({ caller, service, method, capability, resourceKey }) =>
-    authorizeVerifiedCaller(caller, {
+  const { evaluateAuthority } = await import("@vibestudio/shared/authorization");
+  const {
+    authoritySessionIdForCaller,
+    capabilityGrantSubject,
+    constrainApprovalDecisions,
+    requestCapabilityPermission: requestCanonicalCapabilityPermission,
+  } = await import("./services/capabilityPermission.js");
+  const directCodeGrant = ({
+    caller,
+    source,
+    className,
+  }: {
+    caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller;
+    source: string;
+    className: string;
+  }): boolean => {
+    if (source !== "product/browser-data" || className !== "BrowserDataDO") return true;
+    const provider = workspaceProviderExtensionPackageName(workspaceConfig, "browserData");
+    return provider !== null && caller.runtime.id === provider;
+  };
+  const resolveOrdinaryAuthority = (input: {
+    caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller;
+    service: string;
+    method: string;
+    capability: string;
+    resourceKey: string;
+    audience?: string;
+    sessionId?: string;
+    grantCode?: boolean;
+  }) =>
+    authorizeVerifiedCaller(input.caller, {
       workspaceId: entryWorkspaceId,
-      workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
+      workspaceMember:
+        input.caller.hostOriginated === true || membershipEntryGate(input.caller.subject),
       workspaceRole:
-        caller.subject && caller.subject.userId !== "system"
-          ? (userStore.getUser(caller.subject.userId)?.role ?? null)
+        input.caller.subject && input.caller.subject.userId !== "system"
+          ? (userStore.getUser(input.caller.subject.userId)?.role ?? null)
           : null,
-      sessionId: `${caller.runtime.id}:${service}.${method}:${randomUUID()}`,
-      audience: `service:${service}`,
+      sessionId: input.sessionId ?? authoritySessionIdForCaller(input.caller),
+      audience: input.audience ?? `service:${input.service}`,
+      capability: input.capability,
+      resourceKey: input.resourceKey,
+      grantStore: capabilityGrantStore,
+      grantCode: input.grantCode,
+    });
+  dispatcher.setAuthorityResolver(
+    async ({
+      ctx,
+      caller,
+      service,
+      method,
       capability,
       resourceKey,
-      grantStore: capabilityGrantStore,
-    })
+      requirement,
+      acquisition,
+      challenge,
+      preauthorization,
+      sensitivity,
+    }) => {
+      if (!ctx.evalInvocation) {
+        let resolved = resolveOrdinaryAuthority({
+          caller,
+          service,
+          method,
+          capability,
+          resourceKey,
+        });
+        if (acquisition?.kind !== "approval") return resolved;
+        const decision = evaluateAuthority({
+          context: resolved.context,
+          requirement,
+          resourceKey,
+          grants: resolved.grants,
+        });
+        if (decision.allowed || decision.code !== "missing-grant") return resolved;
+        const permission = await requestCanonicalCapabilityPermission(
+          { approvalQueue, grantStore: capabilityGrantStore },
+          {
+            caller,
+            capability,
+            resource: {
+              type: challenge?.resource.type ?? "authority-resource",
+              label: challenge?.resource.label ?? "Resource",
+              value: challenge?.resource.value ?? resourceKey,
+              key: resourceKey,
+            },
+            operation: {
+              kind:
+                challenge?.operation.kind ??
+                (acquisition.operation
+                  .kind as import("@vibestudio/shared/approvals").ApprovalOperationDescriptor["kind"]),
+              verb: challenge?.operation.verb ?? acquisition.operation.verb,
+              object: challenge?.operation.object ?? {
+                type: "authority-resource",
+                label: "Resource",
+                value: resourceKey,
+              },
+              groupKey:
+                challenge?.operation.groupKey ??
+                `${service}.${method}:${capability}:${resourceKey}`,
+            },
+            title: challenge?.title ?? acquisition.title,
+            description: challenge?.description ?? acquisition.description,
+            severity: challenge?.severity ?? acquisition.severity,
+            deniedReason: challenge?.deniedReason ?? `${acquisition.title} denied`,
+            dedupKey: challenge?.dedupKey,
+            details: challenge?.details ? [...challenge.details] : undefined,
+            signal: challenge?.signal,
+            allowedDecisions: constrainApprovalDecisions(
+              [
+                "once",
+                ...acquisition.grantScopes.filter((scope) => scope !== "run"),
+                "deny",
+                "dismiss",
+              ],
+              challenge?.allowedDecisions
+            ),
+          }
+        );
+        if (!permission.allowed) return resolved;
+        if (permission.decision) {
+          (ctx.authorityDecisions ??= new Map()).set(capability, permission.decision);
+        }
+        resolved = resolveOrdinaryAuthority({ caller, service, method, capability, resourceKey });
+        if (permission.decision === "once") {
+          const now = Date.now();
+          const subject = capabilityGrantSubject(caller, resolved.context.session.id);
+          if (!subject) return resolved;
+          return {
+            ...resolved,
+            decision: "once" as const,
+            grants: [
+              ...resolved.grants,
+              {
+                subject: subject.principal,
+                capability,
+                resource: { kind: "exact" as const, key: resourceKey },
+                effect: "allow" as const,
+                issuedBy: "host:authority-challenge-broker" as const,
+                createdAt: now,
+                expiresAt: now + 60_000,
+                binding: subject.code
+                  ? {
+                      kind: "exact-execution" as const,
+                      repoPath: subject.code.repoPath,
+                      executionDigest: subject.code.executionDigest,
+                    }
+                  : { kind: "principal" as const },
+                provenance: "exact-dispatch-approval",
+              },
+            ],
+          };
+        }
+        return permission.decision ? { ...resolved, decision: permission.decision } : resolved;
+      }
+      return await evalInvocationCoordinator.resolve({
+        ...ctx.evalInvocation,
+        transportCaller: ctx.transportCaller ?? ctx.caller,
+        capability,
+        resourceKey,
+        surfaceId: `host:${service}.${method}`,
+        ...(acquisition ? { acquisition } : {}),
+        ...(challenge ? { challenge } : {}),
+        ...(sensitivity ? { sensitivity } : {}),
+        audience: `service:${service}`,
+        root: ({
+          caller: rootCaller,
+          capability: rootCapability,
+          resourceKey: rootResource,
+          audience,
+          sessionId,
+        }) =>
+          resolveOrdinaryAuthority({
+            caller: rootCaller,
+            service,
+            method,
+            capability: rootCapability,
+            resourceKey: rootResource,
+            audience,
+            sessionId,
+          }),
+        ...(preauthorization ? { preauthorization: true } : {}),
+        ...(ctx.evalPreauthorizationSignal ? { signal: ctx.evalPreauthorizationSignal } : {}),
+      });
+    }
   );
   const container = new ServiceContainer(dispatcher);
   const getEntityStore = (): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
@@ -1361,7 +1566,7 @@ async function main() {
   // Prepare the manifest-declared eval engine + runtime prewarm. The returned
   // starter runs only after host readiness so optional compiles cannot starve
   // the VCS store DO that is on the critical startup path.
-  // first interactive `eval.run` doesn't pay the cold esbuild compiles (the bulk
+  // first interactive eval doesn't pay the cold esbuild compiles (the bulk
   // of the EvalDO cold start). The units come from meta/vibestudio.yml
   // (`providers.evalEngine` / `providers.evalRuntime`) — no declaration means
   // eval is disabled, so there is nothing to warm (logged once). Fire-and-forget:
@@ -1506,7 +1711,6 @@ async function main() {
     invokeGitProvider: invokeGitInteropProvider,
     importJournal: gitImportJournal,
     approvalQueue,
-    grantStore: capabilityGrantStore,
     disposableRemotes: disposableGitRemotes,
     workspaceConfigMutationWouldChange: (mutate) => workspaceConfigWriter.wouldMutate(mutate),
     persistWorkspaceConfigMutation: async (input) => {
@@ -1785,8 +1989,6 @@ async function main() {
     container.registerRpc(
       createExternalOpenService({
         eventService,
-        approvalQueue,
-        grantStore: capabilityGrantStore,
       })
     );
   }
@@ -1855,12 +2057,7 @@ async function main() {
     })
   );
   const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
-  container.registerRpc(
-    createCorsApprovalService({
-      approvalQueue,
-      grantStore: capabilityGrantStore,
-    })
-  );
+  container.registerRpc(createCorsApprovalService());
   const { createUserlandApprovalService } = await import("./services/userlandApprovalService.js");
   container.registerRpc(
     createUserlandApprovalService({
@@ -1876,6 +2073,14 @@ async function main() {
           ttl: 0,
         });
       },
+    })
+  );
+  const { createPermissionsService } = await import("./services/permissionsService.js");
+  container.registerRpc(
+    createPermissionsService({
+      capabilityGrants: capabilityGrantStore,
+      userlandGrants: userlandApprovalGrantStore,
+      credentialUseGrants: credentialUseGrantStore,
     })
   );
 
@@ -1989,8 +2194,114 @@ async function main() {
         evalDefinition = createEvalService({
           doDispatch,
           entityStore: ensureEntityStore(doDispatch),
-          tokenManager,
           activity: activityRegistry,
+          invocationCoordinator: evalInvocationCoordinator,
+          ...(process.env["VIBESTUDIO_MANAGED_DEV_PARENT_HOST_ID"] &&
+          process.env["VIBESTUDIO_MANAGED_DEV_PARENT_AUTHORITY_KEY"] &&
+          process.env["VIBESTUDIO_MANAGED_DEV_LAUNCH_ID"] &&
+          process.env["VIBESTUDIO_MANAGED_DEV_BUILD_ID"] &&
+          process.env["VIBESTUDIO_MANAGED_DEV_GENERATION_PROCESS_IDENTITY"] &&
+          managedDevEvalRecipient
+            ? {
+                delegatedAuthority: {
+                  parentHostId: process.env["VIBESTUDIO_MANAGED_DEV_PARENT_HOST_ID"],
+                  publicKeySpki: process.env["VIBESTUDIO_MANAGED_DEV_PARENT_AUTHORITY_KEY"],
+                  generation: {
+                    launchId: process.env["VIBESTUDIO_MANAGED_DEV_LAUNCH_ID"],
+                    hostBuildId: process.env["VIBESTUDIO_MANAGED_DEV_BUILD_ID"],
+                    childServerId: deviceAuthStore.getServerId(),
+                    processIdentity:
+                      process.env["VIBESTUDIO_MANAGED_DEV_GENERATION_PROCESS_IDENTITY"],
+                    childWorkspaceId: workspace.config.id,
+                    childContextId: "unbound",
+                    recipientPublicKey: managedDevEvalRecipient.publicKey,
+                  },
+                  recipientPrivateKey: managedDevEvalRecipient.privateKey,
+                },
+              }
+            : {}),
+          preauthorize: async ({
+            ctx,
+            runId,
+            credential,
+            objectKey,
+            intents,
+            readOnly,
+            signal,
+          }) => {
+            const authorityContext: import("@vibestudio/shared/serviceDispatcher").ServiceContext =
+              {
+                ...ctx,
+                evalInvocation: { runId, credential, objectKey },
+                evalPreauthorization: true,
+                evalPreauthorizationSignal: signal,
+              };
+            for (const intent of intents) {
+              if (intent.plane === "host-service") {
+                const separator = intent.method.indexOf(".");
+                if (separator <= 0 || separator === intent.method.length - 1) {
+                  throw Object.assign(
+                    new Error(`Invalid host-service preauthorization method ${intent.method}`),
+                    { code: "EVAL_INVOCATION_INVALID" }
+                  );
+                }
+                await dispatcher.preauthorize(
+                  authorityContext,
+                  intent.method.slice(0, separator),
+                  intent.method.slice(separator + 1),
+                  intent.args
+                );
+                continue;
+              }
+
+              const row = resolveEvalDirectSurface(intent.target.source, intent.method);
+              if (readOnly && (!("sensitivity" in row) || row.sensitivity !== "read")) {
+                throw Object.assign(
+                  new Error(
+                    `Direct method ${intent.target.source}.${intent.method} is not available in read-only eval`
+                  ),
+                  { code: "EVAL_READ_ONLY" }
+                );
+              }
+              const audience = directAuthorityAudience(
+                intent.target.source,
+                intent.target.className,
+                intent.target.objectKey
+              );
+              await evalInvocationCoordinator.resolve({
+                runId,
+                credential,
+                objectKey,
+                capability: `rpc:${intent.method}`,
+                resourceKey: audience,
+                surfaceId: row.id,
+                acquisition: row.acquisition,
+                audience,
+                preauthorization: true,
+                signal,
+                root: ({ caller, capability, resourceKey, audience: rootAudience, sessionId }) => {
+                  const evalSponsorshipAllowed = directCodeGrant({
+                    caller,
+                    source: intent.target.source,
+                    className: intent.target.className,
+                  });
+                  return {
+                    ...resolveOrdinaryAuthority({
+                      caller,
+                      service: "workspace-do",
+                      method: intent.method,
+                      capability,
+                      resourceKey,
+                      audience: rootAudience,
+                      sessionId,
+                      grantCode: evalSponsorshipAllowed,
+                    }),
+                    evalSponsorshipAllowed,
+                  };
+                },
+              });
+            }
+          },
         });
       },
       getServiceDefinition() {
@@ -2077,10 +2388,10 @@ async function main() {
   // ── runtime.* service ──
   // runtime.createEntity / retireEntity is the only path that
   // mints or retires entity rows. Cleanup hooks fire post-retire (see §10).
+  let runtimeDefinition: import("./services/runtimeService.js").RuntimeServiceDefinition | null =
+    null;
   {
     const { createRuntimeService } = await import("./services/runtimeService.js");
-    let runtimeDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition | null =
-      null;
     container.registerManaged({
       name: "runtime",
       dependencies: ["doDispatch", "workerdManager", "buildSystem", "panelHttpServer"],
@@ -2106,7 +2417,9 @@ async function main() {
           resolveExecutionArtifact: (source, ref) =>
             buildSystem.resolveExecutionArtifact(source, ref),
           resolveExecutionArtifactByDigest: (executionDigest) => {
-            const bundle = buildSystem.getExecutionArtifact(executionDigest);
+            const bundle =
+              getProductExecutionArtifact(executionDigest) ??
+              buildSystem.getExecutionArtifact(executionDigest);
             if (!bundle) {
               throw new Error(`Unknown immutable execution artifact: ${executionDigest}`);
             }
@@ -2115,6 +2428,7 @@ async function main() {
               selectorPolicy: { kind: "artifact", executionDigest: bundle.ref.executionDigest },
               artifact: bundle.ref,
               requested: bundle.requested,
+              delegations: bundle.delegations,
               compilationCacheKey: bundle.ref.buildKey,
             };
           },
@@ -2158,13 +2472,6 @@ async function main() {
           contextBoundary: contextBoundaryDeps,
           setEntityTitle: (entityId, title, options) =>
             entityTitleService.setTitle(entityId, title, options),
-          // Agent credentials follow the entity (§3.2): on retire, revoke all
-          // outstanding agent credentials and the live `agent:<entityId>` token.
-          revokeAgentCredentials: async (entityId) => {
-            await callHubInternal("agent-credential/revoke-entity", { entityId });
-            // Matches auth/model.ts agentCallerId(entityId).
-            tokenManager.revokeToken(`agent:${entityId}`);
-          },
         });
       },
       getServiceDefinition() {
@@ -2184,11 +2491,12 @@ async function main() {
   // ── Generic public webhook ingress ──
   {
     const { createWebhookIngressService } = await import("./services/webhookIngressService.js");
-    const { EVAL_DO_SOURCE } = await import("./internalDOs/productBootManifest.js");
+    const { EVAL_DO_SOURCE, WEBHOOK_STORE_DO_SOURCE } =
+      await import("./internalDOs/productBootManifest.js");
     let webhookIngress: ReturnType<typeof createWebhookIngressService> | null = null;
     container.registerManaged({
       name: "webhookIngress",
-      dependencies: ["rpcServer", "doDispatch"],
+      dependencies: ["rpcServer", "doDispatch", "workerdManager"],
       async start(resolve) {
         const rpcServer = assertPresent(
           resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
@@ -2196,6 +2504,20 @@ async function main() {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
+        const workerdManager = assertPresent(
+          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
+        );
+        // The store is an ordinary exact product entity, not an entity-less
+        // infrastructure shortcut. Activating it before the service becomes
+        // visible gives dispatch preflight a durable liveness and artifact
+        // record, and lets retirement/credential cleanup use the same rules as
+        // every other DO.
+        await activateDurableObjectEntity(doDispatch, workerdManager, {
+          source: WEBHOOK_STORE_DO_SOURCE,
+          className: "WebhookStoreDO",
+          objectKey: "global",
+          ownerUserId: SYSTEM_SUBJECT.userId,
+        });
         webhookIngress = createWebhookIngressService({
           relaySigningSecret,
           relayOrigin: getRelayOrigin(),
@@ -2306,7 +2628,9 @@ async function main() {
   const routedRoomStore = new RoutedRoomStore(
     process.env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"] ?? layout.webrtc.routesFile
   );
-  const pairingActivationStore = new PairingActivationStore(layout.webrtc.pairingActivationsFile);
+  const pairingActivationStore = new PairingActivationStore(
+    process.env["VIBESTUDIO_PAIRING_ACTIVATION_STATE_PATH"] ?? layout.webrtc.pairingActivationsFile
+  );
   pairingActivationStore.removeExpired(Date.now());
   const routedRooms = new Map<string, string>();
   const routedRoomExpiryTimers = new Map<string, NodeJS.Timeout>();
@@ -2434,11 +2758,7 @@ async function main() {
         tokenManager,
         dispatcher,
         workspaceId: workspace.config.id,
-        directCodeGrant: ({ caller, source, className }) => {
-          if (source !== "product/browser-data" || className !== "BrowserDataDO") return true;
-          const provider = workspaceProviderExtensionPackageName(workspaceConfig, "browserData");
-          return provider !== null && caller.runtime.id === provider;
-        },
+        directCodeGrant,
         eventService,
         egressProxy,
         fsService,
@@ -2520,13 +2840,84 @@ async function main() {
           extensionHostForGateway?.resolveActiveInvocation(extensionName, invocationToken) ?? null,
         resolveExtensionCodeIdentity: (extensionName) =>
           extensionHostForGateway?.resolveCodeIdentity(extensionName) ?? null,
-        resolveExecutionRequests: (executionDigest) =>
-          getProductExecutionArtifact(executionDigest)?.requested ??
-          container
-            .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-            .getExecutionArtifact(executionDigest)?.requested ??
-          null,
+        resolveExecutionAuthority: (executionDigest) => {
+          const artifact =
+            getProductExecutionArtifact(executionDigest) ??
+            container
+              .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+              .getExecutionArtifact(executionDigest);
+          return artifact
+            ? { requests: artifact.requested, delegations: artifact.delegations }
+            : null;
+        },
         capabilityGrantStore,
+        resolveEvalDirectAuthority: async (input) => {
+          const surface = resolveEvalDirectSurface(input.source, input.method);
+          const audience = directAuthorityAudience(input.source, input.className, input.objectKey);
+          const capability = directAuthorityCapability(input.method);
+          const resolved = await evalInvocationCoordinator.resolve({
+            runId: input.runId,
+            credential: input.credential,
+            objectKey: input.evalObjectKey,
+            transportCaller: input.transportCaller,
+            capability,
+            resourceKey: audience,
+            surfaceId: surface.id,
+            acquisition: surface.acquisition,
+            ...("sensitivity" in surface && surface.sensitivity
+              ? { sensitivity: surface.sensitivity }
+              : {}),
+            audience,
+            root: ({
+              caller,
+              capability: rootCapability,
+              resourceKey,
+              audience: rootAudience,
+              sessionId,
+            }) => {
+              const evalSponsorshipAllowed = directCodeGrant({
+                caller,
+                source: input.source,
+                className: input.className,
+              });
+              return {
+                ...resolveOrdinaryAuthority({
+                  caller,
+                  service: "workspace-do",
+                  method: input.method,
+                  capability: rootCapability,
+                  resourceKey,
+                  audience: rootAudience,
+                  sessionId,
+                  grantCode: evalSponsorshipAllowed,
+                }),
+                evalSponsorshipAllowed,
+              };
+            },
+          });
+          const now = Date.now();
+          return {
+            authorizingCaller: resolved.authorizingCaller,
+            effectiveCaller:
+              resolved.effectiveCaller ??
+              (() => {
+                throw Object.assign(new Error("Live eval dispatch has no effective caller"), {
+                  code: "EVAL_INVOCATION_INVALID",
+                });
+              })(),
+            readOnly: resolved.readOnly,
+            authorization: {
+              audience,
+              method: input.method,
+              resourceKey: audience,
+              issuedAt: now,
+              expiresAt: now + 5_000,
+              context: resolved.context,
+              grants: resolved.grants,
+              ...(resolved.readOnly ? { readOnly: true as const } : {}),
+            },
+          };
+        },
         // On-behalf-of tokens for userland vcs-DO dispatches (§4): the relay
         // mints one per dispatch to the single-writer DO; refs.updateMains
         // resolves it against the SAME table.
@@ -3061,7 +3452,7 @@ async function main() {
   {
     const { ExecutionSnapshotService } = await import("./execution/executionSnapshotService.js");
     const { getBytes: readExecutionBlob } = await import("./services/blobstoreService.js");
-    const { createDevHostService, DevHostSourceWatcher } =
+    const { createDevHostService, DevHostSourceWatcher, childEvalContinuationDecision } =
       await import("./services/devHostService.js");
     const { requestCapabilityPermission } = await import("./services/capabilityPermission.js");
     const { contextIdFromVcsHead, vcsContextHead } = await import("./vcsHost/paths.js");
@@ -3113,11 +3504,27 @@ async function main() {
         (await assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "stop", [
           launchId,
         ])) as { launchId: string; stopped: boolean },
-      eval: (launchId, code) =>
-        assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "eval", [
+      evalStart: (launchId, input, authority) =>
+        assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "evalStart", [
           launchId,
-          code,
-        ]),
+          input,
+          authority,
+        ]) as Promise<import("@vibestudio/service-schemas/eval").EvalRunHandle>,
+      evalGet: (launchId, input) =>
+        assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "evalGet", [
+          launchId,
+          input,
+        ]) as Promise<import("@vibestudio/service-schemas/eval").EvalRunSnapshot>,
+      evalEvents: (launchId, input) =>
+        assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "evalEvents", [
+          launchId,
+          input,
+        ]) as Promise<{ events: unknown[]; next: number }>,
+      evalCancel: (launchId, input) =>
+        assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "evalCancel", [
+          launchId,
+          input,
+        ]) as Promise<{ status: "requested" | "cancelled" | "terminal" }>,
       logs: (launchId, after) =>
         assertPresent(extensionHostForGateway).invokeProviderStream(ctx, "devHost", "logs", [
           launchId,
@@ -3180,6 +3587,7 @@ async function main() {
     };
     const devHostDefinition = createDevHostService({
       workspaceId: workspace.config.id,
+      parentHostId: `${deviceAuthStore.getServerId()}:${serverBootId}`,
       resolveCallerContext: (callerId) => entityCache.resolveContext(callerId),
       resolveSource: resolveDevHostSource,
       createSnapshot: createDevHostSnapshot,
@@ -3304,6 +3712,59 @@ async function main() {
             "EACCES"
           );
         }
+      },
+      resolveChildChallenge: async ({
+        initiator,
+        launch,
+        runId,
+        challengeId,
+        capability,
+        resource,
+        allowedDecisions,
+        signal,
+      }) => {
+        const childResourceKey = [
+          `dev-host:${launch.readinessIdentity?.serverId ?? "unknown"}`,
+          `launch:${launch.launchId}`,
+          `generation:${launch.activeHostBuildId ?? "unknown"}`,
+          resource.key,
+        ].join("/");
+        const permission = await requestCapabilityPermission(
+          { approvalQueue, grantStore: capabilityGrantStore },
+          {
+            caller: initiator,
+            capability,
+            requesterCategory: "eval",
+            dedupKey: `dev-host-eval:${launch.launchId}:${launch.activeHostBuildId}:${challengeId}`,
+            authoritySessionId: `dev-host:${launch.launchId}:${launch.activeHostBuildId}:${runId}`,
+            signal,
+            operation: {
+              kind: "unknown",
+              verb: capability,
+              object: { type: resource.type, label: resource.label, value: resource.value },
+              groupKey: `${launch.launchId}:${runId}:${capability}`,
+            },
+            resource: {
+              type: resource.type,
+              label: resource.label,
+              value: resource.value,
+              key: childResourceKey,
+            },
+            title: `Allow eval in development build ${launch.activeHostBuildId?.slice(0, 12)}`,
+            description:
+              `Child run ${runId} is waiting in launch ${launch.launchId}. ` +
+              "The grant is bound to this exact child host generation.",
+            details: [
+              { label: "Child launch", value: launch.launchId },
+              { label: "Child generation", value: launch.activeHostBuildId ?? "unknown" },
+              { label: "Child run", value: runId },
+              { label: "Capability", value: capability },
+            ],
+            deniedReason: `Development-host eval access to ${capability} was denied`,
+            allowedDecisions,
+          }
+        );
+        return childEvalContinuationDecision(permission, allowedDecisions);
       },
       provider: devHostProvider,
     });
@@ -3700,12 +4161,14 @@ async function main() {
     container,
     dispatcher,
     entityCache,
-    resolveExecutionRequests: (executionDigest: string) =>
-      getProductExecutionArtifact(executionDigest)?.requested ??
-      container
-        .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-        .getExecutionArtifact(executionDigest)?.requested ??
-      null,
+    resolveExecutionAuthority: (executionDigest: string) => {
+      const artifact =
+        getProductExecutionArtifact(executionDigest) ??
+        container
+          .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+          .getExecutionArtifact(executionDigest);
+      return artifact ? { requests: artifact.requested, delegations: artifact.delegations } : null;
+    },
     connectionGrants,
     workspace,
     activeWorkspaceName: advertisedWorkspaceName ?? workspaceName,
@@ -3725,6 +4188,8 @@ async function main() {
       });
       replaceLiveWorkspaceConfig(result.nextConfig);
     },
+    wouldPersistWorkspaceConfigField: (key: string, value: unknown) =>
+      workspaceConfigWriter.wouldMutate((current) => ({ ...current, [key]: value })),
     treeScanner,
     adminToken,
     workspaceCatalog,
@@ -4339,9 +4804,7 @@ async function main() {
       const workerdManager = assertPresent(workerdManagerForGateway);
       const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
       const record = entityCache.resolveActive(targetId);
-      return workerdManager.ensureDO(source, className, objectKey, {
-        contextId: record?.contextId,
-      });
+      return workerdManager.ensureDispatchableDurableObject(source, className, objectKey, record);
     },
     externalHost: hostConfig.externalHost,
     bindHost: hostConfig.bindHost,
@@ -4351,13 +4814,16 @@ async function main() {
     tokenManager,
     connectionGrants,
     entityCache,
-    resolveExecutionRequests: (executionDigest: string) =>
-      getProductExecutionArtifact(executionDigest)?.requested ??
-      (container.has("buildSystem")
-        ? (container
-            .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-            .getExecutionArtifact(executionDigest)?.requested ?? null)
-        : null),
+    resolveExecutionAuthority: (executionDigest: string) => {
+      const artifact =
+        getProductExecutionArtifact(executionDigest) ??
+        (container.has("buildSystem")
+          ? container
+              .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+              .getExecutionArtifact(executionDigest)
+          : null);
+      return artifact ? { requests: artifact.requested, delegations: artifact.delegations } : null;
+    },
     routeRegistry,
     healthProvider: (detailed) => {
       const base: Record<string, unknown> = {
@@ -4367,6 +4833,9 @@ async function main() {
         protocol: "http",
         serverId: deviceAuthStore.getServerId(),
         serverBootId,
+        ...(managedDevEvalRecipient
+          ? { evalAuthorityRecipientKey: managedDevEvalRecipient.publicKey }
+          : {}),
         workspaceId: workspace.config.id,
         // In the base payload so attach-or-spawn can version-check without auth.
         version: serverVersion,
@@ -4430,8 +4899,6 @@ async function main() {
         const { createWorkerdInspectorService } =
           await import("./services/workerdInspectorService.js");
         workerdInspectorDefinition = createWorkerdInspectorService({
-          approvalQueue,
-          grantStore: capabilityGrantStore,
           listTargets: () => bridge.listTargets(),
           getEndpoint: (targetPath, principalId) => bridge.getEndpoint(targetPath, principalId),
         });
@@ -4586,11 +5053,12 @@ async function main() {
   rpcServerInstance.setEnsureDO((source, className, objectKey) => {
     const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
     const record = entityCache.resolveActive(targetId);
-    return workerdManager.ensureDO(source, className, objectKey, {
-      contextId: record?.contextId,
-    });
+    return workerdManager.ensureDispatchableDurableObject(source, className, objectKey, record);
   });
 
+  const { assertEvalServerCapabilityRegistrations } =
+    await import("./services/evalCapabilityCatalog.js");
+  assertEvalServerCapabilityRegistrations(dispatcher);
   dispatcher.markInitialized();
 
   // ===========================================================================
@@ -4615,6 +5083,11 @@ async function main() {
   const reconciliation = await runStartupReconciliation({
     dispatchWorkspaceDO,
     entityCache,
+    cleanupRetiredEntity: cleanupRuntimeEntityRecord,
+    cleanupContext: async (record) => {
+      if (!runtimeDefinition) throw new Error("runtime service not initialized");
+      await runtimeDefinition.maintenance.retryContextCleanup(record.contextId);
+    },
     recoverLifecycle: () => lifecycleDriver.recoverStartup("server_restart"),
     logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
   });
@@ -4640,6 +5113,11 @@ async function main() {
       `[Bootstrap] Reconciled ${reconciliation.incompleteCleanupIds.length} incomplete cleanup(s): ${reconciliation.incompleteCleanupIds.join(
         ", "
       )}`
+    );
+  }
+  if (reconciliation.incompleteContextCleanupIds.length > 0) {
+    console.log(
+      `[Bootstrap] Reconciled ${reconciliation.incompleteContextCleanupIds.length} incomplete context cleanup(s): ${reconciliation.incompleteContextCleanupIds.join(", ")}`
     );
   }
 
@@ -4703,6 +5181,10 @@ async function main() {
     workspaceDORef: workspaceDORefForBootstrap,
     onRetire: async (record) => {
       await cleanupRuntimeEntityRecord(record);
+    },
+    onContextCleanup: async (record) => {
+      if (!runtimeDefinition) throw new Error("runtime service not initialized");
+      await runtimeDefinition.maintenance.retryContextCleanup(record.contextId);
     },
     logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
   });
@@ -4838,6 +5320,9 @@ async function main() {
         pairing: webrtcPairing,
         serverId: deviceAuthStore.getServerId(),
         serverBootId,
+        ...(managedDevEvalRecipient
+          ? { evalAuthorityRecipientKey: managedDevEvalRecipient.publicKey }
+          : {}),
         tokenFilePath,
         gatewayPort,
         workerdPort: workerdMgr?.getPort() ?? 0,

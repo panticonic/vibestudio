@@ -68,6 +68,7 @@ function panelCaller() {
     repoPath: "panels/test",
     executionDigest: "ev-panel",
     requested: [],
+    delegations: [],
   });
 }
 

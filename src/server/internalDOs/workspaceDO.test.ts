@@ -22,6 +22,8 @@ const WORKSPACE_TABLES = [
   "lifecycle_ops",
   "do_alarms",
   "recurring_jobs",
+  "context_edges",
+  "context_cleanups",
 ];
 const CURRENT_SCHEMA_VERSION = WorkspaceDO.schemaVersion;
 
@@ -296,6 +298,7 @@ describe("WorkspaceDO.entityGc", () => {
   it("with {all:true, graceMs:0} deletes retired rows", () => {
     const rec = instance.entityActivate(panelInput());
     instance.entityRetire(rec.id);
+    instance.entityCleanupComplete(rec.id);
     const deleted = instance.entityGc({ all: true, graceMs: 0 });
     expect(deleted).toEqual([rec.id]);
     expect(instance.entityResolve(rec.id)).toBeNull();
@@ -306,6 +309,14 @@ describe("WorkspaceDO.entityGc", () => {
     const deleted = instance.entityGc({ all: true, graceMs: 0 });
     expect(deleted).toEqual([]);
     expect(instance.entityResolve(rec.id)).not.toBeNull();
+  });
+
+  it("does not erase the only retry proof for an incomplete retirement", () => {
+    const rec = instance.entityActivate(panelInput());
+    instance.entityRetire(rec.id);
+
+    expect(instance.entityGc({ all: true, graceMs: 0 })).toEqual([]);
+    expect(instance.entityResolve(rec.id)?.cleanupComplete).toBe(false);
   });
 
   it("does not delete retired rows referenced by slot_history", () => {
@@ -546,6 +557,80 @@ describe("WorkspaceDO entity reads", () => {
     const incomplete = instance.entityFindIncompleteCleanups();
     expect(incomplete.map((r: EntityRecord) => r.id)).toEqual([r2.id]);
   });
+
+  it("entityListByContext retains the retired records needed for teardown retry", () => {
+    const first = instance.entityActivate(panelInput({ contextId: "ctx-a", key: "a" }));
+    instance.entityActivate(panelInput({ contextId: "ctx-b", key: "b" }));
+    instance.entityRetire(first.id);
+
+    expect(instance.entityListByContext("ctx-a").map((record) => record.id)).toEqual([first.id]);
+    expect(instance.entityListByContext("ctx-a")[0]?.status).toBe("retired");
+  });
+});
+
+describe("WorkspaceDO context cleanup ledger", () => {
+  let instance: WorkspaceDO;
+  beforeEach(async () => {
+    ({ instance } = await createTestDO(WorkspaceDOTestable));
+  });
+
+  it("persists failure detail, promotes detach to destroy, and completes explicitly", () => {
+    const begun = instance.contextCleanupBegin({ contextId: "ctx-clean", kind: "detach" });
+    expect(begun).toMatchObject({ contextId: "ctx-clean", kind: "detach", lastError: null });
+
+    instance.contextCleanupFailed("ctx-clean", "disk busy");
+    expect(instance.contextCleanupListPending()).toMatchObject([
+      { contextId: "ctx-clean", kind: "detach", lastError: "disk busy" },
+    ]);
+
+    instance.contextCleanupBegin({ contextId: "ctx-clean", kind: "destroy" });
+    expect(instance.contextCleanupListPending()[0]?.kind).toBe("destroy");
+    instance.contextCleanupAddDurableObject("ctx-clean", {
+      source: "workers/example",
+      className: "ExampleDO",
+      key: "clone-key",
+    });
+    // Idempotent registration cannot create duplicate deletes.
+    instance.contextCleanupAddDurableObject("ctx-clean", {
+      source: "workers/example",
+      className: "ExampleDO",
+      key: "clone-key",
+    });
+    expect(instance.contextCleanupListPending()[0]?.durableObjects).toEqual([
+      { source: "workers/example", className: "ExampleDO", key: "clone-key" },
+    ]);
+
+    instance.contextCleanupComplete("ctx-clean");
+    expect(instance.contextCleanupListPending()).toEqual([]);
+  });
+
+  it("disarms a multi-context operation atomically", () => {
+    instance.contextCleanupBegin({ contextId: "ctx-a", kind: "destroy" });
+    instance.contextCleanupBegin({ contextId: "ctx-b", kind: "destroy" });
+
+    instance.contextCleanupCompleteMany(["ctx-a", "ctx-b"]);
+
+    expect(instance.contextCleanupListPending()).toEqual([]);
+  });
+
+  it("snapshots DO storage identity before entity proof can be garbage-collected", () => {
+    const entity = instance.entityActivate(
+      doInput({ contextId: "ctx-storage-proof", key: "durable-key" })
+    );
+    const cleanup = instance.contextCleanupBegin({
+      contextId: "ctx-storage-proof",
+      kind: "destroy",
+    });
+    expect(cleanup.durableObjects).toEqual([
+      { source: SOURCE, className: "MyDO", key: "durable-key" },
+    ]);
+
+    instance.entityRetire(entity.id);
+    instance.entityCleanupComplete(entity.id);
+    expect(instance.entityGc({ all: true, graceMs: 0 })).toEqual([entity.id]);
+    expect(instance.entityResolve(entity.id)).toBeNull();
+    expect(instance.contextCleanupListPending()[0]?.durableObjects).toEqual(cleanup.durableObjects);
+  });
 });
 
 describe("WorkspaceDO lifecycle registry", () => {
@@ -637,16 +722,26 @@ describe("WorkspaceDO lifecycle registry", () => {
     expect(instance.lifecycleListResumeTargets()).toEqual([]);
   });
 
-  it("clears a DO lease when the matching entity is retired", () => {
+  it("clears every scheduler-owned DO lifecycle record when the entity is retired", () => {
     const rec = instance.entityActivate(doInput());
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
     instance.lifecycleLeaseUpsert(key);
     instance.alarmSet({ ...key, wakeAt: Date.now() + 5_000 });
+    instance.heartbeatRegister({
+      name: "agent-heartbeat",
+      ...key,
+      kind: "code-owned",
+      status: "running",
+      updatedAt: Date.now(),
+    });
+    instance.lifecycleOpenEpoch({ kind: "planned", reason: "restart", generation: 2 });
 
     instance.entityRetire(rec.id);
 
     expect(instance.lifecycleListLeases()).toEqual([]);
     expect(instance.alarmNextWakeAt()).toBeNull();
+    expect(instance.heartbeatList()).toEqual([]);
+    expect(instance.lifecycleListResumeTargets()).toEqual([]);
   });
 });
 

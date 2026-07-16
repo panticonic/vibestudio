@@ -126,6 +126,7 @@ const CHANNEL_ADMIN_AUTHORITY = {
       anyOf(relationship("workspace-role", "root"), relationship("workspace-role", "admin"))
     )
   ),
+  sensitivity: "admin",
 } as const;
 
 /** Service protocol the channel DO resolves for sibling channels (fork parent,
@@ -841,7 +842,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── Explicit channel structure ─────────────────────────────────────────
 
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
   async createChannel(creationInput: ChannelCreation): Promise<ChannelRecord> {
     const creation = validateChannelCreation(creationInput);
     const creator = this.authenticatedPrincipal("createChannel");
@@ -900,12 +901,12 @@ export class PubSubChannel extends DurableObjectBase {
     return this.requireChannelRecord();
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
   getChannel(): ChannelRecord | null {
     return this.channelRecord();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "admin" })
   async transferOwner(input: {
     expectedRevision: string;
     newOwner: Principal;
@@ -946,7 +947,7 @@ export class PubSubChannel extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async updateStructure(input: {
     expectedRevision: string;
     admission: ChannelCreation["admission"];
@@ -1006,7 +1007,7 @@ export class PubSubChannel extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deleteChannel(): { deleted: boolean } {
     const current = this.requireChannelRecord();
     this.assertOwner(current.structure, "deleteChannel");
@@ -1103,7 +1104,9 @@ export class PubSubChannel extends DurableObjectBase {
       authority.actingUser ??
       authority.entity ??
       authority.host ??
-      authority.code ??
+      (authority.authorizingOrigin.kind === "code"
+        ? authority.authorizingOrigin.principal
+        : null) ??
       null;
     if (!principal) throw new Error(`${method}: authenticated principal required`);
     return principal;
@@ -1170,7 +1173,7 @@ export class PubSubChannel extends DurableObjectBase {
           binding &&
           admission.allow.includes(entity) &&
           authority.agentBinding.entity === entity &&
-          authority.code === binding.code
+          authority.codeAuthority.executor?.principal === binding.code
         ) {
           return;
         }
@@ -1182,7 +1185,9 @@ export class PubSubChannel extends DurableObjectBase {
         authority.actingUser,
         authority.entity,
         authority.host,
-        authority.code,
+        authority.authorizingOrigin.kind === "code"
+          ? authority.authorizingOrigin.principal
+          : null,
       ].filter((candidate): candidate is Principal => candidate !== null);
       if (candidates.some((candidate) => admission.allow.includes(candidate))) return;
     }
@@ -1437,7 +1442,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Durable per-channel human presence, including offline members who have no
    * roster row. Status is server-derived from real activity and session count. */
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
   async getChannelPresence(): Promise<{ entries: ChannelPresenceEntry[]; generatedAt: number }> {
     const generatedAt = Date.now();
     const entries = new Map<string, ChannelPresenceEntry>();
@@ -1499,7 +1504,7 @@ export class PubSubChannel extends DurableObjectBase {
    * Subscribe a participant to this channel. Inserts the participant first,
    * then builds replay, so an initial roster snapshot includes the subscriber.
    */
-  @rpc({ principals: ["user", "code", "entity"] })
+  @rpc({ principals: ["user", "code", "entity"], sensitivity: "write" })
   async subscribe(
     participantId: string,
     metadata: Record<string, unknown>
@@ -1882,7 +1887,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Release exactly one caller-owned session. Public callers can never evict
    * another device or the whole canonical human identity. */
-  @rpc({ principals: ["user", "code", "entity"] })
+  @rpc({ principals: ["user", "code", "entity"], sensitivity: "write" })
   async unsubscribe(participantId: string, sessionId: string): Promise<void> {
     // DELETE-like cleanup is idempotent. The stale-session alarm and a
     // graceful client close can race; if the alarm already released this exact
@@ -1895,7 +1900,7 @@ export class PubSubChannel extends DurableObjectBase {
     await this.unsubscribeParticipant(participantId, "graceful", sessionId);
   }
 
-  @rpc({ principals: ["host", "user"] })
+  @rpc({ principals: ["host", "user"], sensitivity: "admin" })
   async adminUnsubscribeParticipant(participantId: string): Promise<void> {
     this.assertAdminCaller("adminUnsubscribeParticipant");
     await this.unsubscribeParticipant(participantId, "graceful");
@@ -1971,7 +1976,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Liveness heartbeat for exactly one caller-owned session. It deliberately
    * does not update last_active_at: an idle open tab is not user activity. */
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async touch(participantId: string, sessionId: string): Promise<void> {
     this.assertParticipantSession(participantId, sessionId, "touch");
     this.sql.exec(
@@ -1989,7 +1994,7 @@ export class PubSubChannel extends DurableObjectBase {
    * GAD validates agentic payloads at append-time inside the txn; policies
    * annotate (never mutate) the envelope.
    */
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async publish(
     participantId: string,
     type: string,
@@ -2053,7 +2058,7 @@ export class PubSubChannel extends DurableObjectBase {
    * role assistant for an agent), carrying the same addressing fields
    * (`to`/`mentions`) a participant's message would.
    */
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
   async sendAsCaller(
     text: string,
     opts?: {
@@ -2106,7 +2111,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Policy fold state (replaces getConversationState — WS2 §4.4). */
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "read" })
   async getPolicyState(name?: string): Promise<{
     policy: string;
     version: number;
@@ -2157,7 +2162,7 @@ export class PubSubChannel extends DurableObjectBase {
    * Broadcast envelopes that were durably appended to GAD outside this DO
    * (trajectory publication fan-out). Folds each into the policy caches.
    */
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async broadcastStoredEnvelopes(envelopeIds: string[]): Promise<{ broadcasted: number }> {
     let broadcasted = 0;
     for (const envelopeId of envelopeIds) {
@@ -2172,7 +2177,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Mark a message as errored (durable `error` channel event). */
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async error(
     participantId: string,
     messageId: string,
@@ -2193,7 +2198,7 @@ export class PubSubChannel extends DurableObjectBase {
     broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, participantId);
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
   async getReplayAfter(request: ChannelReplayAfterRequest) {
     return this.channelLog.replayAfter(request, this.currentReplayContext());
   }
@@ -2201,13 +2206,13 @@ export class PubSubChannel extends DurableObjectBase {
   /** Return one durable envelope by its stable envelope id, or null when that
    * id belongs to another log (for example a VCS commit id). This is a pure,
    * lineage-aware lookup used by panels, agents, and diagnostic evals. */
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
   async getEnvelope(envelopeId: string): Promise<ChannelEvent | null> {
     return this.channelLog.getEventByEnvelopeId(envelopeId);
   }
 
   /** Send a non-durable signal message. */
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async sendSignal(participantId: string, content: string, contentType?: string): Promise<void> {
     this.assertParticipantCaller(participantId, "sendSignal");
     this.markParticipantActive(participantId);
@@ -2231,14 +2236,14 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Replace a participant's metadata entirely. */
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async updateMetadata(participantId: string, metadata: Record<string, unknown>): Promise<void> {
     this.assertParticipantCaller(participantId, "updateMetadata");
     this.markParticipantActive(participantId);
     await this.updateParticipantMetadata(participantId, metadata);
   }
 
-  @rpc({ principals: ["host", "user"] })
+  @rpc({ principals: ["host", "user"], sensitivity: "admin" })
   async adminUpdateParticipantMetadata(
     participantId: string,
     metadata: Record<string, unknown>
@@ -2264,14 +2269,14 @@ export class PubSubChannel extends DurableObjectBase {
     await this.publishPresenceEvent(participantId, "update", stored);
   }
 
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async setTypingState(participantId: string, typing: boolean): Promise<void> {
     this.assertParticipantCaller(participantId, "setTypingState");
     if (typing) this.markParticipantActive(participantId);
     this.setParticipantTypingState(participantId, typing);
   }
 
-  @rpc({ principals: ["host", "user"] })
+  @rpc({ principals: ["host", "user"], sensitivity: "admin" })
   async adminSetParticipantTypingState(participantId: string, typing: boolean): Promise<void> {
     this.assertAdminCaller("adminSetParticipantTypingState");
     this.setParticipantTypingState(participantId, typing);
@@ -2292,7 +2297,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Get all participants with DO identity when available. */
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
   async getParticipants(): Promise<
     Array<{
       participantId: string;
@@ -2347,7 +2352,7 @@ export class PubSubChannel extends DurableObjectBase {
    * host-verified `userId` (WP4). Idempotent: re-adding refreshes the handle
    * snapshot without a second invite.
    */
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
   async addMember(input: { userId: string }): Promise<ChannelMember & { alreadyMember: boolean }> {
     const targetUserId = requireBareUserId(input?.userId, "addMember");
     const memberId = toUserMemberId(targetUserId);
@@ -2456,7 +2461,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Remove a member from this channel (WP7 §3, §10.3 — a user may remove
    *  themselves; mutual trust means anyone may, no ACL). History stays visible. */
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "destructive" })
   async removeMember(input: { userId: string }): Promise<{ removed: boolean }> {
     const userId = requireBareUserId(input?.userId, "removeMember");
     const memberId = toUserMemberId(userId);
@@ -2485,7 +2490,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** List this channel's durable members (WP7 §3). Ordered by add time. */
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
   async listMembers(): Promise<{ members: ChannelMember[] }> {
     const rows = this.sql
       .exec(
@@ -2512,7 +2517,7 @@ export class PubSubChannel extends DurableObjectBase {
    * identity is host-verified and the indexed lookup is exact; no client-supplied
    * user id and no channel enumeration participate in discovery.
    */
-  @rpc({ principals: ["user", "code"] })
+  @rpc({ principals: ["user", "code"], sensitivity: "read" })
   async listInvitesForMe(): Promise<{ invites: ChannelInvite[] }> {
     const caller = this.caller;
     if (!caller?.userId) throw new Error("listInvitesForMe requires an authenticated user");
@@ -2524,7 +2529,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Remove the calling user's invite from the canonical workspace inbox. */
-  @rpc({ principals: ["user", "code"] })
+  @rpc({ principals: ["user", "code"], sensitivity: "write" })
   async acknowledgeInvite(): Promise<{ acknowledged: boolean }> {
     const caller = this.caller;
     if (!caller?.userId) throw new Error("acknowledgeInvite requires an authenticated user");
@@ -2652,17 +2657,17 @@ export class PubSubChannel extends DurableObjectBase {
     await Promise.all(memberIds.map((memberId) => this.flushInviteIndexOp(memberId)));
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
   async getContextId(): Promise<string | null> {
     return this.getStateValue("contextId");
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async getConfig(): Promise<ChannelConfig | null> {
     return this.getChannelConfig();
   }
 
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async updateConfig(config: Partial<ChannelConfig>): Promise<ChannelConfig> {
     const channel = this.requireChannelRecord();
     const principal = this.authenticatedPrincipal("updateConfig");
@@ -2693,7 +2698,7 @@ export class PubSubChannel extends DurableObjectBase {
     return newConfig;
   }
 
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "read" })
   async getReplayBefore(beforeSeq: number, limit?: number) {
     return this.channelLog.replayBefore(beforeSeq, limit ?? 100, this.currentReplayContext());
   }
@@ -2701,17 +2706,17 @@ export class PubSubChannel extends DurableObjectBase {
   // Registry reads: direct passthrough to GAD's channel_message_types
   // projection (hydrated — published `source` payloads are blob-spilled).
 
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "read" })
   async getMessageTypes(): Promise<MessageTypeDefinition[]> {
     return this.channelLog.listMessageTypes();
   }
 
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "read" })
   async getMessageType(typeId: string): Promise<MessageTypeDefinition | null> {
     return this.channelLog.getMessageType(typeId);
   }
 
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "read" })
   async getMessageSender(participantId: string, messageId: string): Promise<string | null> {
     this.assertParticipantCaller(participantId, "getMessageSender");
     const replay = await this.channelLog.replayInitial(500, this.currentReplayContext());
@@ -2728,7 +2733,7 @@ export class PubSubChannel extends DurableObjectBase {
     return null;
   }
 
-  @rpc({ principals: ["host", "user"] })
+  @rpc({ principals: ["host", "user"], sensitivity: "read" })
   async adminInspectSchema() {
     this.assertAdminCaller("adminInspectSchema");
     const tableNames = [
@@ -2769,7 +2774,7 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user"] })
+  @rpc({ principals: ["host", "user"], sensitivity: "read" })
   async adminInspectLog(
     opts: {
       afterId?: number;
@@ -2797,13 +2802,13 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user"] })
+  @rpc({ principals: ["host", "user"], sensitivity: "read" })
   async adminInspectEnvelope(envelopeId: string) {
     this.assertAdminCaller("adminInspectMessageChain");
     return { rows: await this.channelLog.inspectEnvelope(envelopeId) };
   }
 
-  @rpc({ principals: ["host", "user"] })
+  @rpc({ principals: ["host", "user"], sensitivity: "admin" })
   async adminReconstructTranscript(opts: { rootLimit?: number; beforeSeq?: number } = {}) {
     this.assertAdminCaller("adminReconstructTranscript");
     const envelope =
@@ -2819,7 +2824,7 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user"] })
+  @rpc({ principals: ["host", "user"], sensitivity: "read" })
   async adminInspectAgent(
     participantId: string,
     methodName = "getDebugState"
@@ -2828,7 +2833,7 @@ export class PubSubChannel extends DurableObjectBase {
     return this.inspectAgentReadOnly(participantId, methodName);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async inspectAgent(
     participantId: string,
     methodName = "getDebugState"
@@ -2945,7 +2950,7 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user"] })
+  @rpc({ principals: ["host", "user"], sensitivity: "admin" })
   async adminValidateLog(opts: { rootLimit?: number } = {}) {
     this.assertAdminCaller("adminValidateLog");
     const issues: Array<{ code: string; message: string; rowId?: number }> = [];
@@ -2985,7 +2990,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── Method calls (calls.ts — pending_calls is a declared cache) ──────────
 
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async callMethod(
     callerPid: string,
     targetPid: string,
@@ -2999,7 +3004,7 @@ export class PubSubChannel extends DurableObjectBase {
     await this.calls.callMethod(callerPid, targetPid, callId, method, args, opts);
   }
 
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async submitMethodResult(
     participantId: string,
     transportCallId: string,
@@ -3062,7 +3067,7 @@ export class PubSubChannel extends DurableObjectBase {
     return { id };
   }
 
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async submitMethodProgress(
     participantId: string,
     transportCallId: string,
@@ -3109,12 +3114,12 @@ export class PubSubChannel extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host"] })
+  @rpc({ principals: ["host"], sensitivity: "destructive" })
   async cancelMethodCall(callId: string): Promise<void> {
     await this.calls.cancelMethodCall(callId, "cancelled");
   }
 
-  @rpc({ principals: ["host"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   async timeoutMethodCall(callId: string, reason?: string): Promise<void> {
     const pending = await this.calls.cancelMethodCall(callId, reason ?? "timed out");
     if (!pending) return;
@@ -3402,7 +3407,7 @@ export class PubSubChannel extends DurableObjectBase {
    * provenance at task-channel creation (B1, WS-5) — until that lands a task
    * channel reads as `root`/`fork`.
    */
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async getProvenance(): Promise<ChannelProvenance> {
     return this.computeProvenance();
   }
@@ -3413,7 +3418,7 @@ export class PubSubChannel extends DurableObjectBase {
    * {@link getProvenance} reports `kind:"task"` instead of `root`. Durable state
    * keys, mirroring how fork provenance is stamped at `postClone`.
    */
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async recordTaskProvenance(args: {
     parentChannelId: string;
     parentContextId: string;
@@ -3472,7 +3477,7 @@ export class PubSubChannel extends DurableObjectBase {
     return { source: svc.source, className: svc.className, objectKey: svc.objectKey };
   }
 
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async fork(opts: ForkOpts): Promise<ForkResult> {
     const forkId = crypto.randomUUID();
     const now = Date.now();
@@ -3769,7 +3774,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Rename a direct child fork (durable `channel.fork_renamed` on this log). */
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async renameFork(forkId: string, label: string): Promise<void> {
     const event: AgenticEvent<"channel.fork_renamed"> = {
       kind: "channel.fork_renamed",
@@ -3786,7 +3791,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Archive a direct child fork (durable `channel.fork_archived` latch). */
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "destructive" })
   async archiveFork(forkId: string): Promise<void> {
     const event: AgenticEvent<"channel.fork_archived"> = {
       kind: "channel.fork_archived",
@@ -3811,7 +3816,7 @@ export class PubSubChannel extends DurableObjectBase {
    * shows SIBLING forks by reading the PARENT channel's `listForks` (WS-8
    * deferred this for lack of a cheap getForks RPC).
    */
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "read" })
   async listForks(): Promise<{ forks: ForkProjection[] }> {
     const PAGE = 500;
     let view = createInitialChannelViewState();
@@ -3891,7 +3896,7 @@ export class PubSubChannel extends DurableObjectBase {
    * plumbing: the pending fork marker only makes the operation one-shot and
    * crash-resumable for the matching fork id.
    */
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async appendSeed(
     forkOpRef: { forkId: string },
     envelope: ForkSeed
@@ -3966,7 +3971,7 @@ export class PubSubChannel extends DurableObjectBase {
    * fork (WS2 §4.5). Also lands the clone's fork provenance + pending seed
    * marker from the parent fork op (`forkInit`).
    */
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async postClone(
     parentChannelId: string,
     forkPointId: number,
@@ -4117,7 +4122,7 @@ export class PubSubChannel extends DurableObjectBase {
   // root; the root fans out to its lineage subscribers. Badges reconcile from
   // durable state on open (§H) — a missed signal is not durable.
 
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async subscribeLineage(
     participantId: string,
     metadata: Record<string, unknown> = {}
@@ -4137,14 +4142,14 @@ export class PubSubChannel extends DurableObjectBase {
     return { ok: true };
   }
 
-  @rpc({ principals: ["code"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async unsubscribeLineage(participantId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "unsubscribeLineage");
     this.sql.exec(`DELETE FROM lineage_subscribers WHERE id = ?`, participantId);
   }
 
   /** Relay point for a head advance reported up the chain from a descendant. */
-  @rpc({ principals: ["host", "code"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async reportLineageHead(report: { channelId: string; headSeq: number }): Promise<void> {
     await this.relayLineageHead(report.channelId, report.headSeq);
   }
@@ -4228,7 +4233,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── State introspection ─────────────────────────────────────────────────
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   override async getState(): Promise<Record<string, unknown>> {
     const replay = await this.channelLog.replayInitial(1, this.currentReplayContext());
     const participants = this.sql.exec(`SELECT * FROM participants`).toArray();

@@ -1,5 +1,7 @@
 import type { AuthorizationContext, AuthorityGrant, Principal } from "@vibestudio/rpc";
 import {
+  createHostCaller,
+  ServiceAccessError,
   ServiceDispatcher,
   type ServiceContext,
   type VerifiedCaller,
@@ -22,6 +24,61 @@ export function createTestServiceDispatcher(): ServiceDispatcher {
     testAuthority(caller, capability, resourceKey)
   );
   return dispatcher;
+}
+
+/**
+ * Wrap a definition in the real dispatcher while preserving a unit test's
+ * optional authority adapter. Prepared approval copy is therefore exercised
+ * before the handler exactly as production does; ordinary primary leaves use
+ * the closed-world fixture grants.
+ */
+export function withTestServiceDispatcher(definition: ServiceDefinition): ServiceDefinition {
+  const adapters = new WeakMap<ServiceContext, ServiceContext["authority"]>();
+  const dispatcher = new ServiceDispatcher();
+  dispatcher.setAuthorityResolver(async (input) => {
+    const adapter = adapters.get(input.ctx);
+    if (input.capability === "panel-hosting") {
+      const allowed = await adapter?.allows({
+        capability: input.capability,
+        resourceKey: input.resourceKey,
+        requirement: input.requirement,
+      });
+      if (!allowed) {
+        throw new ServiceAccessError(input.service, input.method, "panel hosting unavailable");
+      }
+      return testAuthority(
+        createHostCaller(`test-panel-host:${input.caller.runtime.id}`),
+        input.capability,
+        input.resourceKey
+      );
+    }
+    if (input.challenge && input.acquisition?.kind === "approval" && adapter) {
+      await adapter.assert({
+        capability: input.capability,
+        resourceKey: input.resourceKey,
+        requirement: input.requirement,
+        acquisition: input.acquisition,
+        authorizingCaller: input.caller,
+        challenge: input.challenge,
+      });
+    }
+    return testAuthority(input.caller, input.capability, input.resourceKey);
+  });
+  dispatcher.registerService(definition);
+  dispatcher.markInitialized();
+  return {
+    ...definition,
+    handler: async (context, method, args) => {
+      const adapter = context.authority;
+      adapters.set(context, adapter);
+      try {
+        await dispatcher.assertAuthority(context, definition.name, method, args);
+        return await definition.handler(context, method, args);
+      } finally {
+        context.authority = adapter;
+      }
+    },
+  };
 }
 
 /**
@@ -118,18 +175,31 @@ export function testAuthority(
       ? (`entity:${caller.agentBinding?.entityId ?? caller.runtime.id}` as const)
       : null;
   const context: AuthorizationContext = {
+    authorizingOrigin: caller.hostOriginated
+      ? { kind: "host", principal: host ?? TEST_HOST }
+      : code
+        ? { kind: "code", principal: code }
+        : caller.runtime.kind === "agent" && entity
+          ? { kind: "entity", principal: entity }
+        : actingUser
+          ? { kind: "user", principal: actingUser }
+          : { kind: "host", principal: host ?? TEST_HOST },
     host,
     actingUser,
     device: null,
     entity,
     incarnation: null,
-    code,
-    codeManifest: code
-      ? {
-          principal: code,
-          requested: [{ capability, resource: { kind: "exact", key: resourceKey } }],
-        }
-      : null,
+    codeAuthority: {
+      executor: code
+        ? {
+            principal: code,
+            requested: [{ capability, resource: { kind: "exact", key: resourceKey } }],
+          }
+        : null,
+      execution: null,
+      initiator: null,
+      delegations: [],
+    },
     deviceOwnership: null,
     ownerChain: actingUser ? [actingUser] : [],
     agentBinding:
@@ -140,7 +210,6 @@ export function testAuthority(
             channelId: caller.agentBinding.channelId,
           }
         : null,
-    delegation: [],
     workspace: { workspaceId: "test", member: true, role: "member", revision: "test" },
     session: {
       id: `test:${caller.runtime.id}`,

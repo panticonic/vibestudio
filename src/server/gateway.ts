@@ -174,8 +174,11 @@ export interface GatewayDeps {
   connectionGrants?: Pick<ConnectionGrantService, "validate">;
   /** Principal metadata for authenticated caller tokens. */
   entityCache?: Pick<EntityCache, "resolve" | "resolveActive" | "resolveSource">;
-  /** Immutable authority requests for an exact execution; absence fails code identity closed. */
-  resolveExecutionRequests?: (executionDigest: string) => readonly CapabilityScope[] | null;
+  /** Immutable authority manifest for an exact execution; absence fails code identity closed. */
+  resolveExecutionAuthority?: (executionDigest: string) => {
+    requests: readonly CapabilityScope[];
+    delegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
+  } | null;
   /** Route registry for `/_r/` dispatch (worker and service routes). Optional
    *  — when absent, `/_r/` paths fall through to 404. */
   routeRegistry?: RouteRegistry;
@@ -387,7 +390,7 @@ export class Gateway {
             tokenManager,
             this.deps.connectionGrants,
             this.deps.entityCache,
-            this.deps.resolveExecutionRequests
+            this.deps.resolveExecutionAuthority
           )
         ) {
           res.writeHead(401, { "Content-Type": "text/plain" });
@@ -432,7 +435,7 @@ export class Gateway {
           tokenManager,
           this.deps.connectionGrants,
           this.deps.entityCache,
-          this.deps.resolveExecutionRequests
+          this.deps.resolveExecutionAuthority
         );
         if (!entry) {
           res.writeHead(401, { "Content-Type": "text/plain" });
@@ -545,7 +548,7 @@ export class Gateway {
             tokenManager,
             this.deps.connectionGrants,
             this.deps.entityCache,
-            this.deps.resolveExecutionRequests
+            this.deps.resolveExecutionAuthority
           )
         ) {
           socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
@@ -858,7 +861,10 @@ function validateCallerBearer(
   tokenManager: TokenManager,
   connectionGrants?: Pick<ConnectionGrantService, "validate">,
   entityCache?: Pick<EntityCache, "resolveActive">,
-  resolveExecutionRequests?: (executionDigest: string) => readonly CapabilityScope[] | null
+  resolveExecutionAuthority?: (executionDigest: string) => {
+    requests: readonly CapabilityScope[];
+    delegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
+  } | null
 ): VerifiedCaller | null {
   const token = extractBearerToken(req);
   if (!token) return null;
@@ -869,8 +875,8 @@ function validateCallerBearer(
     return createVerifiedCaller(
       grant.principalId,
       grant.principalKind,
-      entityCache && resolveExecutionRequests
-        ? (resolveCodeIdentity(entityCache, grant.principalId, resolveExecutionRequests) ??
+      entityCache && resolveExecutionAuthority
+        ? (resolveCodeIdentity(entityCache, grant.principalId, resolveExecutionAuthority) ??
             undefined)
         : undefined
     );
@@ -878,8 +884,8 @@ function validateCallerBearer(
   return createVerifiedCaller(
     entry.callerId,
     entry.callerKind,
-    entityCache && resolveExecutionRequests
-      ? (resolveCodeIdentity(entityCache, entry.callerId, resolveExecutionRequests) ?? undefined)
+    entityCache && resolveExecutionAuthority
+      ? (resolveCodeIdentity(entityCache, entry.callerId, resolveExecutionAuthority) ?? undefined)
       : undefined
   );
 }

@@ -10,7 +10,6 @@ import {
 } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
 import { createGitInteropService as createGitInteropServiceDefinition } from "./gitInteropService.js";
 import { GitImportJournal } from "./gitImportJournal.js";
@@ -139,19 +138,13 @@ function panelServiceContext(): ServiceContext {
       callerKind: "panel",
       repoPath: "panels/test",
       executionDigest: "ev-panel",
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
       ],
     })
   );
-}
-
-function grantStore(): CapabilityGrantStore {
-  return {
-    hasGrant: vi.fn(() => false),
-    grant: vi.fn(),
-  } as unknown as CapabilityGrantStore;
 }
 
 function diskConfigPersistence(workspacePath: string) {
@@ -366,7 +359,6 @@ describe("gitInteropService", () => {
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue,
-      grantStore: grantStore(),
       ...diskConfigPersistence(workspacePath),
     });
 
@@ -415,7 +407,6 @@ describe("gitInteropService", () => {
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue,
-      grantStore: grantStore(),
       ...diskConfigPersistence(workspacePath),
     });
 
@@ -454,7 +445,6 @@ describe("gitInteropService", () => {
       approvalQueue: {
         request: vi.fn(async () => "once" as const),
       } as unknown as ApprovalQueue,
-      grantStore: grantStore(),
       onWorkspaceSourceChanged: sourceChanged,
       ...diskConfigPersistence(workspacePath),
     });
@@ -620,7 +610,6 @@ describe("gitInteropService", () => {
       } as never,
       invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue,
-      grantStore: grantStore(),
       onWorkspaceSourceChanged: sourceChanged,
       ...diskConfigPersistence(workspacePath),
     });

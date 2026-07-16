@@ -13,9 +13,12 @@ import {
 } from "@vibestudio/shared/execution/identity";
 import type { ResolvedExecutionBinding } from "../buildV2/index.js";
 import {
+  authorityDelegationsAsBuildValue,
+  authorityDelegationsFromRecipe,
   authorityRequestsAsBuildValue,
   authorityRequestsFromRecipe,
 } from "@vibestudio/shared/authorityManifest";
+import type { EvalAuthorityDelegation } from "@vibestudio/shared/authorityManifest";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import { PRODUCT_AUTHORITY_GRANT_CATALOG } from "../services/productAuthorityGrantCatalog.generated.js";
 
@@ -56,6 +59,7 @@ export interface ProductExecutionArtifact {
   bundle: {
     ref: ExecutionArtifactRef;
     requested: readonly CapabilityScope[];
+    delegations: readonly EvalAuthorityDelegation[];
     entries: ArtifactBundleEntry[];
   };
 }
@@ -236,6 +240,7 @@ function createProductArtifact(
           resource: { kind: "prefix" as const, prefix: "" },
         }))
       ),
+      authorityDelegations: authorityDelegationsAsBuildValue([]),
     },
     toolchain: {
       digest: toolchainDigest,
@@ -268,13 +273,19 @@ function createProductArtifact(
       selectorPolicy: { kind: "artifact", executionDigest: ref.executionDigest },
       artifact: ref,
       requested: authorityRequestsFromRecipe(recipe),
+      delegations: authorityDelegationsFromRecipe(recipe),
       compilationCacheKey: domainHash(
         "vibestudio/product-compilation-cache/v1",
         source,
         ref.buildKey
       ),
     },
-    bundle: { ref, requested: authorityRequestsFromRecipe(recipe), entries },
+    bundle: {
+      ref,
+      requested: authorityRequestsFromRecipe(recipe),
+      delegations: authorityDelegationsFromRecipe(recipe),
+      entries,
+    },
   };
 }
 
@@ -301,6 +312,7 @@ function cloneBundle(
   return {
     ref: structuredClone(bundle.ref),
     requested: structuredClone(bundle.requested),
+    delegations: structuredClone(bundle.delegations),
     entries: bundle.entries.map((entry) => ({
       ...entry,
       bytes: Uint8Array.from(entry.bytes),

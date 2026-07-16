@@ -13,8 +13,11 @@ import type { ResolvedExecutionBinding } from "../buildV2/index.js";
 import type { BuildResult } from "../buildV2/buildStore.js";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import {
+  authorityDelegationsAsBuildValue,
+  authorityDelegationsFromRecipe,
   authorityRequestsAsBuildValue,
   authorityRequestsFromRecipe,
+  type EvalAuthorityDelegation,
 } from "@vibestudio/shared/authorityManifest";
 
 /** Exact in-memory execution artifact for host/runtime tests. */
@@ -28,6 +31,7 @@ export function executionArtifactFixture(
   bundle: {
     ref: ExecutionArtifactRef;
     requested: readonly CapabilityScope[];
+    delegations: readonly EvalAuthorityDelegation[];
     entries: ArtifactBundleEntry[];
     entryPath(artifactPath: string): string;
   };
@@ -49,6 +53,7 @@ export function executionArtifactFixture(
         { capability: "notifications", resource: { kind: "prefix", prefix: "" } },
         { capability: "clipboard", resource: { kind: "prefix", prefix: "" } },
       ]),
+      authorityDelegations: authorityDelegationsAsBuildValue([]),
     },
     toolchain: { digest, components: { test: digest } },
     dependencyGraph: { digest },
@@ -88,12 +93,14 @@ export function executionArtifactFixture(
       selectorPolicy,
       artifact,
       requested: authorityRequestsFromRecipe(recipe),
+      delegations: authorityDelegationsFromRecipe(recipe),
       compilationCacheKey:
         compilationCacheKey ?? sha256(`cache\0${source}\0${build.metadata.sourceDigest}`),
     },
     bundle: {
       ref: artifact,
       requested: authorityRequestsFromRecipe(recipe),
+      delegations: authorityDelegationsFromRecipe(recipe),
       entries,
       entryPath: (artifactPath: string) => `${build.dir}/${artifactPath}`,
     },

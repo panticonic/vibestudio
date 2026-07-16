@@ -1,6 +1,28 @@
 import type { ServiceAuthorityPolicy } from "./serviceAuthority.js";
-import type { ServiceHandler } from "./serviceDispatcher.js";
+import type { AuthorityRequirement } from "./authorization.js";
+import type {
+  AuthorityChallengePresentation,
+  ServiceContext,
+  ServiceHandler,
+  VerifiedCaller,
+} from "./serviceDispatcher.js";
 import type { MethodSchema } from "./typedServiceClient.js";
+
+export interface PreparedAuthoritySelection {
+  capability: string;
+  resourceKey: string;
+  /** Required only for a schema leaf whose requirement kind is `selected`. */
+  requirement?: AuthorityRequirement;
+  authorizingCaller?: VerifiedCaller;
+  challenge?: AuthorityChallengePresentation;
+}
+
+export type AuthorityPreparationResolver = (
+  ctx: ServiceContext,
+  args: unknown[]
+) =>
+  | readonly PreparedAuthoritySelection[]
+  | Promise<readonly PreparedAuthoritySelection[]>;
 
 export interface ServiceDefinition {
   name: string;
@@ -21,5 +43,7 @@ export interface ServiceDefinition {
    * from the same source of truth (see typedServiceClient.ts).
    */
   methods: Record<string, MethodSchema>;
+  /** Side-effect-free resolvers referenced by method authority schemas. */
+  authorityPreparation?: Record<string, AuthorityPreparationResolver>;
   handler: ServiceHandler;
 }

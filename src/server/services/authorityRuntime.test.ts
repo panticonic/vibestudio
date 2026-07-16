@@ -18,8 +18,9 @@ describe("authority runtime", () => {
         {
           callerId: "do:workers/example:ExampleDO:key",
           callerKind: "do",
-          repoPath: "product/eval",
+          repoPath: "workers/example",
           executionDigest: digest,
+          delegations: [],
           requested: [{ capability: "rpc:chatOp", resource: { kind: "prefix", prefix: "" } }],
         },
         null,
@@ -32,10 +33,16 @@ describe("authority runtime", () => {
       workspaceId: "ws-1",
       workspaceMember: true,
       sessionId: "s-1",
+      grantStore: {
+        hasGrant: () => true,
+        hasDenial: () => false,
+      } as never,
       now: 100,
     });
     const capability = directAuthorityCapability("chatOp");
-    expect(attestation.context.code).toBe(`code:product/eval@${digest}`);
+    expect(attestation.context.codeAuthority.executor?.principal).toBe(
+      `code:workers/example@${digest}`
+    );
     expect(
       evaluateAuthority({
         context: attestation.context,
@@ -102,6 +109,7 @@ describe("authority runtime", () => {
         callerKind: "worker",
         repoPath: "product/eval",
         executionDigest: digest,
+        delegations: [],
         requested: [{ capability: `rpc:${method}`, resource: { kind: "prefix", prefix: "" } }],
       }),
       source: "workers/target",
@@ -131,6 +139,7 @@ describe("authority runtime", () => {
         callerKind: "extension",
         repoPath: "product/eval",
         executionDigest: digest,
+        delegations: [],
         requested: [{ capability: "rpc:getCookies", resource: { kind: "prefix", prefix: "" } }],
       }),
       source: "product/browser-data",
@@ -144,7 +153,9 @@ describe("authority runtime", () => {
       now: 100,
     });
     const capability = directAuthorityCapability("getCookies");
-    expect(attestation.context.code).toBe(`code:product/eval@${digest}`);
+    expect(attestation.context.codeAuthority.executor?.principal).toBe(
+      `code:product/eval@${digest}`
+    );
     expect(
       evaluateAuthority({
         context: attestation.context,
@@ -168,6 +179,7 @@ describe("authority runtime", () => {
           callerKind: "app",
           repoPath: "apps/unreviewed",
           executionDigest: digest,
+          delegations: [],
           requested: [{ capability, resource: { kind: "exact", key: resourceKey } }],
         },
         null,

@@ -24,6 +24,7 @@ import type { WorkspaceNode } from "@vibestudio/shared/types";
 import { APP_CAPABILITIES_BY_TARGET } from "@vibestudio/shared/unitManifest";
 import { pendingUnitBatchApprovalSchema } from "./shellApproval.js";
 import { CapabilityScopeSchema } from "./build.js";
+import { EvalAuthorityDelegationSchema } from "./authority/evalDelegation.js";
 import {
   allOf,
   anyOf,
@@ -153,6 +154,7 @@ export const HostTargetLaunchResultSchema = z.discriminatedUnion("status", [
       capabilities: z.array(AppCapabilitySchema).optional(),
       executionDigest: z.string().nullable().optional(),
       authorityRequests: z.array(CapabilityScopeSchema).readonly().optional(),
+      authorityDelegations: z.array(EvalAuthorityDelegationSchema).readonly().optional(),
       adoptionPolicy: z.enum(["immediate", "prompt", "artifact-only"]).optional(),
     })
     .strict(),

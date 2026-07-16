@@ -39,7 +39,10 @@ function isServiceDefinition(value: unknown): value is ServiceDefinition {
 
 type AuthorityMatrix = Record<
   string,
-  { service: unknown; methods: Record<string, { inherits: true } | unknown> }
+  {
+    service: unknown;
+    methods: Record<string, { authority: { inherits: true } | unknown; access: unknown }>;
+  }
 >;
 
 async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
@@ -87,7 +90,13 @@ async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
           methods: Object.fromEntries(
             Object.entries(definition.methods)
               .sort(([left], [right]) => left.localeCompare(right))
-              .map(([name, schema]) => [name, schema.authority ?? { inherits: true }])
+              .map(([name, schema]) => [
+                name,
+                {
+                  authority: schema.authority ?? { inherits: true },
+                  access: schema.access ?? null,
+                },
+              ])
           ),
         },
       ])

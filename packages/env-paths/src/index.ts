@@ -46,6 +46,17 @@ export function getWorkspaceDir(name: string): string {
   return path.join(getWorkspacesDir(), name);
 }
 
+/**
+ * Get the hub-owned transport-authority directory for a logical workspace.
+ *
+ * This must not live below the managed workspace checkout: ephemeral checkouts
+ * are rotated independently, while a workspace's pinned transport identity and
+ * reconnect routes intentionally survive a child-process replacement.
+ */
+export function getWorkspaceReachDir(name: string): string {
+  return path.join(getCentralDataPath(), "server-auth", "workspace-reach", name);
+}
+
 /** Platform-conventional config directory for Vibestudio. */
 function platformDefault(): string {
   const home = os.homedir();

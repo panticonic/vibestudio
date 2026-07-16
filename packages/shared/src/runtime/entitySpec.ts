@@ -312,6 +312,7 @@ export interface RuntimeEntityHandle {
   executionDigest?: string;
   /** Capability/resource requests sealed into the selected exact execution. */
   authorityRequests?: readonly import("@vibestudio/rpc").CapabilityScope[];
+  authorityDelegations?: readonly import("../authorityManifest.js").EvalAuthorityDelegation[];
   contextId: string;
   targetId: string;
 }
@@ -326,6 +327,7 @@ export interface RuntimeEntitySummary {
   executionDigest?: string;
   /** Present whenever executionDigest is present. */
   authorityRequests?: readonly import("@vibestudio/rpc").CapabilityScope[];
+  authorityDelegations?: readonly import("../authorityManifest.js").EvalAuthorityDelegation[];
 }
 
 /**

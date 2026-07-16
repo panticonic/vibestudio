@@ -20,11 +20,40 @@
 
 import type { z } from "zod";
 import type { ServiceAuthorityPolicy, MethodAccessDescriptor } from "./serviceAuthority.js";
-import type { AuthorityRequirement } from "./authorization.js";
+import type { AuthorityRequirement, PrincipalKind } from "./authorization.js";
 
 export type AuthorityResourceDerivation =
   | { kind: "literal"; key: string }
-  | { kind: "argument"; index: number; path?: readonly (string | number)[]; prefix?: string };
+  | {
+      kind: "argument";
+      index: number;
+      path?: readonly (string | number)[];
+      prefix?: string;
+      transform?: "url-origin" | "external-url-scope";
+    };
+
+export type EvalCapabilityAcquisition =
+  | { kind: "baseline" }
+  | {
+      kind: "approval";
+      title: string;
+      description: string;
+      operation: { kind: string; verb: string };
+      severity?: "standard" | "severe";
+      grantScopes: readonly ("run" | "session" | "version")[];
+    }
+  | { kind: "closed"; reason: string };
+
+/**
+ * Most prepared leaves carry a complete immutable requirement in the schema.
+ * A small class of policies (single-writer identities and manifest-declared
+ * userland services) can only be normalized after reading authoritative host
+ * state. `selected` makes that delegation explicit and bounds the principals
+ * the registered preparer is allowed to place in the selected requirement.
+ */
+export type PreparedAuthorityRequirement =
+  | AuthorityRequirement
+  | { kind: "selected"; principals: readonly PrincipalKind[] };
 
 export interface MethodAuthorityDescriptor {
   requirement: AuthorityRequirement;
@@ -38,7 +67,27 @@ export interface MethodAuthorityDescriptor {
     capability: string;
     requirement: AuthorityRequirement;
     resource: AuthorityResourceDerivation;
+    /** Optional origin filter for a genuinely conditional capability leaf. */
+    when?: { origins: readonly ("code" | "user" | "host" | "device" | "entity")[] };
+    evalAcquisition: EvalCapabilityAcquisition;
   }[];
+  /**
+   * Conditional leaves whose exact resource/review presentation depends on
+   * authoritative host state. The schema owns the reviewed leaves; the named
+   * service resolver may only select among them and supply dynamic values.
+   */
+  prepared?: {
+    resolver: string;
+    leaves: readonly {
+      /** Exact capability or a trailing-* namespace selected by the preparer. */
+      capability: string;
+      requirement: PreparedAuthorityRequirement;
+      evalAcquisition: EvalCapabilityAcquisition;
+    }[];
+  };
+  /** Primary method-leaf classification. Generated census data supplies this
+   * when omitted; explicit declarations are required for non-method leaves. */
+  evalAcquisition?: EvalCapabilityAcquisition;
 }
 
 /** A worked example for a method. Realistic values allowed (hand-authored or
@@ -82,7 +131,7 @@ export interface MethodSchema {
   examples?: MethodExample[];
   /** Documented error outcomes. */
   errors?: MethodError[];
-  /** Related methods, as qualified names (e.g. "eval.getRun"). */
+  /** Related methods, as qualified names (e.g. "eval.get"). */
   seeAlso?: string[];
 }
 

@@ -130,7 +130,7 @@ describe("runtime identity wire contracts", () => {
     });
   });
 
-  it("preserves exact authority requests on ready host-target launches", () => {
+  it("preserves exact authority metadata on ready host-target launches", () => {
     const parsed = HostTargetLaunchResultSchema.parse({
       status: "ready",
       launched: true,
@@ -145,6 +145,18 @@ describe("runtime identity wire contracts", () => {
           resource: { kind: "exact", key: "service:events.subscribe" },
         },
       ],
+      authorityDelegations: [
+        {
+          audience: "eval",
+          purpose: "tool-eval",
+          capabilities: [
+            {
+              capability: "service:events.subscribe",
+              resource: { kind: "exact", key: "service:events.subscribe" },
+            },
+          ],
+        },
+      ],
     });
 
     expect(parsed.status).toBe("ready");
@@ -153,6 +165,18 @@ describe("runtime identity wire contracts", () => {
       {
         capability: "service:events.subscribe",
         resource: { kind: "exact", key: "service:events.subscribe" },
+      },
+    ]);
+    expect(parsed.authorityDelegations).toEqual([
+      {
+        audience: "eval",
+        purpose: "tool-eval",
+        capabilities: [
+          {
+            capability: "service:events.subscribe",
+            resource: { kind: "exact", key: "service:events.subscribe" },
+          },
+        ],
       },
     ]);
   });

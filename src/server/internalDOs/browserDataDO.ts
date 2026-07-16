@@ -73,19 +73,19 @@ export class BrowserDataDO extends DurableObjectBase {
     }
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getBookmarks(folderPath = "/") {
     return this.sql
       .exec(`SELECT * FROM bookmarks WHERE folder_path = ? ORDER BY position`, folderPath)
       .toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getAllBookmarks() {
     return this.sql.exec(`SELECT * FROM bookmarks ORDER BY folder_path, position`).toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   addBookmark(bookmark: {
     title: string;
     url?: string;
@@ -111,7 +111,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return result.id;
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   updateBookmark(id: number, partial: Record<string, unknown>): void {
     this.updateByMap(
       "bookmarks",
@@ -130,12 +130,12 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deleteBookmark(id: number): void {
     this.sql.exec(`DELETE FROM bookmarks WHERE id = ?`, id);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   moveBookmark(id: number, folderPath: string, position: number): void {
     this.sql.exec(
       `UPDATE bookmarks SET folder_path = ?, position = ?, date_modified = ? WHERE id = ?`,
@@ -146,7 +146,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   searchBookmarks(query: string) {
     return this.sql
       .exec(
@@ -157,7 +157,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getHistory(query: {
     search?: string;
     startTime?: number;
@@ -186,7 +186,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   searchHistory(query: string, limit = 50) {
     return this.sql
       .exec(
@@ -201,7 +201,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   searchHistoryForAutocomplete(query: { query: string; limit?: number }) {
     const trimmed = query.query.trim();
     const limit = query.limit ?? 50;
@@ -261,7 +261,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .slice(0, limit);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   recordHistoryVisit(request: RecordHistoryVisitRequest): number {
     const visitTime = request.visitTime ?? Date.now();
     const historyId = this.ensureHistoryRow(request.url, request.title, visitTime);
@@ -277,7 +277,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return historyId;
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   updateHistoryTitle(request: UpdateHistoryTitleRequest): void {
     const title = request.title.trim();
     if (!title) return;
@@ -293,12 +293,12 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deleteHistoryEntry(id: number): void {
     this.sql.exec(`DELETE FROM history WHERE id = ?`, id);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deleteHistoryRange(start: number, end: number): number {
     let affectedCount = 0;
     this.ctx.storage.transactionSync(() => {
@@ -337,19 +337,19 @@ export class BrowserDataDO extends DurableObjectBase {
     return affectedCount;
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   clearAllHistory(): void {
     this.sql.exec(`DELETE FROM history_visits`);
     this.sql.exec(`DELETE FROM history`);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async getPasswords() {
     const rows = this.sql.exec(`SELECT * FROM passwords`).toArray();
     return Promise.all(rows.map((row) => this.passwordRow(row)));
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async getPasswordForSite(url: string) {
     const prefix = `${this.escapeLikePattern(url.replace(/\/+$/, ""))}/%`;
     const rows = this.sql
@@ -364,7 +364,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return Promise.all(rows.map((row) => this.passwordRow(row)));
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addPassword(password: ImportedPassword): Promise<number> {
     const encrypted = await this.encryptPasswordFields(password.username, password.password);
     const now = Date.now();
@@ -395,7 +395,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return result.id;
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async updatePassword(id: number, partial: Partial<ImportedPassword>): Promise<void> {
     const sets: string[] = [];
     const params: unknown[] = [];
@@ -423,12 +423,12 @@ export class BrowserDataDO extends DurableObjectBase {
     this.sql.exec(`UPDATE passwords SET ${sets.join(", ")} WHERE id = ?`, ...params);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deletePassword(id: number): void {
     this.sql.exec(`DELETE FROM passwords WHERE id = ?`, id);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getAutofillSuggestions(fieldName: string, prefix?: string) {
     const pattern = `${prefix ?? ""}%`;
     return this.sql
@@ -440,25 +440,25 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getSearchEngines() {
     return this.sql.exec(`SELECT * FROM search_engines ORDER BY is_default DESC, name`).toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   setDefaultEngine(id: number): void {
     this.sql.exec(`UPDATE search_engines SET is_default = 0`);
     this.sql.exec(`UPDATE search_engines SET is_default = 1 WHERE id = ?`, id);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getPermissions(origin?: string) {
     return origin
       ? this.sql.exec(`SELECT * FROM permissions WHERE origin = ?`, origin).toArray()
       : this.sql.exec(`SELECT * FROM permissions`).toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   setPermission(origin: string, permission: string, setting: string): void {
     this.sql.exec(
       `INSERT INTO permissions (origin, permission, setting, date_set)
@@ -474,7 +474,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getCookies(domain?: string) {
     return domain
       ? this.sql
@@ -487,12 +487,12 @@ export class BrowserDataDO extends DurableObjectBase {
       : this.sql.exec(`SELECT * FROM cookies ORDER BY created_at DESC`).toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deleteCookie(id: number): void {
     this.sql.exec(`DELETE FROM cookies WHERE id = ?`, id);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   clearCookies(domain?: string): number {
     if (domain) {
       this.sql.exec(`DELETE FROM cookies WHERE domain = ? OR domain = ?`, domain, `.${domain}`);
@@ -502,7 +502,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return this.changes();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addBookmarksBatch(
     bookmarks: ImportedBookmark[],
     meta: ImportBatchMeta = {}
@@ -551,7 +551,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addHistoryBatch(
     entries: ImportedHistoryEntry[],
     meta: ImportHistoryBatchMeta = {}
@@ -575,7 +575,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addCookiesBatch(cookies: ImportedCookie[], meta: ImportBatchMeta = {}): Promise<number> {
     const now = Date.now();
     const sourceBrowser = meta.browser ?? null;
@@ -620,7 +620,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addPasswordsBatch(
     passwords: ImportedPassword[],
     meta: ImportBatchMeta = {}
@@ -782,7 +782,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addAutofillBatch(
     entries: ImportedAutofillEntry[],
     meta: ImportBatchMeta = {}
@@ -820,7 +820,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addSearchEnginesBatch(
     engines: ImportedSearchEngine[],
     meta: ImportBatchMeta = {}
@@ -862,7 +862,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addPermissionsBatch(
     permissions: ImportedPermission[],
     meta: ImportBatchMeta = {}
@@ -890,7 +890,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addFaviconsBatch(favicons: ImportedFavicon[], meta: ImportBatchMeta = {}): Promise<number> {
     const sourceBrowser = meta.browser ?? null;
     const sourceProfilePath = meta.profilePath ?? "";
@@ -917,7 +917,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   addNeverSave(origin: string): void {
     this.sql.exec(
       `INSERT INTO password_never_save (origin, date_added) VALUES (?, ?)
@@ -927,7 +927,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   isNeverSave(origin: string): boolean {
     const row = this.sql
       .exec(`SELECT 1 AS present FROM password_never_save WHERE origin = ?`, origin)
@@ -935,7 +935,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return row !== undefined;
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getNeverSaveOrigins(): string[] {
     return (
       this.sql.exec(`SELECT origin FROM password_never_save ORDER BY origin`).toArray() as Array<{
@@ -944,12 +944,12 @@ export class BrowserDataDO extends DurableObjectBase {
     ).map((row) => row.origin);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   removeNeverSave(origin: string): void {
     this.sql.exec(`DELETE FROM password_never_save WHERE origin = ?`, origin);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   updateLastUsed(id: number): void {
     this.sql.exec(
       `UPDATE passwords SET date_last_used = ?, times_used = times_used + 1 WHERE id = ?`,
@@ -958,7 +958,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   recordImportRun(run: {
     browser: string;
     profilePath: string;
@@ -1010,7 +1010,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return runId;
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getImportHistory() {
     const runs = this.sql
       .exec(`SELECT * FROM import_runs ORDER BY finished_at DESC`)
@@ -1023,7 +1023,7 @@ export class BrowserDataDO extends DurableObjectBase {
     }));
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getProfileImportState(query: { browser: string; profilePath: string }): {
     lastRun: Record<string, unknown> | null;
     runs: Array<Record<string, unknown>>;
@@ -1046,7 +1046,7 @@ export class BrowserDataDO extends DurableObjectBase {
 
   // ---- Secret-free "view" aggregates (Tier-1: no raw values leave the store) ----
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getCookieDomains() {
     return this.sql
       .exec(
@@ -1062,7 +1062,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getPasswordOrigins(): Array<{ origin: string; count: number }> {
     const rows = this.sql.exec(`SELECT origin_url FROM passwords`).toArray() as Array<{
       origin_url: string;
@@ -1077,7 +1077,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .sort((a, b) => b.count - a.count);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getAutofillFieldNames() {
     return this.sql
       .exec(
@@ -1087,7 +1087,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getHistoryDomains(
     limit = 2000
   ): Array<{ domain: string; visits: number; typed: number; pages: number; lastVisit: number }> {
@@ -1119,7 +1119,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return [...byHost.values()].sort((a, b) => b.lastVisit - a.lastVisit);
   }
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getDomainReadiness(domain: string): {
     domain: string;
     cookies: number;
@@ -1183,7 +1183,7 @@ export class BrowserDataDO extends DurableObjectBase {
 
   // ---- Dry-run classifier: compares candidate import items against the store ----
 
-  @rpc({ principals: ["host", "user", "code"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async classifyAgainstStore(
     dataType: string,
     items: Array<Record<string, unknown>>,

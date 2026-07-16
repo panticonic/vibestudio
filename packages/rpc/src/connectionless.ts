@@ -60,9 +60,13 @@ type RpcExposedCtor = {
 };
 
 /** Complete principal classes admitted to one direct RPC method. */
-export type RpcAuthorityPolicy =
+export type RpcAuthorityPolicy = (
   | { principals: ReadonlyArray<PrincipalKind>; requires?: never }
-  | { requires: AuthorityRequirement; principals?: never };
+  | { requires: AuthorityRequirement; principals?: never }
+) & {
+  /** Direct-RPC effect classification. Unknown remains mutating by default. */
+  sensitivity?: "read" | "write" | "admin" | "destructive";
+};
 
 type RpcMethodDecorator = <This, Args extends unknown[], Return>(
   value: (this: This, ...args: Args) => Return,

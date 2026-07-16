@@ -174,6 +174,25 @@ describe("FsService", () => {
   });
 
   describe("context root resolution", () => {
+    it("uses the host-authenticated eval context without consuming the path as a context id", async () => {
+      const ctx: ServiceContext = {
+        caller: createVerifiedCaller("shell:eval-initiator", "shell"),
+        evalInvocation: {
+          runId: "run-eval",
+          credential: "opaque",
+          objectKey: "eval-object",
+          contextId: "ctx-eval",
+        },
+      };
+
+      await service.handleCall(ctx, "writeFile", ["/eval.txt", "authority-bound"]);
+
+      expect(existsSync(path.join(tmpRoot, "ctx-eval", "eval.txt"))).toBe(true);
+      await expect(service.handleCall(ctx, "readFile", ["/eval.txt", "utf8"])).resolves.toBe(
+        "authority-bound"
+      );
+    });
+
     it("writeFile+readFile roundtrip through the registered context", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-b");
@@ -406,7 +425,11 @@ describe("FsService", () => {
         callerKind: "do",
         repoPath: "workers/agent-worker",
         executionDigest: "ev-1",
-          requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }, { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } }],
+        delegations: [],
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       };
       registerContext(ctx.chainCaller.callerId, "do", "ctx-agent");
       mkdirSync(path.join(tmpRoot, "ctx-agent", "skills", "system-testing"), { recursive: true });
@@ -430,7 +453,11 @@ describe("FsService", () => {
         callerKind: "do",
         repoPath: "workers/agent-worker",
         executionDigest: "ev-1",
-          requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }, { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } }],
+        delegations: [],
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       };
       registerContext(ctx.chainCaller.callerId, "do", "ctx-realpath");
       mkdirSync(path.join(tmpRoot, "ctx-realpath"), { recursive: true });
@@ -447,7 +474,11 @@ describe("FsService", () => {
         callerKind: "do",
         repoPath: "workers/agent-worker",
         executionDigest: "ev-1",
-          requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }, { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } }],
+        delegations: [],
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       };
       registerContext(ctx.chainCaller.callerId, "do", "ctx-not-ready");
 

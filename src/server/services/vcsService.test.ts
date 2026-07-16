@@ -14,6 +14,7 @@ function panelCaller(id = "panel-source") {
     callerKind: "panel",
     repoPath: "panels/source",
     executionDigest: "version-1",
+    delegations: [],
     requested: [
       { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
       { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },

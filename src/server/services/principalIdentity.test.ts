@@ -30,14 +30,16 @@ describe("resolveCodeIdentity", () => {
     );
 
     expect(
-      resolveCodeIdentity(cache, "do:workers/agent-worker:AiChatWorker:ai-chat-96322794", () => [
-        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
-      ])
+      resolveCodeIdentity(cache, "do:workers/agent-worker:AiChatWorker:ai-chat-96322794", () => ({
+        requests: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
+        delegations: [],
+      }))
     ).toEqual({
       callerId: "do:workers/agent-worker:AiChatWorker:ai-chat-96322794",
       callerKind: "do",
       repoPath: "workers/agent-worker",
       executionDigest: "hash-1",
+      delegations: [],
       requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
     });
   });
@@ -46,7 +48,10 @@ describe("resolveCodeIdentity", () => {
     const cache = new EntityCache();
 
     expect(
-      resolveCodeIdentity(cache, "do:workers/agent-worker:AiChatWorker:ai-chat-96322794", () => [])
+      resolveCodeIdentity(cache, "do:workers/agent-worker:AiChatWorker:ai-chat-96322794", () => ({
+        requests: [],
+        delegations: [],
+      }))
     ).toBeNull();
   });
 });

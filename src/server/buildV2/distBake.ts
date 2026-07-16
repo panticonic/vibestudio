@@ -4,6 +4,7 @@ import { normalizeUnitRepoPath } from "@vibestudio/unit-host";
 import type { BuildArtifactManifestEntry, BuildMetadata, BuildResult } from "./buildStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import type { EvalAuthorityDelegation } from "@vibestudio/shared/authorityManifest";
 import type {
   ArtifactBundleEntry,
   ExecutionArtifactRef,
@@ -38,6 +39,7 @@ export interface AppDistBakeManifest {
     compilationCacheKey: string;
     executionDigest: string;
     authorityRequests: readonly CapabilityScope[];
+    authorityDelegations: readonly EvalAuthorityDelegation[];
     sourceStateHash: string | null;
     target: "electron" | "react-native" | "terminal";
     integrity: string | null;
@@ -55,6 +57,7 @@ export function createAppDistBakeManifest(opts: {
   execution: {
     ref: ExecutionArtifactRef;
     requested: readonly CapabilityScope[];
+    delegations: readonly EvalAuthorityDelegation[];
     entries: readonly ArtifactBundleEntry[];
   };
   buildKey?: string;
@@ -106,6 +109,7 @@ export function createAppDistBakeManifest(opts: {
       compilationCacheKey: buildKey,
       executionDigest: opts.execution.ref.executionDigest,
       authorityRequests: opts.execution.requested,
+      authorityDelegations: opts.execution.delegations,
       sourceStateHash: opts.entry.activeSourceHash,
       target: details.target,
       integrity: details.integrity ?? null,
@@ -122,6 +126,7 @@ export function writeAppDistBake(opts: {
   execution: {
     ref: ExecutionArtifactRef;
     requested: readonly CapabilityScope[];
+    delegations: readonly EvalAuthorityDelegation[];
     entries: readonly ArtifactBundleEntry[];
   };
   outDir: string;

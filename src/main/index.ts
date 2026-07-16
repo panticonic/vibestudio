@@ -25,6 +25,7 @@ import {
   formatUnknownError,
   resolveStartupErrorPaths,
   startupPathDiagnosticEntries,
+  workspaceServerLogPath,
 } from "./startupDiagnostics.js";
 import { cleanupNodeDatachannel } from "@vibestudio/direct-client/node-webrtc";
 import { maybeNotifyNpmUpdate } from "./updateCheck.js";
@@ -1429,9 +1430,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
       pendingPairConfirmed: startupInvocation.pendingPairConfirmed,
       startupError: bootstrapStartupError,
       serverLogPath:
-        startupMode.kind === "local"
-          ? path.join(startupMode.wsDir, "state", "logs", "server.log")
-          : null,
+        startupMode.kind === "local" ? workspaceServerLogPath(startupMode.wsDir) : null,
       startupDetail: bootstrapStartupDetail,
     };
   }
@@ -1447,10 +1446,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
     pendingPairLink,
     pendingPairConfirmed: startupInvocation.pendingPairConfirmed,
     startupError: bootstrapStartupError,
-    serverLogPath:
-      startupMode.kind === "local"
-        ? path.join(startupMode.wsDir, "state", "logs", "server.log")
-        : null,
+    serverLogPath: startupMode.kind === "local" ? workspaceServerLogPath(startupMode.wsDir) : null,
     startupDetail: bootstrapStartupDetail,
   };
 }
@@ -1493,9 +1489,7 @@ function installBootstrapConnectionHandlers(): void {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:open-log");
     const expectedPath =
       bootstrapStartupError?.logPath ??
-      (startupMode.kind === "local"
-        ? path.join(startupMode.wsDir, "state", "logs", "server.log")
-        : null);
+      (startupMode.kind === "local" ? workspaceServerLogPath(startupMode.wsDir) : null);
     if (typeof rawPath !== "string" || !expectedPath) return;
     if (path.resolve(rawPath) !== path.resolve(expectedPath)) return;
     await shell.openPath(rawPath);
@@ -2192,7 +2186,6 @@ app.on("ready", async () => {
     serverEventSubscriptions.add("host-targets:changed");
     serverEventSubscriptions.add(HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT);
     serverEventSubscriptions.add("external-open:open");
-    serverEventSubscriptions.add("browser-panel:open");
     serverEventSubscriptions.add("panel-tree-updated");
     serverEventSubscriptions.add("panel-title-updated");
     serverEventSubscriptions.add("panel:runtimeLeaseChanged");
@@ -2276,13 +2269,21 @@ app.on("ready", async () => {
       const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
       if (viewInfo?.type === "app") {
         const identity = viewInfo.appIdentity;
-        if (!identity?.source || !identity.executionDigest || !identity.requested) return null;
+        if (
+          !identity?.source ||
+          !identity.executionDigest ||
+          !identity.requested ||
+          !identity.delegations
+        ) {
+          return null;
+        }
         return {
           callerId,
           callerKind: "app",
           repoPath: identity.source,
           executionDigest: identity.executionDigest,
           requested: identity.requested,
+          delegations: identity.delegations,
         };
       }
       const panel = assertPresent(panelRegistry).getPanel(callerId);
@@ -3048,7 +3049,7 @@ app.on("ready", async () => {
           ? "The saved pairing was kept unless the server rejected it. Check the server or choose another workspace."
           : "Retry the startup, or choose another server or workspace.",
         ...(startupMode.kind === "local"
-          ? { logPath: path.join(startupMode.wsDir, "state", "logs", "server.log") }
+          ? { logPath: workspaceServerLogPath(startupMode.wsDir) }
           : {}),
       };
       remotePairedAtLaunch = false;

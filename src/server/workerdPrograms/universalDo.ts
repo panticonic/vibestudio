@@ -57,6 +57,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     }
 
     const identity = `${source}:${className}`;
+    const runtimeId = `do:${source}:${className}:${userKey}`;
     const loaderHeaders = { "X-Vibestudio-Loader-Secret": this.env.WORKERD_LOADER_SECRET };
     const versionResponse = await this.env.GATEWAY.fetch(
       new Request(
@@ -84,40 +85,45 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     // One logical DO per host object means one constant facet name. Keeping it
     // stable also makes clone/delete operations portable across host objects.
     const facet = this.ctx.facets.get("do", async () => {
-      // The version already incorporates object-specific builds; omitting the
-      // object key lets objects on the same version share a loaded module graph.
-      const worker = this.env.LOADER.get(`${identity}@${version}`, async () => {
-        const codeResponse = await this.env.GATEWAY.fetch(
-          new Request(
-            `http://gateway/_docode/${encodeURIComponent(source)}/${encodeURIComponent(className)}` +
-              `?objectKey=${encodeURIComponent(userKey)}`,
-            { headers: loaderHeaders }
-          )
-        );
-        if (!codeResponse.ok) {
-          throw new Error(`universal-do: code fetch failed (${codeResponse.status})`);
-        }
-        const code = (await codeResponse.json()) as DurableObjectCodePayload;
-        const modules = { ...code.modules };
-        if (code.wasmModules) {
-          for (const [name, encodedModule] of Object.entries(code.wasmModules)) {
-            const binary = atob(encodedModule);
-            const bytes = new Uint8Array(binary.length);
-            for (let index = 0; index < binary.length; index++) {
-              bytes[index] = binary.charCodeAt(index);
-            }
-            modules[name] = { wasm: bytes.buffer };
+      // Outbound authority is object-scoped, so the loaded worker and its
+      // host-owned egress binding must be object-scoped too. Sharing this
+      // module graph across object keys would collapse distinct DO principals
+      // into a synthetic class identity for raw HTTP/WebSocket egress.
+      const worker = this.env.LOADER.get(
+        `${identity}/${encodeURIComponent(userKey)}@${version}`,
+        async () => {
+          const codeResponse = await this.env.GATEWAY.fetch(
+            new Request(
+              `http://gateway/_docode/${encodeURIComponent(source)}/${encodeURIComponent(className)}` +
+                `?objectKey=${encodeURIComponent(userKey)}`,
+              { headers: loaderHeaders }
+            )
+          );
+          if (!codeResponse.ok) {
+            throw new Error(`universal-do: code fetch failed (${codeResponse.status})`);
           }
+          const code = (await codeResponse.json()) as DurableObjectCodePayload;
+          const modules = { ...code.modules };
+          if (code.wasmModules) {
+            for (const [name, encodedModule] of Object.entries(code.wasmModules)) {
+              const binary = atob(encodedModule);
+              const bytes = new Uint8Array(binary.length);
+              for (let index = 0; index < binary.length; index++) {
+                bytes[index] = binary.charCodeAt(index);
+              }
+              modules[name] = { wasm: bytes.buffer };
+            }
+          }
+          return {
+            compatibilityDate: code.compatibilityDate,
+            compatibilityFlags: code.compatibilityFlags,
+            mainModule: code.mainModule,
+            modules,
+            env: code.env,
+            globalOutbound: egressBinding(this.ctx, runtimeId),
+          };
         }
-        return {
-          compatibilityDate: code.compatibilityDate,
-          compatibilityFlags: code.compatibilityFlags,
-          mainModule: code.mainModule,
-          modules,
-          env: code.env,
-          globalOutbound: egressBinding(this.ctx, identity),
-        };
-      });
+      );
       return { class: worker.getDurableObjectClass(className) };
     });
 

@@ -27,6 +27,9 @@ const approvedRawMainCalls = new Set([
   // not inject one. It intentionally stays on the raw envelope transport.
   "src/server/browserShellBridge.ts:panelTree.metadata",
   "src/server/browserShellBridge.ts:panelTree.focus",
+  // Streaming Response boundary: the eval runtime supplies the body stream
+  // out-of-band, so the ordinary JSON typed-client contract is inapplicable.
+  "src/server/internalDOs/evalDO.ts:gateway.fetch",
 ]);
 
 const rawMainCallPattern =

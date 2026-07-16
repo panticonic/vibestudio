@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { capability, requirementForPrincipals } from "@vibestudio/shared/authorization";
 
 // Opening the system browser is a side-effecting action; for code callers
 // (panel/app/worker/do) it is approval-gated and the open happens only after
@@ -38,7 +39,7 @@ export const openExternalOptionsSchema = z
   .strict() satisfies z.ZodType<OpenExternalOptions>;
 
 export const openExternalResultSchema = z.object({
-  approvalDecision: z.enum(["once", "session", "version"]).optional(),
+  approvalDecision: z.enum(["once", "run", "session", "version"]).optional(),
 }) satisfies z.ZodType<OpenExternalResult>;
 
 export const externalOpenMethods = defineServiceMethods({
@@ -47,6 +48,25 @@ export const externalOpenMethods = defineServiceMethods({
       "Open an http(s) or mailto URL in the host OS browser; approval-gated for code callers, returning the persisted approval decision when one was made.",
     args: z.tuple([z.string(), openExternalOptionsSchema.optional()]),
     returns: openExternalResultSchema,
+    authority: {
+      requirement: requirementForPrincipals(["user", "host", "code"], "$method"),
+      resource: { kind: "literal", key: "service:externalOpen.openExternal" },
+      additional: [
+        {
+          capability: "external-browser-open",
+          requirement: capability("code", "external-browser-open"),
+          resource: { kind: "argument", index: 0, transform: "external-url-scope" },
+          when: { origins: ["code"] },
+          evalAcquisition: {
+            kind: "approval",
+            title: "Open external browser",
+            description: "Allow this code to open URLs in the system browser.",
+            operation: { kind: "browser", verb: "Open external browser" },
+            grantScopes: ["run", "session", "version"],
+          },
+        },
+      ],
+    },
     access: OPEN_EXTERNAL_ACCESS,
     examples: [
       { args: ["https://example.com"] },

@@ -3,7 +3,7 @@ export interface OpenExternalOptions {
 }
 
 export interface OpenExternalResult {
-  approvalDecision?: "once" | "session" | "version";
+  approvalDecision?: "once" | "run" | "session" | "version";
 }
 
 export function assertAllowedOAuthExternalUrl(rawUrl: string, expectedRedirectUri: string): void {

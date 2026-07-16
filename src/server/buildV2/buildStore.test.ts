@@ -214,6 +214,62 @@ describe("build artifact helpers", () => {
       const result = get("legacy-key");
 
       expect(result).toBeNull();
+      expect(fs.existsSync(dir)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects and removes cached artifacts whose bytes do not match the manifest", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
+    try {
+      setUserDataPath(root);
+      const result = put("tampered-key", { entries: build().artifacts }, build().metadata);
+      fs.writeFileSync(path.join(result.dir, "worker.js"), "export default { tampered: true };");
+
+      expect(get("tampered-key")).toBeNull();
+      expect(fs.existsSync(result.dir)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects syntactically invalid worker JavaScript even when its checksum matches", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
+    try {
+      setUserDataPath(root);
+      const result = put("invalid-worker-key", { entries: build().artifacts }, build().metadata);
+      const invalidWorker = "export default {";
+      const integrity = `sha256-${createHash("sha256").update(invalidWorker).digest("hex")}`;
+      fs.writeFileSync(path.join(result.dir, "worker.js"), invalidWorker);
+      const manifestPath = path.join(result.dir, "artifacts.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Array<{
+        integrity: string;
+      }>;
+      manifest[0]!.integrity = integrity;
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+      expect(has("invalid-worker-key")).toBe(false);
+      expect(fs.existsSync(result.dir)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to store syntactically invalid worker JavaScript", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
+    try {
+      setUserDataPath(root);
+      expect(() =>
+        put(
+          "invalid-worker-input",
+          {
+            entries: [{ ...build().artifacts[0]!, content: "export default {" }],
+          },
+          build().metadata
+        )
+      ).toThrow(/contains invalid JavaScript/);
+      expect(fs.existsSync(path.join(root, "builds", "invalid-worker-input"))).toBe(false);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

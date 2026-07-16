@@ -114,6 +114,27 @@ describe("DODispatch", () => {
   });
 
   describe("dispatch with token-backed workerd URL", () => {
+    it("checks exact-object liveness before minting a token or sending a request", async () => {
+      const tokenManager = new TokenManager();
+      const ensureToken = vi.spyOn(tokenManager, "ensureToken");
+      const inactive = new Error("Durable Object runtime entity is not active");
+      const ensureDispatchable = vi.fn().mockRejectedValue(inactive);
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      dispatch.setTokenManager(tokenManager);
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setEnsureDispatchableDO(ensureDispatchable);
+
+      const ref = makeRef();
+      await expect(dispatch.dispatch(ref, "ping")).rejects.toBe(inactive);
+
+      expect(ensureDispatchable).toHaveBeenCalledWith(ref.source, ref.className, ref.objectKey);
+      expect(ensureToken).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("retries fetch failures after ensuring the DO and refreshes the workerd URL", async () => {
       const tokenManager = new TokenManager();
       const ensureDO = vi.fn().mockResolvedValue(undefined);
@@ -136,7 +157,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(getWorkerdUrl);
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
-      dispatch.setEnsureDO(ensureDO);
+      dispatch.setEnsureDispatchableDO(ensureDO);
 
       const ref = makeRef();
       await expect(dispatch.dispatch(ref, "ping", "arg")).resolves.toEqual({ ok: true });
@@ -157,6 +178,32 @@ describe("DODispatch", () => {
           }),
         })
       );
+    });
+
+    it("preserves structured DO error codes across the HTTP dispatch boundary", async () => {
+      const tokenManager = new TokenManager();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              error: "source bundle is too large",
+              errorCode: "EVAL_RESOURCE_LIMIT",
+            }),
+            { status: 500, headers: { "Content-Type": "application/json" } }
+          )
+        )
+      );
+      dispatch.setTokenManager(tokenManager);
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+
+      const failure = await dispatch.dispatch(makeRef(), "prepare").catch((error) => error);
+      expect(failure).toMatchObject({
+        message: "DO dispatch failed (500): source bundle is too large",
+        code: "EVAL_RESOURCE_LIMIT",
+      });
     });
 
     it("stamps verified server caller identity for lifecycle dispatch", async () => {

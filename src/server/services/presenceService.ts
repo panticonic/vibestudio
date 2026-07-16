@@ -47,9 +47,19 @@ export function createPresenceService(deps: { presence: PresenceTracker }): Serv
     principals: ["host", "user", "code", "entity"],
   };
   const methods = {
-    markPanelActive: { args: z.tuple([z.string()]) },
-    markPanelsOwned: { args: z.tuple([z.array(z.string())]) },
-    getPanelActiveOwner: { args: z.tuple([z.string()]), authority: readPolicy },
+    markPanelActive: {
+      args: z.tuple([z.string()]),
+      access: { sensitivity: "write" as const },
+    },
+    markPanelsOwned: {
+      args: z.tuple([z.array(z.string())]),
+      access: { sensitivity: "write" as const },
+    },
+    getPanelActiveOwner: {
+      args: z.tuple([z.string()]),
+      authority: readPolicy,
+      access: { sensitivity: "read" as const },
+    },
   };
   return {
     name: "presence",

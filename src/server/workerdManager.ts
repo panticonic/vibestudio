@@ -21,13 +21,14 @@ import { pathToFileURL } from "url";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { FsService } from "@vibestudio/shared/fsService";
-import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
+import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { ResolvedExecutionBinding, StateAdvancedEvent } from "./buildV2/index.js";
 import type {
   ArtifactBundleEntry,
   ExecutionArtifactRef,
   ExecutionSelector,
 } from "@vibestudio/shared/execution/identity";
+import { parseSha256 } from "@vibestudio/shared/execution/identity";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import type { Principal } from "@vibestudio/rpc";
 import { validateBuildRef } from "./buildV2/refs.js";
@@ -39,6 +40,7 @@ import {
   getPlatformPackageBinaryPath,
 } from "@vibestudio/shared/runtimePaths";
 import {
+  EVAL_DO_SOURCE,
   getBootstrapBundle,
   isBootstrapDoSource,
   requiresStaticDoHost,
@@ -287,6 +289,7 @@ export interface WorkerdManagerDeps {
   getExecutionArtifact: (executionDigest: string) => {
     ref: ExecutionArtifactRef;
     requested: readonly CapabilityScope[];
+    delegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
     entries: ArtifactBundleEntry[];
   } | null;
   /** Immutable, build-compiled programs used by the workerd host services. */
@@ -319,12 +322,6 @@ export interface WorkerdManagerDeps {
   egressSecret: string;
   getWorkerdGatewayToken: () => string;
   /**
-   * Manifest-declared DOs that stay bound to the explicit main head during
-   * bootstrap instead of synthetic ctx-head scopes (e.g. the gad store
-   * backing the userland `vcs` service in meta/vibestudio.yml). Absent ⇒ no DO is
-   * bootstrap-main-bound; the manager never assumes a hardcoded unit.
-   */
-  /**
    * Extra env text bindings for exact product-seed classes. The server derives
    * these from the workspace manifest's `providers.*` slots.
    */
@@ -332,7 +329,6 @@ export interface WorkerdManagerDeps {
   getProductDoCapabilities?: (source: string, className: string) => readonly "unsafe-eval"[];
   /** Override for tests; production uses the default router readiness window. */
   workerdStartupReadyTimeoutMs?: number;
-  cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
   /**
    * Structured lifecycle sink (start/stop/update/failure per worker). The
    * server feeds this into the runtime-diagnostics store so worker startup
@@ -505,7 +501,10 @@ export class WorkerdManager {
     const dir = this.universalDoStorageDir();
     for (const [key, ref] of [...this.pendingDoStorageDeletes]) {
       const hash = this.universalHostHash(ref);
-      const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
+      const files = await fs.promises.readdir(dir).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return [] as string[];
+        throw error;
+      });
       await Promise.all(
         files
           .filter((file) => file.startsWith(`${hash}.`))
@@ -595,6 +594,7 @@ export class WorkerdManager {
     incarnation: RuntimeIncarnationRecord;
     entries: ArtifactBundleEntry[];
     requested: readonly CapabilityScope[];
+    delegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
   } {
     const incarnation = this.runtimeIncarnations.getActive(logicalEntityId);
     if (!incarnation) {
@@ -613,7 +613,12 @@ export class WorkerdManager {
         `Execution artifact lookup returned the wrong digest for ${logicalEntityId}`
       );
     }
-    return { incarnation, entries: bundle.entries, requested: bundle.requested };
+    return {
+      incarnation,
+      entries: bundle.entries,
+      requested: bundle.requested,
+      delegations: bundle.delegations,
+    };
   }
 
   /**
@@ -990,8 +995,10 @@ export class WorkerdManager {
 
   /**
    * Idempotent worker teardown invoked by the runtime-service retire hook.
-   * Revokes the bearer token, drops the worker instance, runs handle/webhook
-   * cleanup, and restarts (or stops) workerd as appropriate.
+   * Revokes workerd-owned identity, drops the worker instance, and stops the
+   * shared host when it becomes idle. Cross-runtime resources (filesystem
+   * handles, webhooks, approvals, credentials) have one owner in
+   * runtimeEntityCleanup and are deliberately not duplicated here.
    */
   async stopWorker(callerId: string): Promise<void> {
     let foundInstance: WorkerInstance | null = null;
@@ -1006,8 +1013,6 @@ export class WorkerdManager {
 
     this.deps.unregisterEgressCaller(callerId);
     this.revokeWorkerBearer(callerId);
-    this.deps.fsService.closeHandlesForCaller(callerId);
-    await this.deps.cleanupWebhookSubscriptions?.(callerId);
 
     if (!foundInstance || !foundName) return;
 
@@ -1034,13 +1039,13 @@ export class WorkerdManager {
   /**
    * Idempotent DO-entity teardown invoked by the runtime-service retire hook.
    * The concrete-instance row lives in WorkspaceDO (durable); workerd does
-   * its own lazy GC of the DO instance, so this is a best-effort cleanup of
-   * Node-side resources keyed by the targetId.
+   * its own lazy GC of the DO instance, so this removes only workerd-owned
+   * identity and the exact executable image keyed by the targetId. Shared
+   * runtime resources are reclaimed once by runtimeEntityCleanup.
    */
   async destroyDOEntity(targetId: string): Promise<void> {
+    this.deps.unregisterEgressCaller(targetId);
     this.revokeWorkerBearer(targetId);
-    this.deps.fsService.closeHandlesForCaller(targetId);
-    await this.deps.cleanupWebhookSubscriptions?.(targetId);
     this.runtimeIncarnations.retire(targetId);
     for (const [key, objectBuild] of Array.from(this.doObjectBuilds.entries())) {
       if (objectBuild.logicalEntityId === targetId) this.doObjectBuilds.delete(key);
@@ -1062,6 +1067,7 @@ export class WorkerdManager {
       repoPath: instance.source,
       executionDigest,
       requested: execution.requested,
+      delegations: execution.delegations,
     });
     this.deps.registerEgressCaller(instance.callerId, caller);
   }
@@ -1302,14 +1308,16 @@ export class WorkerdManager {
   getDoVersion(source: string, className: string, objectKey?: string): string | null {
     if (objectKey) {
       const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
-      if (objectBuild) {
-        const incarnation = this.runtimeIncarnations.getActive(objectBuild.logicalEntityId);
-        if (!incarnation) return null;
-        const version = String(incarnation.generation);
-        return objectBuild.stateArgs
-          ? `${version}:state:${stableHash(objectBuild.stateArgs)}`
-          : version;
-      }
+      // An object-key lookup is also the loader's liveness gate. Falling back
+      // to the class incarnation here lets a facet whose runtime entity was
+      // retired fetch code again and reconstitute its egress principal.
+      if (!objectBuild) return null;
+      const incarnation = this.runtimeIncarnations.getActive(objectBuild.logicalEntityId);
+      if (!incarnation) return null;
+      const version = String(incarnation.generation);
+      return objectBuild.stateArgs
+        ? `${version}:state:${stableHash(objectBuild.stateArgs)}`
+        : version;
     }
     const svc = this.doServices.get(doServiceKey(source, className));
     if (!svc || this.requiresStaticDoHost(source, className)) return null;
@@ -1345,6 +1353,10 @@ export class WorkerdManager {
 
     const objectBuildKey = objectKey ? doObjectBuildKey(source, className, objectKey) : null;
     const objectBuild = objectBuildKey ? this.doObjectBuilds.get(objectBuildKey) : undefined;
+    // Object-scoped code may only be served while the exact object image is
+    // registered. The class image is not authority to revive an arbitrary or
+    // retired object key.
+    if (objectKey && !objectBuild) return null;
     const logicalEntityId = objectBuild?.logicalEntityId ?? svc.logicalEntityId;
     if (!logicalEntityId) return null;
     const { incarnation, entries } = this.getRuntimeExecution(logicalEntityId);
@@ -1362,8 +1374,16 @@ export class WorkerdManager {
     // matches the old `do-service:*` workerd bearer (NOT an entity id).
     const serviceCallerId = `do-service:${serviceKey}`;
     const serviceToken = this.ensureWorkerBearer(serviceCallerId);
-    // Keep the egress attribution registered for this class identity.
+    // Keep the class attribution for class-level hosts and register the exact
+    // principal used by UniversalDO's object-scoped outbound gateway.
     this.registerDoEgressCaller(source, className, incarnation.artifact.executionDigest);
+    if (objectKey && objectBuild) {
+      this.registerDoObjectEgressCaller(
+        objectBuild.logicalEntityId,
+        source,
+        incarnation.artifact.executionDigest
+      );
+    }
 
     const env: Record<string, unknown> = {
       RPC_AUTH_TOKEN: serviceToken,
@@ -1413,8 +1433,29 @@ export class WorkerdManager {
       repoPath: source,
       executionDigest,
       requested: execution.requested,
+      delegations: execution.delegations,
     });
     this.deps.registerEgressCaller(identity, caller);
+  }
+
+  /** Register the concrete logical DO principal stamped by UniversalDO's
+   * host-owned outbound gateway. User code never chooses this identity. */
+  private registerDoObjectEgressCaller(
+    logicalEntityId: string,
+    source: string,
+    executionDigest: string
+  ): void {
+    const execution = this.deps.getExecutionArtifact(executionDigest);
+    if (!execution) throw new Error(`Missing execution authority for ${executionDigest}`);
+    const caller = createVerifiedCaller(logicalEntityId, "do", {
+      callerId: logicalEntityId,
+      callerKind: "do",
+      repoPath: source,
+      executionDigest,
+      requested: execution.requested,
+      delegations: execution.delegations,
+    });
+    this.deps.registerEgressCaller(logicalEntityId, caller);
   }
 
   // =========================================================================
@@ -1440,6 +1481,7 @@ export class WorkerdManager {
             executionDigest: getBootstrapBundle().binding.artifact.executionDigest,
             entries: getBootstrapBundle().bundle.entries,
             requested: getBootstrapBundle().bundle.requested,
+            delegations: getBootstrapBundle().bundle.delegations,
           }
         : (() => {
             const resolved = this.getRuntimeExecution(assertPresent(doService.logicalEntityId));
@@ -1447,6 +1489,7 @@ export class WorkerdManager {
               executionDigest: resolved.incarnation.artifact.executionDigest,
               entries: resolved.entries,
               requested: resolved.requested,
+              delegations: resolved.delegations,
             };
           })();
       const bundleContent = primaryTextExecutionArtifact(execution.entries);
@@ -1470,6 +1513,7 @@ export class WorkerdManager {
         repoPath: doService.source,
         executionDigest: execution.executionDigest,
         requested: execution.requested,
+        delegations: execution.delegations,
       });
       const bindings: object[] = [
         { name: "RPC_AUTH_TOKEN", text: serviceToken },
@@ -1525,6 +1569,13 @@ export class WorkerdManager {
             className,
             uniqueKey: `${doService.source.replace(/\//g, "_")}:${className}`,
             enableSql: true,
+            // EvalDO deliberately keeps live invocation credentials, retained
+            // modules, and REPL scope in one warm object. Its own idle alarm
+            // performs bounded, SQLite-preserving eviction; workerd's generic
+            // idle eviction must not cut through an approval suspension.
+            ...(doService.source === EVAL_DO_SOURCE && className === "EvalDO"
+              ? { preventEviction: true }
+              : {}),
           },
         ],
         durableObjectStorage: {
@@ -2358,6 +2409,15 @@ export class WorkerdManager {
           ...(serviceScopeRef ? { scopeRef: serviceScopeRef } : {}),
           ...(stateArgs ? { stateArgs } : {}),
         });
+        const activeIncarnation =
+          incarnation ?? this.runtimeIncarnations.getActive(logicalEntityId);
+        if (activeIncarnation) {
+          this.registerDoObjectEgressCaller(
+            logicalEntityId,
+            source,
+            activeIncarnation.artifact.executionDigest
+          );
+        }
       }
     }
 
@@ -2381,19 +2441,83 @@ export class WorkerdManager {
   }
 
   /**
-   * Ensure a Durable Object class is registered and workerd is running.
-   * DOs self-bootstrap from env bindings on first request — no external bootstrap call needed.
-   * Used by the unified RPC relay retry path when a DO class is missing after
-   * a rebuild/restart race.
+   * Restore the executable image for an already-active DO before retrying a
+   * dispatch. This is deliberately not an activation API: userland and product
+   * seed objects need an active durable entity row, and its recorded exact
+   * artifact is the only image this path may load.
+   *
+   * The WorkspaceDO is the sole exception because it is the bootstrap entity
+   * registry itself and therefore lives below entity records.
    */
-  async ensureDO(
+  async ensureDispatchableDurableObject(
     source: string,
     className: string,
     objectKey: string,
-    opts: { contextId?: string; ref?: string } = {}
+    activeEntity: EntityRecord | null
   ): Promise<void> {
-    const explicitRef = explicitScopeRef(opts.ref);
-    await this.ensureDOClass(source, className, { scopeRef: explicitRef, objectKey });
+    if (isBootstrapDoSource(source)) {
+      await this.ensureDOClass(source, className);
+      return;
+    }
+
+    const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
+    if (
+      !activeEntity ||
+      activeEntity.status !== "active" ||
+      activeEntity.id !== targetId ||
+      activeEntity.kind !== "do" ||
+      activeEntity.source.repoPath !== source ||
+      activeEntity.className !== className ||
+      activeEntity.key !== objectKey
+    ) {
+      throw new Error(`Durable Object runtime entity is not active: ${targetId}`);
+    }
+    if (!activeEntity.activeExecutionDigest) {
+      throw new Error(`Durable Object runtime entity has no execution artifact: ${targetId}`);
+    }
+
+    const executionDigest = parseSha256(
+      activeEntity.activeExecutionDigest,
+      `execution artifact for ${targetId}`
+    );
+    const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
+    const activeIncarnation = this.runtimeIncarnations.getActive(targetId);
+    if (
+      objectBuild?.logicalEntityId === targetId &&
+      activeIncarnation?.artifact.executionDigest === executionDigest
+    ) {
+      return;
+    }
+    const bundle = this.deps.getExecutionArtifact(executionDigest);
+    if (!bundle || bundle.ref.executionDigest !== executionDigest) {
+      throw new ExecutionArtifactUnavailableError(
+        `Immutable execution artifact is unavailable: ${executionDigest}`
+      );
+    }
+    if (bundle.ref.source.repoPath !== source) {
+      throw new ExecutionArtifactUnavailableError(
+        `Execution artifact ${executionDigest} belongs to ${bundle.ref.source.repoPath}, not ${source}`
+      );
+    }
+    const execution: ResolvedExecutionBinding = {
+      unitName: source,
+      selectorPolicy: {
+        kind: "artifact",
+        executionDigest,
+      },
+      artifact: bundle.ref,
+      requested: bundle.requested,
+      delegations: bundle.delegations,
+      compilationCacheKey: bundle.ref.buildKey,
+    };
+    await this.ensureDurableObjectEntity({
+      source,
+      execution,
+      className,
+      key: objectKey,
+      contextId: activeEntity.contextId,
+      ...(activeEntity.stateArgs !== undefined ? { stateArgs: activeEntity.stateArgs } : {}),
+    });
   }
 
   private async waitForHttpReady(timeoutMs = 5_000): Promise<void> {
@@ -2595,11 +2719,16 @@ export class WorkerdManager {
       this.registerDoEgressCaller(svc.source, svc.className, incarnation.artifact.executionDigest);
     }
     for (const [, objectBuild] of trackedObjects) {
-      await this.resolveRuntimeIncarnation(
+      const incarnation = await this.resolveRuntimeIncarnation(
         objectBuild.logicalEntityId,
         source,
         objectBuild.scopeRef,
         { trigger: "source-advanced" }
+      );
+      this.registerDoObjectEgressCaller(
+        objectBuild.logicalEntityId,
+        source,
+        incarnation.artifact.executionDigest
       );
     }
 
@@ -2616,7 +2745,10 @@ export class WorkerdManager {
         for (const key of Array.from(this.doObjectBuilds.keys())) {
           if (key.startsWith(`${source}:${svc.className}/`)) {
             const objectBuild = this.doObjectBuilds.get(key);
-            if (objectBuild) this.runtimeIncarnations.retire(objectBuild.logicalEntityId);
+            if (objectBuild) {
+              this.deps.unregisterEgressCaller(objectBuild.logicalEntityId);
+              this.runtimeIncarnations.retire(objectBuild.logicalEntityId);
+            }
             this.doObjectBuilds.delete(key);
           }
         }

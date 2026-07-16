@@ -34,38 +34,56 @@ export interface HubRuntimeRecord {
   version: string;
 }
 
-export interface EphemeralWorkspaceRecord extends WorkspaceEntry {
-  diskName?: string;
+export interface DevelopmentWorkspaceCheckout {
+  workspaceId: string;
+  name: string;
+  diskName: string;
 }
 
 function mintWorkspaceId(): string {
   return `ws_${randomBytes(18).toString("base64url")}`;
 }
 
-const EPHEMERAL_WORKSPACE_KEY = "ephemeral_workspace";
+const DEVELOPMENT_WORKSPACE_KEY = "development_workspace";
+const DEVELOPMENT_CHECKOUT_KEY = "development_checkout";
 
-function parseEphemeralWorkspaceMarker(value: SQLOutputValue): {
+function parseDevelopmentWorkspaceOwner(value: SQLOutputValue): {
   workspaceId: string;
   name: string;
-  diskName?: string;
 } {
-  if (typeof value !== "string") throw new Error("Invalid ephemeral workspace marker type");
+  if (typeof value !== "string") throw new Error("Invalid development workspace owner type");
   const parsed = JSON.parse(value) as unknown;
   if (
     !parsed ||
     typeof parsed !== "object" ||
     Array.isArray(parsed) ||
-    (Object.keys(parsed).length !== 2 && Object.keys(parsed).length !== 3) ||
+    Object.keys(parsed).length !== 2 ||
     typeof (parsed as { workspaceId?: unknown }).workspaceId !== "string" ||
     typeof (parsed as { name?: unknown }).name !== "string" ||
-    ((parsed as { diskName?: unknown }).diskName !== undefined &&
-      (typeof (parsed as { diskName?: unknown }).diskName !== "string" ||
-        !/^dev-[0-9a-f]{8}$/.test((parsed as { diskName: string }).diskName))) ||
+    Object.keys(parsed).some((key) => !["workspaceId", "name"].includes(key))
+  ) {
+    throw new Error("Invalid development workspace owner schema");
+  }
+  return parsed as { workspaceId: string; name: string };
+}
+
+function parseDevelopmentWorkspaceCheckout(value: SQLOutputValue): DevelopmentWorkspaceCheckout {
+  if (typeof value !== "string") throw new Error("Invalid development checkout type");
+  const parsed = JSON.parse(value) as unknown;
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    Object.keys(parsed).length !== 3 ||
+    typeof (parsed as { workspaceId?: unknown }).workspaceId !== "string" ||
+    typeof (parsed as { name?: unknown }).name !== "string" ||
+    typeof (parsed as { diskName?: unknown }).diskName !== "string" ||
+    !/^dev-[0-9a-f]{8}$/.test((parsed as { diskName: string }).diskName) ||
     Object.keys(parsed).some((key) => !["workspaceId", "name", "diskName"].includes(key))
   ) {
-    throw new Error("Invalid ephemeral workspace marker schema");
+    throw new Error("Invalid development checkout schema");
   }
-  return parsed as { workspaceId: string; name: string; diskName?: string };
+  return parsed as DevelopmentWorkspaceCheckout;
 }
 
 function rowToWorkspace(row: Record<string, SQLOutputValue>): WorkspaceEntry {
@@ -152,99 +170,155 @@ export class CentralDataManager {
   }
 
   /**
-   * Atomically register the one disposable development workspace and its
-   * crash-recovery marker. A persistent workspace can never be adopted or
-   * overwritten as ephemeral.
+   * Claim the machine's one logical development workspace. Its catalog id is
+   * durable: memberships, routed rooms, pairing state, and its DTLS identity
+   * all refer to this id across disposable checkout and host lifetimes.
    */
-  addEphemeralWorkspace(name: string): EphemeralWorkspaceRecord {
+  claimDevelopmentWorkspace(name: string): WorkspaceEntry {
     const normalized = name.trim();
-    if (!normalized) throw new Error("Ephemeral workspace name is required");
+    if (!normalized) throw new Error("Development workspace name is required");
     return this.transaction(() => {
-      if (
-        this.stmt("SELECT 1 AS one FROM hub_preferences WHERE key = ?").get(EPHEMERAL_WORKSPACE_KEY)
-      ) {
-        throw new Error("An ephemeral workspace lifecycle is already registered");
+      const ownerRow = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
+        DEVELOPMENT_WORKSPACE_KEY
+      );
+      if (ownerRow) {
+        const owner = parseDevelopmentWorkspaceOwner(ownerRow["value"]!);
+        if (owner.name !== normalized) {
+          throw new Error(
+            `Development workspace is already claimed by \"${owner.name}\"`
+          );
+        }
+        const row = this.stmt(
+          "SELECT * FROM workspaces WHERE workspace_id = ? AND name = ?"
+        ).get(owner.workspaceId, owner.name);
+        if (!row) {
+          throw new Error(
+            `Development workspace owner \"${owner.name}\" has no matching catalog row`
+          );
+        }
+        const lastOpened = this.now();
+        this.stmt("UPDATE workspaces SET last_opened = ? WHERE workspace_id = ?").run(
+          lastOpened,
+          owner.workspaceId
+        );
+        return {
+          ...rowToWorkspace(row),
+          lastOpened,
+        };
       }
       if (this.stmt("SELECT 1 AS one FROM workspaces WHERE name = ?").get(normalized)) {
-        throw new Error(`Cannot shadow persistent workspace \"${normalized}\" with ephemeral dev`);
+        throw new Error(`Cannot shadow persistent workspace \"${normalized}\" with development`);
       }
       const workspaceId = mintWorkspaceId();
       const row = this.stmt(
         `INSERT INTO workspaces (workspace_id, name, last_opened)
          VALUES (?, ?, ?) RETURNING *`
       ).get(workspaceId, normalized, this.now());
-      if (!row) throw new Error("Ephemeral workspace registration returned no row");
+      if (!row) throw new Error("Development workspace registration returned no row");
       this.stmt("INSERT INTO hub_preferences (key, value) VALUES (?, ?)").run(
-        EPHEMERAL_WORKSPACE_KEY,
+        DEVELOPMENT_WORKSPACE_KEY,
         JSON.stringify({ workspaceId, name: normalized })
       );
       return rowToWorkspace(row);
     });
   }
 
-  /** Record the random on-disk child name before spawn for crash cleanup. */
-  setEphemeralWorkspaceDiskName(workspaceId: string, diskName: string): void {
+  getDevelopmentWorkspace(): WorkspaceEntry | null {
+    const ownerRow = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
+      DEVELOPMENT_WORKSPACE_KEY
+    );
+    if (!ownerRow) return null;
+    const owner = parseDevelopmentWorkspaceOwner(ownerRow["value"]!);
+    const row = this.stmt("SELECT * FROM workspaces WHERE workspace_id = ? AND name = ?").get(
+      owner.workspaceId,
+      owner.name
+    );
+    if (!row) {
+      throw new Error(`Development workspace owner \"${owner.name}\" has no matching catalog row`);
+    }
+    return rowToWorkspace(row);
+  }
+
+  /** Arm the random on-disk checkout before child startup for crash cleanup. */
+  setDevelopmentCheckout(workspaceId: string, diskName: string): void {
     if (!/^dev-[0-9a-f]{8}$/.test(diskName)) {
-      throw new Error("Invalid ephemeral workspace disk name");
+      throw new Error("Invalid development checkout disk name");
     }
     this.transaction(() => {
-      const row = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
-        EPHEMERAL_WORKSPACE_KEY
+      const ownerRow = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
+        DEVELOPMENT_WORKSPACE_KEY
       );
-      if (!row) throw new Error("No ephemeral workspace lifecycle is registered");
-      const marker = parseEphemeralWorkspaceMarker(row["value"]!);
-      if (marker.workspaceId !== workspaceId) {
-        throw new Error("Ephemeral workspace marker does not match the running workspace");
+      if (!ownerRow) throw new Error("No development workspace is claimed");
+      const owner = parseDevelopmentWorkspaceOwner(ownerRow["value"]!);
+      if (owner.workspaceId !== workspaceId) {
+        throw new Error("Development workspace owner does not match the running workspace");
       }
-      this.stmt("UPDATE hub_preferences SET value = ? WHERE key = ?").run(
-        JSON.stringify({ ...marker, diskName }),
-        EPHEMERAL_WORKSPACE_KEY
+      const catalogRow = this.stmt(
+        "SELECT 1 AS one FROM workspaces WHERE workspace_id = ? AND name = ?"
+      ).get(owner.workspaceId, owner.name);
+      if (!catalogRow) {
+        throw new Error(`Development workspace owner \"${owner.name}\" has no matching catalog row`);
+      }
+      this.stmt(
+        `INSERT INTO hub_preferences (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      ).run(
+        DEVELOPMENT_CHECKOUT_KEY,
+        JSON.stringify({ ...owner, diskName })
       );
     });
   }
 
-  getEphemeralWorkspace(): EphemeralWorkspaceRecord | null {
-    const markerRow = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
-      EPHEMERAL_WORKSPACE_KEY
+  getDevelopmentCheckout(): DevelopmentWorkspaceCheckout | null {
+    const checkoutRow = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
+      DEVELOPMENT_CHECKOUT_KEY
     );
-    if (!markerRow) return null;
-    const marker = parseEphemeralWorkspaceMarker(markerRow["value"]!);
-    const workspace = this.getWorkspaceEntry(marker.name);
-    return {
-      workspaceId: marker.workspaceId,
-      name: marker.name,
-      lastOpened: workspace?.lastOpened ?? 0,
-      ...(marker.diskName ? { diskName: marker.diskName } : {}),
-    };
+    if (!checkoutRow) return null;
+    const checkout = parseDevelopmentWorkspaceCheckout(checkoutRow["value"]!);
+    const owner = this.getDevelopmentWorkspace();
+    if (
+      !owner ||
+      owner.workspaceId !== checkout.workspaceId ||
+      owner.name !== checkout.name
+    ) {
+      throw new Error("Development checkout does not match its logical workspace owner");
+    }
+    return checkout;
   }
 
   /**
-   * Delete the marked ephemeral workspace and every owned row atomically.
-   * Called both during graceful shutdown and at the next startup after a crash.
+   * Disarm a cleaned checkout without deleting the logical workspace or any of
+   * its membership, routing, pairing, or resume state.
    */
-  removeEphemeralWorkspace(): EphemeralWorkspaceRecord | null {
+  clearDevelopmentCheckout(workspaceId: string): DevelopmentWorkspaceCheckout | null {
     return this.transaction(() => {
-      const markerRow = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
-        EPHEMERAL_WORKSPACE_KEY
+      const checkoutRow = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
+        DEVELOPMENT_CHECKOUT_KEY
       );
-      if (!markerRow) return null;
-      const marker = parseEphemeralWorkspaceMarker(markerRow["value"]!);
-      const workspaceRow = this.stmt(
-        "SELECT * FROM workspaces WHERE workspace_id = ? AND name = ?"
-      ).get(marker.workspaceId, marker.name);
-      this.stmt("DELETE FROM membership WHERE workspace_id = ?").run(marker.workspaceId);
-      this.stmt("DELETE FROM user_revocation_cleanup WHERE workspace_id = ?").run(
-        marker.workspaceId
-      );
-      this.stmt("DELETE FROM workspaces WHERE workspace_id = ?").run(marker.workspaceId);
-      this.stmt("DELETE FROM hub_preferences WHERE key = ?").run(EPHEMERAL_WORKSPACE_KEY);
-      return workspaceRow
-        ? {
-            ...rowToWorkspace(workspaceRow),
-            ...(marker.diskName ? { diskName: marker.diskName } : {}),
-          }
-        : null;
+      if (!checkoutRow) return null;
+      const checkout = parseDevelopmentWorkspaceCheckout(checkoutRow["value"]!);
+      if (checkout.workspaceId !== workspaceId) {
+        throw new Error("Development checkout does not match the workspace being cleaned");
+      }
+      this.stmt("DELETE FROM hub_preferences WHERE key = ?").run(DEVELOPMENT_CHECKOUT_KEY);
+      return checkout;
     });
+  }
+
+  /** Fail before any process/filesystem side effect when the target is the
+   * machine-owned development workspace. The catalog row is durable even
+   * though each of its on-disk checkouts is disposable. */
+  assertWorkspaceRemovable(workspaceId: string): void {
+    const developmentOwnerRow = this.stmt(
+      "SELECT value FROM hub_preferences WHERE key = ?"
+    ).get(DEVELOPMENT_WORKSPACE_KEY);
+    if (!developmentOwnerRow) return;
+    const owner = parseDevelopmentWorkspaceOwner(developmentOwnerRow["value"]!);
+    if (owner.workspaceId === workspaceId) {
+      throw new Error(
+        `Development workspace \"${owner.name}\" is a durable host resource and cannot be deleted`
+      );
+    }
   }
 
   /**
@@ -262,6 +336,7 @@ export class CentralDataManager {
       const row = this.stmt("SELECT workspace_id FROM workspaces WHERE name = ?").get(name);
       if (!row) return null;
       const workspaceId = row["workspace_id"] as string;
+      this.assertWorkspaceRemovable(workspaceId);
       this.stmt("DELETE FROM membership WHERE workspace_id = ?").run(workspaceId);
       this.stmt("DELETE FROM user_revocation_cleanup WHERE workspace_id = ?").run(workspaceId);
       this.stmt("DELETE FROM workspaces WHERE name = ?").run(name);

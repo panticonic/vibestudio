@@ -15,20 +15,25 @@ const entity = "entity:worker:example" as Principal;
 
 function context(): AuthorizationContext {
   return {
+    authorizingOrigin: { kind: "code", principal: code },
     host: null,
     actingUser: user,
     device: "device:laptop" as Principal,
     entity,
     incarnation: "inc:1",
-    code,
-    codeManifest: {
-      principal: code,
-      requested: [
-        {
-          capability: "fs.write",
-          resource: { kind: "exact", key: "workspace:ws-1/repo:projects/vibestudio" },
-        },
-      ],
+    codeAuthority: {
+      executor: {
+        principal: code,
+        requested: [
+          {
+            capability: "fs.write",
+            resource: { kind: "exact", key: "workspace:ws-1/repo:projects/vibestudio" },
+          },
+        ],
+      },
+      execution: null,
+      initiator: null,
+      delegations: [],
     },
     deviceOwnership: {
       device: "device:laptop" as Principal,
@@ -37,7 +42,6 @@ function context(): AuthorizationContext {
     },
     ownerChain: [user],
     agentBinding: null,
-    delegation: [],
     workspace: { workspaceId: "ws-1", member: true, role: "member", revision: "7" },
     session: { id: "s1", audience: "host", version: "2.1", expiresAt: 10_000 },
   };
@@ -58,31 +62,51 @@ function grant(subject: Principal, capabilityName: string, effect: "allow" | "de
 }
 
 describe("compositional authority", () => {
-  it("intersects capability and live relationship requirements", () => {
+  it("intersects the authorizing code capability with live relationship facts", () => {
     const decision = evaluateAuthority({
       context: context(),
       requirement: allOf(
         capability("code", "fs.write"),
-        capability("user", "workspace.edit"),
         relationship("workspace-member")
       ),
       resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-      grants: [grant(code, "fs.write"), grant(user, "workspace.edit")],
+      grants: [grant(code, "fs.write")],
       now: 100,
     });
     expect(decision.allowed).toBe(true);
   });
 
-  it("never unions grants from different principals", () => {
+  it("never lets acting-user grants authorize a code-originated branch", () => {
     const decision = evaluateAuthority({
       context: context(),
-      requirement: allOf(capability("code", "fs.write"), capability("user", "workspace.edit")),
+      requirement: {
+        kind: "any",
+        requirements: [
+          capability("code", "fs.write"),
+          capability("user", "workspace.edit"),
+        ],
+      },
       resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-      grants: [grant(user, "fs.write"), grant(code, "workspace.edit")],
+      grants: [grant(user, "fs.write"), grant(user, "workspace.edit")],
       now: 100,
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toContain("lacks fs.write");
+  });
+
+  it("fails closed when an anyOf graph has no branch for the authorizing origin", () => {
+    const decision = evaluateAuthority({
+      context: context(),
+      requirement: {
+        kind: "any",
+        requirements: [capability("user", "workspace.edit")],
+      },
+      resourceKey: "workspace:ws-1/repo:projects/vibestudio",
+      grants: [grant(user, "workspace.edit")],
+      now: 100,
+    });
+    expect(decision).toMatchObject({ allowed: false, code: "missing-principal" });
+    expect(decision.reason).toContain("no authority branch admits the code origin");
   });
 
   it("applies exact-principal denies before allows", () => {
@@ -110,7 +134,7 @@ describe("compositional authority", () => {
 
   it("requires code to request the granted capability in its exact manifest", () => {
     const ctx = context();
-    ctx.codeManifest = { principal: code, requested: [] };
+    ctx.codeAuthority.executor = { principal: code, requested: [] };
     const decision = evaluateAuthority({
       context: ctx,
       requirement: capability("code", "fs.write"),
@@ -164,7 +188,7 @@ describe("compositional authority", () => {
 
   it("requires an audience- and purpose-bound attenuated delegation", () => {
     const ctx = context();
-    ctx.delegation = [
+    ctx.codeAuthority.delegations = [
       {
         id: "delegation-1",
         issuer: user,

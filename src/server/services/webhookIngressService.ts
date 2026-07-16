@@ -103,10 +103,10 @@ export class DOWebhookIngressStore implements WebhookIngressStore {
   }
 
   private call(method: string, args: unknown[]): Promise<unknown> {
-    // Server-owned internal DOs are infrastructure, not user-created runtime
-    // entities. Direct DODispatch preserves the server caller envelope and
-    // lazily ensures workerd without inventing a public runtime entity merely
-    // to satisfy the unified userland relay's active-entity assertion.
+    // The host activates this exact product entity before constructing the
+    // service. Direct dispatch preserves the server caller envelope; the
+    // shared dispatch preflight verifies that the durable entity is still
+    // active and restores only its recorded immutable artifact.
     if (this.doDispatch) return this.doDispatch.dispatch(this.ref, method, ...args);
     if (!this.rpc) throw new Error("DOWebhookIngressStore has no configured RPC relay");
     return this.rpc.call(doTargetId(this.ref), method, args);
@@ -149,7 +149,7 @@ export interface WebhookIngressServiceDeps {
   directPublicBaseUrl?: string | null;
   store?: WebhookIngressStore;
   rpc?: RpcCallerLike;
-  /** Server-internal path for the infrastructure-owned WebhookStoreDO. */
+  /** Server-internal path for the host-owned WebhookStoreDO product entity. */
   doDispatch?: DoDispatcher;
   now?: () => number;
   /**

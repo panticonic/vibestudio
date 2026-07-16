@@ -45,6 +45,7 @@ const approval: PendingUnitBatchApproval = {
   ],
   configWrite: null,
   requestedAt: 1,
+  decisionDeadlineAt: 60_001,
 };
 
 describe("bootstrapLaunchGate", () => {

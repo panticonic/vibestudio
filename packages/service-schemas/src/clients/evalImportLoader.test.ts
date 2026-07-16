@@ -34,7 +34,7 @@ describe("createEvalImportLoader", () => {
 
   it("loads workspace refs as library builds tagged with the host target", async () => {
     const call = vi.fn(async () => ({ bundle: "workspace-bundle" }));
-    const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
+    const loadImport = createEvalImportLoader(createBuildServiceClient(call), "eval");
 
     await expect(loadImport("@workspace/pkg", "abc123", ["react"])).resolves.toBe(
       "workspace-bundle"
@@ -43,7 +43,7 @@ describe("createEvalImportLoader", () => {
     expect(call).toHaveBeenCalledWith("build", "getBuild", [
       "@workspace/pkg",
       "abc123",
-      { library: true, externals: ["react"], libraryTarget: "worker" },
+      { library: true, externals: ["react"], libraryTarget: "eval" },
     ]);
   });
 

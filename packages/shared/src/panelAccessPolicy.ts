@@ -42,7 +42,7 @@ export interface PanelAccessTarget {
 /**
  * Open (ungated) operations — reads / observation / consensual presence. These
  * never gate, regardless of context. Everything else is a control-plane op
- * governed by the single context-boundary gate (see `requirePanelAccessPermission`
+ * governed by the single context-boundary gate (see `preparePanelAccessAuthority`
  * / `context.boundary`).
  *
  * NOTE: cross-entity RPC (rpc.call/emit/on) is deliberately NOT modeled here —

@@ -117,11 +117,11 @@ describe("CentralDataManager SQLite control store", () => {
     central.close();
   });
 
-  it("recovers a crash-marked ephemeral workspace without touching persistent workspaces", () => {
+  it("clears a crash-marked development checkout without deleting its logical authority", () => {
     const first = manager();
     first.addWorkspace("default");
-    const ephemeral = first.addEphemeralWorkspace("dev");
-    first.setEphemeralWorkspaceDiskName(ephemeral.workspaceId, "dev-deadbeef");
+    const development = first.claimDevelopmentWorkspace("dev");
+    first.setDevelopmentCheckout(development.workspaceId, "dev-deadbeef");
     const db = new DatabaseSync(databasePath);
     db.prepare(
       `INSERT INTO users (id, handle, display_name, role, created_at)
@@ -130,30 +130,68 @@ describe("CentralDataManager SQLite control store", () => {
     db.prepare(
       `INSERT INTO membership (user_id, workspace_id, added_by, added_at)
        VALUES (?, ?, ?, ?)`
-    ).run("usr_member", ephemeral.workspaceId, "usr_member", 1);
+    ).run("usr_member", development.workspaceId, "usr_member", 1);
     db.prepare(
       `INSERT INTO user_workspace_targets (user_id, workspace_id, last_opened)
        VALUES (?, ?, ?)`
-    ).run("usr_member", ephemeral.workspaceId, 1);
+    ).run("usr_member", development.workspaceId, 1);
     db.close();
     first.close();
 
     const recovered = manager();
-    expect(recovered.removeEphemeralWorkspace()).toEqual({
-      ...ephemeral,
+    expect(recovered.getDevelopmentCheckout()).toEqual({
+      workspaceId: development.workspaceId,
+      name: "dev",
       diskName: "dev-deadbeef",
     });
-    expect(recovered.listWorkspaces().map((entry) => entry.name)).toEqual(["default"]);
-    expect(recovered.getLastWorkspaceForUser("usr_member")).toBeNull();
-    expect(recovered.removeEphemeralWorkspace()).toBeNull();
+    expect(recovered.clearDevelopmentCheckout(development.workspaceId)).toEqual({
+      workspaceId: development.workspaceId,
+      name: "dev",
+      diskName: "dev-deadbeef",
+    });
+    expect(recovered.listWorkspaces().map((entry) => entry.name).sort()).toEqual([
+      "default",
+      "dev",
+    ]);
+    expect(recovered.getDevelopmentWorkspace()?.workspaceId).toBe(development.workspaceId);
+    expect(recovered.getLastWorkspaceForUser("usr_member")?.workspaceId).toBe(
+      development.workspaceId
+    );
+    expect(recovered.clearDevelopmentCheckout(development.workspaceId)).toBeNull();
     recovered.close();
   });
 
-  it("never adopts a persistent workspace as ephemeral", () => {
+  it("preserves the development workspace id across repeated disposable launches", () => {
+    const central = manager();
+    const first = central.claimDevelopmentWorkspace("dev");
+    central.setDevelopmentCheckout(first.workspaceId, "dev-deadbeef");
+    central.clearDevelopmentCheckout(first.workspaceId);
+    const second = central.claimDevelopmentWorkspace("dev");
+
+    expect(second.workspaceId).toBe(first.workspaceId);
+    expect(central.listWorkspaces()).toHaveLength(1);
+    central.close();
+  });
+
+  it("never adopts a persistent workspace as development", () => {
     const central = manager();
     central.addWorkspace("dev");
-    expect(() => central.addEphemeralWorkspace("dev")).toThrow(/Cannot shadow persistent/);
+    expect(() => central.claimDevelopmentWorkspace("dev")).toThrow(/Cannot shadow persistent/);
     expect(central.getWorkspaceEntry("dev")).not.toBeNull();
+    central.close();
+  });
+
+  it("prevents generic workspace deletion from tearing down development authority", () => {
+    const central = manager();
+    const development = central.claimDevelopmentWorkspace("dev");
+    central.setDevelopmentCheckout(development.workspaceId, "dev-deadbeef");
+
+    expect(() => central.assertWorkspaceRemovable(development.workspaceId)).toThrow(
+      /durable host resource/
+    );
+    expect(() => central.removeWorkspace("dev")).toThrow(/durable host resource/);
+    expect(central.getWorkspaceEntry("dev")?.workspaceId).toBe(development.workspaceId);
+    expect(central.getDevelopmentCheckout()?.workspaceId).toBe(development.workspaceId);
     central.close();
   });
 

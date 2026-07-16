@@ -68,8 +68,9 @@ function npmRefToVersion(specifier: string, ref: string): string {
 /**
  * Build the on-demand import loader for a sandbox host. `target` selects the
  * module resolution conditions for workspace library bundles and MUST match the
- * host's execution environment — `worker` for the eval sandbox (a workerd DO),
- * `panel` for a panel-hosted sandbox. No default: pick deliberately.
+ * host's execution environment — `eval` for the EvalDO sandbox, `worker` for an
+ * ordinary workerd worker, and `panel` for a panel-hosted sandbox. No default:
+ * pick deliberately.
  */
 export function createEvalImportLoader(
   build: BuildServiceClient,

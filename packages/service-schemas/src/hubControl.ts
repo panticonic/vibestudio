@@ -53,6 +53,10 @@ export const HubWorkspaceRouteSchema = z
     workspaceReach: HubReachSchema,
     serverId: z.string().regex(SERVER_ID_PATTERN),
     serverBootId: z.string().regex(SERVER_BOOT_ID_PATTERN),
+    /** X25519 recipient installed only by a managed development workspace.
+     * Lets the parent seal initiator/delegation facts so the transport deputy
+     * cannot inspect them. */
+    evalAuthorityRecipientKey: z.string().min(32).optional(),
   })
   .strict();
 
@@ -107,6 +111,9 @@ export const HubReadyPayloadSchema = z
       .nullable(),
     serverId: z.string().regex(SERVER_ID_PATTERN),
     serverBootId: z.string().regex(SERVER_BOOT_ID_PATTERN),
+    /** X25519 recipient for the exact managed development host generation.
+     * Present only on a child started with a parent authority bridge. */
+    evalAuthorityRecipientKey: z.string().min(32).optional(),
     gatewayPort: z.number().int().min(1).max(65_535),
     pid: z.number().int().positive(),
     version: z.string().min(1),

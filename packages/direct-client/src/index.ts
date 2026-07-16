@@ -230,9 +230,8 @@ export class RpcClient {
   private callerId: string;
   private readonly callerKind: CallerKind;
 
-  private webRtcClient: Promise<
-    import("@vibestudio/direct-client/webrtc").WebRtcRpcClient
-  > | null = null;
+  private webRtcClient: Promise<import("@vibestudio/direct-client/webrtc").WebRtcRpcClient> | null =
+    null;
   private wsClient: Promise<import("./wsClient.js").WsRpcClient> | null = null;
   private keepPushOpen = false;
   private retainedConnections = 0;
@@ -444,7 +443,9 @@ export class RpcClient {
       response = await this.postRpc(token, body);
       if (response.status === 401) {
         const errorBody = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new DirectClientAuthError(remoteErrorMessage(errorBody, "unauthorized after token refresh"));
+        throw new DirectClientAuthError(
+          remoteErrorMessage(errorBody, "unauthorized after token refresh")
+        );
       }
     }
     const raw = responseRecord(await response.json().catch(() => ({})));
@@ -482,9 +483,9 @@ export class RpcClient {
         message.errorKind
       );
     }
-    if (!("result" in message)) {
-      throw new RpcError("malformed rpc response (no result)");
-    }
+    // JSON.stringify omits an `undefined` result. Like the shared persistent
+    // RPC client, treat an error-free response as success and let an absent
+    // field represent a void return value.
     return message.result as T;
   }
 
@@ -568,9 +569,9 @@ export class RpcClient {
     return this.wsClient;
   }
 
-  private async verifyPersistentHost<T extends { call<TValue = unknown>(method: string, args?: unknown[]): Promise<TValue> }>(
-    client: T
-  ): Promise<T> {
+  private async verifyPersistentHost<
+    T extends { call<TValue = unknown>(method: string, args?: unknown[]): Promise<TValue> },
+  >(client: T): Promise<T> {
     if (!this.policy.expectedHost) return client;
     const identity = await client.call<{ serverId?: unknown; workspaceId?: unknown }>(
       "auth.getConnectionInfo",

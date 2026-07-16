@@ -35,6 +35,7 @@ function approvalQueueMock(
 ): ApprovalQueue {
   return {
     request: vi.fn(async () => decision),
+    requestCapability: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
@@ -83,6 +84,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
         callerKind: "panel" as const,
         repoPath: "workers/foo",
         executionDigest: "a".repeat(64),
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -95,7 +97,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
     };
     const res1 = await requestCapabilityPermission(deps, request1);
     expect(res1.allowed).toBe(true);
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
 
     // Now simulate panel navigation: the panel entity is retired and a brand-new
     // entity (different id, same source+version) is created on back-or-forward navigation.
@@ -106,6 +108,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
         callerKind: "panel" as const,
         repoPath: "workers/foo",
         executionDigest: "a".repeat(64),
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -115,7 +118,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
     const res2 = await requestCapabilityPermission(deps, request2);
     expect(res2.allowed).toBe(true);
     // No re-prompt — grant is version-scoped, not principal-scoped.
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
   });
 
   it("a version-scoped grant does NOT cross to a different executionDigest (re-prompt required)", async () => {
@@ -137,6 +140,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
         callerKind: "panel",
         repoPath: "workers/foo",
         executionDigest: "a".repeat(64),
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -151,6 +155,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
         callerKind: "panel",
         repoPath: "workers/foo",
         executionDigest: "b".repeat(64),
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -159,15 +164,13 @@ describe("panel navigation: capability grants and retire hooks", () => {
     });
 
     // Two prompts because version differs.
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(2);
   });
 
   it("retiring a panel fires onRetire with the panel entity record (so cleanup hooks like egressProxy.dropCaller run)", async () => {
     const { instance } = await createTestDO(WorkspaceDOTestable);
     const { dispatch } = makeDODispatch(instance);
     const entityCache = new EntityCache();
-    const grantStore = new CapabilityGrantStore({ statePath: tempStatePath() });
-    const approvalQueue = approvalQueueMock("session");
     const retiredRecords: EntityRecord[] = [];
 
     const service = createRuntimeService({
@@ -191,6 +194,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
           executionDigest: sha256("execution"),
         },
         requested: [],
+        delegations: [],
         compilationCacheKey: `test:${source}`,
       }),
       resolveExecutionArtifactByDigest: (executionDigest) => {
@@ -205,7 +209,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
           retiredRecords.push(record);
         },
       },
-      contextBoundary: { approvalQueue, grantStore, contextExists: () => false },
+      contextBoundary: { contextExists: () => false },
       contextFolders: {
         ensureContextFolder: vi.fn(async (contextId: string) => `/tmp/contexts/${contextId}`),
         removeContext: vi.fn(async () => {}),

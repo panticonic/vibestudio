@@ -95,6 +95,7 @@ describe("full-gateway attribution (row 11)", () => {
           resource: { kind: "prefix", prefix: "" },
         },
       ],
+      delegations: [],
     });
     const bridge = {
       async readMain(repoPath: string) {

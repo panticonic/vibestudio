@@ -68,6 +68,7 @@ export type HostTargetLaunchResult =
       capabilities?: AppCapability[];
       executionDigest?: string | null;
       authorityRequests?: readonly CapabilityScope[];
+      authorityDelegations?: readonly import("./authorityManifest.js").EvalAuthorityDelegation[];
       adoptionPolicy?: "immediate" | "prompt" | "artifact-only";
     }
   | {

@@ -1,4 +1,7 @@
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type {
+  PreparedAuthoritySelection,
+  ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { UserSubject } from "@vibestudio/identity/types";
@@ -8,7 +11,7 @@ import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,
 } from "./panelAccessPermission.js";
-import { requirePanelAccessPermission } from "./panelAccessPermission.js";
+import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
 
 export interface PanelTreeBridgeRequest {
   callerId: string;
@@ -156,9 +159,18 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     method: keyof typeof panelTreeMethods & string,
     args: unknown[]
   ): Promise<unknown> {
+    return bridge(ctx, method, args);
+  }
+
+  async function prepareMethodAuthority(
+    ctx: ServiceContext,
+    method: keyof typeof panelTreeMethods & string,
+    args: unknown[]
+  ) {
     assertAllowedAgentMethod(method, args);
     await validatePanelSourceBeforeMutation(method, args);
     const op = operationFor(method, args);
+    const selections: PreparedAuthoritySelection[] = [];
     if (op) {
       const target =
         method === "create"
@@ -184,28 +196,18 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
           target.requestedContextId = destContextId;
         }
       }
-      const permission = await requirePanelAccessPermission(deps, ctx, op, target);
-      if (!permission.allowed) {
-        throw new Error(permission.reason ?? `${method} denied for panel ${target.id}`);
-      }
+      selections.push(...(await preparePanelAccessAuthority(deps, ctx, op, target)));
     }
     if (method === "expandIds") {
       const panelIds = Array.isArray(args[0]) ? (args[0] as string[]) : [];
       for (const panelId of panelIds) {
         const target = await targetFor(ctx, panelId);
-        const permission = await requirePanelAccessPermission(
-          deps,
-          ctx,
-          "updatePanelState",
-          target
+        selections.push(
+          ...(await preparePanelAccessAuthority(deps, ctx, "updatePanelState", target))
         );
-        if (!permission.allowed) {
-          throw new Error(permission.reason ?? `${method} denied for panel ${target.id}`);
-        }
       }
     }
-
-    return bridge(ctx, method, args);
+    return selections;
   }
 
   return {
@@ -216,6 +218,31 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     // scoped by resource grants unless they hold the chrome capability.
     authority: { principals: ["code", "user", "host"] },
     methods: panelTreeMethods,
+    authorityPreparation: Object.fromEntries(
+      [
+        "create",
+        "setStateArgs",
+        "reload",
+        "close",
+        "archive",
+        "unload",
+        "movePanel",
+        "navigate",
+        "navigateHistory",
+        "takeOver",
+        "openDevTools",
+        "rebuildPanel",
+        "rebuildAndReload",
+        "updatePanelState",
+        "callAgent",
+        "setCollapsed",
+        "expandIds",
+      ].map((method) => [
+        `panelTree.${method}.contextBoundary`,
+        (ctx: ServiceContext, args: unknown[]) =>
+          prepareMethodAuthority(ctx, method as keyof typeof panelTreeMethods & string, args),
+      ])
+    ),
     handler: defineServiceHandler("panelTree", panelTreeMethods, {
       ensureLoaded: (ctx, args) => dispatch(ctx, "ensureLoaded", args),
       focus: (ctx, args) => dispatch(ctx, "focus", args),

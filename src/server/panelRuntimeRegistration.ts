@@ -87,6 +87,7 @@ export interface CommonDeps {
   /** Live config reads and GAD-authoritative protected-main writes. */
   getWorkspaceConfig?: () => WorkspaceConfig;
   persistWorkspaceConfigField?: (ctx: ServiceContext, key: string, value: unknown) => Promise<void>;
+  wouldPersistWorkspaceConfigField?: (key: string, value: unknown) => Promise<boolean>;
   treeScanner?: import("./vcsHost/workspaceTreeScanner.js").WorkspaceTreeScanner;
   adminToken: string;
   /** Required hub-owned catalog proxy; child servers never mutate the catalog directly. */
@@ -97,9 +98,10 @@ export interface CommonDeps {
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   /** Active-entity cache; resolves caller/target contexts and code-identity subjects. */
   entityCache?: import("@vibestudio/shared/runtime/entityCache").EntityCache;
-  resolveExecutionRequests: (
-    executionDigest: string
-  ) => readonly import("@vibestudio/rpc").CapabilityScope[] | null;
+  resolveExecutionAuthority: (executionDigest: string) => {
+    requests: readonly import("@vibestudio/rpc").CapabilityScope[];
+    delegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
+  } | null;
   /** True when the target context already holds state (active entity or materialized folder). */
   contextExists: (contextId: string) => boolean;
   /** Human label for the entity owning the target context, for prompt copy. */
@@ -286,7 +288,11 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         executionDigest: rec.activeExecutionDigest ?? "unknown",
         requested:
           (rec.activeExecutionDigest
-            ? deps.resolveExecutionRequests(rec.activeExecutionDigest)
+            ? deps.resolveExecutionAuthority(rec.activeExecutionDigest)?.requests
+            : null) ?? [],
+        delegations:
+          (rec.activeExecutionDigest
+            ? deps.resolveExecutionAuthority(rec.activeExecutionDigest)?.delegations
             : null) ?? [],
       });
     },
@@ -307,6 +313,9 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           }
           await deps.persistWorkspaceConfigField(ctx, key, value);
         },
+        ...(deps.wouldPersistWorkspaceConfigField
+          ? { wouldSetConfigField: deps.wouldPersistWorkspaceConfigField }
+          : {}),
         workspaceCatalog: deps.workspaceCatalog,
         eventService: deps.eventService,
         listUnits: deps.listWorkspaceUnits,
@@ -427,23 +436,15 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     let panelCdpDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelCdp",
-      dependencies: ["cdpBridge", "shellPresence"],
+      dependencies: ["cdpBridge"],
       async start(resolve) {
         const bridge = assertPresent(resolve<import("./cdpBridge.js").CdpBridge>("cdpBridge"));
-        const shellPresence = assertPresent(
-          resolve<import("./services/shellPresenceService.js").ShellPresenceServiceResult>(
-            "shellPresence"
-          )
-        );
         const { createPanelCdpService } = await import("./services/panelCdpService.js");
         const { CdpHostProviderRpcChannel } = await import("./cdpHostProviderRpcChannel.js");
         const hostProviderChannel = new CdpHostProviderRpcChannel(bridge);
         panelCdpDefinition = createPanelCdpService({
           ...panelGateDeps,
-          approvalQueue: assertPresent(deps.approvalQueue),
-          grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
-          hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
           getTarget: (panelId) => requestPanelMetadataForServices(panelId),
           getEndpoint: async (panelId, requesterEntityId) => {
             await ensureCdpTargetReady(panelId);
@@ -575,13 +576,8 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     let panelTreeDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelTree",
-      dependencies: ["shellPresence", "buildSystem", "workspace-state", "runtime"],
+      dependencies: ["buildSystem", "workspace-state", "runtime"],
       async start(resolve) {
-        const shellPresence = assertPresent(
-          resolve<import("./services/shellPresenceService.js").ShellPresenceServiceResult>(
-            "shellPresence"
-          )
-        );
         const buildSystem = assertPresent(
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
         );
@@ -596,10 +592,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         );
         panelTreeDefinition = createPanelTreeService({
           ...panelGateDeps,
-          approvalQueue: assertPresent(deps.approvalQueue),
-          grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
-          hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
           validateOpenPanelSource: async ({ source, options }) => {
             if (!shouldValidateOpenPanelWorkspaceUnit(source)) return;
             const ref = panelOpenBuildRef(options);

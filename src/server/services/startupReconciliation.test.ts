@@ -79,6 +79,7 @@ describe("runStartupReconciliation", () => {
     const result = await runStartupReconciliation({
       dispatchWorkspaceDO,
       entityCache,
+      cleanupRetiredEntity: async () => {},
       logger: { warn: (msg) => warnings.push(msg) },
     });
 
@@ -87,6 +88,7 @@ describe("runStartupReconciliation", () => {
     expect(entityCache.resolve(activeId)?.status).toBe("active");
     expect(result.hydratedCount).toBe(1);
     expect(result.lifecycleRecovered).toBe(false);
+    expect(result.incompleteContextCleanupIds).toEqual([]);
 
     // 2. Incomplete cleanup is now marked complete in the DO.
     expect(result.incompleteCleanupIds).toContain(incompleteCleanup.id);
@@ -121,9 +123,42 @@ describe("runStartupReconciliation", () => {
 
     expect(result.hydratedCount).toBe(0);
     expect(result.incompleteCleanupIds).toEqual([]);
+    expect(result.incompleteContextCleanupIds).toEqual([]);
     expect(result.gcDeletedIds).toEqual([]);
     expect(result.lifecycleRecovered).toBe(false);
     expect(warnings.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("preserves both retry ledgers when startup cleanup still fails", async () => {
+    const retired = workspaceDO.entityActivate({
+      kind: "panel",
+      source: { repoPath: "panels/retry" },
+      contextId: "ctx-retry",
+      key: "retry",
+    });
+    workspaceDO.entityRetire(retired.id);
+    workspaceDO.contextCleanupBegin({ contextId: "ctx-retry", kind: "destroy" });
+    const cleanupRetiredEntity = vi.fn(async () => {
+      throw new Error("entity backend down");
+    });
+    const cleanupContext = vi.fn(async () => {
+      throw new Error("context backend down");
+    });
+
+    const result = await runStartupReconciliation({
+      dispatchWorkspaceDO,
+      entityCache: new EntityCache(),
+      cleanupRetiredEntity,
+      cleanupContext,
+      gcGraceMs: 0,
+      logger: { warn: vi.fn() },
+    });
+
+    expect(result.incompleteCleanupIds).toEqual([retired.id]);
+    expect(result.incompleteContextCleanupIds).toEqual(["ctx-retry"]);
+    expect(workspaceDO.entityResolve(retired.id)?.cleanupComplete).toBe(false);
+    expect(workspaceDO.contextCleanupListPending()).toHaveLength(1);
+    expect(result.gcDeletedIds).not.toContain(retired.id);
   });
 
   it("runs lifecycle recovery after WorkspaceDO reconciliation when provided", async () => {

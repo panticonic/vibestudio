@@ -221,7 +221,7 @@ describe("AppOrchestrator", () => {
             target: "electron",
             capabilities: ["notifications"],
           },
-          build: { executionDigest: "ev-shell", authorityRequests },
+          build: { executionDigest: "ev-shell", authorityRequests, authorityDelegations: [] },
           artifacts: [{ path: "index.html", role: "html" }],
         })
       );
@@ -235,6 +235,7 @@ describe("AppOrchestrator", () => {
         capabilities: ["notifications"],
         executionDigest: "ev-shell",
         authorityRequests,
+        authorityDelegations: [],
       });
       await expect(orchestrator.loadBakedApp(root)).resolves.toBe(true);
 
@@ -246,6 +247,7 @@ describe("AppOrchestrator", () => {
         {
           source: "apps/shell",
           executionDigest: "ev-shell",
+          delegations: [],
           requested: authorityRequests,
         }
       );

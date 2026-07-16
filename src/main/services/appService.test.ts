@@ -79,6 +79,7 @@ describe("createAppService", () => {
         callerKind: "app",
         repoPath: "apps/shell",
         executionDigest: "ev-shell",
+        delegations: [],
         requested: [{ capability: "open-external", resource: { kind: "prefix", prefix: "" } }],
       }),
       ["open-external"]
@@ -98,6 +99,7 @@ describe("createAppService", () => {
         callerKind: "app",
         repoPath: "apps/shell",
         executionDigest: "ev-shell",
+        delegations: [],
         requested: [{ capability: "panel-hosting", resource: { kind: "prefix", prefix: "" } }],
       }),
       ["panel-hosting"]

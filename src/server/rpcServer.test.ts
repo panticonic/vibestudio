@@ -161,6 +161,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
               callerKind: "extension" as const,
               repoPath: callerId.slice("@workspace-extensions/".length),
               executionDigest: "ev-test",
+              delegations: [],
               requested: [
                 {
                   capability: "service:*",
@@ -1171,6 +1172,7 @@ describe("RpcServer relay behavior", () => {
       callerKind: "app" as const,
       repoPath: "apps/shell",
       executionDigest: "ev-parent",
+      delegations: [],
       requested: [
         {
           capability: "service:*",
@@ -2431,6 +2433,7 @@ describe("RpcServer caller identity", () => {
           callerKind: "app" as const,
           repoPath: "apps/shell",
           executionDigest: "a".repeat(64),
+          delegations: [],
           requested: [
             { capability: "service:*", resource: { kind: "prefix" as const, prefix: "" } },
             { capability: "rpc:*", resource: { kind: "prefix" as const, prefix: "" } },
@@ -2459,6 +2462,7 @@ describe("RpcServer caller identity", () => {
         callerKind: "app",
         repoPath: "apps/shell",
         executionDigest: "a".repeat(64),
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },

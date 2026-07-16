@@ -12,12 +12,13 @@ import type { RuntimeSurface, RuntimeSurfaceTarget } from "@vibestudio/shared/ru
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { AuthorityRequirement, PrincipalKind } from "@vibestudio/rpc";
 import type { MethodSchema } from "@vibestudio/shared/typedServiceClient";
-import type { CatalogEntry } from "@vibestudio/service-schemas/docs";
+import type { CatalogEntry, EvalCatalogLeaf } from "@vibestudio/service-schemas/docs";
 import { serializeMethod } from "./serialize.js";
 
 export interface BuildCatalogDeps {
   definitions: ServiceDefinition[];
   runtimeSurfaces?: { panel?: RuntimeSurface; workerRuntime?: RuntimeSurface };
+  evalAuthorityForMethod?: (serviceName: string, methodName: string) => EvalCatalogLeaf[];
 }
 
 const RUNTIME_TARGET_CALLERS: Record<RuntimeSurfaceTarget, CallerKind[]> = {
@@ -48,6 +49,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
       const ser = serializeMethod(method);
       const principals = authorityPrincipals(method, def);
       const access = { ...(method.access ?? {}), principals };
+      const evalAuthority = deps.evalAuthorityForMethod?.(def.name, methodName) ?? [];
       entries.push({
         id: `service:${def.name}.${methodName}`,
         surface: "service",
@@ -59,6 +61,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         argsSchema: ser.argsSchema,
         ...("returnsSchema" in ser ? { returnsSchema: ser.returnsSchema } : {}),
         ...(method.examples ? { examples: method.examples } : {}),
+        ...(evalAuthority.length > 0 ? { evalAuthority } : {}),
       });
     }
   }
@@ -99,6 +102,9 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         const generated = entry.methodCatalog?.[member];
         const serialized = method ? serializeMethod(method) : generated;
         if (!serialized) continue;
+        const evalAuthority = schemaDefinition
+          ? (deps.evalAuthorityForMethod?.(schemaDefinition.name, member) ?? [])
+          : [];
         entries.push({
           id: `${runtimeId}.${member}`,
           surface: "runtime",
@@ -110,6 +116,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
           ...(serialized.argsSchema ? { argsSchema: serialized.argsSchema } : {}),
           ...(serialized.returnsSchema ? { returnsSchema: serialized.returnsSchema } : {}),
           ...(serialized.examples ? { examples: serialized.examples } : {}),
+          ...(evalAuthority.length > 0 ? { evalAuthority } : {}),
         });
       }
     }

@@ -15,6 +15,7 @@ import { docsMethods, type SerializedServiceDefinition } from "@vibestudio/servi
 import { createCatalogIndex } from "./catalog/catalogIndex.js";
 import { isServiceMethodVisible } from "./catalog/buildCatalog.js";
 import { serializeDef } from "./catalog/serialize.js";
+import { evalCapabilityCensusStatus, evalCatalogForHostMethod } from "./evalCapabilityCatalog.js";
 
 export function createDocsService(deps: {
   dispatcher: ServiceDispatcher;
@@ -23,6 +24,7 @@ export function createDocsService(deps: {
   const index = createCatalogIndex(() => ({
     definitions: deps.dispatcher.getServiceDefinitions(),
     runtimeSurfaces: deps.runtimeSurfaces,
+    evalAuthorityForMethod: evalCatalogForHostMethod,
   }));
 
   // Per-service discovery view: keep methods whose declared authority mentions
@@ -36,7 +38,13 @@ export function createDocsService(deps: {
     for (const name of Object.keys(full.methods)) {
       const schema = def.methods[name];
       const method = full.methods[name];
-      if (schema && method && isServiceMethodVisible(schema, def, kind)) methods[name] = method;
+      if (schema && method && isServiceMethodVisible(schema, def, kind)) {
+        const evalAuthority = evalCatalogForHostMethod(def.name, name);
+        methods[name] = {
+          ...method,
+          ...(evalAuthority.length > 0 ? { evalAuthority } : {}),
+        };
+      }
     }
     return { ...full, methods };
   };
@@ -71,6 +79,7 @@ export function createDocsService(deps: {
         const def = deps.dispatcher.getServiceDefinitions().find((d) => d.name === name);
         return def ? serializeForCaller(def, ctx.caller.runtime.kind) : null;
       },
+      evalCapabilityCensus: () => evalCapabilityCensusStatus(),
     }),
   };
 }

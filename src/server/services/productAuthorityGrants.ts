@@ -18,6 +18,7 @@ export interface ProductGrantInput {
   principals: Partial<Record<PrincipalKind, Principal | null>>;
   capability: string;
   resourceKey: string;
+  sessionId: string;
   now: number;
   grantStore?: CapabilityGrantStore;
   grantCode?: boolean;
@@ -40,16 +41,21 @@ export function productAuthorityGrants(input: ProductGrantInput): AuthorityGrant
   const code = input.principals.code;
   const identity = input.caller.code;
   if (!code || !identity || input.grantCode === false) return grants;
+  const grantSubject = {
+    principal: code,
+    sessionId: input.sessionId,
+    code: { repoPath: identity.repoPath, executionDigest: identity.executionDigest },
+  } as const;
 
   const productAllows = productCodeHasCapability(identity.repoPath, input.capability);
-  const userAllows = input.grantStore?.hasGrant(input.capability, input.resourceKey, identity);
+  const userAllows = input.grantStore?.hasGrant(input.capability, input.resourceKey, grantSubject);
   if (productAllows || userAllows) {
     grants.push({
       ...productGrant(code, input.capability, input.resourceKey, input.now),
       provenance: productAllows ? "product-authority-catalog-v1" : "user-capability-grant",
     });
   }
-  if (input.grantStore?.hasDenial(input.capability, input.resourceKey, identity)) {
+  if (input.grantStore?.hasDenial(input.capability, input.resourceKey, grantSubject)) {
     grants.push({
       ...productGrant(code, input.capability, input.resourceKey, input.now),
       effect: "deny",

@@ -25,7 +25,8 @@ export function verifyPanelCodeIdentity(
     entity.kind !== "panel" ||
     entity.source !== panel.source ||
     entity.executionDigest !== panel.executionDigest ||
-    !entity.authorityRequests
+    !entity.authorityRequests ||
+    !entity.authorityDelegations
   ) {
     throw new Error(`Panel execution identity changed while resolving ${panel.callerId}`);
   }
@@ -35,5 +36,6 @@ export function verifyPanelCodeIdentity(
     repoPath: panel.source,
     executionDigest: panel.executionDigest,
     requested: entity.authorityRequests,
+    delegations: entity.authorityDelegations,
   };
 }

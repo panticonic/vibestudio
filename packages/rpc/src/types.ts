@@ -60,7 +60,12 @@ export interface RpcRequest {
 export interface RpcResponseSuccess {
   type: "response";
   requestId: string;
-  result: unknown;
+  /**
+   * JSON transports omit this field when a service method returns `undefined`.
+   * Absence therefore represents a successful void result, exactly as reading
+   * `response.result` does on the persistent transports.
+   */
+  result?: unknown;
 }
 
 /** Stable error category for caller control flow across every RPC transport. */
@@ -290,8 +295,11 @@ export interface RpcCallOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   idempotencyKey?: string;
-  /** Request read-only containment: the server dispatcher refuses any non-`read`
-   *  method for this call. Propagated to `ServiceContext.readOnly`. */
+  /** Host-minted eval invocation lease. Runtime adapters install this; evaluated
+   * code never receives the credential or chooses its authority identity. */
+  evalInvocation?: { runId: string; credential: string };
+  /** Generic transport containment for non-eval callers. Eval derives this
+   * from its host-resolved manifest rather than accepting a top-level flag. */
   readOnly?: boolean;
 }
 
@@ -300,7 +308,8 @@ export interface RpcStreamOptions {
   idempotencyKey?: string;
   /** Override the transport's deadline for receiving response headers. */
   headTimeoutMs?: number;
-  /** Request read-only containment for streaming calls. */
+  /** Host-minted eval invocation lease; see RpcCallOptions.evalInvocation. */
+  evalInvocation?: { runId: string; credential: string };
   readOnly?: boolean;
   /**
    * Streaming REQUEST body (plan §1.6 — uploads ride the bulk channel). Only
@@ -345,7 +354,9 @@ export interface RpcEnvelope {
   delivery: {
     caller: AuthenticatedCaller;
     idempotencyKey?: string;
-    /** Read-only containment flag — extracted server-side into ServiceContext.readOnly. */
+    /** Opaque, run/object/audience-bound lease. It is authenticated by the host
+     * invocation coordinator and is not itself a serialized authority record. */
+    evalInvocation?: { runId: string; credential: string };
     readOnly?: boolean;
   };
   provenance: AuthenticatedCaller[];

@@ -19,6 +19,7 @@ function authorityCtx(
             callerKind: "app",
             repoPath: "apps/shell",
             executionDigest: "a".repeat(64),
+            delegations: [],
             requested: allowed
               ? [{ capability: "panel-hosting", resource: { kind: "prefix", prefix: "" } }]
               : [],

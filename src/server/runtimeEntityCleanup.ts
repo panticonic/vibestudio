@@ -13,7 +13,10 @@ export interface RuntimeEntityCleanupDeps {
   panelRuntimeCoordinator?: PanelRuntimeCoordinator | null;
   egressProxy: Pick<EgressProxy, "dropCaller">;
   approvalQueue: Pick<ApprovalQueue, "cancelForCaller">;
+  deferrals?: { cancelForCaller(callerId: string): number };
   credentialSessionGrantStore: Pick<CredentialSessionGrantStore, "dropForCaller">;
+  /** Revoke every durable agent credential bound to this runtime entity. */
+  revokeAgentCredentials?: (entityId: string) => void | Promise<void>;
   tokenManager: Pick<TokenManager, "revokeToken">;
   connectionGrants?: Pick<ConnectionGrantService, "revokeForPrincipal">;
   entityTitleService?: Pick<EntityTitleService, "clear">;
@@ -35,28 +38,49 @@ export async function cleanupRuntimeEntity(
   record: EntityRecord,
   deps: RuntimeEntityCleanupDeps
 ): Promise<void> {
+  const failures: Error[] = [];
+  const step = async (name: string, fn: () => unknown | Promise<unknown>): Promise<void> => {
+    try {
+      await fn();
+    } catch (cause) {
+      failures.push(
+        new Error(`Runtime entity cleanup step ${name} failed for ${record.id}`, { cause })
+      );
+    }
+  };
+
   if (record.kind === "panel") {
-    deps.panelRuntimeCoordinator?.retireRuntimeEntity(record.id);
+    await step("panel-runtime", () => deps.panelRuntimeCoordinator?.retireRuntimeEntity(record.id));
   }
-  await deps.egressProxy.dropCaller(record.id).catch(() => {});
-  await bestEffort(() => deps.approvalQueue.cancelForCaller(record.id));
-  await bestEffort(() => deps.credentialSessionGrantStore.dropForCaller(record.id));
-  await bestEffort(() => deps.connectionGrants?.revokeForPrincipal(record.id));
-  await bestEffort(() => deps.getFsService()?.closeHandlesForCaller(record.id));
-  await bestEffort(() => deps.getWebhookIngress()?.internal?.revokeForCaller?.(record.id));
-  await bestEffort(() => deps.tokenManager.revokeToken(record.id));
-  await bestEffort(() => deps.entityTitleService?.clear(record.id));
+  await step("egress", () => deps.egressProxy.dropCaller(record.id));
+  await step("deferrals", () => deps.deferrals?.cancelForCaller(record.id));
+  await step("approvals", () => deps.approvalQueue.cancelForCaller(record.id));
+  await step("credential-session-grants", () =>
+    deps.credentialSessionGrantStore.dropForCaller(record.id)
+  );
+  await step("agent-credentials", () => deps.revokeAgentCredentials?.(record.id));
+  await step("connection-grants", () => deps.connectionGrants?.revokeForPrincipal(record.id));
+  await step("filesystem-handles", () => deps.getFsService()?.closeHandlesForCaller(record.id));
+  await step("webhook-subscriptions", () =>
+    deps.getWebhookIngress()?.internal?.revokeForCaller?.(record.id)
+  );
+  await step("runtime-token", () => deps.tokenManager.revokeToken(record.id));
+  await step("agent-runtime-token", () => deps.tokenManager.revokeToken(`agent:${record.id}`));
+  await step("entity-title", () => deps.entityTitleService?.clear(record.id));
   const workerdManager = deps.getWorkerdManager();
   if (record.kind === "worker") {
-    await workerdManager?.stopWorker(record.id).catch(() => {});
+    await step("worker-runtime", () => workerdManager?.stopWorker(record.id));
   }
   if (record.kind === "do") {
-    await workerdManager?.destroyDOEntity(record.id).catch(() => {});
+    await step("durable-object-runtime", () => workerdManager?.destroyDOEntity(record.id));
   }
-}
 
-async function bestEffort(fn: () => unknown | Promise<unknown>): Promise<void> {
-  await Promise.resolve()
-    .then(fn)
-    .catch(() => {});
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `Runtime entity cleanup was incomplete for ${record.id} (${failures.length} step${
+        failures.length === 1 ? "" : "s"
+      } failed)`
+    );
+  }
 }

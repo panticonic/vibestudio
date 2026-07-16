@@ -47,7 +47,7 @@ describe("buildUnit extension builds", () => {
         type: "module",
         private: true,
         vibestudio: {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           displayName: "Hello Extension",
           entry: "index.ts",
           sourcemap: true,
@@ -146,7 +146,7 @@ describe("buildUnit extension builds", () => {
         type: "module",
         private: true,
         vibestudio: {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           displayName: "CJS Extension",
           entry: "index.ts",
           sourcemap: true,

@@ -181,7 +181,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(result.bundle).not.toContain("root-entry");
   });
 
-  it("selects package export conditions by libraryTarget (panel vs eval/worker)", async () => {
+  it("selects package export conditions independently for panel, worker, and eval", async () => {
     // A package with target-forked entries — exactly the shape that broke eval
     // imports: a panel entry that must NOT be picked for a DO host.
     const pkgDir = path.join(workspaceRoot, "packages", "dual-entry");
@@ -195,6 +195,7 @@ describe("BuildSystemV2 library package subpaths", () => {
         exports: {
           ".": {
             "vibestudio-panel": "./src/panel.ts",
+            "vibestudio-eval": "./src/eval.ts",
             worker: "./src/worker.ts",
             default: "./src/default.ts",
           },
@@ -209,6 +210,7 @@ describe("BuildSystemV2 library package subpaths", () => {
       path.join(pkgDir, "src", "worker.ts"),
       'export const marker = "WORKER-ENTRY";\n'
     );
+    fs.writeFileSync(path.join(pkgDir, "src", "eval.ts"), 'export const marker = "EVAL-ENTRY";\n');
     fs.writeFileSync(
       path.join(pkgDir, "src", "default.ts"),
       'export const marker = "DEFAULT-ENTRY";\n'
@@ -227,15 +229,90 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(panelBuild.bundle).toContain("PANEL-ENTRY");
     expect(panelBuild.bundle).not.toContain("WORKER-ENTRY");
 
-    // Worker target (e.g. the workerd eval sandbox) resolves the `worker`
-    // condition instead — and a distinct libraryTarget MUST yield a distinct
-    // cache key, not the panel bundle.
+    // An ordinary worker still resolves its worker entry.
     const workerBuild = await buildSystem.getBuild("@workspace/dual-entry", undefined, {
       library: true,
       libraryTarget: "worker",
     });
     expect(workerBuild.bundle).toContain("WORKER-ENTRY");
     expect(workerBuild.bundle).not.toContain("PANEL-ENTRY");
+
+    // Eval has its own static contract and cache identity; it does not borrow
+    // the narrower worker entry merely because EvalDO itself runs in workerd.
+    const evalBuild = await buildSystem.getBuild("@workspace/dual-entry", undefined, {
+      library: true,
+      libraryTarget: "eval",
+    });
+    expect(evalBuild.bundle).toContain("EVAL-ENTRY");
+    expect(evalBuild.bundle).not.toContain("WORKER-ENTRY");
+    expect(evalBuild.bundle).not.toContain("PANEL-ENTRY");
+  });
+
+  it("keeps the EvalDO-injected runtime external from eval library bundles", async () => {
+    const runtimeDir = path.join(workspaceRoot, "packages", "runtime");
+    const consumerDir = path.join(workspaceRoot, "packages", "consumer");
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.mkdirSync(consumerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(runtimeDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/runtime",
+        version: "0.1.0",
+        type: "module",
+        exports: {
+          ".": {
+            "vibestudio-eval": "./eval.ts",
+            worker: "./worker.ts",
+          },
+        },
+      })
+    );
+    fs.writeFileSync(
+      path.join(runtimeDir, "eval.ts"),
+      [
+        'throw new Error("HOST-INJECTION-MISSING");',
+        'export const workspace = { marker: "STATIC-EVAL-FACADE" };',
+        "",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(runtimeDir, "worker.ts"),
+      'export const workspace = { marker: "WORKER-FACADE" };\n'
+    );
+    fs.writeFileSync(
+      path.join(consumerDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/consumer",
+        version: "0.1.0",
+        type: "module",
+        exports: { ".": "./index.ts" },
+        dependencies: { "@workspace/runtime": "workspace:*" },
+      })
+    );
+    fs.writeFileSync(
+      path.join(consumerDir, "index.ts"),
+      [
+        'import { workspace } from "@workspace/runtime";',
+        "export const readMarker = () => workspace.marker;",
+        "",
+      ].join("\n")
+    );
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      fakeWorkspaceSource(() => workspaceRoot),
+      []
+    );
+
+    const result = await buildSystem.getBuild("@workspace/consumer", undefined, {
+      library: true,
+      libraryTarget: "eval",
+      externals: ["@workspace/runtime"],
+    });
+
+    expect(result.bundle).toContain('require("@workspace/runtime")');
+    expect(result.bundle).not.toContain("HOST-INJECTION-MISSING");
+    expect(result.bundle).not.toContain("STATIC-EVAL-FACADE");
+    expect(result.bundle).not.toContain("WORKER-FACADE");
   });
 
   it("resolves a build unit that exists only at a context ref", async () => {

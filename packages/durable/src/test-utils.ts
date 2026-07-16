@@ -138,6 +138,7 @@ export function createTestDirectAuthority(input: {
     issuedAt: now,
     expiresAt: now + 5_000,
     context: {
+      authorizingOrigin: { kind: principalKind, principal },
       host: principalKind === "host" ? principal : null,
       actingUser:
         principalKind === "user"
@@ -148,14 +149,18 @@ export function createTestDirectAuthority(input: {
       device: principalKind === "device" ? principal : null,
       entity: principalKind === "entity" ? principal : null,
       incarnation: null,
-      code: principalKind === "code" ? (`code:test@${"a".repeat(64)}` as const) : null,
-      codeManifest:
-        principalKind === "code"
-          ? {
-              principal: `code:test@${"a".repeat(64)}` as const,
-              requested: [{ capability, resource: { kind: "exact", key: audience } }],
-            }
-          : null,
+      codeAuthority: {
+        executor:
+          principalKind === "code"
+            ? {
+                principal: `code:test@${"a".repeat(64)}` as const,
+                requested: [{ capability, resource: { kind: "exact", key: audience } }],
+              }
+            : null,
+        execution: null,
+        initiator: null,
+        delegations: [],
+      },
       deviceOwnership:
         principalKind === "device"
           ? { device: principal, user: "user:test", revision: "test" }
@@ -165,7 +170,6 @@ export function createTestDirectAuthority(input: {
         principalKind === "entity"
           ? { entity: principal, contextId: "test", channelId: "test" }
           : null,
-      delegation: [],
       workspace,
       session: { id: "test", audience, version: "1.0.0", expiresAt: now + 5_000 },
     },

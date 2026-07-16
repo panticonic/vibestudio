@@ -7,7 +7,7 @@ import type { ChildProcess } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getWorkspaceDir } from "@vibestudio/env-paths";
+import { getWorkspaceReachDir } from "@vibestudio/env-paths";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { IdentityDb } from "@vibestudio/identity/identityDb";
@@ -25,7 +25,8 @@ import {
   HubDeviceCredentialBodySchema,
   HubRootCompletePairingBodySchema,
   openHubDataStores,
-  prepareEphemeralWorkspaceDisk,
+  prepareDevelopmentWorkspaceDisk,
+  restoreWorkspaceRuntimesAtHubStart,
   shouldRestartWorkspaceAtHubStart,
   signalWorkspaceChildTree,
   terminateWorkspaceChild,
@@ -70,6 +71,25 @@ describe("hub startup workspace selection", () => {
         hasRoutedRooms: false,
       })
     ).toBe(false);
+  });
+
+  it("keeps restoring healthy workspaces when one routed workspace fails", async () => {
+    const started: string[] = [];
+    const reportFailure = vi.fn();
+
+    await expect(
+      restoreWorkspaceRuntimesAtHubStart(
+        ["healthy-a", "broken", "healthy-b"],
+        async (workspaceName) => {
+          started.push(workspaceName);
+          if (workspaceName === "broken") throw new Error("corrupt worker bundle");
+        },
+        reportFailure
+      )
+    ).resolves.toBeUndefined();
+
+    expect(started).toEqual(["healthy-a", "broken", "healthy-b"]);
+    expect(reportFailure).toHaveBeenCalledWith("broken", expect.any(Error));
   });
 });
 
@@ -134,37 +154,46 @@ describe("workspace child process-tree ownership", () => {
   });
 });
 
-describe("ephemeral workspace evidence retention", () => {
+describe("development checkout evidence retention", () => {
   it("deletes the previous checkout only when its replacement starts", () => {
     const calls: string[] = [];
-    let record: { workspaceId: string; diskName: string | null } | null = {
+    let record: { workspaceId: string; name: string; diskName: string } | null = {
       workspaceId: "ws_dev",
-      diskName: "dev-crashed",
+      name: "dev",
+      diskName: "dev-deadbeef",
     };
     const centralData = {
-      getEphemeralWorkspace: () => record,
-      setEphemeralWorkspaceDiskName: (workspaceId: string, diskName: string) => {
-        record = { workspaceId, diskName };
+      getDevelopmentCheckout: () => record,
+      setDevelopmentCheckout: (workspaceId: string, diskName: string) => {
+        record = { workspaceId, name: "dev", diskName };
       },
     } as unknown as CentralDataManager;
 
-    prepareEphemeralWorkspaceDisk(centralData, "ws_dev", "dev-replacement", (name) => {
+    prepareDevelopmentWorkspaceDisk(centralData, "ws_dev", "dev-replacement", (name) => {
       calls.push(name);
       return true;
     });
 
-    expect(calls).toEqual(["dev-crashed"]);
-    expect(record).toEqual({ workspaceId: "ws_dev", diskName: "dev-replacement" });
+    expect(calls).toEqual(["dev-deadbeef"]);
+    expect(record).toEqual({
+      workspaceId: "ws_dev",
+      name: "dev",
+      diskName: "dev-replacement",
+    });
   });
 
   it("does not remove a checkout when re-registering the same disk name", () => {
     const remove = vi.fn(() => true);
     const centralData = {
-      getEphemeralWorkspace: () => ({ workspaceId: "ws_dev", diskName: "dev-current" }),
-      setEphemeralWorkspaceDiskName: vi.fn(),
+      getDevelopmentCheckout: () => ({
+        workspaceId: "ws_dev",
+        name: "dev",
+        diskName: "dev-current",
+      }),
+      setDevelopmentCheckout: vi.fn(),
     } as unknown as CentralDataManager;
 
-    prepareEphemeralWorkspaceDisk(centralData, "ws_dev", "dev-current", remove);
+    prepareDevelopmentWorkspaceDisk(centralData, "ws_dev", "dev-current", remove);
 
     expect(remove).not.toHaveBeenCalled();
   });
@@ -232,7 +261,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
       workspaceId: "ws_beta",
     });
 
-    const advertisedState = path.join(getWorkspaceDir("base"), "state");
+    const advertisedReach = getWorkspaceReachDir("base");
     // Every child reads the hub's ONE identity DB (WP0 §2) — same path for all.
     expect(envA["VIBESTUDIO_IDENTITY_DB_PATH"]).toBe("/hub/state/identity.db");
     expect(envB["VIBESTUDIO_IDENTITY_DB_PATH"]).toBe("/hub/state/identity.db");
@@ -242,9 +271,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(envB["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_beta");
     // DTLS identity belongs to the advertised logical workspace, so replacing
     // an ephemeral child checkout preserves the pinned workspace fingerprint.
-    expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(
-      path.join(advertisedState, "webrtc", "identity.pem")
-    );
+    expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(path.join(advertisedReach, "identity.pem"));
     expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(envB["VIBESTUDIO_WEBRTC_IDENTITY"]);
 
     // It is still distinct from the hub's own identity.
@@ -264,7 +291,10 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_ADVERTISED_WORKSPACE"]).toBe("base");
     expect(env["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_base");
     expect(env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"]).toBe(
-      path.join(getWorkspaceDir("base"), "state", "webrtc", "routes.json")
+      path.join(getWorkspaceReachDir("base"), "routes.json")
+    );
+    expect(env["VIBESTUDIO_PAIRING_ACTIVATION_STATE_PATH"]).toBe(
+      path.join(getWorkspaceReachDir("base"), "pairing-activations.json")
     );
     expect(env["VIBESTUDIO_WORKSPACE_EPHEMERAL"]).toBe("1");
     expect(env["VIBESTUDIO_GATEWAY_PORT"]).toBeUndefined();
@@ -311,6 +341,7 @@ function makeHubCentralData(
     getWorkspaceIdByName: (name: string) =>
       entries.find((e) => e.name === name)?.workspaceId ?? null,
     hasWorkspace: (name: string) => entries.some((e) => e.name === name),
+    getDevelopmentWorkspace: () => null,
     addWorkspace: (name: string) => {
       if (!entries.some((e) => e.name === name)) {
         entries.push({ name, workspaceId: `ws_${name}`, lastOpened: Date.now() });

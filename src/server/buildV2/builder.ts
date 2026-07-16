@@ -1344,8 +1344,8 @@ export interface BuildUnitOptions {
   /**
    * Which execution target will run this library bundle — selects the module
    * resolution conditions (see `conditionsForLibraryTarget`). Defaults to
-   * `panel`; eval imports pass `eval` so workspace packages resolve their
-   * worker/workerd entry instead of a panel entry that bootstraps on load.
+   * `panel`; eval imports pass `eval` so packages may select an eval-specific
+   * injected surface and otherwise fall back to their worker/workerd entry.
    */
   libraryTarget?: LibraryBuildTarget;
 }
@@ -1475,7 +1475,7 @@ async function doBuild(
     if (options?.library) {
       if (!options.libraryTarget) {
         throw new Error(
-          `library build for ${node.name} requires an explicit libraryTarget ('panel' or 'worker')`
+          `library build for ${node.name} requires an explicit libraryTarget ('panel', 'worker', or 'eval')`
         );
       }
       return await buildLibraryBundle(
@@ -1581,8 +1581,12 @@ async function prepareBuildEnv(
   // and its dependencies disagree about a package's panel-vs-worker fork.
   conditions: readonly string[] = PANEL_CONDITIONS
 ): Promise<BuildEnv> {
-  const outdir = path.join(os.tmpdir(), "vibestudio-builds", `build-${buildKey}`);
-  fs.mkdirSync(outdir, { recursive: true });
+  const buildsTmpDir = path.join(os.tmpdir(), "vibestudio-builds");
+  fs.mkdirSync(buildsTmpDir, { recursive: true });
+  // buildKey identifies the output, not the process producing it. Multiple
+  // Vibestudio instances may legitimately build the same key concurrently, so
+  // they must never share esbuild's mutable output directory.
+  const outdir = fs.mkdtempSync(path.join(buildsTmpDir, `build-${buildKey}-`));
 
   const sourcePath = sourcePathForNode(node, sourceRoot);
   const entryFile = resolveEntryPoint(node, sourcePath, conditions);
@@ -1899,17 +1903,20 @@ async function buildPanel(
 // ---------------------------------------------------------------------------
 
 const WORKER_CONDITIONS = ["worker", "workerd", "import", "default"] as const;
+const EVAL_CONDITIONS = ["vibestudio-eval", "worker", "workerd", "import", "default"] as const;
 const EXTENSION_CONDITIONS = ["import", "default"] as const;
 
 /**
  * Map a library bundle's execution target to esbuild/package-export resolution
- * conditions. This is what lets a workerd-hosted import (incl. the eval sandbox)
- * pick up a package's worker entry instead of its panel entry — the panel entry
- * of `@workspace/runtime` runs `initRuntime()` at module load, which throws
- * outside a panel. No default: the caller MUST state the host.
+ * conditions. Eval keeps worker/workerd as fallbacks, but gets a leading
+ * `vibestudio-eval` condition so host-injected packages can publish an eval-only
+ * surface without contaminating ordinary workers. No default: the caller MUST
+ * state the host.
  */
 function conditionsForLibraryTarget(target: LibraryBuildTarget): readonly string[] {
   switch (target) {
+    case "eval":
+      return EVAL_CONDITIONS;
     case "worker":
       return WORKER_CONDITIONS;
     case "panel":

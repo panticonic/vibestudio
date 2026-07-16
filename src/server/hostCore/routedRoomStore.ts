@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import { PAIRING_ROOM_PATTERN } from "@vibestudio/shared/connect";
 import { DEVICE_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
-import { getWorkspaceDir } from "@vibestudio/env-paths";
+import { getWorkspaceReachDir } from "@vibestudio/env-paths";
 import { writeFileAtomicSync } from "../../atomicFile.js";
 
 const USER_ID_PATTERN = /^usr_[A-Za-z0-9_-]{24}$/;
@@ -88,7 +88,15 @@ export function routedRoomKey(route: RoutedRoomRecord): string {
 }
 
 export function routedRoomStatePath(workspaceName: string): string {
-  return path.join(getWorkspaceDir(workspaceName), "state", "webrtc", "routes.json");
+  return path.join(getWorkspaceReachDir(workspaceName), "routes.json");
+}
+
+export function pairingActivationStatePath(workspaceName: string): string {
+  return path.join(getWorkspaceReachDir(workspaceName), "pairing-activations.json");
+}
+
+export function workspaceWebRtcIdentityPath(workspaceName: string): string {
+  return path.join(getWorkspaceReachDir(workspaceName), "identity.pem");
 }
 
 /**

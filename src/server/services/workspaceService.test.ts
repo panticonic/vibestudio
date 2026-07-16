@@ -39,6 +39,7 @@ import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { UserlandApprovalChoice } from "@vibestudio/shared/approvals";
 import type { HubWorkspaceRoute } from "@vibestudio/service-schemas/hubControl";
+import type { UserlandApprovalQueueRequest } from "./approvalQueue.js";
 
 /**
  * Build a recording RpcCaller that captures every (target, method, args) tuple
@@ -176,6 +177,7 @@ const panelCtx: ServiceContext = {
       callerKind: "panel",
       repoPath: "panels/test",
       executionDigest: "ev-test",
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -198,6 +200,7 @@ const appCtx: ServiceContext = {
       callerKind: "app",
       repoPath: "apps/shell",
       executionDigest: "ev-app",
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -486,6 +489,7 @@ describe("workspace service handler", () => {
         callerKind: "app",
         repoPath: "apps/self",
         executionDigest: "ev-self",
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -586,6 +590,54 @@ describe("workspace service handler", () => {
     });
     await service.handler(panelCtx, "setConfigField", ["title", "Test"]);
     expect(setConfigField).toHaveBeenCalledWith("title", "Test", panelCtx);
+  });
+
+  it("gives identical workspace writes one stable scoped approval identity", async () => {
+    const requests: UserlandApprovalQueueRequest[] = [];
+    const requestUserland = vi.fn(async (request: UserlandApprovalQueueRequest) => {
+      requests.push(request);
+      return grantedApproval();
+    });
+    const service = createWorkspaceService({
+      workspace: makeWorkspace(),
+      getConfig: () => makeConfig(),
+      setConfigField: vi.fn(),
+      workspaceCatalog: makeCentralData(),
+      approvalQueue: { requestUserland },
+    });
+
+    await service.handler(panelCtx, "setConfigField", ["title", { text: "Same" }]);
+    await service.handler(panelCtx, "setConfigField", ["title", { text: "Same" }]);
+    await service.handler(panelCtx, "setConfigField", ["title", { text: "Different" }]);
+
+    const [first, second, third] = requests;
+    expect(first?.promptOptions).toBe("scoped");
+    expect(first?.options.map((option) => option.value)).toEqual([
+      "once",
+      "session",
+      "version",
+      "deny",
+    ]);
+    expect(first?.subject.id).toBe(second?.subject.id);
+    expect(first?.subject.id).not.toBe(third?.subject.id);
+  });
+
+  it("does not request approval for an already-applied config value", async () => {
+    const requestUserland = vi.fn(async () => grantedApproval());
+    const setConfigField = vi.fn();
+    const service = createWorkspaceService({
+      workspace: makeWorkspace(),
+      getConfig: () => makeConfig(),
+      setConfigField,
+      wouldSetConfigField: vi.fn(async () => false),
+      workspaceCatalog: makeCentralData(),
+      approvalQueue: { requestUserland },
+    });
+
+    await service.handler(panelCtx, "setConfigField", ["title", "Already stored"]);
+
+    expect(requestUserland).not.toHaveBeenCalled();
+    expect(setConfigField).not.toHaveBeenCalled();
   });
 
   it("recurring.list returns declarative scheduled job diagnostics", async () => {

@@ -17,6 +17,7 @@ import {
   saveCentralConfig,
 } from "./loader.js";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { getWorkspaceReachDir } from "@vibestudio/env-paths";
 
 const originalXdgConfigHome = process.env["XDG_CONFIG_HOME"];
 const tempRoots: string[] = [];
@@ -509,6 +510,9 @@ describe("initWorkspace", () => {
       "delete-failure"
     );
     fs.writeFileSync(path.join(workspaceDir, "operator-data.txt"), "keep");
+    const reachDir = getWorkspaceReachDir("delete-failure");
+    fs.mkdirSync(reachDir, { recursive: true });
+    fs.writeFileSync(path.join(reachDir, "identity.pem"), "pinned-identity");
     const centralData = {
       getWorkspaceEntry: () => ({
         name: "delete-failure",
@@ -524,6 +528,7 @@ describe("initWorkspace", () => {
       /injected registry deletion failure/
     );
     expect(fs.readFileSync(path.join(workspaceDir, "operator-data.txt"), "utf-8")).toBe("keep");
+    expect(fs.readFileSync(path.join(reachDir, "identity.pem"), "utf-8")).toBe("pinned-identity");
     expect(
       fs
         .readdirSync(path.dirname(workspaceDir))
@@ -584,6 +589,9 @@ describe("initWorkspace", () => {
     const workspace = createAndRegisterWorkspace("cleanup-retry", centralData, {
       templateDir: templateRoot,
     });
+    const reachDir = getWorkspaceReachDir("cleanup-retry");
+    fs.mkdirSync(reachDir, { recursive: true });
+    fs.writeFileSync(path.join(reachDir, "identity.pem"), "pinned-identity");
     const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
     const originalRmSync = fs.rmSync.bind(fs);
     const rm = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
@@ -603,9 +611,14 @@ describe("initWorkspace", () => {
 
     expect(centralData.getWorkspaceEntry("cleanup-retry")).toBeNull();
     expect(fs.existsSync(path.join(workspacesDir, "cleanup-retry"))).toBe(false);
+    expect(fs.existsSync(reachDir)).toBe(false);
+    const [stagedName] = fs
+      .readdirSync(workspacesDir)
+      .filter((name) => name.startsWith(".delete-cleanup-retry-"));
+    expect(stagedName).toBeDefined();
     expect(
-      fs.readdirSync(workspacesDir).filter((name) => name.startsWith(".delete-cleanup-retry-"))
-    ).toHaveLength(1);
+      fs.readFileSync(path.join(workspacesDir, stagedName!, "reach", "identity.pem"), "utf-8")
+    ).toBe("pinned-identity");
 
     expect(recoverStagedWorkspaceDeletions(centralData)).toEqual({
       finalized: ["cleanup-retry"],
@@ -631,6 +644,9 @@ describe("initWorkspace", () => {
       "workspaces",
       "dev-deadbeef"
     );
+    const stableReachDir = getWorkspaceReachDir("dev");
+    fs.mkdirSync(stableReachDir, { recursive: true });
+    fs.writeFileSync(path.join(stableReachDir, "routes.json"), "stable-routes");
     const registered = { hasWorkspace: () => true } as unknown as CentralDataManager;
 
     expect(() => deleteUnregisteredWorkspace("dev-deadbeef", registered)).toThrow(
@@ -641,6 +657,9 @@ describe("initWorkspace", () => {
     const unregistered = { hasWorkspace: () => false } as unknown as CentralDataManager;
     expect(deleteUnregisteredWorkspace("dev-deadbeef", unregistered)).toBe(true);
     expect(fs.existsSync(workspaceDir)).toBe(false);
+    expect(fs.readFileSync(path.join(stableReachDir, "routes.json"), "utf-8")).toBe(
+      "stable-routes"
+    );
     expect(deleteUnregisteredWorkspace("dev-deadbeef", unregistered)).toBe(false);
   });
 
@@ -674,9 +693,15 @@ describe("initWorkspace", () => {
       "workspaces",
       "full-lifecycle"
     );
+    const reachDir = getWorkspaceReachDir("full-lifecycle");
+    fs.mkdirSync(reachDir, { recursive: true });
+    fs.writeFileSync(path.join(reachDir, "identity.pem"), "pinned-identity");
+    fs.writeFileSync(path.join(reachDir, "routes.json"), "durable-routes");
+    fs.writeFileSync(path.join(reachDir, "pairing-activations.json"), "durable-activation");
 
     expect(deleteAndUnregisterWorkspace("full-lifecycle", centralData)).toBe(entry.workspaceId);
     expect(fs.existsSync(workspaceDir)).toBe(false);
+    expect(fs.existsSync(reachDir)).toBe(false);
     expect(centralData.getWorkspaceEntry("full-lifecycle")).toBeNull();
     expect(db.prepare("SELECT COUNT(*) AS count FROM membership").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM user_workspace_targets").get()).toEqual({

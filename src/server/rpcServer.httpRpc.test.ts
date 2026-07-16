@@ -34,8 +34,8 @@ function createTestSetup(opts?: {
   entityCache?: EntityCache;
   userSubjectSource?: UserSubjectSource;
   membershipGate?: (subject: UserSubject | undefined) => boolean;
-  resolveExecutionRequests?: NonNullable<
-    ConstructorParameters<typeof RpcServer>[0]["resolveExecutionRequests"]
+  resolveExecutionAuthority?: NonNullable<
+    ConstructorParameters<typeof RpcServer>[0]["resolveExecutionAuthority"]
   >;
 }) {
   const tokenManager = new TokenManager();
@@ -81,7 +81,7 @@ function createTestSetup(opts?: {
     entityCache,
     userSubjectSource: opts?.userSubjectSource,
     membershipGate: opts?.membershipGate,
-    resolveExecutionRequests: opts?.resolveExecutionRequests,
+    resolveExecutionAuthority: opts?.resolveExecutionAuthority,
   });
 
   return {
@@ -421,7 +421,8 @@ describe("RpcServer HTTP POST /rpc", () => {
       );
       setup = createTestSetup({
         entityCache,
-        resolveExecutionRequests: (digest) => (digest === TEST_EXECUTION_DIGEST ? [] : null),
+        resolveExecutionAuthority: (digest) =>
+          digest === TEST_EXECUTION_DIGEST ? { requests: [], delegations: [] } : null,
       });
       setup.server.initHandlers();
       gateway = new Gateway({
@@ -460,6 +461,7 @@ describe("RpcServer HTTP POST /rpc", () => {
           callerKind: "do",
           repoPath: "workers/agent-worker",
           executionDigest: TEST_EXECUTION_DIGEST,
+          delegations: [],
           requested: [],
         },
       });
@@ -1060,7 +1062,8 @@ describe("RpcServer HTTP POST /rpc", () => {
         dispatcher,
         egressProxy: stubEgress,
         entityCache,
-        resolveExecutionRequests: (digest) => (digest === TEST_EXECUTION_DIGEST ? [] : null),
+        resolveExecutionAuthority: (digest) =>
+          digest === TEST_EXECUTION_DIGEST ? { requests: [], delegations: [] } : null,
       });
       server.initHandlers();
       const gw = new Gateway({
@@ -1099,6 +1102,7 @@ describe("RpcServer HTTP POST /rpc", () => {
                 callerKind: "do",
                 repoPath: "workers/agent-worker",
                 executionDigest: TEST_EXECUTION_DIGEST,
+                delegations: [],
                 requested: [],
               },
             },

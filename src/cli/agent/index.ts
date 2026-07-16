@@ -77,7 +77,8 @@ interface EnsuredAgentSession {
 
 async function ensureAgentSessionWithCredentials(
   name: string,
-  creds: CliCredentials
+  creds: CliCredentials,
+  client = new RpcClient(creds)
 ): Promise<EnsuredAgentSession> {
   if (!isValidSessionName(name)) {
     throw new UsageError(`Invalid session name: ${name} (use letters, digits, "_", "-")`);
@@ -87,7 +88,6 @@ async function ensureAgentSessionWithCredentials(
       "no remote workspace selected — run `vibestudio remote select <workspace>`"
     );
   }
-  const client = new RpcClient(creds);
   const existing = loadAgentSession(name);
   if (existing && existing.serverUrl !== creds.url) {
     console.error(
@@ -125,8 +125,12 @@ async function ensureAgentSessionWithCredentials(
 /** Ensure a named session exists in the currently selected workspace.
  * System-test commands use this for explicit `--session` scopes so an
  * ephemeral dev-workspace restart repairs its context without a manual attach. */
-export async function ensureNamedAgentSession(name: string): Promise<AgentSession> {
-  return (await ensureAgentSessionWithCredentials(name, requireWorkspaceCredentials())).session;
+export async function ensureNamedAgentSession(
+  name: string,
+  client?: RpcClient
+): Promise<AgentSession> {
+  return (await ensureAgentSessionWithCredentials(name, requireWorkspaceCredentials(), client))
+    .session;
 }
 
 async function attach(inv: ParsedInvocation): Promise<number> {

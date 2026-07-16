@@ -21,6 +21,7 @@ import {
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
 import { executionArtifactFixture } from "./testing/executionArtifactFixture.js";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
 // Mock child_process to prevent actual workerd spawning
 vi.mock("child_process", () => ({
@@ -177,6 +178,25 @@ async function launchDurableObject(mgr: WorkerdManager, intent: DurableObjectInt
   return mgr.ensureDurableObjectEntity({ ...args, execution });
 }
 
+function activeDoRecord(
+  handle: { targetId: string; executionDigest: string },
+  intent: Pick<DurableObjectIntent, "source" | "className" | "key" | "contextId" | "stateArgs">
+): EntityRecord {
+  return {
+    id: handle.targetId,
+    kind: "do",
+    source: { repoPath: intent.source },
+    activeExecutionDigest: handle.executionDigest,
+    contextId: intent.contextId,
+    className: intent.className,
+    key: intent.key,
+    ...(intent.stateArgs !== undefined ? { stateArgs: intent.stateArgs } : {}),
+    createdAt: 1,
+    status: "active",
+    cleanupComplete: false,
+  };
+}
+
 /** Status of a live worker instance by sanitized name (replaces getInstanceStatus). */
 function statusOf(mgr: WorkerdManager, name: string) {
   return mgr.listInstances().find((instance) => instance.name === name) ?? null;
@@ -213,6 +233,31 @@ describe("workerd stderr filtering", () => {
 });
 
 describe("WorkerdManager", () => {
+  it("retains the durable DO deletion queue when storage enumeration fails", async () => {
+    const deps = createMockDeps();
+    const mgr = new WorkerdManager(deps);
+    const internals = mgr as unknown as {
+      universalDoStorageDir(): string;
+      flushPendingDoStorageDeletes(): Promise<void>;
+    };
+    const storageDir = internals.universalDoStorageDir();
+    fs.mkdirSync(path.dirname(storageDir), { recursive: true });
+    fs.writeFileSync(storageDir, "not-a-directory");
+    await mgr.destroyDO({
+      source: "workers/runtime-fixture",
+      className: "RuntimeFixtureDO",
+      objectKey: "delete-me",
+    });
+
+    await expect(internals.flushPendingDoStorageDeletes()).rejects.toMatchObject({
+      code: "ENOTDIR",
+    });
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(deps.statePath, "pending-do-storage-deletes.json"), "utf8")
+    ) as { refs: Array<{ objectKey: string }> };
+    expect(manifest.refs).toEqual([expect.objectContaining({ objectKey: "delete-me" })]);
+  });
+
   it("binds the required process-owned egress secret", () => {
     const mgr = new WorkerdManager(createMockDeps({ egressSecret: "owned-by-bootstrap" }));
 
@@ -452,10 +497,11 @@ describe("WorkerdManager", () => {
     });
 
     it("binds runtime-managed DOs to main by default", async () => {
-      const deps = createMockDeps();
+      const registerEgressCaller = vi.fn();
+      const deps = createMockDeps({ registerEgressCaller });
       const mgr = new WorkerdManager(deps);
 
-      await launchDurableObject(mgr, {
+      const handle = await launchDurableObject(mgr, {
         source: "workers/new-do",
         className: "NewDO",
         key: "k1",
@@ -463,6 +509,85 @@ describe("WorkerdManager", () => {
       });
 
       expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith("workers/new-do", undefined);
+      expect(registerEgressCaller).toHaveBeenCalledWith(
+        handle.targetId,
+        expect.objectContaining({
+          runtime: { id: handle.targetId, kind: "do" },
+          code: expect.objectContaining({ callerId: handle.targetId, repoPath: "workers/new-do" }),
+        })
+      );
+    });
+
+    it("removes exact DO egress attribution and makes its object image unloadable", async () => {
+      const registerEgressCaller = vi.fn();
+      const unregisterEgressCaller = vi.fn();
+      const deps = createMockDeps({ registerEgressCaller, unregisterEgressCaller });
+      const mgr = new WorkerdManager(deps);
+      const handle = await launchDurableObject(mgr, {
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "k1",
+        contextId: "ctx-agent",
+      });
+
+      await mgr.destroyDOEntity(handle.targetId);
+
+      expect(unregisterEgressCaller).toHaveBeenCalledWith(handle.targetId);
+      registerEgressCaller.mockClear();
+      expect(mgr.getDoVersion("workers/new-do", "NewDO", "k1")).toBeNull();
+      await expect(mgr.getDoCode("workers/new-do", "NewDO", "k1")).resolves.toBeNull();
+      expect(registerEgressCaller).not.toHaveBeenCalled();
+    });
+
+    it("cannot restore a userland object without its active durable entity", async () => {
+      const registerEgressCaller = vi.fn();
+      const deps = createMockDeps({ registerEgressCaller });
+      const mgr = new WorkerdManager(deps);
+      const intent = {
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "retired",
+        contextId: "ctx-agent",
+      };
+      const handle = await launchDurableObject(mgr, intent);
+
+      await mgr.destroyDOEntity(handle.targetId);
+      registerEgressCaller.mockClear();
+
+      await expect(
+        mgr.ensureDispatchableDurableObject(intent.source, intent.className, intent.key, null)
+      ).rejects.toThrow(`Durable Object runtime entity is not active: ${handle.targetId}`);
+      expect(mgr.getDoVersion(intent.source, intent.className, intent.key)).toBeNull();
+      expect(registerEgressCaller).not.toHaveBeenCalled();
+    });
+
+    it("restores an active object from its recorded exact artifact", async () => {
+      const deps = createMockDeps();
+      const launchManager = new WorkerdManager(deps);
+      const intent = {
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "restored",
+        contextId: "ctx-agent",
+      };
+      const handle = await launchDurableObject(launchManager, intent);
+      const record = activeDoRecord(handle, intent);
+      vi.mocked(deps.resolveExecutionArtifact).mockClear();
+      vi.mocked(deps.getExecutionArtifact).mockClear();
+      const restoredManager = new WorkerdManager(deps);
+
+      await restoredManager.ensureDispatchableDurableObject(
+        intent.source,
+        intent.className,
+        intent.key,
+        record
+      );
+
+      expect(deps.getExecutionArtifact).toHaveBeenCalledWith(handle.executionDigest);
+      expect(deps.resolveExecutionArtifact).not.toHaveBeenCalled();
+      expect(
+        restoredManager.getDoVersion(intent.source, intent.className, intent.key)
+      ).not.toBeNull();
     });
 
     it("serves object-specific stateArgs in userland DO env", async () => {
@@ -972,14 +1097,21 @@ describe("WorkerdManager", () => {
       const mgr = new WorkerdManager(deps);
 
       // Bring workerd up first (a worker create starts the static host); then
-      // register a userland DO class — which by itself never restarts.
+      // prepare an active userland DO image — which by itself never restarts.
       await launchWorker(mgr, startArgs());
-      await mgr.registerAllDOClasses([{ source: "workers/agent", className: "AgentDO" }]);
+      const intent = {
+        source: "workers/agent",
+        className: "AgentDO",
+        key: "object-1",
+        contextId: "ctx-agent",
+      };
+      const handle = await launchDurableObject(mgr, intent);
+      const record = activeDoRecord(handle, intent);
 
       const restartBegin = vi.fn();
       mgr.onRestartBegin(restartBegin);
 
-      // If ensureDO probed HTTP readiness, a rejecting fetch would (old behavior)
+      // If dispatch restoration probed HTTP readiness, a rejecting fetch would
       // trigger a restart. The new contract: a live, registered process is left
       // alone — no readiness fetch, no restart. (Userland DO classes load into
       // the static universal-do host, so they never restart regardless.)
@@ -987,7 +1119,9 @@ describe("WorkerdManager", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       try {
-        await expect(mgr.ensureDO("workers/agent", "AgentDO", "object-1")).resolves.toBeUndefined();
+        await expect(
+          mgr.ensureDispatchableDurableObject(intent.source, intent.className, intent.key, record)
+        ).resolves.toBeUndefined();
       } finally {
         vi.unstubAllGlobals();
       }
@@ -998,11 +1132,16 @@ describe("WorkerdManager", () => {
   });
 
   describe("universal DO host", () => {
-    it("shares dynamically loaded DO module graphs across object keys for the same version", () => {
+    it("binds loaded DO outbound authority to the exact object principal", () => {
       expect(compiledWorkerdPrograms.universalDo).toContain(
-        "this.env.LOADER.get(`${identity}@${version}`"
+        "`${identity}/${encodeURIComponent(userKey)}@${version}`"
       );
-      expect(compiledWorkerdPrograms.universalDo).not.toContain("loaderIdentity");
+      expect(compiledWorkerdPrograms.universalDo).toContain(
+        "globalOutbound: egressBinding(this.ctx, runtimeId)"
+      );
+      expect(compiledWorkerdPrograms.universalDo).toContain(
+        "const runtimeId = `do:${source}:${className}:${userKey}`"
+      );
     });
   });
 

@@ -18,6 +18,7 @@ export interface HostedAppIdentity {
   source?: string;
   executionDigest?: string | null;
   requested?: readonly CapabilityScope[];
+  delegations?: readonly import("./authorityManifest.js").EvalAuthorityDelegation[];
 }
 import type { PanelLifecycleResult } from "./types.js";
 

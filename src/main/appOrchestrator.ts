@@ -5,7 +5,11 @@ import { pathToFileURL } from "node:url";
 import type { PanelViewLike } from "@vibestudio/shared/panelInterfaces";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { CapabilityScope } from "@vibestudio/rpc";
-import { parseAuthorityRequests } from "@vibestudio/shared/authorityManifest";
+import {
+  parseAuthorityDelegations,
+  parseAuthorityRequests,
+  type EvalAuthorityDelegation,
+} from "@vibestudio/shared/authorityManifest";
 
 const log = createDevLogger("AppOrchestrator");
 
@@ -33,6 +37,7 @@ export interface AppAvailableEvent {
   capabilities?: readonly AppCapability[];
   executionDigest?: string | null;
   authorityRequests?: readonly CapabilityScope[];
+  authorityDelegations?: readonly EvalAuthorityDelegation[];
   buildKey?: string | null;
   adoptionPolicy?: "immediate" | "prompt" | "artifact-only";
   selectedForHost?: boolean;
@@ -54,6 +59,7 @@ interface BakedAppManifest {
   build: {
     executionDigest: string;
     authorityRequests: readonly CapabilityScope[];
+    authorityDelegations: readonly EvalAuthorityDelegation[];
   };
   artifacts: Array<{
     path: string;
@@ -151,6 +157,7 @@ export class AppOrchestrator {
         source: event.source,
         executionDigest: event.executionDigest ?? undefined,
         requested: event.authorityRequests,
+        delegations: event.authorityDelegations,
       }
     );
     panelView.setViewVisible?.(event.appId, true);
@@ -239,6 +246,10 @@ export function readBakedElectronApp(distDir: string): AppAvailableEvent | null 
     authorityRequests: parseAuthorityRequests(
       { requests: manifest.build.authorityRequests },
       `baked app ${manifest.app.name} authorityRequests`
+    ),
+    authorityDelegations: parseAuthorityDelegations(
+      { delegations: manifest.build.authorityDelegations },
+      `baked app ${manifest.app.name} authorityDelegations`
     ),
   };
 }

@@ -5,6 +5,7 @@ import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import type { EvalAuthorityDelegation } from "@vibestudio/shared/authorityManifest";
 
 export interface Disposable {
   dispose(): void;
@@ -28,6 +29,7 @@ export interface ExtensionInvocation {
     repoPath: string;
     executionDigest: string;
     requested: readonly CapabilityScope[];
+    delegations: readonly EvalAuthorityDelegation[];
     contextId?: string;
   };
 }

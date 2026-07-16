@@ -45,6 +45,8 @@ export type {
 export { RemoteRpcError, RpcBoundaryError, rpcErrorKindOf } from "./errors.js";
 export type {
   AuthorizationContext,
+  AuthorizationOrigin,
+  CodeAuthorityChain,
   AuthorizationDecision,
   AuthorityGrant,
   AuthorityRequirement,

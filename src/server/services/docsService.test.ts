@@ -123,6 +123,17 @@ describe("docs service (caller-aware)", () => {
     expect(surfaces.find((s) => s.surface === "service")?.count).toBeGreaterThan(0);
   });
 
+  it("reports a closed eval census and proves an unclassified fixture is rejected", async () => {
+    await expect(svc.handler(ctx("server"), "evalCapabilityCensus", [])).resolves.toMatchObject({
+      closedByDefault: true,
+      classifiedLeaves: expect.any(Number),
+      unclassifiedIds: [],
+      wildcardCapabilities: [],
+      fixtureRejected: true,
+      fixtureError: expect.stringContaining("fixture:unclassified"),
+    });
+  });
+
   it("search filters runtime entries to the caller's runtime target", async () => {
     const runtimeSvc = createDocsService({
       dispatcher,
