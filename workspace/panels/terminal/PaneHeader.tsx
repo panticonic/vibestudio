@@ -78,7 +78,7 @@ export function PaneHeader(props: {
             {contextBadgeLabel(props.session.contextId)}
           </Badge>
         ) : null}
-        {props.session.gitBranch ? <Text size="1" color="gray" truncate>{props.session.gitBranch}</Text> : null}
+        {props.session.revisionLabel ? <Text size="1" color="gray" truncate>{props.session.revisionLabel}</Text> : null}
         <Text size="1" color="gray" truncate>{basename(cwd)}</Text>
         {ports.map((port) => (
           <button

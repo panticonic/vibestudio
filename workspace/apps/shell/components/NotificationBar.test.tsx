@@ -33,8 +33,12 @@ vi.mock("../shell/client", () => ({
 vi.mock("../shell/useShellEvent", () => ({
   useShellEvent: vi.fn(),
 }));
+vi.mock("../shell/useDirectShellEvent", () => ({
+  useDirectShellEvent: vi.fn(),
+}));
 
 import { useShellEvent } from "../shell/useShellEvent";
+import { useDirectShellEvent } from "../shell/useDirectShellEvent";
 import { NotificationBar } from "./NotificationBar";
 
 function renderBar() {
@@ -57,15 +61,41 @@ function emitShellEvent<E extends EventName>(event: E, payload: EventPayloads[E]
   });
 }
 
+function emitDirectShellEvent<E extends EventName>(event: E, payload: EventPayloads[E]) {
+  const callback = vi
+    .mocked(useDirectShellEvent)
+    .mock.calls.find(([registeredEvent]) => registeredEvent === event)?.[1] as
+    | ((payload: EventPayloads[E]) => void)
+    | undefined;
+  expect(callback).toBeTruthy();
+  act(() => {
+    callback?.(payload);
+  });
+}
+
 describe("NotificationBar", () => {
   beforeEach(() => {
     vi.mocked(useShellEvent).mockClear();
+    vi.mocked(useDirectShellEvent).mockClear();
     shellClient.applyUpdate.mockClear();
     shellClient.rollback.mockClear();
     shellClient.restart.mockClear();
     shellClient.show.mockClear();
     shellClient.reportAction.mockClear();
     shellClient.dismiss.mockClear();
+  });
+
+  it("renders notifications addressed directly to the authenticated account", () => {
+    renderBar();
+
+    emitDirectShellEvent("notification:show", {
+      id: "account-only",
+      type: "info",
+      title: "Account notification",
+      message: "This was not a watched broadcast.",
+    });
+
+    expect(screen.getByText("Account notification")).toBeTruthy();
   });
 
   it("expands bounded diagnostic details and all recorded errors", () => {

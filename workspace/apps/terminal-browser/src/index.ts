@@ -11,6 +11,7 @@ import { TerminalBrowser } from "./host/TerminalBrowser.js";
 import type { LogLine } from "./ui/LogsView.js";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -54,23 +55,6 @@ async function connect(appId: string, logSink: LogSink) {
       clientLabel: "Vibestudio Terminal",
       clientPlatform: "desktop",
     }),
-    translateEvent: (event, payload, deliver) => {
-      deliver({
-        type: "event",
-        fromId: "main",
-        event,
-        payload,
-      });
-      if (
-        event === "event:apps:lifecycle" ||
-        event === "event:apps:status" ||
-        event === "apps:lifecycle" ||
-        event === "apps:status"
-      ) {
-        logSink.push({ level: "info", source: event, message: JSON.stringify(payload) });
-      }
-      return true;
-    },
     adapter: {
       now: () => Date.now(),
       getAuthToken: async () => token,
@@ -87,6 +71,13 @@ async function connect(appId: string, logSink: LogSink) {
     if (status === "disconnected") process.exit(0);
   });
   await transport.connectAndWait();
+  const events = new EventsClient(rpc);
+  for (const event of ["apps:lifecycle", "apps:status"] as const) {
+    events.on(event, (payload) => {
+      logSink.push({ level: "info", source: event, message: JSON.stringify(payload) });
+    });
+  }
+  await events.subscribeAll(["apps:lifecycle", "apps:status"]);
   return { rpc, close: () => transport.close() };
 }
 

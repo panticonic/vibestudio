@@ -115,11 +115,9 @@ function createOrchestrator(
   let orchestratorRef: PanelOrchestrator | null = null;
   let createCounter = 0;
   let leaseVersionCounter = 0;
-  // Reactive view-host simulation: the desktop builders only *acquire* the
-  // lease; the server broadcasts the assigned-lease event which drives the
-  // native build (handleRuntimeLeaseChanged → loadAssignedLeaseIntoView). The
-  // harness mirrors that — acquire/takeOver dispatch the lease-changed event to
-  // the orchestrator so awaitViewBuilt resolves, exactly as in production.
+  // Mirror the server's lease broadcast. Local loading owns native view
+  // creation directly; this event keeps registry state synchronized and tests
+  // the independent remote-assignment path.
   const dispatchAssignedLease = async (
     runtimeEntityId: string,
     request: {

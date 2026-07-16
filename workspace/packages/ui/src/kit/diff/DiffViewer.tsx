@@ -9,7 +9,7 @@
  *   • client-side LCS line diffing of the two fetched blobs, and
  *   • added/removed line backgrounds layered over best-effort shiki highlighting.
  *
- * Guardrails (narrow-host-vcs-plan §5.1): file contents are fetched ONLY by the
+ * Guardrails (provenance-aware-diff-merge-plan §9): file contents are fetched only by the
  * content hashes named in the payload, lazily on expand. Binary/oversized files
  * render diffstat-only; callers that have a real file-inspection surface may
  * opt into an "open in gad-browser" action. Highlighting is best-effort — plain

@@ -520,7 +520,6 @@ describe("panelCdpService", () => {
       contextId: "ctx-agent",
       channelId: "chan-1",
       agentId: "agt_1",
-      userId: "usr_test",
     });
 
     await expect(
@@ -560,7 +559,6 @@ describe("panelCdpService", () => {
       contextId: "ctx-agent",
       channelId: "chan-1",
       agentId: "agt_1",
-      userId: "usr_test",
     });
 
     await expect(

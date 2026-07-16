@@ -71,9 +71,5 @@ export function useStoreState<T extends object, U>(store: Store<T>, selector: (s
     return selected;
   }, [store]);
 
-  return useSyncExternalStore(
-    store.subscribe,
-    getSelectedSnapshot,
-    getSelectedSnapshot,
-  );
+  return useSyncExternalStore(store.subscribe, getSelectedSnapshot, getSelectedSnapshot);
 }

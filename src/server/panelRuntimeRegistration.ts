@@ -31,7 +31,6 @@ import type {
   HostTargetSelectionInput,
 } from "@vibestudio/shared/hostTargets";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
-import type { WorkspaceCatalogClient } from "./services/workspaceService.js";
 import { assertPresent } from "../lintHelpers";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
@@ -89,16 +88,12 @@ export interface CommonDeps {
   persistWorkspaceConfigField?: (ctx: ServiceContext, key: string, value: unknown) => Promise<void>;
   treeScanner?: import("./vcsHost/workspaceTreeScanner.js").WorkspaceTreeScanner;
   adminToken: string;
-  /** Required hub-owned catalog proxy; child servers never mutate the catalog directly. */
-  workspaceCatalog: WorkspaceCatalogClient;
   hostConfig: HostConfig;
   tokenManager?: import("@vibestudio/shared/tokenManager").TokenManager;
   eventService?: import("@vibestudio/shared/eventsService").EventService;
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   /** Whether a workspace-app caller declares a capability (e.g. panel-hosting). */
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-  /** CURRENT role lookup; workspace administration fails closed without one. */
-  roleOf: (userId: string) => import("@vibestudio/identity/types").UserRole | null | undefined;
   /** Active-entity cache; resolves caller/target contexts and code-identity subjects. */
   entityCache?: import("@vibestudio/shared/runtime/entityCache").EntityCache;
   /** True when the target context already holds state (active entity or materialized folder). */
@@ -304,8 +299,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           }
           await deps.persistWorkspaceConfigField(ctx, key, value);
         },
-        workspaceCatalog: deps.workspaceCatalog,
-        eventService: deps.eventService,
         listUnits: deps.listWorkspaceUnits,
         restartUnit: deps.restartWorkspaceUnit,
         listUnitLogs: deps.listWorkspaceUnitLogs,
@@ -326,7 +319,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         resolveHostTargetLaunchSessionApproval: deps.resolveHostTargetLaunchSessionApproval,
         cancelHostTargetLaunchSession: deps.cancelHostTargetLaunchSession,
         hasAppCapability: deps.hasAppCapability,
-        roleOf: deps.roleOf,
         approvalQueue: deps.approvalQueue,
         ensureContextFolder: deps.ensureContextFolder,
       })
@@ -623,7 +615,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
   container.registerManaged({
     name: "panelHttpWiring",
-    dependencies: ["panelHttpServer", "buildSystem", "rpcServer"],
+    dependencies: ["panelHttpServer", "buildSystem"],
     async start(resolve) {
       const { server: panelHttpServer } = assertPresent(
         resolve<{
@@ -633,9 +625,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       const buildSystem = assertPresent(
         resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
       );
-      const { server: rpcServer } = assertPresent(
-        resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
-      );
+      const eventService = assertPresent(deps.eventService);
 
       const graph = buildSystem.getGraph();
       const panelNodes = graph.allNodes().filter((n) => n.kind === "panel");
@@ -648,11 +638,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       panelHttpServer.setCallbacks({
         getBuild: (source, ref) => buildSystem.getBuild(source, ref),
         onBuildComplete: (source, error) => {
-          rpcServer.broadcastToControlPlane({
-            type: "ws:event",
-            event: "build:complete",
-            payload: { source, error },
-          } as import("@vibestudio/shared/ws/protocol").WsServerMessage);
+          eventService.emit("build:complete", { source, ...(error ? { error } : {}) });
         },
       });
 

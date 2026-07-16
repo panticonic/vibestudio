@@ -5,7 +5,7 @@
  * half-typed `@scribe` line never dispatches. The button opens a small composer
  * (pre-filled with any current editor selection as quoted context). On send we
  * {@link sendToScribe}, which **commits pending dirty blocks first** and then
- * dispatches referencing the committed `stateHash` so the scribe reads exactly
+ * dispatches referencing the committed event so the scribe reads exactly
  * what the user saw.
  */
 
@@ -38,7 +38,7 @@ export function SendToScribe({
   const app = useApp();
   const activePath = useAppState((s) => s.activePath);
   const scribeHandle = useAppState(
-    (s) => s.roster.find((a) => a.handle.startsWith("scribe"))?.handle ?? "scribe",
+    (s) => s.roster.find((a) => a.handle.startsWith("scribe"))?.handle ?? "scribe"
   );
   const clientReady = useAppState((s) => s.client !== null);
   const [open, setOpen] = useState(false);
@@ -68,7 +68,7 @@ export function SendToScribe({
           message: text,
           handle: scribeHandle,
           context: { path: vcsPath, selection },
-        },
+        }
       );
       setOpen(false);
       setMessage("");
@@ -124,7 +124,9 @@ export function SendToScribe({
           )}
           <TextArea
             autoFocus
-            placeholder={selection ? "What should the scribe do with this?" : "What should the scribe do?"}
+            placeholder={
+              selection ? "What should the scribe do with this?" : "What should the scribe do?"
+            }
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={(e) => {

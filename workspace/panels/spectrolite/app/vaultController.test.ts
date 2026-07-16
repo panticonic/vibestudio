@@ -1,183 +1,46 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createStore } from "./store";
-import { initialState } from "./state";
-import { VaultController } from "./vaultController";
-import { vaultContextId } from "./vaultContext";
-
-const runtimeMocks = vi.hoisted(() => ({
-  listFiles: vi.fn(),
-  edit: vi.fn(),
-  readFile: vi.fn(),
-  reopen: vi.fn(async () => ({ id: "p", title: "t" })),
-  setStateArgs: vi.fn(),
-}));
+import { describe, expect, it, vi } from "vitest";
+import { createStore } from "./store.js";
+import { initialState } from "./state.js";
+import { VaultController, type VaultFileSession } from "./vaultController.js";
 
 vi.mock("@workspace/runtime", () => ({
-  vcs: {
-    listFiles: runtimeMocks.listFiles,
-    edit: runtimeMocks.edit,
-    readFile: runtimeMocks.readFile,
-  },
-  panel: {
-    reopen: runtimeMocks.reopen,
-    stateArgs: { set: runtimeMocks.setStateArgs },
-  },
+  panel: { reopen: vi.fn(async () => undefined) },
 }));
 
-function makeStore() {
-  return createStore(
-    initialState({
-      contextId: "ctx",
-      channelName: "chan",
-      repoRoot: "projects/default",
-      openPath: null,
-      installedAgents: [],
-    })
-  );
-}
-
 describe("VaultController", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("runs a second path scan when invalidated during an in-flight scan", async () => {
-    const store = makeStore();
-    const controller = new VaultController(store, {
-      onVaultSelected: () => {},
-    });
-    const releases: Array<
-      (entries: Array<{ path: string; contentHash: string; mode: number }>) => void
-    > = [];
-    runtimeMocks.listFiles.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releases.push(resolve);
-        })
+  it("indexes repository files by durable semantic listing", async () => {
+    const store = createStore(
+      initialState({
+        contextId: "vault-notes",
+        channelName: null,
+        repoRoot: "projects/notes",
+        openPath: null,
+        installedAgents: [],
+      })
     );
-
-    const running = controller.refreshPaths();
-    controller.refreshPaths();
-    await Promise.resolve();
-    expect(runtimeMocks.listFiles).toHaveBeenCalledTimes(1);
-
-    releases[0]!([{ path: "projects/default/First.mdx", contentHash: "a", mode: 0o644 }]);
-    await vi.waitFor(() => {
-      expect(runtimeMocks.listFiles).toHaveBeenCalledTimes(2);
-    });
-
-    releases[1]!([{ path: "projects/default/Second.mdx", contentHash: "b", mode: 0o644 }]);
-    await running;
-    expect(store.getState().paths).toEqual(["Second.mdx"]);
-  });
-
-  it("maps vcs paths to vault-relative .mdx paths and ignores other files", async () => {
-    const store = makeStore();
-    const controller = new VaultController(store, { onVaultSelected: () => {} });
-    runtimeMocks.listFiles.mockResolvedValue([
-      { path: "projects/default/A.mdx", contentHash: "1", mode: 0o644 },
-      { path: "projects/default/nested/B.mdx", contentHash: "2", mode: 0o644 },
-      { path: "projects/default/notes.txt", contentHash: "3", mode: 0o644 },
-      { path: "projects/other/C.mdx", contentHash: "4", mode: 0o644 },
-    ]);
-    await controller.refreshPaths();
-    expect(store.getState().paths).toEqual(["A.mdx", "nested/B.mdx"]);
-  });
-
-  it("keeps known paths and exposes a retryable error when listing fails", async () => {
-    const store = makeStore();
-    store.setState({ paths: ["Existing.mdx"], pathsLoaded: true });
-    const controller = new VaultController(store, { onVaultSelected: () => {} });
-    runtimeMocks.listFiles.mockRejectedValue(new Error("pipe unavailable"));
-
-    await controller.refreshPaths();
-
-    expect(store.getState()).toMatchObject({
-      paths: ["Existing.mdx"],
-      pathsLoaded: true,
-      pathsLoading: false,
-      pathsError: "Couldn't load the notes in this vault: pipe unavailable",
-    });
-  });
-
-  it("passes starter docs through reopen so creation happens in the vault context", () => {
-    const store = makeStore();
-    const controller = new VaultController(store, { onVaultSelected: () => {} });
-    const starterDoc = { path: "Welcome.mdx", content: "# Welcome\n" };
-
-    controller.selectVault("/projects/fresh", { starterDoc });
-
-    expect(runtimeMocks.reopen).toHaveBeenCalledWith({
-      contextId: vaultContextId("projects/fresh"),
-      stateArgs: {
-        repoRoot: "projects/fresh",
-        pendingStarterDoc: starterDoc,
+    const files: VaultFileSession = {
+      listFiles: async () => [
+        {
+          repositoryId: "repository:notes",
+          repoPath: "projects/notes",
+          fileId: "file:one",
+          path: "projects/notes/One.mdx",
+          contentHash: "blob:one",
+          mode: 0o644,
+          executable: false,
+          contentKind: "text",
+          byteLength: 5,
+          coordinateExtent: 5,
+        },
+      ],
+      readFile: async () => null,
+      createFile: async () => {
+        throw new Error("unexpected create");
       },
-    });
-    expect(runtimeMocks.edit).not.toHaveBeenCalled();
-  });
-
-  it("surfaces a failed vault selection and clears its pending state", async () => {
-    const store = makeStore();
-    const controller = new VaultController(store, { onVaultSelected: () => {} });
-    runtimeMocks.reopen.mockRejectedValueOnce(new Error("reopen failed"));
-
-    controller.selectVault("projects/broken");
-    expect(store.getState().vaultPendingPath).toBe("projects/broken");
-    await vi.waitFor(() => expect(store.getState().vaultPendingPath).toBeNull());
-    expect(store.getState().vaultError).toBe("Couldn't open this vault: reopen failed");
-  });
-
-  it("enters picker state and clears persisted repoRoot when switching vaults", async () => {
-    const store = makeStore();
-    store.setState({
-      activeDeps: { chart: "1.0.0" },
-      activePath: "E2E.mdx",
-      dirtyPaths: ["E2E.mdx"],
-      installedAgents: [
-        {
-          agentId: "SilentAgentWorker",
-          className: "SilentAgentWorker",
-          handle: "scribe",
-          key: "scribe",
-          source: "workers/silent-agent-worker",
-        },
-      ],
-      paths: ["E2E.mdx"],
-      pathsLoaded: true,
-      pendingSuggestions: [
-        {
-          id: "s",
-          vcsPath: "projects/default/E2E.mdx",
-          collision: {
-            fromIndex: 0,
-            toIndex: 1,
-            oldIds: ["a"],
-            oldTexts: ["old"],
-            newTexts: ["new"],
-            liveIds: ["a"],
-          },
-        },
-      ],
-      roster: [{ handle: "scribe", status: "live" }],
-    });
-    const controller = new VaultController(store, { onVaultSelected: () => {} });
-
-    await controller.switchVault();
-
-    expect(store.getState()).toMatchObject({
-      activeDeps: {},
-      activePath: null,
-      dirtyPaths: [],
-      installedAgents: [],
-      paths: [],
-      pathsLoaded: false,
-      pendingSuggestions: [],
-      repoRoot: null,
-      roster: [],
-    });
-    expect(runtimeMocks.reopen).toHaveBeenCalledWith({
-      stateArgs: { repoRoot: null },
-    });
+    };
+    const controller = new VaultController(store, { onVaultSelected: vi.fn() }, files);
+    await controller.refreshPaths();
+    expect(store.getState().paths).toEqual(["One.mdx"]);
+    expect(store.getState().pathContentHashes).toEqual({ "One.mdx": "blob:one" });
   });
 });

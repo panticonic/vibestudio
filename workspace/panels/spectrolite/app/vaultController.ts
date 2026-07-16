@@ -1,20 +1,18 @@
 /**
  * Vault controller — owns vault selection and the workspace path index.
  *
- * GAD-native: the path index comes from `vcs.listFiles()` (the vault's ctx
- * head), filtered to `.mdx` and mapped to vault-relative paths via the
+ * The path index comes from `vcs.listFiles()` at the vault's exact working
+ * state, filtered to `.mdx` and mapped to vault-relative paths via the
  * {@link VaultPathMapping}. There is no `fs` walk. File creation records the new
  * doc as a tracked working `vcs.edit` so it appears in the index immediately
  * (committed + published later via Publish).
  *
  * Switching vault is a panel **reopen** under the new vault's stable
  * contextId (`vault-<hash>`), not a runtime `repoRoot` swap — only reopening
- * rebinds `vcs.*` (and the scribe) to the new vault's durable head. First-run
- * starter docs are passed through stateArgs and created by the reopened panel,
- * so the tracked working edit lands on the vault's own context head.
+ * rebinds `vcs.*` (and the scribe) to the new vault's durable context.
  */
 
-import { panel, vcs } from "@workspace/runtime";
+import { panel } from "@workspace/runtime";
 import type { Store } from "./store";
 import type { SpectroliteState } from "./state";
 import { createQueuedRefresh } from "./queuedRefresh";
@@ -24,16 +22,17 @@ import {
   normalizeVaultPath,
   type VaultPathMapping,
 } from "./vaultContext";
+import type { VaultSemanticVcs } from "./semanticVcs";
+
+export interface VaultFileSession {
+  listFiles(prefix?: string): ReturnType<VaultSemanticVcs["listFiles"]>;
+  readFile(path: string): ReturnType<VaultSemanticVcs["readFile"]>;
+  createFile(path: string, text: string): ReturnType<VaultSemanticVcs["createFile"]>;
+}
 
 export interface VaultControllerHooks {
   /** Notify the session layer (agent scope update / default-agent bootstrap). */
   onVaultSelected(repoRoot: string): void;
-}
-
-export interface VaultStarterDoc {
-  /** Vault-relative path, e.g. `Welcome.mdx`. */
-  path: string;
-  content: string;
 }
 
 export class VaultController {
@@ -42,7 +41,8 @@ export class VaultController {
 
   constructor(
     private readonly store: Store<SpectroliteState>,
-    private readonly hooks: VaultControllerHooks
+    private readonly hooks: VaultControllerHooks,
+    private readonly semanticVcs: VaultFileSession | null = null
   ) {}
 
   /** The mapping for the active vault (vault-relative ↔ workspace-relative vcs paths). */
@@ -51,19 +51,17 @@ export class VaultController {
   }
 
   /**
-   * Pick a vault from the picker. The vault head is durable + per-vault, so
-   * binding to it means reopening the panel under `vault-<hash>`. We persist
+   * Pick a vault from the picker. Its semantic context is durable + per-vault,
+   * so binding to it means reopening the panel under `vault-<hash>`. We persist
    * the selection in the new context's stateArgs via `reopen`.
    */
-  selectVault(contextPath: string, options?: { starterDoc?: VaultStarterDoc }): void {
+  selectVault(contextPath: string): void {
     const repoRoot = normalizeVaultPath(contextPath);
     this.store.setState({ vaultError: null, vaultPendingPath: repoRoot });
-    const stateArgs: Record<string, unknown> = { repoRoot };
-    if (options?.starterDoc) stateArgs["pendingStarterDoc"] = options.starterDoc;
     void panel
       .reopen({
         contextId: vaultContextId(repoRoot),
-        stateArgs,
+        stateArgs: { repoRoot },
       })
       .catch((err) => {
         this.store.setState({
@@ -113,7 +111,8 @@ export class VaultController {
       const epoch = this.pathsEpoch;
       this.store.setState({ pathsLoading: true, pathsError: null });
       try {
-        const entries = await vcs.listFiles();
+        if (!this.semanticVcs) throw new Error("The vault is not bound to a VCS context");
+        const entries = await this.semanticVcs.listFiles(mapping.toVcsPath(""));
         if (epoch !== this.pathsEpoch) return;
         const pathContentHashes: Record<string, string> = {};
         const paths = entries
@@ -146,7 +145,7 @@ export class VaultController {
    * Create a file (exclusive — refuses to clobber an existing note). Returns
    * the final vault-relative path on success, or the existing path when the
    * file is already there. Records the empty doc as a tracked working `vcs.edit`
-   * on the vault head (no commit — Publish folds + pushes it later).
+   * on the vault's working state (no commit — Publish seals and advances it later).
    */
   async createFile(relPath: string, initialContent: string): Promise<string> {
     const root = this.store.getState().repoRoot;
@@ -155,12 +154,11 @@ export class VaultController {
     const mapping = vaultPathMapping(root);
     const vcsPath = mapping.toVcsPath(finalPath);
 
-    const existing = await vcs.readFile({ path: vcsPath }).catch(() => null);
+    if (!this.semanticVcs) throw new Error("The vault is not bound to a VCS context");
+    const existing = await this.semanticVcs.readFile(vcsPath).catch(() => null);
     if (existing) return finalPath; // already exists — caller just opens it
 
-    await vcs.edit({
-      edits: [{ kind: "create", path: vcsPath, content: { kind: "text", text: initialContent } }],
-    });
+    await this.semanticVcs.createFile(vcsPath, initialContent);
     void this.refreshPaths();
     return finalPath;
   }

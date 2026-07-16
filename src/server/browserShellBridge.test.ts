@@ -47,7 +47,6 @@ describe("installFallbackShellBridge", () => {
     expect(mocks.createWsTransport).toHaveBeenCalledWith(
       expect.objectContaining({
         viewId: "panel:nav-entry-a",
-        eventPanelId: "panel:tree/slot-a",
         wsUrl: "ws://127.0.0.1:4567/_workspace/test/rpc",
         authToken: "grant-token",
         connectionId: "runtime-conn",

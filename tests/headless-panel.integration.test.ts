@@ -17,9 +17,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
   gatewayUrl: string;
-  connectUrl: string;
-  rootInvites: { desktop: { code: string } } | null;
-  workspaces: Array<{ name: string }>;
+  rootInvite: { code: string } | null;
+  workspaces: Array<{ name: string; workspaceId: string }>;
 }
 
 interface ShellCredential {
@@ -300,16 +299,13 @@ async function waitForReadyFile(
 }
 
 async function issueShellToken(ready: ReadyPayload): Promise<ShellCredential> {
-  const code = ready.rootInvites?.desktop.code;
-  const workspace = ready.workspaces[0]?.name;
-  if (!code || !workspace) throw new Error("fresh hub did not advertise a root invite/workspace");
-  const pairedResponse = await fetch(`${ready.connectUrl}/_r/s/auth/complete-pairing`, {
+  const code = ready.rootInvite?.code;
+  if (!code) throw new Error("fresh hub did not advertise a root invite");
+  const pairedResponse = await fetch(`${ready.gatewayUrl}/_r/s/auth/complete-pairing`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       code,
-      handle: "headless-smoke",
-      displayName: "Headless Smoke",
       label: "Vitest headless panel integration",
       platform: "test",
     }),
@@ -330,24 +326,21 @@ async function issueShellToken(ready: ReadyPayload): Promise<ShellCredential> {
       `failed to pair root device (${pairedResponse.status}): ${JSON.stringify(paired)}`
     );
   }
-  const routeResponse = await fetch(`${ready.connectUrl}/rpc`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${paired.shellToken}`,
-    },
-    body: JSON.stringify({ method: "hubControl.routeWorkspace", args: [{ workspace }] }),
-  });
-  const routePayload = (await routeResponse.json()) as {
-    result?: { serverUrl?: unknown };
-    error?: unknown;
-  };
-  const route = routePayload.result;
-  if (!routeResponse.ok || typeof route?.serverUrl !== "string") {
-    throw new Error(
-      `failed to route workspace (${routeResponse.status}): ${JSON.stringify(routePayload)}`
-    );
-  }
+  const workspaces = await rpc<Array<{ workspaceId: string; name: string }>>(
+    ready,
+    paired.shellToken,
+    "hubControl.listWorkspaces",
+    []
+  );
+  const workspace = workspaces[0];
+  if (!workspace?.workspaceId) throw new Error("hub exposed no exact workspace identity");
+  const route = await rpc<{ serverUrl: string }>(
+    ready,
+    paired.shellToken,
+    "hubControl.routeWorkspace",
+    [{ workspaceId: workspace.workspaceId }]
+  );
+  if (typeof route.serverUrl !== "string") throw new Error("workspace route had no server URL");
   ready.gatewayUrl = route.serverUrl;
   const refreshResponse = await fetch(`${route.serverUrl}/_r/s/auth/refresh-shell`, {
     method: "POST",

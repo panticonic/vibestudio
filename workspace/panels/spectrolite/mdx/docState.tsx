@@ -58,12 +58,11 @@ export function useDocState<T>(key: string, initial: T): [T, Setter<T>] {
         setLocal(next as never);
         return;
       }
-      const resolved = typeof next === "function"
-        ? (next as (prev: T) => T)(store.get(path, key, initial))
-        : next;
+      const resolved =
+        typeof next === "function" ? (next as (prev: T) => T)(store.get(path, key, initial)) : next;
       store.set(path, key, resolved);
     },
-    [store, path, key, initial],
+    [store, path, key, initial]
   );
 
   return [value, setValue];

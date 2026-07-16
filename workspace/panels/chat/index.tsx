@@ -20,18 +20,17 @@ import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
-import { AgenticChat, ErrorBoundary, ReviewAndPickSurface } from "@workspace/agentic-chat";
+import { AgenticChat, ErrorBoundary } from "@workspace/agentic-chat";
 import type {
   ConnectionConfig,
   AgenticChatActions,
   ToolProvider,
   ForkNavHandlers,
-  ReviewTarget,
   NewConversationOptions,
 } from "@workspace/agentic-chat";
 import { useAppTheme } from "@workspace/ui/panel";
 import "@workspace/ui/tokens.css";
-import { createPanelSandboxConfig } from "@workspace/agentic-core";
+import { createPanelSandboxConfig, unsubscribeAgentFromChannel } from "@workspace/agentic-core";
 import type {
   AvailableAgent,
   ModelCatalog,
@@ -191,12 +190,12 @@ async function unsubscribeDOFromChannel(
   objectKey: string,
   channelId: string
 ): Promise<void> {
-  const target = await rpc.call<{ targetId: string }>("main", "workers.resolveDurableObject", [
+  await unsubscribeAgentFromChannel(rpc, {
     source,
     className,
-    objectKey,
-  ]);
-  await rpc.call(target.targetId, "unsubscribeChannel", [channelId]);
+    key: objectKey,
+    channelId,
+  });
 }
 
 export default function ChatPanel() {
@@ -458,40 +457,31 @@ export default function ChatPanel() {
     void openPanel("panels/local-models", { focus: true, stateArgs: { openLog: server } });
   }, []);
 
-  // Launch a Claude Code session as a linked agent in this conversation (§4.3):
-  // prepare via the claude-code extension (resolves the channel's context,
-  // ensures the vessel, mints the agent credential, writes the launch profile),
-  // then open a context-scoped terminal running the returned argv. Both calls go
-  // through the manifest-selected claudeCode provider namespace.
-  const handleOpenClaudeCode = useCallback(async (channelId: string) => {
-    try {
-      const prepared = (await extensions.invokeProvider("claudeCode", "prepare", [
-        { channelId },
-      ])) as {
-        contextId: string;
-        contextFolder: string;
-        env: Record<string, string>;
-        argv: string[];
-      };
-      const [command, ...args] = prepared.argv;
-      await extensions.invoke("@workspace-extensions/shell", "open", [
-        {
-          contextId: prepared.contextId,
-          cwd: prepared.contextFolder,
-          command: command ?? "claude",
-          args,
-          env: prepared.env,
-          label: "Claude Code",
-        },
-      ]);
-    } catch (err) {
-      void notifications.show({
-        type: "error",
-        title: "Open Claude Code failed",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }, []);
+  // The panel declares intent; the shell's registered Claude adapter owns
+  // semantic preparation, host-local materialization, and process cleanup.
+  const handleOpenClaudeCode = useCallback(
+    async (channelId: string) => {
+      try {
+        if (!resolvedContextId) throw new Error("Conversation has no context");
+        await extensions.invoke("@workspace-extensions/shell", "open", [
+          {
+            contextId: resolvedContextId,
+            command: "claude",
+            args: [],
+            launchIntent: { channelId },
+            label: "Claude Code",
+          },
+        ]);
+      } catch (err) {
+        void notifications.show({
+          type: "error",
+          title: "Open Claude Code failed",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+    [resolvedContextId]
+  );
 
   const handleActionBarFileChange = useCallback(
     (value: { path: string | null; props?: Record<string, unknown>; maxHeight?: number }) => {
@@ -506,7 +496,7 @@ export default function ChatPanel() {
 
   // Fetch available worker sources (DO agents) on mount. Only sources that
   // declare an `agent` manifest block are chat agents — this filters out
-  // service DOs (pubsub-channel, gad-store, fork, …).
+  // service DOs (pubsub-channel, semantic control plane, fork, …).
   const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([]);
   useEffect(() => {
     rpc
@@ -772,10 +762,10 @@ export default function ChatPanel() {
   const handleConnectProvider = useCallback(
     async (
       providerId: string,
-      modelBaseUrl: string,
+      _modelBaseUrl: string,
       opts?: { browser?: "internal" | "external" }
     ): Promise<ConnectProviderResult> => {
-      const request = toPanelConnectRequest(providerId, modelBaseUrl, { browser: opts?.browser });
+      const request = toPanelConnectRequest(providerId, { browser: opts?.browser });
       if (!request) {
         return { ok: false, error: `No connect flow available for ${providerId}` };
       }
@@ -894,9 +884,6 @@ export default function ChatPanel() {
     ]
   );
 
-  // --- Fork navigation + review overlay ---------------------------------
-  const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null);
-
   // In-place fork switch: rebind the panel's channel + context and let the
   // useChatCore bootstrap effect (keyed on channelName/contextId) reconnect.
   const handleForkSwitch = useCallback(
@@ -931,10 +918,6 @@ export default function ChatPanel() {
     [bootstrapChannel, resolvedContextId, stateArgs.channelName]
   );
 
-  const handleReviewContext = useCallback((target: ReviewTarget) => {
-    setReviewTarget(target);
-  }, []);
-
   // Shell toast when a fork the user didn't initiate lands while unfocused.
   const handleExternalFork = useCallback(
     (fork: {
@@ -963,10 +946,9 @@ export default function ChatPanel() {
     () => ({
       switchTo: handleForkSwitch,
       openInNewPanel: handleOpenForkPanel,
-      reviewContext: handleReviewContext,
       onExternalFork: handleExternalFork,
     }),
-    [handleForkSwitch, handleOpenForkPanel, handleReviewContext, handleExternalFork]
+    [handleForkSwitch, handleOpenForkPanel, handleExternalFork]
   );
 
   // Sandbox config — provides RPC and import loading to agentic-chat.
@@ -1095,17 +1077,6 @@ export default function ChatPanel() {
         initialActionBarMaxHeight={stateArgs.actionBarMaxHeight ?? undefined}
         onActionBarFileChange={handleActionBarFileChange}
       />
-      {reviewTarget && (
-        <Theme appearance={theme} {...appTheme}>
-          <ReviewAndPickSurface
-            rpc={rpc}
-            target={reviewTarget}
-            appearance={theme}
-            open
-            onClose={() => setReviewTarget(null)}
-          />
-        </Theme>
-      )}
     </>
   );
 }

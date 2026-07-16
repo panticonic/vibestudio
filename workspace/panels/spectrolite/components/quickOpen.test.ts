@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { computeQuickOpen, fuzzyMatch, fuzzyScore, matchRanges, normalizeCreateName } from "./quickOpenModel";
+import {
+  computeQuickOpen,
+  fuzzyMatch,
+  fuzzyScore,
+  matchRanges,
+  normalizeCreateName,
+} from "./quickOpenModel";
 
 // QuickOpen renders inside a Radix Dialog (portaled overlay), which can't open
 // in jsdom (duplicate-React via react-remove-scroll, a pnpm hoist quirk). Its

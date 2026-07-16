@@ -46,14 +46,19 @@ export function joinSafe(root: string, rel: string): string | null {
   const normalizedRel = normalize(rel);
   if (normalizedRel.startsWith("/")) {
     // Absolute paths must be inside the root.
-    if (!normalizedRel.startsWith(`${normalizedRoot}/`) && normalizedRel !== normalizedRoot) return null;
+    if (!normalizedRel.startsWith(`${normalizedRoot}/`) && normalizedRel !== normalizedRoot)
+      return null;
     const result = resolveSegments(normalizedRel.slice(normalizedRoot.length + 1).split("/"));
     if (result.escape) return null;
-    return result.segments.length === 0 ? normalizedRoot : `${normalizedRoot}/${result.segments.join("/")}`;
+    return result.segments.length === 0
+      ? normalizedRoot
+      : `${normalizedRoot}/${result.segments.join("/")}`;
   }
   const result = resolveSegments(normalizedRel.split("/"));
   if (result.escape) return null;
-  return result.segments.length === 0 ? normalizedRoot : `${normalizedRoot}/${result.segments.join("/")}`;
+  return result.segments.length === 0
+    ? normalizedRoot
+    : `${normalizedRoot}/${result.segments.join("/")}`;
 }
 
 /**

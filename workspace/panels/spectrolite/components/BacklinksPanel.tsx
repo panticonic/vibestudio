@@ -4,7 +4,8 @@
  *
  * Computed on demand by reading each `.mdx` and matching the active file's
  * basename (or path) inside `[[…]]`. GAD-native: the panel reads through
- * `vcs.readFile` (the vault head), mapping vault-relative paths to vcs paths.
+ * `vcs.readFile` at the vault's exact working state, mapping vault-relative
+ * paths to VCS paths.
  * The core scan (`findBacklinks`) takes an injected reader so it stays a pure,
  * fs-free, unit-testable function. Scans are bounded + concurrent so large
  * vaults don't serialize thousands of reads onto the UI update path.
@@ -13,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { Box, Flex, ScrollArea, Text } from "@radix-ui/themes";
 import { Link2Icon } from "@radix-ui/react-icons";
-import { blobstore, vcs } from "@workspace/runtime";
+import { blobstore } from "@workspace/runtime";
 import { findBacklinks, type Backlink, type BacklinkReader } from "../state/backlinks";
 import { useApp, useAppState } from "../app/context";
 
@@ -45,7 +46,7 @@ export function BacklinksPanel({ onOpened }: { onOpened?: () => void }) {
         const text = await blobstore.getText(digest).catch(() => null);
         if (text !== null) return text;
       }
-      const file = await vcs.readFile({ path: mapping.toVcsPath(relPath) }).catch(() => null);
+      const file = await app.semanticVcs?.readFile(mapping.toVcsPath(relPath)).catch(() => null);
       return file && file.content.kind === "text" ? file.content.text : null;
     };
     void findBacklinks(root, activePath, paths, { concurrency: 96, readFile })

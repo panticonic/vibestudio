@@ -10,7 +10,7 @@ export interface SessionInfo {
   command: { argv: string[]; cwd: string };
   /** Set for context-scoped sessions (placed inside a VCS context folder). */
   contextId?: string;
-  gitBranch?: string;
+  revisionLabel?: string;
   cols: number;
   rows: number;
   alive: boolean;

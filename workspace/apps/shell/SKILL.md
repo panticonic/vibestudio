@@ -10,14 +10,15 @@ hosts desktop panel chrome and device-management UI.
 
 ## Devices Surface
 
-- "Connect a device" mints an invite on the currently connected server, local or
-  remote. The desktop is a broker, never a data relay.
+- "Connect a device" calls `hubControl.pairDevice` on the currently connected
+  server, local or remote. The desktop is a broker, never a data relay.
 - Render the HTTPS pair URL and QR from the complete invite object. Do not build
   client-side fallback links or accept nullable `deepLink`/`room`.
 - The modal should show expiry, server/workspace label, waiting state, and then
-  the paired device once `remoteCred.listDevices` observes it.
-- Device revocation uses `remoteCred.revokeDevice`; after revocation, the phone
-  should return to recovery/re-pair.
+  the paired device once `hubControl.listDevices` observes it.
+- Device revocation uses `hubControl.revokeDevice`; after revoking the desktop's
+  own stored device, explicitly call local `remoteCred.clear` before relaunching.
+  A revoked phone should return to recovery/re-pair.
 
 ## Remote Parity
 

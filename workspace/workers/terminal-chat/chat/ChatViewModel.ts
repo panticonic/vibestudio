@@ -1,5 +1,8 @@
 import type { HeadlessSession, ChatMessage } from "@workspace/agentic-session";
-import { PROVIDER_CONNECT_PRESETS, toPanelConnectRequest } from "@workspace/model-catalog/providerConnect";
+import {
+  PROVIDER_CONNECT_PRESETS,
+  toPanelConnectRequest,
+} from "@workspace/model-catalog/providerConnect";
 
 /**
  * Terminal view-model over the shared headless chat core.
@@ -143,12 +146,14 @@ export class ChatViewModel {
       const sources = await this.deps.rpc.call<Array<{ name?: string; source?: string }>>(
         "main",
         "workers.listSources",
-        [],
+        []
       );
       const names = (Array.isArray(sources) ? sources : [])
         .map((s) => s.name ?? s.source)
         .filter(Boolean);
-      this.addNotice(names.length ? `Available agents:\n${names.join("\n")}` : "No agent sources found.");
+      this.addNotice(
+        names.length ? `Available agents:\n${names.join("\n")}` : "No agent sources found."
+      );
     } catch (err) {
       this.addNotice(`/agents failed: ${errText(err)}`);
     }
@@ -156,7 +161,9 @@ export class ChatViewModel {
 
   private async handleModel(arg: string): Promise<void> {
     if (!arg) {
-      this.addNotice(`Current model: ${this.deps.modelRef ?? "(default)"}.\nUsage: /model <provider:modelId>`);
+      this.addNotice(
+        `Current model: ${this.deps.modelRef ?? "(default)"}.\nUsage: /model <provider:modelId>`
+      );
       return;
     }
     // Setting a model live requires re-subscribing the agent with new config —
@@ -170,12 +177,12 @@ export class ChatViewModel {
     const preset = PROVIDER_CONNECT_PRESETS[provider];
     if (!preset) {
       this.addNotice(
-        `Unknown provider "${provider}". Try one of: ${Object.keys(PROVIDER_CONNECT_PRESETS).join(", ")}`,
+        `Unknown provider "${provider}". Try one of: ${Object.keys(PROVIDER_CONNECT_PRESETS).join(", ")}`
       );
       return;
     }
     try {
-      const request = toPanelConnectRequest(provider, "", { browser: "external" });
+      const request = toPanelConnectRequest(provider, { browser: "external" });
       if (!request) {
         this.addNotice(`Could not build a connect request for ${provider}.`);
         return;

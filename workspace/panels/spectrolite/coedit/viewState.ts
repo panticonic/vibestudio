@@ -14,8 +14,6 @@
  * Backend is injectable so it is unit-testable without `localStorage`.
  */
 
-import { parseFrontmatter, replaceFrontmatterState } from "../mdx/frontmatter.js";
-
 export interface ViewStateBackend {
   read(key: string): string | null;
   write(key: string, value: string): void;
@@ -64,18 +62,6 @@ export class ViewStateStore {
     this.cache.set(path, next);
     this.persist(path, next);
     this.notify(path);
-  }
-
-  /** Seed migrated/legacy state — only when nothing is stored yet, so a real
-   *  edit never gets clobbered by a stale frontmatter migration. */
-  seedIfAbsent(path: string, state: Record<string, unknown>): boolean {
-    if (this.backend.read(this.storageKey(path)) !== null) return false;
-    if (!state || Object.keys(state).length === 0) return false;
-    const seeded = { ...state };
-    this.cache.set(path, seeded);
-    this.persist(path, seeded);
-    this.notify(path);
-    return true;
   }
 
   /** Follow the doc on rename (the sidecar is keyed by path). */
@@ -152,25 +138,4 @@ export function localStorageBackend(): ViewStateBackend {
       }
     },
   };
-}
-
-/**
- * One-time migration: lift any legacy `state:` frontmatter out of a document
- * into the sidecar and strip it from the canonical bytes. Returns the parsed
- * view-state (or null) plus the canonical markdown with `state:` removed. The
- * DocController seeds the sidecar (seedIfAbsent) and, when `canonical` differs,
- * records the strip as a working `vcs.edit` once so the co-edited doc is pure
- * prose thereafter.
- */
-export function liftLegacyViewState(markdown: string): {
-  viewState: Record<string, unknown> | null;
-  canonical: string;
-  migrated: boolean;
-} {
-  const { state } = parseFrontmatter(markdown);
-  if (!state || Object.keys(state).length === 0) {
-    return { viewState: null, canonical: markdown, migrated: false };
-  }
-  const canonical = replaceFrontmatterState(markdown, {});
-  return { viewState: state, canonical, migrated: canonical !== markdown };
 }

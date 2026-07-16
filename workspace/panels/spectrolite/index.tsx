@@ -9,7 +9,7 @@
  *
  * The panel binds to the vault's STABLE per-vault context (`vault-<hash>`): if
  * mounted under a different contextId than the selected vault's, it reopens to
- * bind `vcs.*` (and the resident scribe) to the vault's durable head.
+ * bind `vcs.*` (and the resident scribe) to the vault's durable semantic context.
  */
 
 import { useEffect, useMemo } from "react";
@@ -36,9 +36,9 @@ export default function SpectrolitePanel() {
     return () => app.dispose();
   }, [app]);
 
-  // Bind to the vault's stable per-vault context head. If the panel mounted
+  // Bind to the vault's stable per-vault context. If the panel mounted
   // under a different contextId than the selected vault's, reopen so every
-  // `vcs.*` call (and the scribe) resolves to the vault's durable head.
+  // `vcs.*` call (and the scribe) resolves the exact working state through that context.
   useEffect(() => {
     const repoRoot = app.store.getState().repoRoot;
     if (repoRoot === null) return;
@@ -46,10 +46,12 @@ export default function SpectrolitePanel() {
     const want = vaultContextId(repoRoot);
     if (shouldRebindToVaultContext(repoRoot, runtimeContextId, persisted.contextId)) {
       const activePath = app.store.getState().activePath;
-      void panel.reopen({
-        contextId: want,
-        stateArgs: activePath ? { repoRoot, openPath: activePath } : { repoRoot },
-      }).catch((err) => console.warn("[Spectrolite] reopen to vault context failed:", err));
+      void panel
+        .reopen({
+          contextId: want,
+          stateArgs: activePath ? { repoRoot, openPath: activePath } : { repoRoot },
+        })
+        .catch((err) => console.warn("[Spectrolite] reopen to vault context failed:", err));
     }
   }, [app]);
 
@@ -71,20 +73,25 @@ function SessionGate({ theme }: { theme: "light" | "dark" }) {
   const dirtyPaths = useAppState((s) => s.dirtyPaths);
   const pendingSuggestions = useAppState((s) => s.pendingSuggestions.length);
   const repoRoot = useAppState((s) => s.repoRoot);
-  const agentState = useMemo(() => ({
-    path: activePath,
-    dirtyPaths,
-    pendingSuggestions,
-    conflicts: pendingSuggestions,
-    repoRoot,
-  }), [activePath, dirtyPaths, pendingSuggestions, repoRoot]);
+  const agentState = useMemo(
+    () => ({
+      path: activePath,
+      dirtyPaths,
+      pendingSuggestions,
+      conflicts: pendingSuggestions,
+      repoRoot,
+    }),
+    [activePath, dirtyPaths, pendingSuggestions, repoRoot]
+  );
   useAgentState("spectrolite", agentState);
 
   if (!ready) {
     return (
       <Flex align="center" justify="center" gap="2" style={{ height: "100%" }}>
         <Spinner />
-        <Text size="2" color="gray">Starting Spectrolite…</Text>
+        <Text size="2" color="gray">
+          Starting Spectrolite…
+        </Text>
       </Flex>
     );
   }

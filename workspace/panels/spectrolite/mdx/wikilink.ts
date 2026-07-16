@@ -23,7 +23,8 @@
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
 const WIKILINK_JSX_RE_SELF = /<WikiLink\s+target=("([^"]+)"|'([^']+)')\s*\/>/g;
-const WIKILINK_JSX_RE_WITH_TEXT = /<WikiLink\s+target=("([^"]+)"|'([^']+)')\s*>([\s\S]*?)<\/WikiLink>/g;
+const WIKILINK_JSX_RE_WITH_TEXT =
+  /<WikiLink\s+target=("([^"]+)"|'([^']+)')\s*>([\s\S]*?)<\/WikiLink>/g;
 const FRONTMATTER_RE = /^(---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n)/;
 
 /** Strip the YAML frontmatter (if any) off the front of the doc and
@@ -74,7 +75,9 @@ function splitByCodeBlocks(markdown: string): Array<{ code: boolean; text: strin
     // line containing the marker as a substring (e.g. a JS string with
     // backticks inside).
     const marker = fenceMarker[0]!;
-    const closeRe = new RegExp(`^\\s{0,3}${marker === "`" ? "`" : "~"}{${fenceMarker.length},}\\s*$`);
+    const closeRe = new RegExp(
+      `^\\s{0,3}${marker === "`" ? "`" : "~"}{${fenceMarker.length},}\\s*$`
+    );
     if (closeRe.test(line)) {
       buf.push(line);
       flush(true);
@@ -104,7 +107,7 @@ export function wikilinksToJsx(markdown: string): string {
       const t = target.trim();
       if (!alias) return `<WikiLink target="${escapeAttr(t)}" />`;
       return `<WikiLink target="${escapeAttr(t)}">${escapeText(alias.trim())}</WikiLink>`;
-    }),
+    })
   );
   return frontmatter + transformed;
 }
@@ -158,16 +161,14 @@ function unescapeAttr(value: string): string {
   // alone (they're unusual inside wikilink targets and a user-typed
   // `&amp;` in `[[]]` syntax should round-trip as written).
   return value
-    .replace(/&quot;/g, "\"")
+    .replace(/&quot;/g, '"')
     .replace(/&gt;/g, ">")
     .replace(/&lt;/g, "<")
     .replace(/&amp;/g, "&");
 }
 
 function escapeText(value: string): string {
-  return escapeAttr(value)
-    .replace(/{/g, "&#123;")
-    .replace(/}/g, "&#125;");
+  return escapeAttr(value).replace(/{/g, "&#123;").replace(/}/g, "&#125;");
 }
 
 function unescapeText(value: string): string {

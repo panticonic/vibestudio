@@ -4,7 +4,7 @@
  * P3.5: mirror of gate payload — unify with host schema when P1 lands.
  *
  * These shapes mirror what the host approval gate attaches per batch entry
- * (narrow-host-vcs-plan §5.1). File CONTENTS are never inlined: the gate only
+ * (provenance-aware-diff-merge-plan §9). File contents are never inlined: the gate only
  * ships content hashes, and the UI lazily fetches the two trusted blobs by
  * content hash from the host blobstore read surface when a reviewer expands a
  * file. Content addressing is the integrity argument — `get(hash)` can only

@@ -6,7 +6,12 @@
  */
 
 export function labelFor(path: string): string {
-  return path.split("/").pop()?.replace(/\.mdx$/i, "") ?? path;
+  return (
+    path
+      .split("/")
+      .pop()
+      ?.replace(/\.mdx$/i, "") ?? path
+  );
 }
 
 export interface FuzzyMatch {

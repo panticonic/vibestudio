@@ -10,7 +10,9 @@ describe("splitMdxBlocks", () => {
   });
 
   it("keeps a fenced code block with internal blank lines as ONE block", () => {
-    const md = ["# T", "", "```js", "const a = 1;", "", "const b = 2;", "```", "", "after"].join("\n");
+    const md = ["# T", "", "```js", "const a = 1;", "", "const b = 2;", "```", "", "after"].join(
+      "\n"
+    );
     const blocks = splitMdxBlocks(md);
     const code = blocks.find((b) => b.text.startsWith("```js"));
     expect(code).toBeDefined();

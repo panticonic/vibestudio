@@ -1,10 +1,10 @@
 /**
  * Composition root — builds the store + the GAD-native pieces and wires them.
  *
- * Created once per panel mount. The vault runs under its own durable context
- * head (`ctx:<contextId>`), so:
+ * Created once per panel mount. The vault runs under its own durable semantic
+ * context with an exact committed event and working state, so:
  *   - `viewState` (per-viewer component state) is panel-local, per vault,
- *   - `publish` (PublishController) drives the ctx→main publish UX,
+ *   - `publish` commits local applications, integrates main, and publishes,
  *   - `vault` owns selection + the `vcs.listFiles` path index,
  *   - `session` owns the channel + resident scribe (NO edit-driven dispatch),
  *   - per-document DocControllers (owned by `DocumentEditor`) commit + reconcile.
@@ -13,12 +13,13 @@
  * the only writers.
  */
 
-import { panel, contextId as runtimeContextId, rpc, vcs } from "@workspace/runtime";
+import { panel, contextId as runtimeContextId, rpc } from "@workspace/runtime";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
 import { createStore, type Store } from "./store";
 import { initialState, type PendingSuggestion, type SpectroliteState } from "./state";
 import { SessionController } from "./sessionController";
-import { VaultController, type VaultStarterDoc } from "./vaultController";
+import { VaultController } from "./vaultController";
 import { normalizeVaultPath } from "./vaultContext";
 import { PublishController } from "./publishController";
 import { createViewStateStore, type ViewStateStore } from "../coedit/viewState";
@@ -27,22 +28,14 @@ import { prefetchDependencies } from "../mdx/depPrefetch";
 import type { Collision } from "../coedit/blockReconcile";
 import { resolveContextId, type InstalledAgentRecord } from "../bootstrap";
 import { spectroliteE2EHooksEnabled } from "./e2eHooks";
+import { VaultSemanticVcs } from "./semanticVcs";
 
 interface PersistedStateArgs {
   channelName?: string;
   contextId?: string;
   installedAgents?: InstalledAgentRecord[];
   openPath?: string;
-  pendingStarterDoc?: unknown;
   repoRoot?: string;
-}
-
-function parsePendingStarterDoc(value: unknown): VaultStarterDoc | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as { path?: unknown; content?: unknown };
-  return typeof candidate.path === "string" && typeof candidate.content === "string"
-    ? { path: candidate.path, content: candidate.content }
-    : null;
 }
 
 export interface SpectroliteApp {
@@ -50,9 +43,8 @@ export interface SpectroliteApp {
   session: SessionController;
   vault: VaultController;
   publish: PublishController;
+  semanticVcs: VaultSemanticVcs | null;
   viewState: ViewStateStore;
-  /** The vault's stable head (`ctx:<contextId>`) the DocController subscribes to. */
-  vaultHead: string;
   /** Open a document (vault-relative path) in the editor. */
   openFile(path: string): void;
   /** Recompute the active doc's frontmatter dependency map (feeds inline JSX). */
@@ -72,25 +64,19 @@ export interface SpectroliteApp {
   /** DocumentEditor registers the active doc's deliberate commit (Publish /
    *  Send-to-scribe flush). Carries a commit message. */
   registerCommitActiveDoc(commit: CommitActiveDoc | null): void;
-  /** DocumentEditor registers a reload-now (re-read at the current head) — used
-   *  after a Sync/rebase that re-pinned the base without advancing the head. */
+  /** DocumentEditor registers a reload-now after Sync advances the working state. */
   registerReloadActiveDoc(reload: ReloadActiveDoc | null): void;
   /** Commit the active doc's working copy now with a message (Send-to-scribe
    *  flush-first). NOT called on typing — only on deliberate user gestures. */
-  commitActiveDoc(
-    message: string
-  ): Promise<{ stateHash: string; changed: boolean; conflicted?: boolean } | null>;
-  /** A save 3-way-conflicted (DocController.onConflict): refresh publish state so
-   *  the parked pending merge surfaces in the resolution UX. */
-  onSaveConflict(vcsPath: string): void;
+  commitActiveDoc(message: string): Promise<{ eventId: string; changed: boolean } | null>;
   start(): void;
   dispose(): void;
 }
 
 export type CommitActiveDoc = (
   message: string
-) => Promise<{ stateHash: string; changed: boolean; conflicted?: boolean } | null>;
-/** Re-read the active document at the current head (used after a Sync/rebase). */
+) => Promise<{ eventId: string; changed: boolean } | null>;
+/** Re-read the active document at the current exact working state. */
 export type ReloadActiveDoc = () => Promise<void>;
 
 /** The text the user chose for a colliding run, with the run's live block ids. */
@@ -127,44 +113,31 @@ type SpectroliteE2EGlobal = typeof globalThis & {
 export function createSpectroliteApp(): SpectroliteApp {
   const args = panel.stateArgs.get<PersistedStateArgs>();
   const contextId = resolveContextId(args.contextId, runtimeContextId) ?? null;
-  const pendingStarterDoc = parsePendingStarterDoc(args.pendingStarterDoc);
   const repoRoot = typeof args.repoRoot === "string" ? normalizeVaultPath(args.repoRoot) : null;
-  const store = createStore(initialState({
-    contextId,
-    channelName: args.channelName ?? null,
-    repoRoot,
-    openPath: args.openPath ?? null,
-    installedAgents: args.installedAgents ?? [],
-  }));
+  const store = createStore(
+    initialState({
+      contextId,
+      channelName: args.channelName ?? null,
+      repoRoot,
+      openPath: args.openPath ?? null,
+      installedAgents: args.installedAgents ?? [],
+    })
+  );
 
-  // The panel runs under the vault's contextId, so the vault's durable head IS
-  // the caller's own ctx head.
-  const vaultHead = contextId ? `ctx:${contextId}` : "ctx:unbound";
+  const semanticVcs = contextId && repoRoot ? new VaultSemanticVcs(contextId, repoRoot) : null;
 
   const viewState = createViewStateStore();
-  // The vault is a single repo: its repo path IS the vault's workspace-relative
-  // root (`projects/<vault>`). Spectrolite only ever pushes this one repo, so
-  // the controller is bound to it (per-repo push/pushStatus on
-  // `vcs:repo:projects/<vault>`). `""` (root) is used until a vault is picked.
-  // The generated VcsClient structurally satisfies the narrow PublishVcs surface
-  // (push/pushStatus/merge/pendingMerge/abortMerge) the controller consumes — no
-  // cast needed (PublishVcs is a structural supertype of the client methods).
-  //
-  // The active document's reload-now (re-read at the current head), registered by
-  // DocumentEditor. Declared before `publish` so the controller's onRebased can
-  // close over it. `onRebased` re-reads the active doc after a Sync: an unedited
-  // vault's rebase only re-pins the base (no head advance), so the DocController
-  // won't reload on its own — without this the editor would show stale content
-  // under a cleared "behind" indicator.
+  // The active document reloads after semantic integration remaps the context
+  // onto a new exact working state.
   let reloadActiveDocFn: ReloadActiveDoc | null = null;
-  // The active document's deliberate commit (working copy → ctx head with a
-  // message), registered by DocumentEditor. Declared before `publish` so the
+  // The active document's deliberate semantic commit (selected working unit →
+  // new context event with a message), registered by DocumentEditor.
+  // Declared before `publish` so the
   // controller's commit-then-push step can close over it. Publish ties the
   // commit and the push into one user gesture.
   let commitActiveDocFn: CommitActiveDoc | null = null;
   const publish = new PublishController(
-    vcs,
-    repoRoot ?? "",
+    semanticVcs,
     () => (reloadActiveDocFn ? reloadActiveDocFn() : Promise.resolve()),
     (message) => (commitActiveDocFn ? commitActiveDocFn(message) : Promise.resolve(null))
   );
@@ -185,7 +158,12 @@ export function createSpectroliteApp(): SpectroliteApp {
     if (store.getState().activePath !== path) return;
     const next = parseFrontmatter(markdown).dependencies;
     const { added, changed, removed } = diffDependencies(lastDeps, next);
-    if (Object.keys(added).length === 0 && Object.keys(changed).length === 0 && removed.length === 0) return;
+    if (
+      Object.keys(added).length === 0 &&
+      Object.keys(changed).length === 0 &&
+      removed.length === 0
+    )
+      return;
     lastDeps = next;
     store.setState({ activeDeps: next });
     void prefetchDependencies(depSandbox, { ...added, ...changed }, (line) => {
@@ -195,12 +173,16 @@ export function createSpectroliteApp(): SpectroliteApp {
 
   const session = new SessionController(store);
 
-  const vault = new VaultController(store, {
-    onVaultSelected: (repoRoot) => {
-      session.onVaultSelected(repoRoot);
-      void publish.refresh();
+  const vault = new VaultController(
+    store,
+    {
+      onVaultSelected: (repoRoot) => {
+        session.onVaultSelected(repoRoot);
+        void publish.refresh();
+      },
     },
-  });
+    semanticVcs
+  );
 
   const openFileInternal = (path: string, extraStateArgs?: Record<string, unknown>): void => {
     if (store.getState().activePath === path) {
@@ -214,27 +196,19 @@ export function createSpectroliteApp(): SpectroliteApp {
       activeDeps: {},
       // Suggestions are per-doc; drop any not for the new doc on open.
       pendingSuggestions: prev.pendingSuggestions.filter(
-        (s) => s.vcsPath === vault.mapping().toVcsPath(path),
+        (s) => s.vcsPath === vault.mapping().toVcsPath(path)
       ),
     }));
     lastDeps = {};
     void panel.stateArgs.set({ openPath: path, ...(extraStateArgs ?? {}) });
   };
 
-  const createPendingStarterDoc = async (): Promise<void> => {
-    if (!pendingStarterDoc) return;
-    try {
-      const created = await vault.createFile(pendingStarterDoc.path, pendingStarterDoc.content);
-      openFileInternal(created, { pendingStarterDoc: null });
-    } catch (err) {
-      console.warn("[Spectrolite] starter doc creation failed:", err);
-    }
-  };
-
   let started = false;
-  let offPublishHead: (() => void) | null = null;
-  let offPublishWorking: (() => void) | null = null;
   let startupRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const semanticEvents = semanticVcs ? new EventsClient(rpc) : null;
+  const unsubscribePublication = semanticEvents?.on("vcs:publication", () => {
+    refreshVaultSidebars();
+  });
   const refreshVaultSidebars = (): void => {
     void vault.refreshPaths();
     void publish.refresh();
@@ -244,8 +218,8 @@ export function createSpectroliteApp(): SpectroliteApp {
     session,
     vault,
     publish,
+    semanticVcs,
     viewState,
-    vaultHead,
     openFile(path) {
       openFileInternal(path);
     },
@@ -268,11 +242,17 @@ export function createSpectroliteApp(): SpectroliteApp {
         vcsPath,
         collision,
       }));
-      store.setState((prev) => ({ pendingSuggestions: [...prev.pendingSuggestions, ...additions] }));
+      store.setState((prev) => ({
+        pendingSuggestions: [...prev.pendingSuggestions, ...additions],
+      }));
     },
     resolveSuggestion(id, resolved) {
       const suggestion = store.getState().pendingSuggestions.find((s) => s.id === id);
-      if (resolved && suggestion && suggestion.vcsPath === vault.mapping().toVcsPath(store.getState().activePath ?? "")) {
+      if (
+        resolved &&
+        suggestion &&
+        suggestion.vcsPath === vault.mapping().toVcsPath(store.getState().activePath ?? "")
+      ) {
         try {
           suggestionApplier?.(resolved);
         } catch (err) {
@@ -296,16 +276,11 @@ export function createSpectroliteApp(): SpectroliteApp {
     commitActiveDoc(message) {
       return commitActiveDocFn ? commitActiveDocFn(message) : Promise.resolve(null);
     },
-    onSaveConflict() {
-      // The save parked a pending merge on the vault head; surface it.
-      void publish.refresh();
-    },
     start() {
       if (started) return;
       started = true;
       void session.start();
       if (store.getState().repoRoot !== null) {
-        void createPendingStarterDoc();
         if (store.getState().activePath) {
           startupRefreshTimer = setTimeout(() => {
             startupRefreshTimer = null;
@@ -315,18 +290,15 @@ export function createSpectroliteApp(): SpectroliteApp {
           refreshVaultSidebars();
         }
       }
-      offPublishHead = vcs.subscribeHead(vaultHead, () => {
-        void publish.refresh();
-      });
-      offPublishWorking = vcs.subscribeWorking(vaultHead, () => {
-        void publish.refresh();
-      });
+      if (semanticVcs) {
+        void semanticEvents?.subscribe("vcs:publication").catch((error) => {
+          console.warn("[Spectrolite] failed to subscribe to VCS publications:", error);
+        });
+      }
     },
     dispose() {
-      offPublishHead?.();
-      offPublishWorking?.();
-      offPublishHead = null;
-      offPublishWorking = null;
+      unsubscribePublication?.();
+      void semanticEvents?.unsubscribeAll();
       session.dispose();
       if (startupRefreshTimer) {
         clearTimeout(startupRefreshTimer);

@@ -31,7 +31,7 @@ function scribeText(collision: Collision): string {
 function DiffView({ collision }: { collision: Collision }) {
   const segments = useMemo(
     () => computeBlockDiff(userText(collision), scribeText(collision)),
-    [collision],
+    [collision]
   );
   return (
     <Box
@@ -56,7 +56,11 @@ function DiffView({ collision }: { collision: Collision }) {
             seg.type === "insert"
               ? { background: "var(--grass-4)", color: "var(--grass-11)" }
               : seg.type === "delete"
-                ? { background: "var(--red-4)", color: "var(--red-11)", textDecoration: "line-through" }
+                ? {
+                    background: "var(--red-4)",
+                    color: "var(--red-11)",
+                    textDecoration: "line-through",
+                  }
                 : undefined
           }
         >
@@ -87,10 +91,16 @@ function SuggestionRow({ id, collision }: { id: string; collision: Collision }) 
   };
 
   return (
-    <Card size="1" data-testid="spectrolite-suggestion-card" className="spectrolite-suggestion-card">
+    <Card
+      size="1"
+      data-testid="spectrolite-suggestion-card"
+      className="spectrolite-suggestion-card"
+    >
       <Flex direction="column" gap="2">
         <Flex align="center" justify="between" gap="2">
-          <Text size="1" weight="medium" color="iris">@scribe suggested a change here</Text>
+          <Text size="1" weight="medium" color="iris">
+            @scribe suggested a change here
+          </Text>
           <Button
             size="1"
             variant="ghost"

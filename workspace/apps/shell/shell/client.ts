@@ -9,7 +9,6 @@ import {
   type EnvelopeRpcTransport,
   type RpcClient,
   type RpcEnvelope,
-  type RpcEventContext,
 } from "@vibestudio/rpc";
 import { RPC_METHODS } from "@vibestudio/shared/approvalContract";
 import { appMethods } from "@vibestudio/service-schemas/app";
@@ -18,7 +17,7 @@ import {
   type AccountProfile,
   type AccountProfileUpdate,
 } from "@vibestudio/service-schemas/account";
-import { eventsMethods } from "@vibestudio/service-schemas/events";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import { menuMethods } from "@vibestudio/service-schemas/menu";
 import { notificationMethods } from "@vibestudio/service-schemas/notification";
@@ -28,8 +27,6 @@ import { paletteMethods } from "@vibestudio/service-schemas/palette";
 import {
   remoteCredMethods,
   type RemoteCredCurrent as RemoteCredCurrentContract,
-  type RemoteCredDeviceRecord,
-  type RemoteCredPairingInvite,
 } from "@vibestudio/service-schemas/remoteCred";
 import { settingsMethods } from "@vibestudio/service-schemas/settings";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
@@ -37,13 +34,18 @@ import { autofillMethods } from "@vibestudio/service-schemas/autofill";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import { viewMethods } from "@vibestudio/service-schemas/view";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import {
+  hubControlMethods,
+  type HubDevice,
+  type HubPairingInvite,
+} from "@vibestudio/service-schemas/hubControl";
 import { workspacePresenceMethods } from "@vibestudio/service-schemas/workspacePresence";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   createDurableObjectServiceClient,
   createGadServiceClient,
   type DurableObjectServiceClient,
-} from "@vibestudio/shared/userlandServiceRpc";
+} from "@vibestudio/shared/workspaceServiceRpc";
 import type { ChannelInvite } from "@vibestudio/shared/channelInvites";
 import {
   channelInviteFromNotification,
@@ -96,9 +98,7 @@ const appClient = createTypedServiceClient("app", appMethods, (service, method, 
 const accountClient = createTypedServiceClient("account", accountMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
-const eventsClient = createTypedServiceClient("events", eventsMethods, (service, method, args) =>
-  rpc.call("main", `${service}.${method}`, args)
-);
+const eventsClient = new EventsClient(rpc);
 const extensionsClient = createTypedServiceClient(
   "extensions",
   extensionsMethods,
@@ -144,6 +144,11 @@ const viewClient = createTypedServiceClient("view", viewMethods, (service, metho
 const workspaceClient = createTypedServiceClient(
   "workspace",
   workspaceMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const hubControlClient = createTypedServiceClient(
+  "hubControl",
+  hubControlMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const blobstoreClient = createTypedServiceClient(
@@ -202,7 +207,7 @@ export const panel = {
   takeOver: (panelId: string) => panelClient.takeOver(panelId),
   togglePin: (panelId: string) => panelClient.togglePin(panelId),
   listPinnedPanelIds: () => panelClient.listPinnedPanelIds(),
-  getAddressOptions: (source: string, ref?: string) => panelClient.getAddressOptions(source, ref),
+  getAddressOptions: (source: string) => panelClient.getAddressOptions(source),
   getBrowserAddressOptions: (query: string) => panelClient.getBrowserAddressOptions(query),
   markBrowserNavigationIntent: (panelId: string, intent: BrowserNavigationIntent) =>
     panelClient.markBrowserNavigationIntent(panelId, intent),
@@ -471,15 +476,27 @@ export const menu = {
 // Workspace Service
 // =============================================================================
 export const workspace = {
-  list: () => workspaceClient.list(),
+  list: () => hubControlClient.listWorkspaces(),
   create: (
     name: string,
     opts?: {
       forkFrom?: string;
     }
-  ) => workspaceClient.create(name, opts),
-  select: (name: string) => workspaceClient.select(name),
-  delete: (name: string) => workspaceClient.delete(name),
+  ) =>
+    hubControlClient.createWorkspace({
+      workspace: name,
+      ...(opts?.forkFrom ? { forkFrom: opts.forkFrom } : {}),
+    }),
+  select: async (name: string) => {
+    const entry = (await hubControlClient.listWorkspaces()).find(
+      (workspace) => workspace.name === name
+    );
+    if (!entry) throw new Error(`Workspace "${name}" is not visible to this account`);
+    return hubControlClient.routeWorkspace({ workspaceId: entry.workspaceId });
+  },
+  delete: async (name: string) => {
+    await hubControlClient.deleteWorkspace({ workspace: name });
+  },
   getActive: () => workspaceClient.getActive(),
   hostTargets: {
     list: (target: HostTarget) => workspaceClient.hostTargets.list(target),
@@ -517,19 +534,17 @@ export interface RemoteCredCurrent {
   deviceId?: RemoteCredCurrentContract["deviceId"];
   workspaceName?: RemoteCredCurrentContract["workspaceName"];
 }
-export type DeviceRecord = RemoteCredDeviceRecord;
-export type PairingInvite = RemoteCredPairingInvite;
+export type DeviceRecord = HubDevice;
+export type PairingInvite = HubPairingInvite;
 export const remoteCred = {
   getCurrent: () => remoteCredClient.getCurrent(),
   pair: (link: string, label?: string) => remoteCredClient.pair({ link, label }),
-  pairDevice: async (args?: { workspace?: string; ttlMs?: number }) =>
-    (await remoteCredClient.pairDevice(args)).pairing,
-  listDevices: () => remoteCredClient.listDevices(),
-  revokeDevice: (deviceId: string) => remoteCredClient.revokeDevice(deviceId),
   reconnectNow: () => remoteCredClient.reconnectNow(),
   clear: () => remoteCredClient.clear(),
   relaunch: () => remoteCredClient.relaunch(),
 };
+/** The stable server-wide control service, composed directly over the hub pipe. */
+export const hubControl = hubControlClient;
 // =============================================================================
 // Autofill Service
 // =============================================================================
@@ -566,7 +581,7 @@ export const account = {
   getProfile: () => accountClient.getProfile(),
   resolveProfiles: (userIds: readonly string[]) => accountClient.resolveProfiles([...userIds]),
   updateProfile: async (input: ShellAccountProfileUpdate) => {
-    const profile = await accountClient.updateProfile(input);
+    const profile = await hubControlClient.updateProfile(input);
     window.dispatchEvent(
       new CustomEvent<ShellAccountProfile>(ACCOUNT_PROFILE_CHANGED_EVENT, { detail: profile })
     );
@@ -722,11 +737,24 @@ export const userNotifications = {
 // =============================================================================
 // Re-export event types from shared module
 export type { EventName, EventPayloads } from "@vibestudio/shared/events";
-import type { EventName } from "@vibestudio/shared/events";
+import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 export const events = {
   subscribe: (event: EventName) => eventsClient.subscribe(event),
   unsubscribe: (event: EventName) => eventsClient.unsubscribe(event),
   unsubscribeAll: () => eventsClient.unsubscribeAll(),
+  on: <E extends EventName>(event: E, listener: (payload: EventPayloads[E]) => void) =>
+    eventsClient.on(event, listener),
+};
+
+/**
+ * Events addressed to this exact authenticated shell RPC session.
+ *
+ * This is deliberately separate from `events`: direct events do not own or
+ * join an `events.watch` response, and watched broadcasts never arrive here.
+ */
+export const directEvents = {
+  on: <E extends EventName>(event: E, listener: (payload: EventPayloads[E]) => void) =>
+    rpc.on(event, ({ payload }) => listener(payload as EventPayloads[E])),
 };
 // =============================================================================
 // Notification Service
@@ -801,14 +829,3 @@ export const shellApproval = {
 export const shellPresence = {
   heartbeat: () => rpc.call<undefined>("main", RPC_METHODS.shellPresence.heartbeat, []),
 };
-// =============================================================================
-// RPC Event Listener (for useShellEvent hook)
-// =============================================================================
-/**
- * Register a listener for RPC events.
- * Used by the useShellEvent hook.
- */
-export const onRpcEvent = (
-  event: string,
-  listener: (event: RpcEventContext) => void
-): (() => void) => rpc.on(event, listener);

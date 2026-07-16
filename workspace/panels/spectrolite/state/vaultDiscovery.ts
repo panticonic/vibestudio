@@ -1,64 +1,41 @@
-/**
- * Discover Spectrolite vaults.
- *
- * A Spectrolite vault is a directory under `projects/` in the workspace.
- *
- * Inside a panel context, workspace repos are mounted at the same path:
- * `projects/<name>/` becomes accessible as `/projects/<name>/` via the
- * panel's RPC-backed fs. Edits happen in the per-context working tree;
- * commits go through the GAD-native runtime VCS surface and advance the
- * caller's workspace head.
- *
- * `discoverVaults()` returns metadata for every existing `projects/*`
- * directory.
- */
+/** Discover present `projects/*` repositories by walking the semantic state. */
 
-import { workspace } from "@workspace/runtime";
+import { contextId, vcs } from "@workspace/runtime";
 
 export interface VaultEntry {
-  /** Name as it appears under `projects/`. */
   name: string;
-  /** Path relative to the workspace source root, e.g. `projects/my-notes`. */
   relPath: string;
-  /** Path as visible inside the panel context fs, e.g. `/projects/my-notes`. */
   contextPath: string;
 }
 
-interface WorkspaceNodeLike {
-  name: string;
-  path: string;
-  children?: WorkspaceNodeLike[];
-}
-
 export async function discoverVaults(): Promise<VaultEntry[]> {
-  let tree: { children?: WorkspaceNodeLike[] };
-  try {
-    tree = await workspace.sourceTree() as { children?: WorkspaceNodeLike[] };
-  } catch (err) {
-    console.warn("[Spectrolite] workspace.sourceTree failed:", err);
-    return [];
-  }
-  const projectsNode = tree.children?.find((c) => c.name === "projects");
-  if (!projectsNode || !projectsNode.children) return [];
-  return projectsNode.children.map((child) => ({
-    name: child.name,
-    relPath: child.path,
-    contextPath: `/${child.path}`,
-  })).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/** Resolve a vault name to its context fs path. */
-export function vaultContextPath(name: string): string {
-  return `/projects/${name}`;
-}
-
-/** Validate a proposed vault name. */
-export function validateVaultName(name: string): string | null {
-  const trimmed = name.trim();
-  if (!trimmed) return "Name is required";
-  if (!/^[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(trimmed)) {
-    return "Name must start with a letter/digit/underscore and contain only letters, digits, underscores, or hyphens";
-  }
-  if (trimmed.length > 64) return "Name must be 64 characters or fewer";
-  return null;
+  if (!contextId) return [];
+  const status = await vcs.status({ contextId });
+  const entries: VaultEntry[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await vcs.neighbors({
+      root: status.workingHead,
+      limit: 500,
+      ...(cursor ? { cursor } : {}),
+    });
+    const repositories = page.edges.flatMap((edge) =>
+      edge.kind === "contains-repository" && edge.to.kind === "repository" ? [edge.to] : []
+    );
+    const inspected = await Promise.all(
+      repositories.map((node) => vcs.inspect({ node, edgeLimit: 1 }))
+    );
+    for (const result of inspected) {
+      if (result.node.kind !== "repository" || result.node.value.kind !== "present") continue;
+      const relPath = result.node.value.repoPath;
+      if (!relPath.startsWith("projects/")) continue;
+      entries.push({
+        name: relPath.slice("projects/".length),
+        relPath,
+        contextPath: `/${relPath}`,
+      });
+    }
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  return entries.sort((left, right) => left.name.localeCompare(right.name));
 }

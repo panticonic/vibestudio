@@ -8,7 +8,7 @@
  * working edits into a messaged snapshot.
  *
  * Each dirty block carries its byte range in the *base* canonical document (the
- * content at `baseStateHash` — the last recorded working state, tracked by the
+ * content at the controller's exact base state — the last recorded working projection, tracked by the
  * block registry from mdast positions) and its current serialized text. The
  * happy path emits one surgical `replace` hunk per dirty block. We then
  * **verify** by replaying those hunks against the base: if the result is
@@ -47,7 +47,7 @@ export interface DirtyBlockEdit {
 
 export interface CommitEditsInput {
   path: string;
-  /** Canonical document content at `baseStateHash`. */
+  /** Canonical document content at the exact base state. */
   baseText: string;
   /** Full serialization of the editor's current state (all blocks). */
   currentCanonical: string;
@@ -101,7 +101,11 @@ export function buildEditOps(input: CommitEditsInput): CommitEditsResult {
   if (surgical.length > 0) {
     try {
       if (applyReplaceHunks(baseText, surgical) === currentCanonical) {
-        return { edits: [{ kind: "replace", path, hunks: surgical }], usedFallback: false, changed: true };
+        return {
+          edits: [{ kind: "replace", path, hunks: surgical }],
+          usedFallback: false,
+          changed: true,
+        };
       }
     } catch {
       // Out-of-range / overlap → not reconcilable surgically; fall back.

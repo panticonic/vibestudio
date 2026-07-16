@@ -25,19 +25,21 @@ export function createQueuedRefresh(): QueuedRefresh {
       }
       const runGeneration = generation;
       let currentTask: (() => void | Promise<void>) | null = task;
-      inFlight = Promise.resolve().then(async () => {
-        while (runGeneration === generation) {
-          if (!currentTask) return;
-          await currentTask();
-          if (!queued) return;
-          queued = false;
-          currentTask = latestTask;
-        }
-      }).finally(() => {
-        if (runGeneration === generation) {
-          inFlight = null;
-        }
-      });
+      inFlight = Promise.resolve()
+        .then(async () => {
+          while (runGeneration === generation) {
+            if (!currentTask) return;
+            await currentTask();
+            if (!queued) return;
+            queued = false;
+            currentTask = latestTask;
+          }
+        })
+        .finally(() => {
+          if (runGeneration === generation) {
+            inFlight = null;
+          }
+        });
       return inFlight;
     },
     reset() {

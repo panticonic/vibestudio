@@ -30,9 +30,9 @@ describe("vaultContextId", () => {
 describe("shouldRebindToVaultContext", () => {
   it("rebinds an ordinary initial mount but respects an explicit shared context", () => {
     expect(shouldRebindToVaultContext("projects/default", "agent-context", undefined)).toBe(true);
-    expect(
-      shouldRebindToVaultContext("projects/default", "agent-context", "agent-context")
-    ).toBe(false);
+    expect(shouldRebindToVaultContext("projects/default", "agent-context", "agent-context")).toBe(
+      false
+    );
     const stable = vaultContextId("projects/default");
     expect(shouldRebindToVaultContext("projects/default", stable, undefined)).toBe(false);
   });

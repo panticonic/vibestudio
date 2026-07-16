@@ -28,7 +28,10 @@ import type { SandboxConfig } from "@workspace/agentic-core";
 const inFlightBySandbox = new WeakMap<SandboxConfig, Map<string, Promise<void>>>();
 
 function fingerprint(deps: Record<string, string>): string {
-  return Object.entries(deps).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}@${v}`).join(",");
+  return Object.entries(deps)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}@${v}`)
+    .join(",");
 }
 
 function inFlightFor(sandbox: SandboxConfig): Map<string, Promise<void>> {
@@ -43,7 +46,7 @@ function inFlightFor(sandbox: SandboxConfig): Map<string, Promise<void>> {
 export async function prefetchDependencies(
   sandbox: SandboxConfig,
   deps: Record<string, string>,
-  onLog?: (line: string) => void,
+  onLog?: (line: string) => void
 ): Promise<void> {
   if (Object.keys(deps).length === 0) return;
   const inFlight = inFlightFor(sandbox);
@@ -62,7 +65,9 @@ export async function prefetchDependencies(
         onLog?.(`[spectrolite] dep prefetch reported failure: ${result.error}`);
       }
     } catch (err) {
-      onLog?.(`[spectrolite] dep prefetch threw: ${err instanceof Error ? err.message : String(err)}`);
+      onLog?.(
+        `[spectrolite] dep prefetch threw: ${err instanceof Error ? err.message : String(err)}`
+      );
     } finally {
       inFlight.delete(key);
     }
