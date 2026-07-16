@@ -6,19 +6,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverPackageGraph } from "./packageGraph.js";
 import { computeEffectiveVersions } from "./effectiveVersion.js";
 import type { BuildSourceProvider } from "./buildSource.js";
-import {
-  StateTransitionTrigger,
-  type StateAdvancedEvent,
-  type WorkspaceStateSource,
-} from "./stateTrigger.js";
+import { StateTransitionTrigger, type WorkspaceStateSource } from "./stateTrigger.js";
+import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 
 /**
- * Regression for the multi-repo group-push invalidation bug: a `push({ repoPaths:
- * [a, b] })` emits ONE state-advanced event per advanced repo, all carrying the
- * SAME composed workspace `stateHash` but DISTINCT per-repo `changedPaths`. The
- * trigger must process EVERY event for its own changed paths — deduping on
- * `stateHash` alone would drop every repo after the first, leaving its units'
- * content hashes / EV stale.
+ * Regression for multi-repository publication invalidation: one semantic
+ * publication emits one atomic effect carrying every repository delta, all of
+ * which must reach graph invalidation in one build-trigger pass.
  */
 describe("StateTransitionTrigger — multi-repo group push", () => {
   let root: string;
@@ -45,38 +39,36 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  function makeEvent(repoPath: string, stateHash: string): StateAdvancedEvent {
+  function makeEvent(stateHash: string): ProtectedPublicationEvent {
     return {
-      head: "main",
-      stateHash,
-      repoStateHash: stateHash,
-      sinceStateHash: "state:prev",
-      eventId: null,
-      headHash: null,
-      actor: null,
-      transitionKind: "merge",
-      changedPaths: [`${repoPath}/index.ts`],
-      repoPath,
-      fileChanges: [],
-      editOps: [],
+      publicationId: "publication:group",
+      resultHostRefsBasisDigest: "host-refs:group",
+      appliedAt: 42,
+      workspaceStateHash: stateHash,
+      changedPaths: ["packages/a/index.ts", "packages/b/index.ts"],
+      repositories: ["packages/a", "packages/b"].map((repoPath) => ({
+        repoPath,
+        previousStateHash: "state:prev",
+        nextStateHash: stateHash,
+        fileChanges: [],
+      })),
     };
   }
 
-  it("processes BOTH repos when their events share one composed workspace stateHash", async () => {
+  it("processes every repository effect sharing one workspace state", async () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const { evMap, contentHashes } = computeEffectiveVersions(graph, {});
 
-    let advanceCb: ((event: StateAdvancedEvent) => void) | null = null;
+    let publicationCb: ((event: ProtectedPublicationEvent) => void) | null = null;
     const source: WorkspaceStateSource & BuildSourceProvider = {
       ensureFresh: async () => ({ stateHash: "state:0" }),
       // New hashes per state so the touched unit registers as changed.
       unitHashes: async (stateHash, relPaths) =>
         Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}:${stateHash}`])),
-      resolveHead: async () => "state:0",
-      resolveContextView: async () => "state:0",
+      resolveContextState: async () => "state:0",
       discoverGraph: async () => graph,
-      onStateAdvanced: (cb) => {
-        advanceCb = cb;
+      onProtectedPublication: (cb) => {
+        publicationCb = cb;
         return () => {};
       },
       recordBuild: async () => {},
@@ -97,15 +89,12 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       for (const u of e.units) changed.push(u.relativePath);
     });
     trigger.start();
-    expect(advanceCb).not.toBeNull();
+    expect(publicationCb).not.toBeNull();
 
-    // The group push: two events, SAME composed workspace stateHash, different repos.
-    advanceCb!(makeEvent("packages/a", "state:X"));
-    advanceCb!(makeEvent("packages/b", "state:X"));
+    publicationCb!(makeEvent("state:X"));
     await trigger.whenSettled();
 
-    // BOTH repos must be invalidated — pre-fix, packages/b's event was dropped as
-    // a stateHash duplicate and never reached unitsForChangedPaths.
+    // Both repository path deltas must reach graph invalidation.
     expect(changed).toContain("packages/a");
     expect(changed).toContain("packages/b");
   });

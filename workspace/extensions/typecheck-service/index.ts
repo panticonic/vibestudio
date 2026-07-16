@@ -22,7 +22,7 @@ const WORKSPACE_PACKAGE_ROOTS = [
 
 interface ExtensionContextLike {
   workspace: {
-    getInfo(): Promise<{ path: string; contextsPath: string }>;
+    getInfo(): Promise<{ path: string; contextProjectionsPath: string }>;
   };
   fs: {
     /** Materialize the given workspace path(s)/repo(s) into the (sparse) context
@@ -81,23 +81,19 @@ function resolveWithin(root: string, relativePath: string): string {
 async function resolvePanelPath(
   ctx: ExtensionContextLike,
   panelPath: string,
-  contextId: string | undefined,
+  contextId: string | undefined
 ): Promise<string> {
   const info = await ctx.workspace.getInfo();
-  if (!contextId) return path.isAbsolute(panelPath) ? panelPath : resolveWithin(info.path, panelPath);
+  if (!contextId)
+    return path.isAbsolute(panelPath) ? panelPath : resolveWithin(info.path, panelPath);
   validateContextId(contextId);
-  // The context folder is SPARSE — materialize the panel's own repo so its source
-  // is on disk to typecheck. The base package graph comes from the full workspace
-  // source (`info.path`); any context-edited dependency packages are already
-  // materialized by their edits, so this minimal scope (the panel's repo) is enough.
-  await ctx.fs.ensureMaterialized(panelPath);
-  return resolveWithin(path.join(info.contextsPath, contextId), panelPath);
+  return resolveWithin(path.join(info.contextProjectionsPath, contextId), panelPath);
 }
 
 async function validateFilePath(
   ctx: ExtensionContextLike,
   filePath: string | undefined,
-  contextId: string | undefined,
+  contextId: string | undefined
 ): Promise<void> {
   if (!filePath) return;
   const info = await ctx.workspace.getInfo();
@@ -106,59 +102,71 @@ async function validateFilePath(
     return;
   }
   validateContextId(contextId);
-  resolveWithin(path.join(info.contextsPath, contextId), filePath);
+  resolveWithin(path.join(info.contextProjectionsPath, contextId), filePath);
 }
 
 async function buildContextWorkspaceContext(
   ctx: ExtensionContextLike,
-  contextId: string | undefined,
+  contextId: string | undefined
 ): Promise<WorkspaceContext | undefined> {
   const info = await ctx.workspace.getInfo();
-  const sourceContext =
-    discoverWorkspaceContext(info.path) ?? discoverWorkspaceSourceContext(info.path);
-  if (!contextId) return sourceContext ?? undefined;
-  if (!sourceContext) return undefined;
+  if (!contextId) {
+    return (
+      discoverWorkspaceContext(info.path) ?? discoverWorkspaceSourceContext(info.path) ?? undefined
+    );
+  }
   validateContextId(contextId);
 
-  const contextRoot = path.join(info.contextsPath, contextId);
+  // A context working head is the complete dependency universe for a context-bound
+  // typecheck. Project it in full before discovery; consulting the live source
+  // tree for missing packages would silently combine two different revisions.
+  await ctx.fs.ensureMaterialized("all");
+  const contextRoot = path.join(info.contextProjectionsPath, contextId);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(contextRoot);
+  } catch (error) {
+    throw new Error(`Materialized context root is unavailable: ${contextRoot}`, { cause: error });
+  }
+  if (!stat.isDirectory())
+    throw new Error(`Materialized context root is not a directory: ${contextRoot}`);
+
+  return discoverExactContextWorkspaceContext(contextRoot);
+}
+
+/**
+ * Discover package metadata from one fully materialized semantic context.
+ * Unlike the tolerant source-workspace discovery used outside contexts, this
+ * is an authority boundary: malformed or duplicate package metadata is an
+ * explicit failure, never a reason to borrow a package from live main.
+ */
+function discoverExactContextWorkspaceContext(contextRoot: string): WorkspaceContext {
   const packages = new Map<string, WorkspacePackageInfo>();
-  const contextContext =
-    discoverWorkspaceContext(contextRoot) ?? discoverWorkspaceSourceContext(contextRoot);
-  for (const [name, pkg] of sourceContext.packages) {
-    const relativeDir = path.relative(sourceContext.monorepoRoot, pkg.dir);
-    if (relativeDir.startsWith("..") || path.isAbsolute(relativeDir)) continue;
-
-    // Pinned-context isolation: materialize this dependency package into the
-    // context at ITS pinned state (the context's `ctx` head if edited, else the
-    // pinned base) so typecheck reads the context's dependency version — NOT live
-    // `main`. Without this, an unedited dependency absent from the sparse context
-    // tree falls through to the live source package below, so an older pinned
-    // context would be typechecked against newer main code.
-    await ctx.fs.ensureMaterialized(relativeDir).catch(() => {});
-
-    const contextDir = path.join(contextRoot, relativeDir);
-    const contextPackageJson = path.join(contextDir, "package.json");
-    if (fs.existsSync(contextPackageJson)) {
+  for (const root of WORKSPACE_PACKAGE_ROOTS) {
+    for (const pkgDir of packageDirsUnder(path.join(contextRoot, root))) {
+      const packageJsonPath = path.join(pkgDir, "package.json");
+      let parsed: Record<string, unknown>;
       try {
-        packages.set(name, {
-          name,
-          dir: contextDir,
-          packageJson: JSON.parse(fs.readFileSync(contextPackageJson, "utf-8")),
+        parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as Record<string, unknown>;
+      } catch (error) {
+        throw new Error(`Invalid package metadata in semantic context: ${packageJsonPath}`, {
+          cause: error,
         });
-        continue;
-      } catch {
-        // Fall back to the source package below.
       }
+      const name = parsed["name"];
+      if (typeof name !== "string" || name.trim().length === 0) {
+        throw new Error(`Semantic context package has no valid name: ${packageJsonPath}`);
+      }
+      const existing = packages.get(name);
+      if (existing) {
+        throw new Error(
+          `Semantic context contains duplicate package name ${JSON.stringify(name)}: ` +
+            `${existing.dir} and ${pkgDir}`
+        );
+      }
+      packages.set(name, { name, dir: pkgDir, packageJson: parsed });
     }
-    // Only reached when the package isn't in the context at all (e.g. added to
-    // main AFTER this context was pinned, so it's not in the pinned base) — a
-    // genuine last resort, not the unedited-dependency case covered above.
-    packages.set(name, pkg);
   }
-  for (const [name, pkg] of contextContext?.packages ?? []) {
-    if (!packages.has(name)) packages.set(name, pkg);
-  }
-
   return { monorepoRoot: contextRoot, packages };
 }
 
@@ -232,7 +240,7 @@ export async function activate(ctx: ExtensionContextLike) {
       if (!source) {
         throw new Error(
           "Could not auto-detect panel path from caller ID. " +
-          "Pass the panel source path explicitly, e.g. checkPanel(\"panels/my-app\")",
+            'Pass the panel source path explicitly, e.g. checkPanel("panels/my-app")'
         );
       }
       const { contextId = currentInvocationContextId(ctx) } = normalizeCheckPanelOptions(options);
@@ -241,7 +249,7 @@ export async function activate(ctx: ExtensionContextLike) {
         resolvedPath,
         undefined,
         undefined,
-        { workspaceContext: await buildContextWorkspaceContext(ctx, contextId) },
+        { workspaceContext: await buildContextWorkspaceContext(ctx, contextId) }
       );
       return {
         diagnostics: result.diagnostics,
@@ -250,28 +258,20 @@ export async function activate(ctx: ExtensionContextLike) {
       };
     },
 
-    async check(
-      panelPath?: string,
-      filePath?: string,
-      fileContent?: string,
-      contextId?: string,
-    ) {
+    async check(panelPath?: string, filePath?: string, fileContent?: string, contextId?: string) {
       const source = panelPath ?? currentCallerPanelPath(ctx);
       if (!source) {
         throw new Error(
           "typecheck-service.check: panel path is required and could not be auto-detected from caller. " +
-          "Pass the panel source path explicitly, e.g. check(\"panels/my-app\")",
+            'Pass the panel source path explicitly, e.g. check("panels/my-app")'
         );
       }
       const effectiveContextId = contextId ?? currentInvocationContextId(ctx);
       const resolvedPanelPath = await resolvePanelPath(ctx, source, effectiveContextId);
       await validateFilePath(ctx, filePath, effectiveContextId);
-      return typeCheckRpcMethods["typecheck.check"](
-        resolvedPanelPath,
-        filePath,
-        fileContent,
-        { workspaceContext: await buildContextWorkspaceContext(ctx, effectiveContextId) },
-      );
+      return typeCheckRpcMethods["typecheck.check"](resolvedPanelPath, filePath, fileContent, {
+        workspaceContext: await buildContextWorkspaceContext(ctx, effectiveContextId),
+      });
     },
 
     async getTypeInfo(
@@ -280,7 +280,7 @@ export async function activate(ctx: ExtensionContextLike) {
       line: number,
       column: number,
       fileContent?: string,
-      contextId?: string,
+      contextId?: string
     ) {
       const effectiveContextId = contextId ?? currentInvocationContextId(ctx);
       const resolvedPanelPath = await resolvePanelPath(ctx, panelPath, effectiveContextId);
@@ -291,7 +291,7 @@ export async function activate(ctx: ExtensionContextLike) {
         line,
         column,
         fileContent,
-        { workspaceContext: await buildContextWorkspaceContext(ctx, effectiveContextId) },
+        { workspaceContext: await buildContextWorkspaceContext(ctx, effectiveContextId) }
       );
     },
 
@@ -301,7 +301,7 @@ export async function activate(ctx: ExtensionContextLike) {
       line: number,
       column: number,
       fileContent?: string,
-      contextId?: string,
+      contextId?: string
     ) {
       const effectiveContextId = contextId ?? currentInvocationContextId(ctx);
       const resolvedPanelPath = await resolvePanelPath(ctx, panelPath, effectiveContextId);
@@ -312,7 +312,7 @@ export async function activate(ctx: ExtensionContextLike) {
         line,
         column,
         fileContent,
-        { workspaceContext: await buildContextWorkspaceContext(ctx, effectiveContextId) },
+        { workspaceContext: await buildContextWorkspaceContext(ctx, effectiveContextId) }
       );
     },
 
@@ -331,7 +331,7 @@ export async function activate(ctx: ExtensionContextLike) {
       return typeCheckRpcMethods["typecheck.getBrowserTypeDefinitions"](
         resolvedPanelPath,
         packageNames,
-        { workspaceContext: await buildContextWorkspaceContext(ctx, effectiveContextId) },
+        { workspaceContext: await buildContextWorkspaceContext(ctx, effectiveContextId) }
       );
     },
   };

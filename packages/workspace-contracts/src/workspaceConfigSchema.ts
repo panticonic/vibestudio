@@ -66,9 +66,7 @@ const WorkspaceServiceSchema = z.union([
       protocols: z.array(z.string()).optional(),
       policy: z
         .object({
-          allowed: z
-            .array(WorkspaceServiceCallerKindSchema)
-            .optional(),
+          allowed: z.array(WorkspaceServiceCallerKindSchema).optional(),
         })
         .strict()
         .optional(),
@@ -84,9 +82,7 @@ const WorkspaceServiceSchema = z.union([
       protocols: z.array(z.string()).optional(),
       policy: z
         .object({
-          allowed: z
-            .array(WorkspaceServiceCallerKindSchema)
-            .optional(),
+          allowed: z.array(WorkspaceServiceCallerKindSchema).optional(),
         })
         .strict()
         .optional(),
@@ -165,6 +161,7 @@ const WorkspaceHeartbeatSchema = z
 export const WorkspaceConfigSchema = z
   .object({
     id: z.string(),
+    systemEpoch: z.number().int().nonnegative(),
     defaultRepo: z.string().optional(),
     git: z
       .object({
@@ -175,9 +172,7 @@ export const WorkspaceConfigSchema = z
       .optional(),
     initPanels: z
       .array(
-        z
-          .object({ source: z.string(), stateArgs: WorkspaceJsonObjectSchema.optional() })
-          .strict()
+        z.object({ source: z.string(), stateArgs: WorkspaceJsonObjectSchema.optional() }).strict()
       )
       .optional(),
     panelRestorePolicy: z.enum(["focused", "none"]).optional(),

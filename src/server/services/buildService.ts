@@ -43,7 +43,6 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
           ? { ...build.metadata, diagnostics }
           : build.metadata;
       },
-      validate: (_ctx, [input]) => deps.buildSystem.validate(input),
       getBuildReport: (_ctx, [unit, ref]) => deps.buildSystem.getBuildReport(unit, ref),
       getEffectiveVersion: (_ctx, [unit]) => deps.buildSystem.getEffectiveVersion(unit),
       inspectBuildProvenance: (_ctx, [source]) => {

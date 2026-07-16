@@ -1,3 +1,4 @@
+systemEpoch: 56
 defaultRepo: projects/default
 defaultAgentConfig:
   model: openai-codex:gpt-5.6-sol
@@ -123,9 +124,6 @@ initPanels:
         authorize URLs
 
 singletonObjects:
-  - source: workers/gad-store
-    className: GadWorkspaceDO
-    key: workspace-gad
   - source: workers/model-settings
     className: ModelSettingsDO
     key: workspace-model-settings
@@ -133,52 +131,6 @@ singletonObjects:
     className: TestkitDriverDO
     key: workspace-testkit-driver
 services:
-  - source: workers/gad-store
-    name: gad.workspace
-    title: gad Workspace Store
-    protocols:
-      - vibestudio.gad.workspace.v1
-    policy:
-      allowed:
-        - app
-        - panel
-        - shell
-        - server
-        - worker
-        - do
-    durableObject:
-      className: GadWorkspaceDO
-  # Userland VCS (P5c/P5d): the vcs read/history surface (vcsFileHistory,
-  # vcsLog, vcsCommitEdits, vcsCommitAncestors, vcsEditsBy*), the edit/commit
-  # composition (applyEditOps/commitWorking/revertWorking), status semantics
-  # (vcsStatus/vcsPushStatus), ctx-target merge orchestration (vcsMerge/
-  # vcsAbortMerge) and the context semantics (vcsPinContext/
-  # vcsResolveContextView/vcsContextStatus/vcsRebaseContext/vcsDropContext/
-  # vcsContextRepoStates) run in the gad-store DO against its own storage plus
-  # the host blobstore.*/refs.* primitives. Host `vcs.*` keeps only the
-  # operations that genuinely need host resources (fork/delete/restore disk
-  # + ref lifecycle, disk projection, scan triggers, content-store reads).
-  # This declaration is ALSO how the host locates the store DO (attach,
-  # provenance follower, bootstrap main-binding) — there is no separate
-  # provider slot.
-  - source: workers/gad-store
-    name: vcs
-    title: Workspace VCS (userland)
-    protocols:
-      - vibestudio.vcs.v1
-    policy:
-      allowed:
-        - panel
-        - shell
-        - server
-        - worker
-        - do
-        # git-bridge extension: vcsLog / ingestWorktreeState
-        - extension
-        # agent CLI (plan §3.1 grant set): vcsLog, listChannelLogs, mirror reads
-        - agent
-    durableObject:
-      className: GadWorkspaceDO
   - source: workers/pubsub-channel
     name: channel
     title: Workspace Channel Service

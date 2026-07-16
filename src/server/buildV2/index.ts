@@ -4,10 +4,9 @@
  * The build system lives entirely in the server process.
  * Electron requests builds via RPC. The headless server gets builds for free.
  *
- * Builds are triggered by workspace state advances on the GAD vcs log
- * (`vcs:workspace`). Cold start compares the persisted EV state's workspace
- * state hash against a fresh scan-on-demand snapshot — the snapshot IS the
- * change detection.
+ * Builds are triggered by protected workspace publication effects. Cold start
+ * compares the persisted effective-version state with the exact current
+ * publication resolved from the semantic authority.
  *
  * Immutability: the PackageGraph is never mutated after creation. Content
  * hashes (GAD manifest subtree hashes) are tracked in a separate
@@ -50,24 +49,8 @@ import {
 } from "./buildSource.js";
 import { validateBuildRef } from "./refs.js";
 import { typecheckUnit } from "./typecheckFold.js";
-import { CONTAINER_SECTIONS, CONTENT_SECTIONS } from "@vibestudio/shared/runtime/entitySpec";
-
-/** Expected unit kind for a build-unit section, used to report a malformed
- *  (unresolvable) unit at the right kind even when no GraphNode exists. */
-const SECTION_UNIT_KIND: Record<string, GraphNode["kind"]> = {
-  packages: "package",
-  panels: "panel",
-  about: "panel",
-  workers: "worker",
-  extensions: "extension",
-  apps: "app",
-};
 import { diagnosticsFromError, hasErrors, type BuildDiagnostic } from "./diagnostics.js";
-import {
-  recordDiagnostics,
-  diagnosticsForUnit,
-  diagnosticsForBuildKey,
-} from "./diagnosticsStore.js";
+import { recordDiagnostics, diagnosticsForUnit } from "./diagnosticsStore.js";
 import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
 import {
   StateTransitionTrigger,
@@ -75,10 +58,10 @@ import {
   isBuildableKind,
   sourcemapForKind,
   MAIN_HEAD,
-  type StateAdvancedEvent,
   type StateChangedUnit,
   type WorkspaceStateSource,
 } from "./stateTrigger.js";
+import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import {
   collectTransitiveDependencyOverrides,
   collectTransitiveExternalDeps,
@@ -117,12 +100,12 @@ export interface BuildSystemBuildEvent {
   error?: string;
   /** Structured esbuild/tsc diagnostics on a build-error event. */
   diagnostics?: BuildDiagnostic[];
-  trigger?: StateAdvancedEvent;
+  trigger?: ProtectedPublicationEvent;
   timestamp: string;
 }
 
 export interface BuildSystemUnitChangeEvent extends StateChangedUnit {
-  trigger: StateAdvancedEvent;
+  trigger: ProtectedPublicationEvent;
 }
 
 export interface RuntimeImageBinding {
@@ -134,13 +117,13 @@ export interface RuntimeImageBinding {
 }
 
 // ---------------------------------------------------------------------------
-// Per-repo build report (push gate contract) — agent-actionable, not a blob.
+// Exact-state unit build report — agent-actionable, not a blob.
 // ---------------------------------------------------------------------------
 
-export type RepoBuildTargetKind = "runtime" | "library:panel" | "library:worker";
+export type UnitBuildTargetKind = "runtime" | "library:panel" | "library:worker";
 
-export interface RepoBuildTarget {
-  target: RepoBuildTargetKind;
+export interface UnitBuildTarget {
+  target: UnitBuildTargetKind;
   exportPath?: string;
   buildKey?: string;
   /** Artifact manifests only — never byte content. */
@@ -148,72 +131,17 @@ export interface RepoBuildTarget {
   diagnostics: BuildDiagnostic[];
 }
 
-export interface RepoBuildReport {
+export interface UnitBuildReport {
   repoPath: string;
   unitName?: string;
   kind: GraphNode["kind"] | "content";
-  role: "pushed" | "dependent";
-  required: boolean;
   status: "ok" | "failed" | "skipped";
-  builds: RepoBuildTarget[];
-}
-
-export interface ValidateRepoPushOptions {
-  /** Workspace-rooted state to gate dependents against for the regression rule
-   *  (the state BEFORE the push). When omitted, dependents gate absolutely. */
-  baseView?: string;
-}
-
-/**
- * Object-shaped input for the gad-facing `validate` build surface (narrow-host
- * VCS plan §2.2). Keyed by the FULL triple — `repoPaths` decides pushed-vs-
- * dependent roles and `baseViewHash` drives the dependent regression gate — so
- * overlapping validations recompute classification, not compilation (the
- * underlying per-unit builds are cached by build key).
- */
-export interface ValidateInput {
-  /** Composed candidate workspace view (state:… hash) to build + classify at. */
-  viewHash: string;
-  /** Workspace-relative repo roots being pushed (pushed-role units). */
-  repoPaths: string[];
-  /** Composed view BEFORE the push, for the dependent regression gate. Omitted
-   *  ⇒ failed dependents gate absolutely. */
-  baseViewHash?: string;
-}
-
-/** Coarse per-unit build status at a composed view (host-internal `statusAt`). */
-export interface UnitBuildStatus {
-  unit: string;
-  /** `ok` = a build artifact for this unit's effective version is cached;
-   *  `failed` = the most recent recorded build at this EV had error diagnostics;
-   *  `unknown` = no cached artifact and no recorded failure at this EV. */
-  status: "ok" | "failed" | "unknown";
-}
-
-/**
- * Result of `statusAt(viewHash)` — a PURE cache read over recorded/cached
- * per-unit build results at an exact composed view. Never triggers a build.
- * Deliberately coarser than a `validate` report: it answers whether buildable
- * units changed from the published workspace state were built, and whether any
- * failed. Required-vs-informational classification remains `validate`'s job.
- */
-export interface BuildStatusAt {
-  /** True iff every changed buildable unit has a cached-or-recorded result (no
-   * `unknown`). A resolvable content-only/unchanged view is already validated. */
-  validated: boolean;
-  /** True iff any unit at this view has a recorded build failure. */
-  failed?: boolean;
-  /** Per-unit statuses for buildable units changed from published state. */
-  unitStatuses?: UnitBuildStatus[];
+  builds: UnitBuildTarget[];
 }
 
 export type { BuildUnitOptions } from "./builder.js";
-export type {
-  WorkspaceStateSource,
-  StateAdvancedEvent,
-  BuildRecord,
-  StateChangedUnit,
-} from "./stateTrigger.js";
+export type { WorkspaceStateSource, BuildRecord, StateChangedUnit } from "./stateTrigger.js";
+export type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 export type { BuildSourceProvider } from "./buildSource.js";
 export type { BuildDiagnostic } from "./diagnostics.js";
 export { setBuildSourceProvider, directorySourceProvider } from "./buildSource.js";
@@ -225,31 +153,6 @@ export {
   onBuildProviderChange,
   unregisterBuildProvider,
 } from "./buildProviderRegistry.js";
-
-/**
- * The narrow push-gate contract WorkspaceVcs depends on — exactly the
- * `validateRepoPush` method, extracted so the VCS core (which must not import
- * the whole build system to avoid a build-dependency cycle) depends on a real
- * typed interface instead of an ad-hoc `as unknown as { … }` cast at the seam.
- * `BuildSystemV2` satisfies it structurally.
- */
-export interface RepoPushValidator {
-  validateRepoPush(
-    repoPaths: string[],
-    candidateView: string,
-    options?: ValidateRepoPushOptions
-  ): Promise<RepoBuildReport[]>;
-  /**
-   * On-demand build from a WORKING composed view, scoped to specific repos/units.
-   * Unlike the push gate (`validateRepoPush`) this NEVER persists the EV baseline
-   * or records builds — it never poisons the published baseline (builds are
-   * authoritative only at push). Powers `vcs.previewBuild` (dev preview).
-   */
-  previewBuild(
-    workingView: string,
-    options?: { repoPaths?: string[]; units?: string[] }
-  ): Promise<RepoBuildReport[]>;
-}
 
 export interface BuildUnitResolution {
   unitPath: string;
@@ -273,7 +176,7 @@ export interface BuildSystemRootOptions {
   dependencyWorkspaceRoot?: string;
 }
 
-export interface BuildSystemV2 extends RepoPushValidator {
+export interface BuildSystemV2 {
   /**
    * Get build result for a panel/worker/extension/library.
    * `ref` selects the workspace state to build from: undefined = main HEAD
@@ -291,15 +194,15 @@ export interface BuildSystemV2 extends RepoPushValidator {
     options?: BuildUnitOptions & { library?: false | undefined }
   ): Promise<BuildResult>;
 
-  /** Resolve a build unit at main, a ctx:* head, or state:* without building it. */
+  /** Resolve a build unit at `main`, a `ctx:*` context selector, or `state:*`. */
   resolveBuildUnit(unitPath: string, ref?: string): Promise<BuildUnitResolution | null>;
 
   /** Get an immutable build-store artifact by build key. */
   getBuildByKey(key: string): BuildResult | null;
 
   /**
-   * Binder API for runtime entities. Resolves a head/scope to a committed
-   * state off the hot path, builds the unit from that immutable state, and
+   * Binder API for runtime entities. Resolves a build content selector to an
+   * exact state off the hot path, builds the unit from that immutable state, and
    * returns the global artifact identity the loader can fetch by key.
    */
   bindRuntimeImage(unitPath: string, ref?: string): Promise<RuntimeImageBinding>;
@@ -346,47 +249,11 @@ export interface BuildSystemV2 extends RepoPushValidator {
   recompute(): Promise<ChangeSet>;
 
   /**
-   * Server-internal push build gate. For each pushed repoPath, resolve the
-   * owning unit against the candidate workspace view and build it directly
-   * (not via the public `getBuild`, which strips library results) — capturing
-   * structured esbuild + tsc diagnostics. Packages are validated as library
-   * bundles for dependent-inferred targets × (root + declared exports).
-   * EV-changed dependents are folded in under the regression gate (block only
-   * if green on `baseView`, red on `candidateView`). Returns one
-   * `RepoBuildReport` per repo, with artifact content stripped.
+   * Build a single unit at an exact state (or the protected workspace
+   * publication) and return its `UnitBuildReport` with structured diagnostics.
+   * Does not publish content.
    */
-  validateRepoPush(
-    repoPaths: string[],
-    candidateView: string,
-    options?: ValidateRepoPushOptions
-  ): Promise<RepoBuildReport[]>;
-
-  /**
-   * Gad-facing build surface (narrow-host VCS plan §2.2). Build + cache the
-   * per-unit results for a composed candidate view and return the classified
-   * `RepoBuildReport[]` — IDEMPOTENT and side-effect-free w.r.t. the published
-   * EV baseline: unlike a main-advance reaction it never `persistEvState`s and
-   * never `recordBuild`s, so it is safe for gad to call on any candidate,
-   * including ones that are never published. Same report semantics as
-   * `validateRepoPush` (the in-process push-pipeline caller during P1–P2); the
-   * object-param shape matches the RPC surface the vcs DO calls.
-   */
-  validate(input: ValidateInput): Promise<RepoBuildReport[]>;
-
-  /**
-   * PURE cache read of per-unit build status at an exact composed view. Never
-   * triggers a build, never blocks. Host-internal — the approval gate's
-   * prompt build-status source (plan §5). Trivially adaptable to the P1 gate's
-   * injected `getBuildStatusAt?: (viewHash) => Promise<{ validated; failed? }>`.
-   */
-  statusAt(viewHash: string): Promise<BuildStatusAt>;
-
-  /**
-   * Queryable companion to `validateRepoPush`: build a single unit at a state
-   * (or main HEAD) and return its `RepoBuildReport` with structured
-   * diagnostics. Does NOT advance any head.
-   */
-  getBuildReport(unitName: string, stateHash?: string): Promise<RepoBuildReport>;
+  getBuildReport(unitName: string, stateHash?: string): Promise<UnitBuildReport>;
 
   /** Most recent structured build diagnostics for a unit, if any were captured. */
   getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null;
@@ -420,7 +287,7 @@ export interface BuildSystemV2 extends RepoPushValidator {
   onBuildEvent(callback: (event: BuildSystemBuildEvent) => void): () => void;
 
   /**
-   * Subscribe to effective-version changes detected from VCS state advances.
+   * Subscribe to effective-version changes detected from workspace publications.
    * Trusted unit hosts use this to rebuild apps/extensions through their
    * approval-aware activation paths because the state trigger intentionally
    * does not build trusted units directly.
@@ -433,7 +300,7 @@ export interface BuildSystemV2 extends RepoPushValidator {
    * HTTP server can invalidate its serving cache.
    */
   onPushBuild(
-    callback: (source: string, trigger?: StateAdvancedEvent, buildKey?: string) => void
+    callback: (source: string, trigger?: ProtectedPublicationEvent, buildKey?: string) => void
   ): void;
 
   /** Shut down (stop state trigger) */
@@ -610,9 +477,9 @@ export async function initBuildSystemV2(
       if (ref.startsWith("state:")) {
         stateHash = ref;
       } else if (ref.startsWith("ctx:")) {
-        // A context ref builds against the context's composed view (all repos at
-        // main, with the context's writable repos overlaid at their ctx heads).
-        stateHash = await source.resolveContextView(ref.slice(4));
+        // `ctx:` is a user-facing build selector. Resolve the semantic
+        // context's exact working frontier before graph discovery.
+        stateHash = await source.resolveContextState(ref.slice(4));
       } else {
         throw new Error(`Invalid build ref after validation: ${ref}`);
       }
@@ -646,7 +513,7 @@ export async function initBuildSystemV2(
   };
 
   // -------------------------------------------------------------------------
-  // Push build gate (W6) — validateRepoPush / getBuildReport
+  // Exact-state unit build reports
   // -------------------------------------------------------------------------
 
   interface GraphView {
@@ -654,16 +521,16 @@ export async function initBuildSystemV2(
     evMap: EffectiveVersionMap;
   }
 
-  /** Discover + EV-compute over a workspace-rooted view (composed live union). */
-  const viewAt = async (viewStateHash: string): Promise<GraphView> => {
-    const graph = await source.discoverGraph(viewStateHash);
+  /** Discover + EV-compute over one immutable content view. */
+  const viewAt = async (viewStateHash: string, knownGraph?: PackageGraph): Promise<GraphView> => {
+    const graph = knownGraph ?? (await source.discoverGraph(viewStateHash));
     const hashes = await contentHashesAt(graph, viewStateHash);
     const evMap = computeEffectiveVersions(graph, hashes).evMap;
     return { graph, evMap };
   };
 
   /** Manifest-only artifacts (no byte content) for a report. */
-  const artifactManifests = (build: BuildResult): RepoBuildTarget["artifacts"] =>
+  const artifactManifests = (build: BuildResult): UnitBuildTarget["artifacts"] =>
     build.artifacts.map((a) => ({
       path: a.path,
       role: a.role,
@@ -682,7 +549,7 @@ export async function initBuildSystemV2(
     graphAtView: PackageGraph,
     viewStateHash: string,
     spec: { target: "runtime" } | { target: "library:panel" | "library:worker"; exportPath: string }
-  ): Promise<RepoBuildTarget> => {
+  ): Promise<UnitBuildTarget> => {
     const libraryTarget: LibraryBuildTarget | null =
       spec.target === "library:panel"
         ? "panel"
@@ -700,7 +567,7 @@ export async function initBuildSystemV2(
 
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
-    let artifacts: RepoBuildTarget["artifacts"] | undefined;
+    let artifacts: UnitBuildTarget["artifacts"] | undefined;
     let buildError: unknown = null;
     try {
       const build = await buildUnit(node, ev, graphAtView, workspaceRoot, viewStateHash, options);
@@ -812,16 +679,13 @@ export async function initBuildSystemV2(
   const buildUnitReport = async (
     node: GraphNode,
     view: GraphView,
-    viewStateHash: string,
-    role: "pushed" | "dependent"
-  ): Promise<RepoBuildReport> => {
+    viewStateHash: string
+  ): Promise<UnitBuildReport> => {
     const ev = view.evMap[node.name];
-    const base: Omit<RepoBuildReport, "status" | "builds"> = {
+    const base: Omit<UnitBuildReport, "status" | "builds"> = {
       repoPath: node.relativePath,
       unitName: node.name,
       kind: node.kind,
-      role,
-      required: role === "pushed",
     };
     if (!ev) {
       return { ...base, status: "skipped", builds: [] };
@@ -830,7 +694,7 @@ export async function initBuildSystemV2(
       return { ...base, status: "skipped", builds: [] };
     }
 
-    const builds: RepoBuildTarget[] = [];
+    const builds: UnitBuildTarget[] = [];
     if (node.kind === "package") {
       const targets = libraryTargetsForDependents(node.name, view.graph);
       const exports = packageExportPaths(node);
@@ -849,260 +713,19 @@ export async function initBuildSystemV2(
     return { ...base, status: failed ? "failed" : "ok", builds };
   };
 
-  const validateRepoPushImpl = async (
-    repoPaths: string[],
-    candidateView: string,
-    options?: ValidateRepoPushOptions
-  ): Promise<RepoBuildReport[]> => {
-    const candidate = await viewAt(candidateView);
-    const baseView = options?.baseView;
-    const base: GraphView | null = baseView ? await viewAt(baseView) : null;
-
-    const reports: RepoBuildReport[] = [];
-    const pushedUnitNames = new Set<string>();
-
-    // 1) Pushed repos — absolute gate for buildable units; content-only skipped.
-    //    The per-repo builds are independent (buildUnit coalesces by key), so
-    //    build them concurrently; Promise.all preserves repoPaths order.
-    const pushedResults = await Promise.all(
-      repoPaths.map(async (repoPath): Promise<{ report: RepoBuildReport; unitName?: string }> => {
-        const node = resolveUnit(candidate.graph, repoPath, workspaceRoot);
-        if (!node) {
-          const section = repoPath.split("/")[0] ?? "";
-          const isBuildSection = CONTAINER_SECTIONS.has(section) && !CONTENT_SECTIONS.has(section);
-          if (isBuildSection) {
-            // A unit was expected here (packages/panels/workers/extensions/apps/about)
-            // but none resolved — a malformed unit (missing/invalid package.json).
-            // Surface a required failure with an actionable diagnostic instead of
-            // silently skipping it as content.
-            return {
-              report: {
-                repoPath,
-                kind: SECTION_UNIT_KIND[section] ?? "package",
-                role: "pushed",
-                required: true,
-                status: "failed",
-                builds: [
-                  {
-                    target: "runtime",
-                    diagnostics: [
-                      {
-                        source: "esbuild",
-                        severity: "error",
-                        file: `${repoPath}/package.json`,
-                        line: 1,
-                        column: 1,
-                        message:
-                          `No buildable unit resolved at ${repoPath}. A ${section}/ unit needs a ` +
-                          `package.json with a "name" (and a vibestudio manifest). Create/fix it, then re-push.`,
-                      },
-                    ],
-                  },
-                ],
-              },
-            };
-          }
-          // Genuine content-only repo (projects/<vault>, skills, templates, meta).
-          return {
-            report: {
-              repoPath,
-              kind: "content",
-              role: "pushed",
-              required: false,
-              status: "skipped",
-              builds: [],
-            },
-          };
-        }
-        return {
-          report: await buildUnitReport(node, candidate, candidateView, "pushed"),
-          unitName: node.name,
-        };
-      })
-    );
-    for (const { report, unitName } of pushedResults) {
-      reports.push(report);
-      if (unitName) pushedUnitNames.add(unitName);
-    }
-
-    // 2) Dependents of pushed buildable units — EV-changed only, regression gate.
-    const dependentNames = new Set<string>();
-    for (const name of pushedUnitNames) {
-      for (const dep of candidate.graph.getReverseDeps(name)) {
-        if (!pushedUnitNames.has(dep)) dependentNames.add(dep);
-      }
-    }
-
-    // Each dependent's candidate (and base-regression) build is independent —
-    // build them concurrently rather than serializing the whole gate.
-    const dependentReports = await Promise.all(
-      [...dependentNames].map(async (depName): Promise<RepoBuildReport | null> => {
-        const node = candidate.graph.tryGet(depName);
-        if (!node) return null;
-        const candEv = candidate.evMap[depName];
-        const baseEv = base?.evMap[depName];
-        // EV-changed only: skip dependents whose effective version is unchanged.
-        if (base && candEv && baseEv && candEv === baseEv) return null;
-
-        const report = await buildUnitReport(node, candidate, candidateView, "dependent");
-
-        // Regression gate: a dependent that is ALSO red on the base view is a
-        // pre-existing failure, not caused by this push — do not block on it.
-        // With NO base to diff against we cannot tell pre-existing from new, so a
-        // failed dependent gates absolutely (the documented `baseView`-omitted
-        // contract) rather than slipping through as non-required.
-        if (report.status === "failed") {
-          if (!base || !baseView) {
-            report.required = true; // no base → gate absolutely
-          } else {
-            const baseReport = await buildUnitReport(node, base, baseView, "dependent");
-            // Pre-existing red on the base is informational; newly red blocks.
-            report.required = baseReport.status !== "failed";
-          }
-        } else {
-          report.required = false;
-        }
-        return report;
-      })
-    );
-    for (const report of dependentReports) {
-      if (report) reports.push(report);
-    }
-
-    return reports;
-  };
-
-  /**
-   * Gad-facing `build.validate` (plan §2.2). Object-param adapter over the push
-   * gate: build + cache + classify the candidate view. Idempotent — it never
-   * promotes the EV baseline (`persistEvState`) nor records provenance builds
-   * (`recordBuild`); those happen ONLY host-side in reaction to a main actually
-   * moving (`stateTrigger.process` on a `head === "main"` advance). Overlapping
-   * validations sharing units reuse the per-unit build cache (`buildUnit`
-   * coalesces + stores by build key) and recompute only the classification.
-   */
-  const validateImpl = (input: ValidateInput): Promise<RepoBuildReport[]> =>
-    validateRepoPushImpl(
-      input.repoPaths,
-      input.viewHash,
-      input.baseViewHash ? { baseView: input.baseViewHash } : undefined
-    );
-
-  /**
-   * `build.statusAt` (plan §2.2 / §5). PURE lookup over recorded/cached per-unit
-   * results at an exact composed view — never calls `buildUnit`. Scoped to
-   * non-trusted buildable units whose EV differs from the published state;
-   * unchanged units need no candidate build, and extensions/apps remain
-   * activation-gated. A unit is `failed` when the most recent recorded
-   * diagnostics for that key carry errors, `ok` when no error diagnostics are
-   * recorded and its runtime build key is in the store, else `unknown` (never
-   * validated at this EV).
-   */
-  const statusAtImpl = async (viewHash: string): Promise<BuildStatusAt> => {
-    let view: GraphView;
-    try {
-      view = await viewAt(viewHash);
-    } catch {
-      // Unknown / unresolvable view — not a build, just not validated.
-      return { validated: false };
-    }
-    const unitStatuses: UnitBuildStatus[] = [];
-    const published = currentState();
-    let anyFailed = false;
-    let anyUnknown = false;
-    for (const node of view.graph.allNodes()) {
-      // Trusted extensions/apps are validated by their approval/activation
-      // path. Unchanged non-trusted units already have published-state evidence
-      // and do not need a speculative candidate build.
-      if (!isNodeBuildable(node) || node.kind === "extension" || node.kind === "app") continue;
-      const ev = view.evMap[node.name];
-      if (!ev) continue;
-      if (published.evMap[node.name] === ev) continue;
-      const buildKey = computeBuildUnitKey(node, ev);
-      let status: UnitBuildStatus["status"];
-      const diagnostics = diagnosticsForBuildKey(buildKey);
-      if (diagnostics && hasErrors(diagnostics)) {
-        status = "failed";
-        anyFailed = true;
-      } else if (buildStore.has(buildKey)) {
-        status = "ok";
-      } else {
-        status = "unknown";
-        anyUnknown = true;
-      }
-      unitStatuses.push({ unit: node.name, status });
-    }
-    return {
-      validated: !anyUnknown,
-      ...(anyFailed ? { failed: true } : {}),
-      unitStatuses,
-    };
-  };
-
-  /**
-   * On-demand WORKING build (dev preview). Builds the requested repos/units from
-   * a working composed view via the same ctx-ref build path as `validateRepoPush`
-   * — BUT never persists the EV baseline and never records builds, so a preview
-   * can never poison the published main baseline. Builds are authoritative only
-   * at the push gate. Reports are role:"pushed" but required:false (advisory).
-   */
-  const previewBuildImpl = async (
-    workingView: string,
-    options?: { repoPaths?: string[]; units?: string[] }
-  ): Promise<RepoBuildReport[]> => {
-    const view = await viewAt(workingView);
-
-    // Resolve the explicit scope to a deduped set of nodes. `repoPaths` are
-    // workspace-relative repo roots; `units` are unit names / partial paths.
-    // Both resolve through the same resolver used by the push gate.
-    const requested = [...(options?.repoPaths ?? []), ...(options?.units ?? [])];
-    const nodes = new Map<string, GraphNode>();
-    const reports: RepoBuildReport[] = [];
-    for (const spec of requested) {
-      const node = resolveUnit(view.graph, spec, workspaceRoot);
-      if (!node) {
-        // Unresolvable target — surface as skipped/content rather than throwing,
-        // mirroring the push gate's content-repo handling for preview ergonomics.
-        reports.push({
-          repoPath: spec,
-          kind: "content",
-          role: "pushed",
-          required: false,
-          status: "skipped",
-          builds: [],
-        });
-        continue;
-      }
-      nodes.set(node.name, node);
-    }
-
-    // Build each resolved unit from the working view. buildUnitReport only calls
-    // buildUnit + recordDiagnostics + typecheck (no persistEvState/recordBuild),
-    // so this stays preview-only. Independent units build concurrently.
-    const built = await Promise.all(
-      [...nodes.values()].map((node) => buildUnitReport(node, view, workingView, "pushed"))
-    );
-    for (const report of built) {
-      // Preview is advisory: never required (the push gate alone gates merges).
-      reports.push({ ...report, required: false });
-    }
-
-    return reports;
-  };
-
   const getBuild = async function getBuild(
     unitPath: string,
     ref?: string,
     options?: BuildUnitOptions
   ): Promise<BuildResult | { bundle: string }> {
     ref = validateBuildRef(ref);
-    // ── Pinned-state / head-ref build path ──
+    // ── Exact state / semantic-context build selector ──
     if (ref && ref !== MAIN_HEAD) {
       let buildState: string;
       if (ref.startsWith("state:")) {
         buildState = ref;
       } else if (ref.startsWith("ctx:")) {
-        buildState = await source.resolveContextView(ref.slice(4));
+        buildState = await source.resolveContextState(ref.slice(4));
       } else {
         throw new Error(`Invalid build ref after validation: ${ref}`);
       }
@@ -1237,7 +860,7 @@ export async function initBuildSystemV2(
       if (ref && ref !== MAIN_HEAD) {
         const stateHash = ref.startsWith("state:")
           ? ref
-          : await source.resolveContextView(ref.slice("ctx:".length));
+          : await source.resolveContextState(ref.slice("ctx:".length));
         const graph = await source.discoverGraph(stateHash);
         const node = resolveUnit(graph, unitPath, workspaceRoot);
         return node ? toResolution(node, stateHash) : null;
@@ -1450,30 +1073,7 @@ export async function initBuildSystemV2(
       return changes;
     },
 
-    validateRepoPush(
-      repoPaths: string[],
-      candidateView: string,
-      options?: ValidateRepoPushOptions
-    ): Promise<RepoBuildReport[]> {
-      return validateRepoPushImpl(repoPaths, candidateView, options);
-    },
-
-    validate(input: ValidateInput): Promise<RepoBuildReport[]> {
-      return validateImpl(input);
-    },
-
-    statusAt(viewHash: string): Promise<BuildStatusAt> {
-      return statusAtImpl(viewHash);
-    },
-
-    previewBuild(
-      workingView: string,
-      options?: { repoPaths?: string[]; units?: string[] }
-    ): Promise<RepoBuildReport[]> {
-      return previewBuildImpl(workingView, options);
-    },
-
-    async getBuildReport(unitName: string, stateHash?: string): Promise<RepoBuildReport> {
+    async getBuildReport(unitName: string, stateHash?: string): Promise<UnitBuildReport> {
       const ref = validateBuildRef(stateHash);
       let view: GraphView;
       let viewStateHash: string;
@@ -1495,7 +1095,7 @@ export async function initBuildSystemV2(
         if (ref.startsWith("state:")) {
           resolvedState = ref;
         } else if (ref.startsWith("ctx:")) {
-          resolvedState = await source.resolveContextView(ref.slice(4));
+          resolvedState = await source.resolveContextState(ref.slice(4));
         } else {
           throw new Error(`Invalid build ref after validation: ${ref}`);
         }
@@ -1507,13 +1107,11 @@ export async function initBuildSystemV2(
         return {
           repoPath: unitName,
           kind: "content",
-          role: "pushed",
-          required: false,
           status: "skipped",
           builds: [],
         };
       }
-      return buildUnitReport(node, view, viewStateHash, "pushed");
+      return buildUnitReport(node, view, viewStateHash);
     },
 
     getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null {
@@ -1590,7 +1188,7 @@ export async function initBuildSystemV2(
     },
 
     onPushBuild(
-      callback: (source: string, trigger?: StateAdvancedEvent, buildKey?: string) => void
+      callback: (source: string, trigger?: ProtectedPublicationEvent, buildKey?: string) => void
     ): void {
       trigger.on(
         "build-complete",
@@ -1601,7 +1199,7 @@ export async function initBuildSystemV2(
         }: {
           name: string;
           buildKey: string;
-          trigger?: StateAdvancedEvent;
+          trigger?: ProtectedPublicationEvent;
         }) => {
           const node = currentState().graph.tryGet(name);
           if (node) callback(node.relativePath, t, buildKey);

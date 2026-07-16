@@ -15,6 +15,7 @@ import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { EventName } from "@vibestudio/shared/events";
 import type { NotificationPayload } from "@vibestudio/shared/events";
 import type { EventService } from "@vibestudio/shared/eventsService";
+import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 import type {
   BuildProvider,
@@ -85,6 +86,18 @@ const EXTENSION_UNIT_DESCRIPTOR: UnitDescriptor<"extension"> = {
   seedTrustEligible: true,
 };
 
+/**
+ * Host-only state for an extension invocation. The public invocation is sent
+ * to the extension process; its causal parent is deliberately retained here
+ * so its existing host-issued request identity can reconnect nested calls to
+ * the already verified trajectory edge without trusting extension-supplied
+ * provenance.
+ */
+type ActiveExtensionInvocation = {
+  invocation: ExtensionInvocation;
+  causalParent: NonNullable<ServiceContext["causalParent"]> | null;
+};
+
 interface BuildSystemLike {
   getBuild(
     unitPath: string,
@@ -122,13 +135,13 @@ interface BuildSystemLike {
       };
     }>;
   };
-  onPushBuild(callback: (source: string, trigger?: { head: string }) => void): void;
+  onPushBuild(callback: (source: string, trigger?: ProtectedPublicationEvent) => void): void;
   onUnitChange?(
     callback: (event: {
       name: string;
       relativePath: string;
       kind: string;
-      trigger: { head: string };
+      trigger: ProtectedPublicationEvent;
     }) => void
   ): () => void;
 }
@@ -208,7 +221,7 @@ export interface ExtensionHostDeps {
   statePath: string;
   workspacePath: string;
   workspaceId: string;
-  readWorkspaceFileAtCommit(commit: string, filePath: string): Promise<string | null>;
+  readWorkspaceFileAtState(stateHash: string, filePath: string): Promise<string | null>;
   buildSystem: BuildSystemLike;
   tokenManager: TokenManager;
   eventService: EventService;
@@ -253,7 +266,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   private unitLogs = new Map<string, UnitLogRecord[]>();
   private extensionErrorHistory = new Map<string, ExtensionErrorHistoryItem[]>();
   private fetchRequestBodies = new Map<string, FetchRequestBodyStream>();
-  private activeInvocations = new Map<string, ExtensionInvocation>();
+  private activeInvocations = new Map<string, ActiveExtensionInvocation>();
   private registeredBuildProviderTargets = new Map<string, Set<BuildProviderTarget>>();
   private activationTails = new Map<string, Promise<void>>();
   private readonly sourceChangeGrants: UnitSourceChangeGrantStore;
@@ -576,7 +589,6 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
               entry.name.split("/").filter(Boolean).at(-1) ??
               entry.name,
           })),
-        on: (ctx, [name, event]) => this.subscribe(ctx, name, event),
         ready: (ctx, [ready]) => this.readyFromExtension(ctx, ready),
         emit: (ctx, [event, payload]) => this.emitFromExtension(ctx, event, payload),
         fetchRequestBodyChunk: (ctx, [streamId]) => this.fetchRequestBodyChunk(ctx, streamId),
@@ -896,13 +908,20 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   resolveActiveInvocation(
     extensionName: string,
-    invocationToken: string
-  ): (ExtensionInvocation & { chainCaller?: ExtensionUserlandCaller }) | null {
-    return (
-      (this.activeInvocations.get(this.invocationKey(extensionName, invocationToken)) as
-        | (ExtensionInvocation & { chainCaller?: ExtensionUserlandCaller })
-        | undefined) ?? null
-    );
+    requestId: string
+  ):
+    | (ExtensionInvocation & {
+        chainCaller?: ExtensionUserlandCaller;
+        causalParent: NonNullable<ServiceContext["causalParent"]> | null;
+      })
+    | null {
+    const active = this.activeInvocations.get(this.invocationKey(extensionName, requestId));
+    return active
+      ? {
+          ...active.invocation,
+          causalParent: active.causalParent,
+        }
+      : null;
   }
 
   resolveCodeIdentity(extensionName: string): VerifiedCodeIdentity | null {
@@ -928,22 +947,21 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       randomUUID(),
       this.deps.getContextIdForCaller
     );
-    const token = randomUUID();
-    invocation.invocationToken = token;
-    this.activeInvocations.set(this.invocationKey(extensionName, token), invocation);
+    this.activeInvocations.set(this.invocationKey(extensionName, invocation.requestId), {
+      invocation,
+      causalParent: ctx.causalParent ?? null,
+    });
     return invocation;
   }
 
   private clearTrackedInvocation(invocation: ExtensionInvocation): void {
-    if (invocation.invocationToken) {
-      this.activeInvocations.delete(
-        this.invocationKey(invocation.extensionName, invocation.invocationToken)
-      );
-    }
+    this.activeInvocations.delete(
+      this.invocationKey(invocation.extensionName, invocation.requestId)
+    );
   }
 
-  private invocationKey(extensionName: string, invocationToken: string): string {
-    return `${extensionName}\x00${invocationToken}`;
+  private invocationKey(extensionName: string, requestId: string): string {
+    return `${extensionName}\x00${requestId}`;
   }
 
   /**
@@ -1134,18 +1152,6 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         .call(extensionName, "extension.fetchResponseBodyClose", body.id)
         .catch(() => {});
     }
-  }
-
-  private subscribe(ctx: ServiceContext, name: string, event: string): null {
-    const eventName = `extensions:${name}::${event}` as const;
-    const subscriber = this.deps.eventService.getOrCreateSubscriber(ctx);
-    this.deps.eventService.subscribe(
-      eventName,
-      ctx.caller.runtime.id,
-      subscriber,
-      ctx.connectionId
-    );
-    return null;
   }
 
   private emitFromExtension(ctx: ServiceContext, event: string, payload: unknown): null {
@@ -1432,7 +1438,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   private async readDeclaredExtensionsFromCommit(commit: string): Promise<UnitDeclaration[]> {
     try {
-      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/vibestudio.yml");
+      const content = await this.deps.readWorkspaceFileAtState(commit, "meta/vibestudio.yml");
       if (!content) return [];
       return resolveDeclaredExtensions(
         parseWorkspaceConfigContentWithId(content, this.deps.workspaceId)
@@ -1688,7 +1694,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   private async handleChangedExtensionUnit(event: {
     name: string;
     relativePath: string;
-    trigger?: { head: string };
+    trigger?: ProtectedPublicationEvent;
   }): Promise<void> {
     const installed =
       this.registry.get(event.name) ??
@@ -1704,14 +1710,17 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   }
 
   private sourceChangeAppliesToEntry(
-    trigger: { head: string } | undefined,
+    trigger: ProtectedPublicationEvent | undefined,
     entry: RegistryEntry
   ): boolean {
-    if (!trigger?.head) return true;
-    return normalizeRef(trigger.head) === normalizeRef(entry.source.ref);
+    if (!trigger) return true;
+    return normalizeRef(entry.source.ref) === "main";
   }
 
-  private async handleSourceRebuilt(source: string, trigger?: { head: string }): Promise<void> {
+  private async handleSourceRebuilt(
+    source: string,
+    trigger?: ProtectedPublicationEvent
+  ): Promise<void> {
     const installed = this.unitHost.findInstalledByRepo(source);
     if (!installed) return;
     if (!this.sourceChangeAppliesToEntry(trigger, installed.entry)) return;

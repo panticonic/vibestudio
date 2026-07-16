@@ -3,6 +3,7 @@ import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export interface Disposable {
@@ -11,8 +12,6 @@ export interface Disposable {
 
 export interface ExtensionInvocation {
   requestId: string;
-  /** Opaque host-issued token echoed by the runtime for attribution. */
-  invocationToken?: string;
   extensionName: string;
   method: string;
   caller: {
@@ -86,7 +85,7 @@ export interface RegistryEntry extends UnitRegistryEntryBase {
  * registered name infers its API type and an unregistered name is a compile
  * error. There is deliberately no `string` fallback.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface WorkspaceExtensions {}
 
 /** Name of any extension registered in {@link WorkspaceExtensions}. */
@@ -128,7 +127,6 @@ export interface ExtensionsClient {
 export interface ExtensionsClientRpc {
   call(target: string, method: string, args: unknown[]): Promise<unknown>;
   stream(target: string, method: string, args: unknown[]): Promise<Response>;
-  on?: (event: string, listener: (event: { payload: unknown }) => void) => () => void;
 }
 
 const IGNORED_PROXY_PROPS = new Set<PropertyKey>([
@@ -195,6 +193,8 @@ export function createExtensionProxy<T extends object>(
  */
 export function createExtensionsClient(rpc: ExtensionsClientRpc): ExtensionsClient {
   const extensionsService = createExtensionsServiceClient(rpc);
+  const events = new EventsClient(rpc);
+  const eventRefcounts = new Map<string, number>();
   const streamingCache = new Map<string, Promise<Set<string>>>();
   const declaredStreaming = (name: string): Promise<Set<string>> => {
     let cached = streamingCache.get(name);
@@ -224,12 +224,30 @@ export function createExtensionsClient(rpc: ExtensionsClientRpc): ExtensionsClie
       ) as WorkspaceExtensions[typeof name];
     },
     on(name, event, cb) {
-      const eventName = `extensions:${name}::${event}`;
-      const unsubscribe = rpc.on
-        ? rpc.on(`event:${eventName}`, (event) => cb(event.payload))
-        : () => {};
-      void extensionsService.on(name, event);
-      return { dispose: unsubscribe };
+      const eventName = `extensions:${name}::${event}` as const;
+      const stopListening = events.on(eventName, cb);
+      const previous = eventRefcounts.get(eventName) ?? 0;
+      eventRefcounts.set(eventName, previous + 1);
+      if (previous === 0) {
+        void events
+          .subscribe(eventName)
+          .catch((error: unknown) => console.warn(`[extension] watch ${eventName} failed:`, error));
+      }
+      let disposed = false;
+      return {
+        dispose() {
+          if (disposed) return;
+          disposed = true;
+          stopListening();
+          const remaining = (eventRefcounts.get(eventName) ?? 1) - 1;
+          if (remaining > 0) {
+            eventRefcounts.set(eventName, remaining);
+          } else {
+            eventRefcounts.delete(eventName);
+            void events.unsubscribe(eventName).catch(() => {});
+          }
+        },
+      };
     },
     list: () => extensionsService.list(),
     reload: (name) => extensionsService.reload(name),
@@ -317,7 +335,7 @@ export interface ExtensionWorkspaceLike {
     path: string;
     /** Absolute path to the workspace's persisted state directory. */
     statePath: string;
-    contextsPath: string;
+    contextProjectionsPath: string;
   }>;
   /**
    * Materialize a context's working folder on the server host (idempotent) and
@@ -338,11 +356,11 @@ export interface ExtensionNotificationsLike {
 }
 
 export interface ExtensionWorkersLike {
-  /** Resolve a manifest-declared userland service by name or protocol. */
+  /** Resolve a workspace service by name or protocol. */
   resolveService(query: string, objectKey?: string | null): Promise<unknown>;
   /** Resolve a concrete Durable Object target and grant this extension relay access. */
   resolveDurableObject(source: string, className: string, objectKey: string): Promise<unknown>;
-  /** List manifest-declared userland services. */
+  /** List workspace-authored services declared in the manifest. */
   listServices(): Promise<unknown[]>;
 }
 

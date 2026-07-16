@@ -64,6 +64,7 @@ import {
 import { resolveExportSubpath } from "@vibestudio/typecheck";
 import { assertPresent } from "../../lintHelpers";
 import { resolveBuildProvider } from "./buildProviderRegistry.js";
+import { createBuildScratchDir } from "./buildScratch.js";
 import type {
   BuildProvider,
   BuildProviderArtifact,
@@ -1399,8 +1400,9 @@ export function computeBuildUnitKey(
  * Build a single unit (panel, about page, worker, or library).
  * Returns a BuildResult from the content-addressed store.
  *
- * @param stateRef - Immutable workspace state (`state:…` hash) the build's
- *   sources are materialized from — the same state EVs were derived from.
+ * @param stateRef - Immutable source coordinate (a workspace state or leased
+ *   repository-set build view) the build's sources are materialized from — the
+ *   same coordinate from which EVs were derived.
  * @param options - Optional build options (library mode, externals).
  */
 export async function buildUnit(
@@ -1525,10 +1527,9 @@ async function doBuild(
     } else if (node.kind === "template") {
       throw new Error(`Templates are not buildable: ${node.name}`);
     } else if (node.kind === "package") {
-      // Packages have no standalone runtime artifact — they are validated as
-      // library bundles (panel/worker targets) by the push gate, never eagerly
-      // built as a panel. Falling through to buildPanel would silently produce
-      // a bogus panel artifact for a library.
+      // Packages have no standalone runtime artifact. They can be built
+      // explicitly as library bundles for panel/worker targets, but never as a
+      // panel. Falling through to buildPanel would produce a bogus artifact.
       throw new Error(
         `package ${node.name} cannot be built as a runtime unit; build it as a library (options.library + libraryTarget)`
       );
@@ -1581,8 +1582,7 @@ async function prepareBuildEnv(
   // and its dependencies disagree about a package's panel-vs-worker fork.
   conditions: readonly string[] = PANEL_CONDITIONS
 ): Promise<BuildEnv> {
-  const outdir = path.join(os.tmpdir(), "vibestudio-builds", `build-${buildKey}`);
-  fs.mkdirSync(outdir, { recursive: true });
+  const outdir = createBuildScratchDir(`build-${buildKey}`);
 
   const sourcePath = sourcePathForNode(node, sourceRoot);
   const entryFile = resolveEntryPoint(node, sourcePath, conditions);
@@ -2290,7 +2290,7 @@ async function buildWorker(
   // import maps, workers have no way to resolve external imports).
 
   // Read the manifest from the materialized source state rather than
-  // `node.manifest`, so ref-pinned builds do not observe the working tree.
+  // `node.manifest`, so exact-state builds never observe mutable source directories.
   const workerSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(workerSourcePath, "package.json");
   const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8"));
@@ -2900,7 +2900,12 @@ function createExtensionSmokeContext() {
     panel: asyncNull,
     workspace: {
       async getInfo() {
-        return { id: "smoke", name: "smoke", path: process.cwd(), contextsPath: process.cwd() };
+        return {
+          id: "smoke",
+          name: "smoke",
+          path: process.cwd(),
+          contextProjectionsPath: process.cwd(),
+        };
       },
     },
     rpc: {
@@ -3233,12 +3238,7 @@ async function doNpmBuild(
       throw new Error(`Failed to install npm package: ${specifier}@${version}`);
     }
 
-    const outdir = path.join(
-      os.tmpdir(),
-      "vibestudio-builds",
-      `npm-${specifier.replace(/[/@]/g, "_")}-${Date.now()}`
-    );
-    fs.mkdirSync(outdir, { recursive: true });
+    const outdir = createBuildScratchDir(`npm-${specifier.replace(/[/@]/g, "_")}`);
 
     const nodePaths = [nodeModulesDir];
     if (_appNodeModules.length > 0) {
@@ -3346,12 +3346,7 @@ async function doPlatformBuild(
   await acquireSemaphore();
 
   try {
-    const outdir = path.join(
-      os.tmpdir(),
-      "vibestudio-builds",
-      `platform-${specifier.replace(/[/@]/g, "_")}-${Date.now()}`
-    );
-    fs.mkdirSync(outdir, { recursive: true });
+    const outdir = createBuildScratchDir(`platform-${specifier.replace(/[/@]/g, "_")}`);
 
     const nodePaths = [..._appNodeModules];
 

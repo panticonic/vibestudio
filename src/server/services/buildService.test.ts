@@ -5,19 +5,21 @@ import { createBuildService } from "./buildService.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 
 function buildTrigger(path: string) {
+  const repoPath = path.split("/").slice(0, 2).join("/");
   return {
-    head: "main",
-    stateHash: "state:abcdef123",
-    repoStateHash: "state:abcdef123",
-    sinceStateHash: "state:previous",
-    eventId: "event:abcdef123",
-    headHash: "head:abcdef123",
-    actor: { id: "user", kind: "user" },
-    transitionKind: "snapshot" as const,
+    publicationId: "publication:abcdef123",
+    resultHostRefsBasisDigest: "host-refs:abcdef123",
+    appliedAt: 42,
+    workspaceStateHash: "state:abcdef123",
     changedPaths: [path],
-    repoPath: path.split("/").slice(0, 2).join("/"),
-    fileChanges: [],
-    editOps: [],
+    repositories: [
+      {
+        repoPath,
+        previousStateHash: "state:previous",
+        nextStateHash: "state:abcdef123",
+        fileChanges: [],
+      },
+    ],
   };
 }
 
@@ -202,7 +204,8 @@ describe("build service extension diagnostics", () => {
           type: "build-error",
           error: "Build failed with 1 error: missing module",
           trigger: expect.objectContaining({
-            head: "main",
+            publicationId: "publication:abcdef123",
+            workspaceStateHash: "state:abcdef123",
           }),
         }),
       ],
@@ -232,7 +235,8 @@ describe("build service extension diagnostics", () => {
         name: "@workspace-panels/example",
         error: "Could not resolve node:buffer",
         trigger: expect.objectContaining({
-          head: "main",
+          publicationId: "publication:abcdef123",
+          workspaceStateHash: "state:abcdef123",
         }),
       }),
     ]);

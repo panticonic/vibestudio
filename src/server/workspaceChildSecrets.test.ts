@@ -7,7 +7,7 @@ describe("consumeWorkspaceChildSecrets", () => {
       PATH: "/usr/bin",
       VIBESTUDIO_IDENTITY_DB_PATH: "/hub/identity.db",
       VIBESTUDIO_HUB_URL: "http://127.0.0.1:3030",
-      VIBESTUDIO_HUB_CONTROL_TOKEN: "child-capability",
+      VIBESTUDIO_WORKSPACE_CHILD_TOKEN: "child-runtime",
       VIBESTUDIO_ADMIN_TOKEN: "child-admin-capability",
       VIBESTUDIO_RELAY_SIGNING_SECRET: "relay-signing-secret",
     };
@@ -15,7 +15,7 @@ describe("consumeWorkspaceChildSecrets", () => {
     expect(consumeWorkspaceChildSecrets(env)).toEqual({
       identityDbPath: "/hub/identity.db",
       hubUrl: "http://127.0.0.1:3030",
-      hubControlToken: "child-capability",
+      workspaceChildToken: "child-runtime",
       adminToken: "child-admin-capability",
       relaySigningSecret: "relay-signing-secret",
     });
@@ -25,7 +25,7 @@ describe("consumeWorkspaceChildSecrets", () => {
   it("scrubs every capability even when the bootstrap contract is incomplete", () => {
     const env: NodeJS.ProcessEnv = {
       VIBESTUDIO_IDENTITY_DB_PATH: "/hub/identity.db",
-      VIBESTUDIO_HUB_CONTROL_TOKEN: "child-capability",
+      VIBESTUDIO_WORKSPACE_CHILD_TOKEN: "child-runtime",
       VIBESTUDIO_ADMIN_TOKEN: "child-admin-capability",
     };
 

@@ -8,7 +8,9 @@
   },
   "exports": {
     "./configParser": "./src/configParser.ts",
+    "./contextProjections": "./src/contextProjections.ts",
     "./extensionRegistry": "./src/extensionRegistry.ts",
+    "./gitCheckouts": "./src/gitCheckouts.ts",
     "./loader": "./src/loader.ts",
     "./pathPolicy": "./src/pathPolicy.ts",
     "./remotes": "./src/remotes.ts",

@@ -5,8 +5,8 @@
  * throwing away the rich `BuildFailure.errors[]`/`.warnings[]` esbuild already
  * produces (each carrying `text` + `location:{ file, line, column, lineText,
  * suggestion }`). This module captures those into `BuildDiagnostic[]` so the
- * push gate, the async state-trigger path, and the typecheck fold-in all speak
- * one type the agent parses uniformly.
+ * explicit reports, the async state-trigger path, and the typecheck fold-in all
+ * speak one type the agent parses uniformly.
  *
  * `BuildDiagnostic` mirrors the typecheck service's `BaseDiagnostic` shape
  * (position + severity) plus a `source` discriminator.
@@ -36,8 +36,8 @@ export interface DiagnosticPathContext {
 
 /**
  * A build error that carries structured diagnostics alongside its summary
- * message. Thrown from build paths so the push gate / state trigger can recover
- * the per-line diagnostics instead of only `error.message`.
+ * message. Thrown from build paths so callers and the state trigger can recover
+ * per-line diagnostics instead of only `error.message`.
  */
 export class BuildDiagnosticsError extends Error {
   readonly diagnostics: BuildDiagnostic[];
@@ -72,7 +72,7 @@ function relUnderRoot(file: string, root?: string | null): string | null {
 
 /**
  * Convert diagnostic file paths to the workspace coordinate system callers can
- * edit. Build-gate failures often originate in an immutable materialized source
+ * edit. Build failures often originate in an immutable materialized source
  * root rather than the live workspace, so both roots are accepted.
  */
 export function workspaceDiagnosticPath(
@@ -189,7 +189,7 @@ export function warningsFromResult(
   );
 }
 
-/** Whether a diagnostics list contains any hard errors (gate-blocking). */
+/** Whether a diagnostics list contains any errors. */
 export function hasErrors(diagnostics: readonly BuildDiagnostic[]): boolean {
   return diagnostics.some((d) => d.severity === "error");
 }

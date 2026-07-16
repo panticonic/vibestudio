@@ -8,14 +8,16 @@ import {
   workspaceExtensionPackageName,
   workspaceProviderExtensionPackageName,
 } from "./configParser.js";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
-const parse = (yaml: string) => parseWorkspaceConfigContentWithId(yaml, "test-ws");
+const parse = (yaml: string) =>
+  parseWorkspaceConfigContentWithId(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n${yaml}`, "test-ws");
 
 const FULL_MANIFEST = `
 singletonObjects:
-  - source: workers/gad-store
-    className: GadWorkspaceDO
-    key: workspace-gad
+  - source: workers/agent-worker
+    className: AgentWorkspaceDO
+    key: workspace-agent
 extensions:
   - source: extensions/browser-data
   - source: extensions/git-bridge
@@ -51,6 +53,18 @@ hostTargets:
 `;
 
 describe("manifest declarations: providers / trust / hostTargets", () => {
+  it("rejects a missing or mismatched pre-release workspace system epoch", () => {
+    expect(() => parseWorkspaceConfigContentWithId("initPanels: []\n", "test-ws")).toThrow(
+      /systemEpoch.*Required/
+    );
+    expect(() =>
+      parseWorkspaceConfigContentWithId(
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH - 1}\ninitPanels: []\n`,
+        "test-ws"
+      )
+    ).toThrow(/incompatible with host epoch/);
+  });
+
   it("parses a full declaration set", () => {
     const config = parse(FULL_MANIFEST);
     expect(config.providers?.evalEngine?.source).toBe("@workspace/eval");

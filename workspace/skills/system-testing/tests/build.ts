@@ -54,21 +54,6 @@ export const buildTests: TestCase[] = [
     },
   },
   {
-    name: "build-at-state-ref",
-    description: "Build a workspace package at a specific GAD state ref",
-    category: "build",
-    prompt:
-      "Exercise building a workspace unit at an immutable GAD state ref from vcs.log. " +
-      "vcs.log returns a repo-rooted outputStateHash; convert it to a workspace-rooted " +
-      "state with vcs.workspaceViewWithRepoAt(repoPath, outputStateHash) before passing " +
-      "it to build.getBuild. Finish with BUILD_STATE_REF_OK or BUILD_STATE_REF_UNAVAILABLE.",
-    validate: (result) => {
-      const ok = finalMessageHasAll(result, ["BUILD_STATE_REF_OK"]);
-      if (ok.passed) return noIncompleteInvocations(result);
-      return checked(result, ["BUILD_STATE_REF_UNAVAILABLE"]);
-    },
-  },
-  {
     name: "import-built-package",
     description: "Import a built package and inspect its exports",
     category: "build",

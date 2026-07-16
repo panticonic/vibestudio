@@ -24,8 +24,8 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
  *    callers — panels and workers must be able to reach this service
  *    directly via the WebSocket transport.
  *
- * 4. `workspace.select` routes through the hub before the child asks its shell
- *    to relaunch.
+ * Server-wide catalog methods are intentionally absent: they belong to the
+ * stable hubControl service and never transit a workspace child.
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
@@ -36,9 +36,9 @@ import type { RpcCaller } from "@vibestudio/rpc";
 import { createWorkspaceService } from "./workspaceService.js";
 import { createWorkspaceClient } from "@vibestudio/service-schemas/clients/workspaceClient";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { UserlandApprovalChoice } from "@vibestudio/shared/approvals";
-import type { HubWorkspaceRoute } from "@vibestudio/service-schemas/hubControl";
 
 /**
  * Build a recording RpcCaller that captures every (target, method, args) tuple
@@ -54,18 +54,14 @@ function recordingRpc(): {
   const callImpl = async (target: string, method: string, args: unknown[]): Promise<unknown> => {
     captured.push({ target, method, args });
     switch (method) {
-      case "workspace.list":
       case "workspace.units.list":
       case "workspace.units.logs":
       case "workspace.recurring.list":
         return [];
       case "workspace.getActive":
         return "test-ws";
-      case "workspace.getActiveEntry":
-      case "workspace.create":
-        return { workspaceId: "ws_test", name: "test-ws", lastOpened: 1 };
       case "workspace.getConfig":
-        return { id: "test-ws", initPanels: [] };
+        return { id: "test-ws", systemEpoch: WORKSPACE_SYSTEM_EPOCH, initPanels: [] };
       case "workspace.units.inspector":
         return null;
       case "workspace.units.versions":
@@ -83,7 +79,12 @@ function recordingRpc(): {
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
 function makeConfig(overrides: Partial<WorkspaceConfig> = {}): WorkspaceConfig {
-  return { id: "test-ws", initPanels: [], ...overrides };
+  return {
+    id: "test-ws",
+    systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+    initPanels: [],
+    ...overrides,
+  };
 }
 
 function makeWorkspace() {
@@ -93,53 +94,10 @@ function makeWorkspace() {
     config: makeConfig(),
     panelsPath: "/tmp/source/panels",
     packagesPath: "/tmp/source/packages",
-    contextsPath: "/tmp/state/.contexts",
+    contextProjectionsPath: "/tmp/state/.context-projections/v5",
     cachePath: "/tmp/state/.cache",
     agentsPath: "/tmp/source/agents",
     projectsPath: "/tmp/source/projects",
-  };
-}
-
-function makeCentralData() {
-  // Registry entries now carry the opaque stable `workspaceId` (WP2 §4).
-  const entries: Array<{ name: string; workspaceId: string; lastOpened: number }> = [
-    { name: "test-ws", workspaceId: "ws_test", lastOpened: 1000 },
-    { name: "other", workspaceId: "ws_other", lastOpened: 500 },
-  ];
-  return {
-    list: vi.fn(async () => entries),
-    create: vi.fn(async (_actorUserId: string, name: string) => ({
-      name,
-      workspaceId: `ws_${name}`,
-      lastOpened: Date.now(),
-    })),
-    delete: vi.fn(async (_actorUserId: string, name: string): Promise<void> => {
-      const idx = entries.findIndex((e) => e.name === name);
-      if (idx >= 0) entries.splice(idx, 1);
-    }),
-    select: vi.fn(async (_actorUserId: string, _deviceId: string, name: string) =>
-      workspaceRoute(name)
-    ),
-  };
-}
-
-function workspaceRoute(name: string): HubWorkspaceRoute {
-  const reach = {
-    room: "room_123456789012345678901234",
-    fp: "AA".repeat(32),
-    sig: "wss://signal.example.test",
-    v: 2 as const,
-    ice: "all" as const,
-  };
-  return {
-    workspace: name,
-    workspaceId: `ws_${name}`,
-    running: true,
-    serverUrl: `https://hub.example.test/w/${name}`,
-    controlReach: reach,
-    workspaceReach: { ...reach, room: "room_abcdefghijklmnopqrstuvwx" },
-    serverId: "srv_123456789012345678901234",
-    serverBootId: "boot_123456789012345678901234",
   };
 }
 
@@ -147,23 +105,11 @@ function grantedApproval(): UserlandApprovalChoice {
   return { kind: "choice", choice: "allow" };
 }
 
-function makeService(
-  opts: {
-    eventService?: {
-      emit: (
-        event: "workspace:relaunch-requested",
-        payload: { name: string; route: HubWorkspaceRoute }
-      ) => void;
-    };
-  } = {}
-) {
+function makeService() {
   return createWorkspaceService({
     workspace: makeWorkspace(),
     getConfig: () => makeConfig(),
     setConfigField: vi.fn(),
-    workspaceCatalog: makeCentralData(),
-    roleOf: () => "root",
-    eventService: opts.eventService,
     approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
   });
 }
@@ -182,20 +128,6 @@ const panelCtx: ServiceContext = {
     { userId: "usr_root", handle: "root" }
   ),
 };
-const appCtx: ServiceContext = {
-  caller: createVerifiedCaller(
-    "@workspace-apps/shell",
-    "app",
-    {
-      callerId: "@workspace-apps/shell",
-      callerKind: "app",
-      repoPath: "apps/shell",
-      effectiveVersion: "ev-app",
-    },
-    undefined,
-    { userId: "usr_root", handle: "root" }
-  ),
-};
 const shellCtx: ServiceContext = {
   caller: createVerifiedCaller("shell:dev_test", "shell", undefined, undefined, {
     userId: "usr_root",
@@ -209,7 +141,7 @@ describe("workspace service ↔ client contract", () => {
   it("client and server agree on the service name (`workspace`)", async () => {
     const { rpc, captured } = recordingRpc();
     const client = createWorkspaceClient(rpc);
-    await Promise.all([client.list(), client.getActive()]);
+    await Promise.all([client.getActive(), client.getConfig()]);
 
     expect(captured.length).toBeGreaterThan(0);
     for (const { target, method } of captured) {
@@ -226,15 +158,10 @@ describe("workspace service ↔ client contract", () => {
     // Exercise every method the client exposes (reads + writes). The contract
     // assertion below verifies each captured wire-name is a registered method
     // on the service definition.
-    await client.list();
     await client.getActive();
-    await client.getActiveEntry();
     await client.getConfig();
-    await client.create("new-ws", { forkFrom: "test-ws" });
-    await client.delete("old-ws");
     await client.setInitPanels([{ source: "panels/chat" }]);
     await client.setConfigField("title", "Test");
-    await client.switchTo("other");
     await client.units.list();
     await client.units.inspector("extensions/foo");
     await client.units.restart("extensions/foo");
@@ -261,15 +188,10 @@ describe("workspace service ↔ client contract", () => {
     const client = createWorkspaceClient(rpc);
 
     await Promise.all([
-      client.list(),
       client.getActive(),
-      client.getActiveEntry(),
       client.getConfig(),
-      client.create("x"),
-      client.delete("old"),
       client.setInitPanels([]),
       client.setConfigField("title", "Test"),
-      client.switchTo("x"),
       client.units.list(),
       client.units.inspector("extensions/foo"),
       client.units.restart("extensions/foo"),
@@ -307,15 +229,6 @@ describe("workspace service policy", () => {
 // ─── Behavior: handler delegates correctly ────────────────────────────────────
 
 describe("workspace service handler", () => {
-  it("list returns the central catalog entries", async () => {
-    const service = makeService();
-    const result = await service.handler(panelCtx, "list", []);
-    expect(result).toEqual([
-      { name: "test-ws", workspaceId: "ws_test", lastOpened: 1000 },
-      { name: "other", workspaceId: "ws_other", lastOpened: 500 },
-    ]);
-  });
-
   it("getActive returns the active workspace name from config", async () => {
     const service = makeService();
     const result = await service.handler(panelCtx, "getActive", []);
@@ -328,36 +241,10 @@ describe("workspace service handler", () => {
       activeWorkspaceName: "dev",
       getConfig: () => makeConfig({ id: "ws_opaque" }),
       setConfigField: vi.fn(),
-      workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
 
     expect(await service.handler(panelCtx, "getActive", [])).toBe("dev");
-  });
-
-  it("getActiveEntry returns the catalog entry for the active workspace", async () => {
-    const service = makeService();
-    const result = await service.handler(panelCtx, "getActiveEntry", []);
-    expect(result).toEqual({ name: "test-ws", workspaceId: "ws_test", lastOpened: 1000 });
-  });
-
-  it("getActiveEntry fails loud when the active workspace is absent from the hub catalog", async () => {
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      workspaceCatalog: {
-        ...makeCentralData(),
-        list: vi.fn(async () => []),
-      },
-      roleOf: () => "root",
-      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-    });
-
-    await expect(service.handler(panelCtx, "getActiveEntry", [])).rejects.toMatchObject({
-      code: "ENOENT",
-    });
   });
 
   it("getConfig returns the workspace config", async () => {
@@ -371,8 +258,6 @@ describe("workspace service handler", () => {
       workspace: makeWorkspace(),
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
-      workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       listUnits: vi.fn(() => [
         {
           name: "@workspace-extensions/git-tools",
@@ -396,8 +281,6 @@ describe("workspace service handler", () => {
       workspace: makeWorkspace(),
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
-      workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       bakeAppDist,
     });
 
@@ -421,8 +304,6 @@ describe("workspace service handler", () => {
       workspace: makeWorkspace(),
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
-      workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       listUnits: vi.fn(() => [
         {
           name: "@workspace-apps/other",
@@ -450,8 +331,6 @@ describe("workspace service handler", () => {
       workspace: makeWorkspace(),
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
-      workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       listUnits: vi.fn(() => [
         {
           name: "@workspace-apps/self",
@@ -491,63 +370,12 @@ describe("workspace service handler", () => {
     expect(listAppVersions).toHaveBeenCalledWith("@workspace-apps/other");
   });
 
-  it("create delegates to the createWorkspace dep", async () => {
-    const service = makeService();
-    const result = (await service.handler(panelCtx, "create", [
-      "new-ws",
-      { forkFrom: "test-ws" },
-    ])) as { name: string };
-    expect(result.name).toBe("new-ws");
-  });
-
-  it("delete is approval-gated for panels", async () => {
-    const service = makeService();
-    await service.handler(panelCtx, "delete", ["other"]);
-    // Should not throw when approval is granted.
-  });
-
-  it("delete is approval-gated for apps", async () => {
-    const service = makeService();
-    await service.handler(appCtx, "delete", ["other"]);
-    // Should not throw when approval is granted.
-  });
-
-  it("delete works from the shell", async () => {
-    const service = makeService();
-    await service.handler(shellCtx, "delete", ["other"]);
-    // Should not throw
-  });
-
-  it("delete refuses to delete the currently running workspace", async () => {
-    const service = makeService();
-    await expect(service.handler(shellCtx, "delete", ["test-ws"])).rejects.toThrow(
-      /currently running/
-    );
-  });
-
-  it("delegates deletion to the hub-owned catalog with the verified actor", async () => {
-    const workspaceCatalog = makeCentralData();
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      workspaceCatalog,
-      roleOf: () => "root",
-      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-    });
-
-    await service.handler(shellCtx, "delete", ["other"]);
-    expect(workspaceCatalog.delete).toHaveBeenCalledWith("usr_root", "other");
-  });
-
   it("setInitPanels delegates to setConfigField", async () => {
     const setConfigField = vi.fn();
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
       getConfig: () => makeConfig(),
       setConfigField,
-      workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
     await service.handler(panelCtx, "setInitPanels", [[{ source: "panels/chat" }]]);
@@ -564,8 +392,6 @@ describe("workspace service handler", () => {
       workspace: makeWorkspace(),
       getConfig: () => makeConfig(),
       setConfigField,
-      workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
     await service.handler(panelCtx, "setConfigField", ["title", "Test"]);
@@ -601,79 +427,10 @@ describe("workspace service handler", () => {
       workspace: makeWorkspace(),
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
-      workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       listRecurringJobs: vi.fn(() => jobs),
     });
 
     await expect(service.handler(shellCtx, "recurring.list", [])).resolves.toEqual(jobs);
-  });
-});
-
-// ─── Select / relaunch: shell-relaunch event ─────────────────────────────────
-
-describe("workspace.select", () => {
-  it("routes an ordinary member device and emits exact durable relaunch coordinates", async () => {
-    const emit = vi.fn();
-    const central = makeCentralData();
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      workspaceCatalog: central,
-      roleOf: () => "member",
-      eventService: { emit },
-      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-    });
-
-    await service.handler(shellCtx, "select", ["other"]);
-
-    expect(central.select).toHaveBeenCalledWith("usr_root", "dev_test", "other");
-    expect(emit).toHaveBeenCalledWith("workspace:relaunch-requested", {
-      name: "other",
-      route: workspaceRoute("other"),
-    });
-  });
-
-  it("fails clearly when no desktop shell is attached", async () => {
-    const central = makeCentralData();
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      workspaceCatalog: central,
-      roleOf: () => "root",
-      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-      // No eventService — no shell attached to relaunch.
-    });
-
-    await expect(service.handler(shellCtx, "select", ["other"])).resolves.toBeUndefined();
-    expect(central.select).toHaveBeenCalledWith("usr_root", "dev_test", "other");
-  });
-
-  it("rejects userland callers that cannot durably switch a device route", async () => {
-    const central = makeCentralData();
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      workspaceCatalog: central,
-      roleOf: () => "root",
-    });
-
-    await expect(service.handler(panelCtx, "select", ["other"])).rejects.toMatchObject({
-      code: "EACCES",
-    });
-    expect(central.select).not.toHaveBeenCalled();
-  });
-
-  it("the runtime client's switchTo() maps to the wire method workspace.select", () => {
-    const { rpc, captured } = recordingRpc();
-    const client = createWorkspaceClient(rpc);
-    void client.switchTo("other");
-    expect(captured).toHaveLength(1);
-    expect(captured[0]!.method).toBe("workspace.select");
-    expect(captured[0]!.args).toEqual(["other"]);
   });
 });
 
@@ -701,15 +458,13 @@ describe("workspace service agent resources", () => {
         config: makeConfig(),
         panelsPath: path.join(wsPath, "panels"),
         packagesPath: path.join(wsPath, "packages"),
-        contextsPath: path.join(wsPath, ".contexts"),
+        contextProjectionsPath: path.join(wsPath, ".context-projections", "v5"),
         cachePath: path.join(wsPath, ".cache"),
         agentsPath: path.join(wsPath, "agents"),
         projectsPath: path.join(wsPath, "projects"),
       },
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
-      workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
     });
   }
 

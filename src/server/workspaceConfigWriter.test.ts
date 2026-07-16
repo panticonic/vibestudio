@@ -1,234 +1,199 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { describe, expect, it } from "vitest";
-import YAML from "yaml";
+import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { setDeclaredRemoteInConfig } from "@vibestudio/workspace/remotes";
-import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import { createProtectedRefStore } from "./services/protectedRefStore.js";
-import {
-  collectTreeReachableDigests,
-  ensureLayout,
-  getBytes,
-  listTree,
-  mirrorWorktreeTree,
-  putBytes,
-  readFileAtTree,
-} from "./services/blobstoreService.js";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import type { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
 import { createWorkspaceConfigMainWriter } from "./workspaceConfigWriter.js";
 
-const FILE_MODE = 33188;
+const mainState = { kind: "event" as const, eventId: "event:main" };
+const editedState = { kind: "application" as const, applicationId: "application:config" };
+const committedState = { kind: "event" as const, eventId: "event:config" };
+const repositoryRef = {
+  kind: "repository" as const,
+  state: mainState,
+  repositoryId: "repository:meta",
+};
+
+function configReader(initialYaml: string) {
+  return vi.fn(async (method: string, input: unknown) => {
+    if (method === "vcsStatus") {
+      return {
+        contextId: (input as { contextId: string }).contextId,
+        committed: mainState,
+        workingHead: mainState,
+        clean: true,
+        mainEventId: mainState.eventId,
+        mainRelation: "at",
+        workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      };
+    }
+    if (method === "vcsNeighbors") {
+      return {
+        root: mainState,
+        edges: [
+          {
+            kind: "contains-repository",
+            from: mainState,
+            to: repositoryRef,
+          },
+        ],
+        nextCursor: null,
+      };
+    }
+    if (method === "vcsInspect") {
+      return {
+        root: repositoryRef,
+        node: {
+          kind: "repository",
+          state: mainState,
+          value: {
+            kind: "present",
+            repositoryId: "repository:meta",
+            repoPath: "meta",
+            manifestId: "manifest:meta",
+          },
+        },
+        edges: [],
+        hasMoreEdges: false,
+      };
+    }
+    if (method === "vcsListFiles") {
+      return {
+        state: mainState,
+        repositoryId: "repository:meta",
+        files: [
+          {
+            fileId: "file:config",
+            path: "vibestudio.yml",
+            contentHash: "blob:before",
+            mode: 0o644,
+            size: initialYaml.length,
+            binary: false,
+          },
+        ],
+        nextCursor: null,
+      };
+    }
+    if (method === "vcsReadFile") {
+      return {
+        repositoryId: "repository:meta",
+        fileId: "file:config",
+        repoPath: "meta",
+        path: "vibestudio.yml",
+        contentHash: "blob:before",
+        mode: 0o644,
+        content: { kind: "text", text: initialYaml },
+      };
+    }
+    if (method === "vcsEdit") {
+      return {
+        contextId: (input as { contextId: string }).contextId,
+        workUnitId: "work-unit:config",
+        applicationId: editedState.applicationId,
+        changeIds: ["change:config"],
+        incorporatedChangeIds: [],
+        workingHead: editedState,
+      };
+    }
+    if (method === "vcsCommit") {
+      return {
+        contextId: (input as { contextId: string }).contextId,
+        event: committedState,
+        committedApplicationIds: [editedState.applicationId],
+        integrationSourceEventId: null,
+      };
+    }
+    throw new Error(`unexpected semantic call ${method}`);
+  });
+}
 
 describe("workspaceConfigWriter", () => {
-  it("persists workspace config through protected meta/main and preserves protected YAML fields", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-config-writer-"));
-    const blobsDir = path.join(root, "blobs");
-    ensureLayout(blobsDir);
-    const refs = createProtectedRefStore({
-      statePath: path.join(root, "refs"),
-      gate: async () => undefined,
-      assertTreeComplete: async (stateHash) => {
-        if (!(await collectTreeReachableDigests(blobsDir, stateHash))) {
-          throw new Error(`incomplete tree: ${stateHash}`);
-        }
-      },
-    });
-    const protectedContent = YAML.stringify({
-      id: "test",
-      defaultRepo: "panels/old",
-      git: {
-        remotes: {
-          projects: {
-            old: {
-              origin: { url: "https://example.com/old.git" },
-            },
-          },
-        },
-      },
-    });
-    const staleProjectedContent = YAML.stringify({ id: "test", defaultRepo: "panels/stale" });
-    const protectedDigest = (await putBytes(blobsDir, Buffer.from(protectedContent, "utf8")))
-      .digest;
-    const staleDigest = (await putBytes(blobsDir, Buffer.from(staleProjectedContent, "utf8")))
-      .digest;
-    const protectedState = (
-      await mirrorWorktreeTree(blobsDir, [
-        { path: "vibestudio.yml", contentHash: protectedDigest, mode: FILE_MODE },
-      ])
-    ).stateHash;
-    const staleState = (
-      await mirrorWorktreeTree(blobsDir, [
-        { path: "vibestudio.yml", contentHash: staleDigest, mode: FILE_MODE },
-      ])
-    ).stateHash;
-    await refs.seedMain({ repoPath: "meta", value: protectedState });
-
-    const writer = createWorkspaceConfigMainWriter({
-      workspacePath: path.join(root, "source"),
-      blobsDir,
-      refs,
-      vcs: {
-        async readFile(ref, filePath) {
-          const meta = await readFileAtTree(blobsDir, ref, filePath);
-          if (!meta) return null;
-          const bytes = await getBytes(blobsDir, meta.contentHash);
-          if (!bytes) throw new Error("missing test blob");
-          return { content: { kind: "text" as const, text: bytes.toString("utf8") } };
-        },
-        async listFiles(ref) {
-          const entries = await listTree(blobsDir, ref);
-          return (entries ?? [])
-            .filter((entry) => entry.kind === "file")
-            .map((entry) => ({
-              path: entry.path,
-              contentHash: entry.contentHash,
-              mode: entry.mode,
-            }));
-        },
-      },
-      async publishMain({ expectedOld, files, summary, operation }) {
-        const next = await mirrorWorktreeTree(blobsDir, files);
-        await refs.updateMains({
-          entries: [{ repoPath: "meta", expectedOld, next: next.stateHash }],
-          gateContext: { kind: "system", actor: { id: "test", kind: "server" } },
-          operation,
-          reason: summary,
-          writer: "test",
-        });
-        return { stateHash: next.stateHash };
-      },
-    });
+  it("uses a fresh context, one whole-chain commit, and an exact protected push", async () => {
+    const initialYaml = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/old\n`;
+    const semanticCausalCall = configReader(initialYaml);
+    const semanticPublishCall = vi.fn(async () => ({
+      contextId: "context:config",
+      eventId: committedState.eventId,
+      mainEventId: committedState.eventId,
+      effectId: "effect:publish",
+      appliedAt: "2026-07-15T12:00:00.000Z",
+    }));
+    const vcs = {
+      ensureContext: vi.fn(async () => mainState),
+      dropContext: vi.fn(async () => undefined),
+      semanticCausalCall,
+      semanticPublishCall,
+    } as unknown as WorkspaceVcs;
+    const writer = createWorkspaceConfigMainWriter({ workspacePath: "/workspace", vcs });
+    const ctx = {
+      caller: createVerifiedCaller("shell:dev", "shell"),
+      requestId: "request:config",
+    };
 
     const result = await writer.applyMutation({
-      ctx: { caller: createVerifiedCaller("server", "server") },
-      mutate: () => ({
-        id: "test",
-        git: {
-          remotes: {
-            projects: {
-              bgkit: {
-                origin: { url: "https://github.com/werg/bgkit.git" },
-              },
-            },
-          },
-        },
-      }),
-      summary: "record bgkit remote",
-      operation: "push",
+      ctx,
+      mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
+      summary: "change default repo",
     });
 
-    expect(result.changed).toBe(true);
-    const updated = refs.readMain("meta");
-    expect(updated?.stateHash).not.toBe(protectedState);
-    expect(updated?.stateHash).not.toBe(staleState);
-    const updatedFile = await readFileAtTree(blobsDir, updated!.stateHash, "vibestudio.yml");
-    const updatedBytes = await getBytes(blobsDir, updatedFile!.contentHash);
-    const parsed = YAML.parse(updatedBytes!.toString("utf8")) as Record<string, unknown>;
-    expect(parsed["defaultRepo"]).toBe("panels/old");
-    expect(parsed["git"]).toEqual({
-      remotes: {
-        projects: {
-          bgkit: {
-            origin: { url: "https://github.com/werg/bgkit.git" },
-          },
+    expect(result).toMatchObject({ changed: true, nextConfig: { defaultRepo: "panels/new" } });
+    const contextId = vi.mocked(vcs.ensureContext).mock.calls[0]?.[0];
+    expect(contextId).toMatch(/^system:workspace-config:/);
+    expect(vcs.dropContext).toHaveBeenCalledWith(contextId);
+    expect(semanticCausalCall.mock.calls.map(([method]) => method)).toEqual([
+      "vcsStatus",
+      "vcsNeighbors",
+      "vcsInspect",
+      "vcsListFiles",
+      "vcsReadFile",
+      "vcsEdit",
+      "vcsCommit",
+    ]);
+    expect(
+      semanticCausalCall.mock.calls.find(([method]) => method === "vcsEdit")?.[1]
+    ).toMatchObject({
+      contextId,
+      expectedWorkingHead: mainState,
+      changes: [
+        {
+          kind: "text-edit",
+          repositoryId: "repository:meta",
+          fileId: "file:config",
         },
-      },
+      ],
     });
+    expect(
+      semanticCausalCall.mock.calls.find(([method]) => method === "vcsCommit")?.[1]
+    ).toMatchObject({ expectedWorkingHead: editedState });
+    expect(semanticPublishCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedCommittedEventId: committedState.eventId,
+        expectedMainEventId: mainState.eventId,
+      }),
+      null,
+      expect.objectContaining({
+        runtime: expect.objectContaining({ id: "shell:dev", kind: "shell" }),
+      })
+    );
   });
 
-  it("serializes concurrent narrow mutations against the latest protected config", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-config-writer-race-"));
-    const blobsDir = path.join(root, "blobs");
-    ensureLayout(blobsDir);
-    const refs = createProtectedRefStore({
-      statePath: path.join(root, "refs"),
-      gate: async () => undefined,
-      assertTreeComplete: async (stateHash) => {
-        if (!(await collectTreeReachableDigests(blobsDir, stateHash))) {
-          throw new Error(`incomplete tree: ${stateHash}`);
-        }
-      },
-    });
-    const initialDigest = (
-      await putBytes(blobsDir, Buffer.from(YAML.stringify({ id: "test" }), "utf8"))
-    ).digest;
-    const initialState = (
-      await mirrorWorktreeTree(blobsDir, [
-        { path: "vibestudio.yml", contentHash: initialDigest, mode: FILE_MODE },
-      ])
-    ).stateHash;
-    await refs.seedMain({ repoPath: "meta", value: initialState });
+  it("does not author content when rendering is unchanged", async () => {
+    const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
+    const vcs = {
+      ensureContext: vi.fn(async () => mainState),
+      dropContext: vi.fn(async () => undefined),
+      semanticCausalCall,
+      semanticPublishCall: vi.fn(),
+    } as unknown as WorkspaceVcs;
+    const writer = createWorkspaceConfigMainWriter({ workspacePath: "/workspace", vcs });
 
-    const writer = createWorkspaceConfigMainWriter({
-      workspacePath: path.join(root, "source"),
-      blobsDir,
-      refs,
-      vcs: {
-        async readFile(ref, filePath) {
-          const meta = await readFileAtTree(blobsDir, ref, filePath);
-          if (!meta) return null;
-          const bytes = await getBytes(blobsDir, meta.contentHash);
-          if (!bytes) throw new Error("missing test blob");
-          return { content: { kind: "text" as const, text: bytes.toString("utf8") } };
-        },
-        async listFiles(ref) {
-          const entries = await listTree(blobsDir, ref);
-          return (entries ?? [])
-            .filter((entry) => entry.kind === "file")
-            .map((entry) => ({
-              path: entry.path,
-              contentHash: entry.contentHash,
-              mode: entry.mode,
-            }));
-        },
-      },
-      async publishMain({ expectedOld, files, summary, operation }) {
-        const next = await mirrorWorktreeTree(blobsDir, files);
-        await refs.updateMains({
-          entries: [{ repoPath: "meta", expectedOld, next: next.stateHash }],
-          gateContext: { kind: "system", actor: { id: "test", kind: "server" } },
-          operation,
-          reason: summary,
-          writer: "test",
-        });
-        return { stateHash: next.stateHash };
-      },
-    });
-    const ctx = { caller: createVerifiedCaller("server", "server") };
-
-    await Promise.all([
-      writer.applyMutation({
-        ctx,
-        mutate: (current) =>
-          setDeclaredRemoteInConfig(current, "projects/alpha", {
-            name: "origin",
-            url: "https://example.com/alpha.git",
-          }),
-        summary: "record alpha remote",
-        operation: "push",
-      }),
-      writer.applyMutation({
-        ctx,
-        mutate: (current) =>
-          setDeclaredRemoteInConfig(current, "projects/beta", {
-            name: "origin",
-            url: "https://example.com/beta.git",
-          }),
-        summary: "record beta remote",
-        operation: "push",
-      }),
+    await expect(writer.wouldMutate((config) => config)).resolves.toBe(false);
+    expect(semanticCausalCall.mock.calls.map(([method]) => method)).toEqual([
+      "vcsStatus",
+      "vcsNeighbors",
+      "vcsInspect",
+      "vcsListFiles",
+      "vcsReadFile",
     ]);
-
-    const updated = refs.readMain("meta");
-    const updatedFile = await readFileAtTree(blobsDir, updated!.stateHash, "vibestudio.yml");
-    const updatedBytes = await getBytes(blobsDir, updatedFile!.contentHash);
-    const parsed = YAML.parse(updatedBytes!.toString("utf8")) as WorkspaceConfig;
-    expect(parsed.git?.remotes?.["projects"]?.["alpha"]?.["origin"]).toEqual({
-      url: "https://example.com/alpha.git",
-    });
-    expect(parsed.git?.remotes?.["projects"]?.["beta"]?.["origin"]).toEqual({
-      url: "https://example.com/beta.git",
-    });
+    expect(vcs.dropContext).toHaveBeenCalledOnce();
   });
 });

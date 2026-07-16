@@ -28,7 +28,7 @@ export interface TestRunResult {
 
 interface ExtensionContextLike {
   workspace: {
-    getInfo(): Promise<{ path: string; contextsPath: string }>;
+    getInfo(): Promise<{ path: string; contextProjectionsPath: string }>;
   };
   fs: {
     ensureMaterialized(scope: string | string[] | "all"): Promise<void>;
@@ -218,7 +218,7 @@ export async function activate(ctx: ExtensionContextLike) {
         throw new Error("test-runner.run requires a contextId");
       }
       validateContextId(contextId);
-      const root = path.join(info.contextsPath, contextId);
+      const root = path.join(info.contextProjectionsPath, contextId);
       await ctx.fs.ensureMaterialized(request.target);
       const targetPath = resolveWithin(root, request.target);
       if (!fs.existsSync(targetPath)) {

@@ -40,8 +40,8 @@ export interface GraphNode {
   dependencyErrors?: string[];
   /**
    * Declared `exports` subpaths from package.json (the keys, e.g. ".",
-   * "./panel"). Used by the push gate to validate a package's library bundles
-   * for each declared export, not just the root entry.
+   * "./panel"). Used by exact-state unit reports to build each declared library
+   * export, not just the root entry.
    */
   exports?: string[];
   /** vibestudio manifest from package.json */
@@ -186,6 +186,23 @@ interface PackageJson {
   main?: string;
 }
 
+/**
+ * The manifest-sized input needed to derive one immutable build-graph node.
+ * Repository-backed build views use this form so graph discovery never has to
+ * materialize an entire workspace tree merely to read one marker per unit.
+ */
+export interface PackageGraphManifest {
+  relativePath: string;
+  kind: GraphNode["kind"];
+  packageJson?: string;
+  templateJson?: string;
+}
+
+export function buildUnitKindForPath(relativePath: string): GraphNode["kind"] | null {
+  const section = relativePath.replace(/\\/g, "/").split("/")[0];
+  return BUILDABLE_UNIT_DIRS.find(({ dir }) => dir === section)?.kind ?? null;
+}
+
 function normalizeSimpleOverrides(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const result: Record<string, string> = {};
@@ -212,6 +229,44 @@ function readPackageJson(dir: string): PackageJson | null {
   }
 }
 
+function packageNodeFromJson(
+  workspaceRoot: string,
+  relativePath: string,
+  kind: GraphNode["kind"],
+  packageJson: string
+): GraphNode | null {
+  let pkg: PackageJson;
+  try {
+    pkg = JSON.parse(packageJson) as PackageJson;
+  } catch {
+    return null;
+  }
+  if (!pkg.name) return null;
+
+  const allDeps = { ...pkg.peerDependencies, ...pkg.dependencies };
+  const internalDeps: string[] = [];
+  const partialNode = { name: pkg.name, dependencyErrors: undefined as string[] | undefined };
+  for (const [depName, depSpec] of Object.entries(allDeps)) {
+    if (isInternalDep(depName)) {
+      internalDeps.push(depName);
+      recordInternalDepSpecError(partialNode, depName, depSpec);
+    }
+  }
+
+  return {
+    path: path.join(workspaceRoot, ...relativePath.split("/")),
+    relativePath,
+    name: pkg.name,
+    kind,
+    dependencies: allDeps,
+    dependencyOverrides: packageManagerOverrides(pkg),
+    internalDeps,
+    ...(partialNode.dependencyErrors ? { dependencyErrors: partialNode.dependencyErrors } : {}),
+    ...(pkg.exports ? { exports: declaredExportSubpaths(pkg.exports) } : {}),
+    manifest: pkg.vibestudio ?? {},
+  };
+}
+
 function scanDirectory(dir: string, workspaceRoot: string, kind: GraphNode["kind"]): GraphNode[] {
   if (!fs.existsSync(dir)) return [];
   const nodes: GraphNode[] = [];
@@ -222,34 +277,40 @@ function scanDirectory(dir: string, workspaceRoot: string, kind: GraphNode["kind
 
     const unitDir = path.join(dir, entry.name);
     const pkg = readPackageJson(unitDir);
-    if (!pkg?.name) continue;
-
-    const allDeps = { ...pkg.peerDependencies, ...pkg.dependencies };
-    const internalDeps: string[] = [];
-    const partialNode = { name: pkg.name, dependencyErrors: undefined as string[] | undefined };
-
-    for (const [depName, depSpec] of Object.entries(allDeps)) {
-      if (isInternalDep(depName)) {
-        internalDeps.push(depName);
-        recordInternalDepSpecError(partialNode, depName, depSpec);
-      }
-    }
-
-    nodes.push({
-      path: unitDir,
-      relativePath: path.relative(workspaceRoot, unitDir).replace(/\\/g, "/"),
-      name: pkg.name,
+    if (!pkg) continue;
+    const node = packageNodeFromJson(
+      workspaceRoot,
+      path.relative(workspaceRoot, unitDir).replace(/\\/g, "/"),
       kind,
-      dependencies: allDeps,
-      dependencyOverrides: packageManagerOverrides(pkg),
-      internalDeps,
-      ...(partialNode.dependencyErrors ? { dependencyErrors: partialNode.dependencyErrors } : {}),
-      ...(pkg.exports ? { exports: declaredExportSubpaths(pkg.exports) } : {}),
-      manifest: pkg.vibestudio ?? {},
-    });
+      JSON.stringify(pkg)
+    );
+    if (node) nodes.push(node);
   }
 
   return nodes;
+}
+
+function templateNodeFromJson(
+  workspaceRoot: string,
+  relativePath: string,
+  templateJson: string
+): GraphNode {
+  let config: TemplateConfig = {};
+  try {
+    config = JSON.parse(templateJson) as TemplateConfig;
+  } catch {
+    console.warn(`[PackageGraph] Failed to parse template.json in ${relativePath}`);
+  }
+  return {
+    path: path.join(workspaceRoot, ...relativePath.split("/")),
+    relativePath,
+    name: `template:${path.posix.basename(relativePath)}`,
+    kind: "template",
+    dependencies: {},
+    dependencyOverrides: {},
+    internalDeps: [],
+    manifest: { framework: config.framework },
+  };
 }
 
 /**
@@ -293,16 +354,13 @@ function scanTemplates(dir: string, workspaceRoot: string): GraphNode[] {
       console.warn(`[PackageGraph] Failed to parse template.json in ${entry.name}`);
     }
 
-    nodes.push({
-      path: templateDir,
-      relativePath: path.relative(workspaceRoot, templateDir).replace(/\\/g, "/"),
-      name: `template:${entry.name}`,
-      kind: "template",
-      dependencies: {},
-      dependencyOverrides: {},
-      internalDeps: [],
-      manifest: { framework: config.framework },
-    });
+    nodes.push(
+      templateNodeFromJson(
+        workspaceRoot,
+        path.relative(workspaceRoot, templateDir).replace(/\\/g, "/"),
+        JSON.stringify(config)
+      )
+    );
   }
 
   return nodes;
@@ -328,6 +386,40 @@ export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
     }
   }
 
+  return finalizePackageGraph(graph);
+}
+
+/**
+ * Derive the same graph as {@link discoverPackageGraph} from immutable,
+ * manifest-sized records. This is the canonical repository-view discovery
+ * path; callers can cache each record by `(repoPath,stateHash)` and assemble a
+ * candidate graph without projecting unrelated repository content.
+ */
+export function discoverPackageGraphFromManifests(
+  workspaceRoot: string,
+  manifests: readonly PackageGraphManifest[]
+): PackageGraph {
+  const graph = new PackageGraph();
+  for (const manifest of manifests) {
+    const node =
+      manifest.kind === "template"
+        ? manifest.templateJson === undefined
+          ? null
+          : templateNodeFromJson(workspaceRoot, manifest.relativePath, manifest.templateJson)
+        : manifest.packageJson === undefined
+          ? null
+          : packageNodeFromJson(
+              workspaceRoot,
+              manifest.relativePath,
+              manifest.kind,
+              manifest.packageJson
+            );
+    if (node) graph.addNode(node);
+  }
+  return finalizePackageGraph(graph);
+}
+
+function finalizePackageGraph(graph: PackageGraph): PackageGraph {
   // The template workspace may contain packages whose real package name is not
   // under an @workspace/* scope, e.g. @vendor/shared-utils. Treat any dependency
   // whose package name is present in the graph as internal so source

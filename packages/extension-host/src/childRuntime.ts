@@ -21,6 +21,7 @@ import {
 } from "@vibestudio/extension";
 import { createCredentialClient } from "@vibestudio/credential-client";
 import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 
@@ -31,7 +32,6 @@ import {
   type BinaryEnvelope,
   type BodyEnvelope,
   type StreamChunkEnvelope,
-  type StreamEnvelope,
 } from "./wireEnvelopes.js";
 
 type ChildMessage = { type: "shutdown" };
@@ -76,7 +76,6 @@ interface SerializedFileStats {
 }
 
 const invocationStore = new AsyncLocalStorage<ExtensionInvocation>();
-const extensionEventCallbacks = new Map<string, Set<(payload: unknown) => void>>();
 const fetchResponseBodies = new Map<string, FetchResponseBodyStream>();
 const STREAM_CHUNK_BYTES = 64 * 1024;
 
@@ -164,9 +163,17 @@ function createGitInteropClient() {
 function createExtensionsClient(): ExtensionsClient {
   const proxyRpc = {
     call: (_target: string, method: string, args: unknown[]) => rpcCall(method, args),
-    stream: (_target: string, method: string, args: unknown[]) =>
-      getRuntimeBridge().stream("main", method, args),
+    stream: (
+      _target: string,
+      method: string,
+      args: unknown[],
+      options?: { signal?: AbortSignal }
+    ) => getRuntimeBridge().stream("main", method, args, options),
+    on: (eventName: string, listener: (event: import("@vibestudio/rpc").RpcEventContext) => void) =>
+      getRuntimeBridge().on(eventName, listener),
   };
+  const events = new EventsClient(proxyRpc);
+  const eventRefcounts = new Map<string, number>();
   const streamingCache = new Map<string, Promise<Set<string>>>();
   const declaredStreaming = (name: string): Promise<Set<string>> => {
     let cached = streamingCache.get(name);
@@ -195,32 +202,37 @@ function createExtensionsClient(): ExtensionsClient {
       ) as never;
     },
     on(targetName: string, event: string, cb: (payload: unknown) => void) {
-      const eventName = `extensions:${targetName}::${event}`;
-      const channel = `event:${eventName}`;
-      let callbacks = extensionEventCallbacks.get(channel);
-      if (!callbacks) {
-        callbacks = new Set();
-        extensionEventCallbacks.set(channel, callbacks);
-        void rpcCall("events.subscribe", [eventName]).catch((err) => {
-          console.error(`[ExtensionRuntime] Failed to subscribe to ${eventName}:`, err);
-        });
+      const eventName = `extensions:${targetName}::${event}` as const;
+      const stopListening = events.on(eventName, cb);
+      const previous = eventRefcounts.get(eventName) ?? 0;
+      eventRefcounts.set(eventName, previous + 1);
+      if (previous === 0) {
+        void events
+          .subscribe(eventName)
+          .catch((error: unknown) =>
+            console.warn(`[extension-host] watch ${eventName} failed:`, error)
+          );
       }
-      callbacks.add(cb);
+      let disposed = false;
       return {
         dispose() {
-          const current = extensionEventCallbacks.get(channel);
-          current?.delete(cb);
-          if (current && current.size === 0) {
-            extensionEventCallbacks.delete(channel);
-            void rpcCall("events.unsubscribe", [eventName]).catch((err) => {
-              console.error(`[ExtensionRuntime] Failed to unsubscribe from ${eventName}:`, err);
-            });
+          if (disposed) return;
+          disposed = true;
+          stopListening();
+          const remaining = (eventRefcounts.get(eventName) ?? 1) - 1;
+          if (remaining > 0) {
+            eventRefcounts.set(eventName, remaining);
+          } else {
+            eventRefcounts.delete(eventName);
+            void events.unsubscribe(eventName).catch(() => {});
           }
         },
       };
     },
     list: () => rpcCall<RegistryEntry[]>("extensions.list", []),
-    reload: (name) => rpcCall<void>("extensions.reload", [name]),
+    reload: async (name) => {
+      await rpcCall("extensions.reload", [name]);
+    },
     invoke: (name, method, args) => rpcCall<unknown>("extensions.invoke", [name, method, args]),
     invokeProvider: (provider, method, args) =>
       rpcCall<unknown>("extensions.invokeProvider", [provider, method, args]),
@@ -522,11 +534,11 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
       if (ws.readyState !== WebSocket.OPEN) {
         throw new Error("Extension WebSocket RPC is not connected");
       }
-      const invocationToken = invocationStore.getStore()?.invocationToken;
+      const parentRequestId = invocationStore.getStore()?.requestId;
       const stampedMessage =
-        invocationToken &&
+        parentRequestId &&
         (envelope.message.type === "request" || envelope.message.type === "stream-request")
-          ? { ...envelope.message, parentInvocationToken: invocationToken }
+          ? { ...envelope.message, parentRequestId }
           : envelope.message;
       const stampedEnvelope =
         stampedMessage === envelope.message ? envelope : { ...envelope, message: stampedMessage };
@@ -629,16 +641,6 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
       console.warn(
         `[ExtensionRuntime] routed event "${message.event}" to ${message.targetId} dropped: ${message.error}`
       );
-    } else if (message.type === "ws:event") {
-      const callbacks = extensionEventCallbacks.get(message.event);
-      if (!callbacks) return;
-      for (const cb of callbacks) {
-        try {
-          cb(message.payload);
-        } catch (err) {
-          console.error(`[ExtensionRuntime] Event handler failed for ${message.event}:`, err);
-        }
-      }
     }
   });
 
@@ -973,7 +975,8 @@ async function main(): Promise<void> {
 
   const disposeSubscriptions = () => {
     while (ctx.subscriptions.length) {
-      const subscription = ctx.subscriptions.pop()!;
+      const subscription = ctx.subscriptions.pop();
+      if (!subscription) continue;
       try {
         subscription.dispose();
       } catch (err) {
@@ -1000,8 +1003,8 @@ async function main(): Promise<void> {
   await rpcCall("extensions.ready", [{ methods, providerMethods, hasFetch: !!fetchHandler }]);
 }
 
-function importExtensionModule(bundlePath: string): Promise<Record<string, any>> {
-  return import(pathToFileURL(bundlePath).href) as Promise<Record<string, any>>;
+function importExtensionModule(bundlePath: string): Promise<Record<string, unknown>> {
+  return import(pathToFileURL(bundlePath).href) as Promise<Record<string, unknown>>;
 }
 
 function installCommonJsGlobals(bundlePath: string): void {
