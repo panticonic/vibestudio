@@ -83,16 +83,19 @@ VIBESTUDIO_WEBRTC_SIGNAL_URL=ws://127.0.0.1:8787 pnpm server
 #   and the pool logs:  [webrtc-ingress] armed room <uuid> (invite)
 ```
 
-On first bootstrap the hub publishes desktop and mobile root invites in
-`rootInvites`; later device invites come from `hubControl.pairDevice`. Each
-invite arms a fresh signaling room in the selected workspace child. Redemption
-promotes that ephemeral room to the issued device. After a restart, returning
-devices obtain fresh reach coordinates from the hub instead of restoring rooms
-from identity storage.
+On first bootstrap the hub publishes one `rootInvite`; its deep link and HTTPS
+pair/QR URL are presentation carriers for that same invitation fact. Later
+device invites come from `hubControl.pairDevice`. Every invite arms a fresh room
+on the stable hub control ingress, and redemption atomically promotes that room
+to the issued device's durable control reach. The client then routes the exact
+invited workspace ID and receives only the child `workspaceReach`. After a
+restart, returning devices keep their hub control reach and obtain fresh child
+reach coordinates through exact workspace routing.
 
-Optional env: `VIBESTUDIO_WEBRTC_ICE=relay` (force TURN). The isolated hub
-manages a persistent identity for each disposable workspace child; the child's
-certificate SHA-256 is the published `fp`.
+Optional env: `VIBESTUDIO_WEBRTC_ICE=relay` (force TURN). The isolated hub owns
+the persistent control identity whose certificate SHA-256 is the root invite's
+`fp`; each disposable workspace child owns a separate identity published only
+in its routed workspace reach.
 
 Observability (§9.8 relay alarm): every pipe connect logs
 `[webrtc-ingress] room=… device=… path=<host|srflx|relay>` and WARNS when the

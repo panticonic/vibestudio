@@ -190,10 +190,9 @@ const response = await credentials.fetch(
 const results = await response.json();
 ```
 
-See [RUNTIME_API.md](RUNTIME_API.md) for the full credentials surface (`store`,
-`connect`, `fetch`, `listStoredCredentials`, …). Works with any configured
-provider; check `await credentials.listStoredCredentials()` to see what's
-available.
+See [RUNTIME_API.md](RUNTIME_API.md) for the full runtime surface. Works with any
+configured provider; check
+`await credentials.listStoredCredentials()` to see what's available.
 
 ## Request Access to a Custom Userland Resource
 

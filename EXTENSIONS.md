@@ -231,6 +231,13 @@ interface ExtensionInvocation {
 }
 ```
 
+When extension code makes a nested RPC call, the child runtime echoes this same
+host-issued `requestId` as the parent request. The server resolves it only while
+that `(extensionName, requestId)` invocation is active and recovers the retained
+causal edge. There is no second invocation token, bearer capability, or
+caller-supplied authorship record: the request identity is only a precise link
+back to the host-observed call.
+
 This avoids making extension APIs ambient privileged services by accident. An extension may intentionally expose an unauthenticated API, but it has enough caller context to make that an explicit decision. The host does not impose a blanket approval gate on `extensions.invoke`; the extension owns its authorization policy.
 
 Returning `void` is valid — the extension is then fire-and-forget (only useful for side effects, e.g. registering event handlers).
@@ -275,7 +282,7 @@ interface ExtensionContext {
   readonly git: GitClient;
   readonly workspace: WorkspaceClient;
   readonly rpc: RpcClient; // unified RPC for explicit targets
-  readonly workers: WorkersClient; // userland service/DO discovery
+  readonly workers: WorkersClient; // workspace service/DO discovery
   readonly credentials: CredentialsClient;
   readonly webhooks: WebhooksClient;
   readonly approvals: ApprovalsClient;

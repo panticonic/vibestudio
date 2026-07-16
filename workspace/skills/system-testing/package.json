@@ -15,9 +15,11 @@
     "./tests/*": "./tests/*.ts"
   },
   "dependencies": {
+    "@vibestudio/content-addressing": "workspace:*",
     "@workspace/agentic-session": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/runtime": "workspace:*",
-    "@workspace/testkit": "workspace:*"
+    "@workspace/testkit": "workspace:*",
+    "@workspace-skills/vibestudio-vcs": "workspace:*"
   }
 }

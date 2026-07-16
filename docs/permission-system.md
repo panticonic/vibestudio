@@ -28,7 +28,7 @@ credentials. It handles:
 Each permission has:
 
 - `capability`: stable permission type, such as `external-browser-open` or
-  `workspace-repo-write`
+  `workspace-main-advance`
 - `resource.key`: stable grant key
 - `resource.value`: human-readable UI value
 
@@ -72,16 +72,17 @@ imports a project, or otherwise touches host-managed resources, call the
 corresponding runtime API and let the built-in permission flow choose the right
 scope and audit model.
 
-## Workspace Repo Writes
+## Workspace Main Advances
 
-Workspace repo writes use ref-aware authorizers. The caller identity only
-identifies the requester; it does not authorize writes by itself.
+Protected publication uses a main-aware authorizer. Caller identity identifies
+the requester; it does not authorize publication by itself.
 
-The same `workspace-repo-write` capability is used for host-mediated repo
-writes, keyed to the target repo path.
+`workspace-main-advance` is keyed to the protected workspace main resource. The
+host computes the exact changed-ref set and content diff; a content-identical
+semantic advance instead shows the exact previous and proposed event IDs.
 
-This lets Vibestudio show approvals that are specific to the destination repo,
-ref, and change. Generic workspace source repos such as `panels/*`,
-`workers/*`, `skills/*`, and `packages/*` use a push-specific
-`workspace-repo-write` resource key. Unit repos (`apps/*`, `extensions/*`) and
-`meta` keep their richer unit/config approval flows.
+Generic workspace source changes show their affected repositories and paths.
+Unit repos (`apps/*`, `extensions/*`) and `meta` retain their richer unit/config
+approval flows. Whole-repository deletion remains a separate severe
+`workspace-repo-delete` capability, so a main-advance grant cannot authorize
+destructive deletion.

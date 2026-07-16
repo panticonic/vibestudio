@@ -19,6 +19,9 @@ await credentials.store({
 });
 ```
 
+This example uses the userland runtime wrapper. Direct service/RPC callers use
+the exact wire method `credentials.storeCredential`.
+
 For providers with many services or dynamic resources, request the broad
 upstream grant once and store narrow local `bindings`:
 

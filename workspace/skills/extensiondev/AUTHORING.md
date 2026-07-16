@@ -136,7 +136,7 @@ Today's surface (mirrors what panels and workers see; will narrow as capabilitie
 | `ctx.git` | Canonical typed external Git client (`gitInterop.*`) |
 | `ctx.workspace` | Workspace info (`getInfo`, etc.) |
 | `ctx.rpc` | `call(targetId, method, ...args)` for unified RPC targets |
-| `ctx.workers` | Userland service/DO discovery (`listServices`, `resolveService`, `resolveDurableObject`) |
+| `ctx.workers` | Workspace service/DO discovery (`listServices`, `resolveService`, `resolveDurableObject`) |
 | `ctx.credentials` | Stored credentials (OAuth tokens, secrets) |
 | `ctx.webhooks` | Webhook ingress (`webhookIngress` service) |
 | `ctx.notifications` | `show`/`dismiss` notifications in the shell |
@@ -170,20 +170,22 @@ export async function activate() {
 
 Raw Node calls are silent and ambient — the user authorized them once at install. Use `ctx.fs` instead when you want the call to show up in the audit log under the extension's identity, or when you want to ask the original caller for permission per call.
 
-### Sparse context folders — materialize before reading raw disk
+### Exact context folders — provision before reading raw disk
 
-A caller's context working folder (`.contexts/{contextId}/`) is **sparse**: it does
-not contain the whole workspace. A repo's files are written to disk only when
-something materializes them (on first edit, or on demand). Unmaterialized repos are
-simply **absent** — a raw read of one fails with `ENOENT` (or the server's loud
-`MATERIALIZE BUG` assertion), never a silent partial result.
+A caller's context working folder (`.context-projections/v6/{contextId}/`) is one
+complete, authority-published projection of an exact semantic working head. It is
+never a sparse checkout assembled repo by repo. A repository is absent only when
+that exact state does not contain it; lifecycle ensure/fork and every semantic
+mutation publish the complete repository set before returning.
 
 This matters when your extension reads the context folder **outside `ctx.fs`** — a
 ripgrep/find subprocess, `fs.createReadStream`, a recursive `fs.readdir`, etc.
-Before that raw read, declare the **narrowest** scope you need:
+Before that raw read, declare the **narrowest read intent** you need. The first
+call provisions the complete exact context projection; the scope remains useful
+for capability checks and audit semantics, not as a second partial projection path:
 
 ```ts
-// A repo-scoped search needs only that repo — never the whole context.
+// Express what the extension intends to read; provisioning remains context-wide.
 await ctx.fs.ensureMaterialized("panels/chat");        // one repo
 await ctx.fs.ensureMaterialized("panels");             // a section (its repos)
 await ctx.fs.ensureMaterialized(["packages/a", "packages/b"]); // a specific set
@@ -192,9 +194,10 @@ await ctx.fs.ensureMaterialized("all");                // ONLY for a true worksp
 ```
 
 You do **not** need this for `ctx.fs.*` reads (`readFile`/`readdir`/`grep`/`glob`/…):
-those materialize the path's repo on demand automatically. The explicit call is only
-for code that touches the on-disk tree directly. Prefer the narrowest scope — reach
-for `"all"` only for a genuine whole-workspace operation, never as a lazy default.
+those ensure the exact context projection automatically. The explicit call is only
+for code that touches the on-disk tree directly. Prefer the narrowest truthful
+scope for authority and audit clarity; use `"all"` only for a genuine
+workspace-wide read.
 
 ## Health
 

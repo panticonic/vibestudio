@@ -4,8 +4,8 @@ A step-by-step guide for onboarding. The agent should first detect the user's ex
 
 ## Step 0: Detect Experience Level And Setup State
 
-Before anything else, check how many workspaces exist and what is already set
-up. Keep this lightweight and tolerate helper-call failures because some APIs
+Before anything else, inspect the current workspace and what is already set up.
+Keep this lightweight and tolerate helper-call failures because some APIs
 are panel-only or depend on optional services/runtime state.
 
 ```
@@ -14,8 +14,7 @@ eval({ code: `
   import { getGoogleOnboardingStatus } from "@workspace-skills/google-workspace";
   import { getActiveSearchProvider } from "@workspace-skills/web-research";
 
-  const workspaces = await services.workspace.list();
-  const active = await services.workspace.getActive();
+  const config = await services.workspace.getConfig();
   const storedCredentials = await services.credentials.listStoredCredentials().catch(() => []);
   const google = await getGoogleOnboardingStatus()
     .catch(error => ({ error: error instanceof Error ? error.message : String(error) }));
@@ -27,9 +26,7 @@ eval({ code: `
   ))];
 
   return {
-    workspaceCount: workspaces.length,
-    workspaceNames: workspaces.map(w => w.name),
-    active,
+    workspaceId: config.id,
     providerIds,
     storedCredentialCount: storedCredentials.length,
     google,
@@ -49,8 +46,9 @@ eval({ code: `
   resolve to the same workspace source directory; prefer `panels` in docs and
   examples so agents do not mistake it for a host absolute path.
 
-- **`workspaceCount <= 1`** → new user. Start from Step 1, explain concepts thoroughly. Note: in IPC/remote mode `workspace.list()` may return `[]` even when an active workspace exists — treat `workspaceCount === 0` with a valid `active` as a new user too.
-- **`workspaceCount > 1`** → returning user. Greet them briefly, mention their active workspace, and ask what they need. Skip to whichever step is relevant, or point them to the right skill directly.
+- **Little setup evidence** → start from Step 1 and explain concepts thoroughly.
+- **Existing setup evidence** → greet them briefly, mention the current
+  workspace, and ask what they need.
 - Use `providerIds`, Google status, `searchProvider`, `browserImportCount`, and `panelCount` to make the first recommendations specific. A `searchProvider === "duckduckgo"` value is fine for most users; only suggest upgrading if they bring up research, hit rate limits, or ask about search quality.
 
 ## Step 1: Explore Your Workspace
@@ -233,32 +231,13 @@ Then ask the user which browser/profile to import from and which data types they
 - [BOOKMARKS.md](../../extensions/browser-data/references/BOOKMARKS.md) — bookmark browsing
 - [WORKFLOWS.md](../../extensions/browser-data/references/WORKFLOWS.md) — end-to-end recipes
 
-## Step 5: Set Up a Workspace
+## Step 5: Configure This Workspace
 
-If the user wants to organize their work into separate workspaces:
-
-```
-eval({ code: `
-  // List existing workspaces
-  const workspaces = await services.workspace.list();
-  console.log("Workspaces:");
-  for (const ws of workspaces) {
-    const active = ws.name === await services.workspace.getActive() ? " (active)" : "";
-    console.log("  " + ws.name + active);
-  }
-  return workspaces;
-` })
-```
-
-Create a new workspace (optionally forking from an existing one):
-
-```
-eval({ code: `
-  const active = await services.workspace.getActive();
-  const entry = await services.workspace.create("my-workspace", { forkFrom: active });
-  console.log("Created workspace:", entry.name);
-` })
-```
+Listing, creating, deleting, and selecting workspaces are human-shell control
+operations over the stable hub session. They are intentionally unavailable to
+agent eval running inside a selected workspace. If the user asks for one, point
+them to the workspace chooser or the corresponding `vibestudio workspace`
+command rather than attempting a child RPC.
 
 Configure which panels open on first launch:
 
@@ -266,14 +245,6 @@ Configure which panels open on first launch:
 eval({ code: `
   await services.workspace.setInitPanels([{ source: "panels/chat" }]);
   console.log("Init panels set");
-` })
-```
-
-Switch to a workspace (this relaunches the app):
-
-```
-eval({ code: `
-  await services.workspace.switchTo("my-workspace");
 ` })
 ```
 
@@ -295,11 +266,13 @@ eval({ code: `
 })
 ```
 
-Then edit the generated files with Read/Edit/Write tools — each edit is recorded
-as a tracked WORKING change on your context head and projected to disk (no commit
-or build yet). Seal milestones with `vcs.commit({ message })`, preview a build on
-demand with `vcs.previewBuild`, and `vcs.push` to build-gate it into `main` — and
-launch.
+Then edit the generated files through the managed tools. Read
+[vibestudio-vcs](../vibestudio-vcs/SKILL.md), build or test the exact working
+head, commit the complete local application chain, and publish the committed
+event through semantic ancestry/integration validation, approval, and atomic
+protected-ref publication. Builds are explicit advisory checks and
+post-publication projections; a failed activation retains the previous runnable
+artifact.
 
 `openPanel` is part of the portable runtime surface from `@workspace/runtime`;
 it works from server-side eval, panels, workers, and DOs:

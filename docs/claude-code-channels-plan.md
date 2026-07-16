@@ -5,10 +5,13 @@ typecheck host/userland/mobile, all unit suites, and the boundary checker green)
 Rev 2 replaced the earlier `agent-external` participant-class redesign with a userland
 **linked-agent vessel**: the Claude Code session's system identity is a real agent DO,
 and the local process is a thin peripheral attached to it.
-Rev 3 makes the plan **big-bang**: everything below is one scope and one landing — no
-milestone sequencing, no deferred follow-ons, no optional tiers of ambition. The former
-"later" items (Claude Code as a subagent target, adoption mode + plugin, remote context
-mirrors) are in scope and land in the same cut.
+Rev 3 made the plan **big-bang**. Rev 4 deliberately removes plugin/adoption and linked
+managed authoring after provenance recovery found that neither had an enforceable
+invocation or filesystem boundary.
+Rev 4 corrects a false managed-authoring claim discovered during provenance recovery:
+linked processes have no canonical invocation-scoped mutation surface. They are
+read-only reviewers/conversation peers until one exists; the server refuses agent-bound
+managed mutation and eval without an exact causal invocation.
 Companion docs: `docs/ws2-channel-spec.md` (channel substrate), `docs/fork-and-subagents-plan.md`
 (contexts/subagents), `docs/agentic-architecture.md`, `docs/cli.md`,
 `docs/multi-user-wp1-hub-control-plane.md`.
@@ -24,9 +27,9 @@ workspace, not a foreign process:
    every other agent_, with identity, presence, addressing, and a durable trajectory —
    surfaced to Claude Code via its native **channels** mechanism (an MCP server we
    implement).
-3. It has the **full `vibestudio` CLI** available and auto-scoped to its context — and
-   through `vibestudio eval`, **programmatic execution inside the system** (userland,
-   context-scoped), which is the real "full functionality of the running server".
+3. It has the `vibestudio` CLI auto-scoped for **read-only semantic orientation** and
+   channel participation. Managed mutation and eval fail closed: a linked hook report is
+   evidence of a Claude tool call, not an invocation-scoped execution authority.
 4. Its tool-use **permission prompts flow into our approvals system**, so the user
    approves Claude Code actions from the workspace UI or mobile like any other approval.
 5. Everything above works from **one command / one click** — no manual pairing, config
@@ -71,16 +74,16 @@ Two facts anchor the design:
   the _right_ shape for it — same tier as the desktop shell and mobile: paired device
   clients whose power comes from what the server exposes, not from linked-in userland
   code.
-- **Userland placement already has a front door: eval.** `vibestudio eval` executes
-  TS/JS server-side in an `EvalDO` inside workerd, scoped to a session entity's context.
-  Code running there _is inside the system_: it can import workspace packages, use
-  `connectViaRpc`, call services, and touch the context working tree. This — not CLI
-  feature accretion — is the full-functionality surface for an agent.
+- **Userland placement already has a front door: eval, but only from an exactly causal
+  caller.** `vibestudio eval` executes TS/JS server-side in an `EvalDO`. An in-process
+  agent tool invocation carries that edge automatically; a linked external CLI does not,
+  so its eval call is refused rather than retroactively attributed from a hook.
 
 Consequence for the channel integration: the Claude Code session's **system identity
 must live in userland as a real agent vessel DO** (a _linked-agent vessel_, §5). The
 vessel joins channels exactly the way every agent joins — invited, subscribed via the
-shared launch primitives, `agent-do` semantics, heartbeats, fork-cloning — and the local
+shared launch primitives, `agent-do` semantics, response-owned subscription lifetime,
+fork-cloning — and the local
 Claude Code process is a **peripheral attached to its vessel** through a thin bridge.
 This removes any need to redesign the channel participant model, keeps the
 host/userland boundary untouched, and means a dead terminal process degrades to "agent
@@ -98,6 +101,7 @@ Remaining friction points, and the verdict on each (extend, don't work around):
 | No messaging surface in the CLI                       | New `channel` command group over shared schemas (§6.3)                 |
 | Claude Code permission prompts invisible to workspace | Permission relay → approvals service, via the vessel (§7.3)            |
 | No structured trajectory for external agents          | Hooks → vessel → `agentic.trajectory.v1` (§7.4)                        |
+| No exact linked mutation ingress                      | Keep managed paths read-only; do not invent identity transport (§6.6)  |
 
 ## 3. Identity & auth: the `agent` principal
 
@@ -110,8 +114,9 @@ paired human-driven device) so service policies and approval flows can treat aut
 tool use differently from a human at a prompt.
 
 Every `ServicePolicy.allowed` list is reviewed once and updated deliberately (no blanket
-grant). Initial grants: `channel`, `fs`, `vcs`, `eval`, `docs`, `events`, `runtime`
-(scoped methods), `serverLog` (read). Denied by default: auth admin, hostLifecycle,
+grant). Initial grants allow channel participation and read methods on `fs`, `vcs`,
+`docs`, `events`, `runtime`, and `serverLog`. Managed mutations and eval additionally
+require an exact causal invocation and therefore reject linked CLI calls. Denied by default: auth admin, hostLifecycle,
 workspace management. The compile-time parity guard forces the sweep.
 
 Invariant: **the `agent` grant set must remain a subset of what `do` can reach.**
@@ -122,21 +127,24 @@ subset relation against the registered service definitions.
 
 ### 3.2 Entity-scoped agent credentials
 
-New auth surface (extend `authService` + `DeviceAuthStore`):
+Auth surface (`authService` + `DeviceAuthStore`):
 
-- `auth.mintAgentCredential({ entityId, contextId, channelId, ttl?, scopes? })` —
+- `auth.mintAgentCredential({ entityId, ttlMs? })` —
   callable by `extension` (the launch-orchestrator extension, §4.2) and `server`;
   deliberately _not_ by `shell`/`panel`/`agent`, so credentials are only ever minted
   through an orchestrator's prepare flow (with its `ctx.approvals` gate), never ad hoc
   by a device or by a running agent. Returns `{ agentId, agentToken }`.
-  The credential authenticates as caller kind `agent`, principal `agent:<entityId>`,
-  and the RPC layer stamps the binding (entityId, contextId, vessel ref) onto the
-  connection so services and the vessel can enforce scope without trusting
-  client-supplied ids.
+  The credential authenticates as caller kind `agent`, principal `agent:<entityId>`.
+  It stores only credential id, secret hash, entity id, and lifecycle timestamps.
+  The live session entity owns `agentChannelId`, context, and owner; authentication
+  derives the connection binding from that entity and rejects a retired or unbound
+  session. No user, context, channel, scopes, intent, or authorship assertion rides
+  in the credential.
 - Lifecycle follows the entity: `retireEntity` revokes outstanding agent credentials.
   Tokens are refresh-style (same redeemer pipeline as `refresh:<deviceId>:<token>`,
   new prefix `agent:<agentId>:<token>`), redeemed at WS auth exactly like device
   credentials — one auth model everywhere, per the attachable-server design.
+  Mint rotates the entity's single credential and its ephemeral bearer token.
 
 This removes any temptation to hand the raw device credential of the human's CLI pairing
 to an autonomous process. The same credential powers both the bridge (§7) and every
@@ -148,12 +156,12 @@ to an autonomous process. The same credential powers both the bridge (§7) and e
 
 - `shell.open()` / `shell.exec()` gain `contextId?: string`. When set, the extension asks
   the host to materialize the folder (new extension-host capability
-  `workspace.ensureContextFolder(contextId)`, backed by the existing
-  `WorkspaceVcs.ensureContextFolder`) and confines cwd resolution to
+  `workspace.ensureContextFolder(contextId)`, backed by the host's narrow
+  exact-state projection effect) and confines cwd resolution to
   `resolveWithin(contextFolder, parsed.cwd)` instead of the workspace root.
 - Session records and `list()` output carry `contextId`; in context sessions the
-  git-branch probe is replaced by the context's VCS status (branch display = context
-  head via `vcs.contextStatus`, not `.git` reads).
+  Git-branch probe is replaced by semantic context status (display the current
+  working-head summary via `vcs.status({ contextId })`, not `.git` reads).
 - The terminal panel gains a context picker on new-tab/split: "workspace root" (default)
   or any live context, plus "new context…" (creates a `session` entity first). Split
   inherits the parent's context.
@@ -179,8 +187,7 @@ the linked agent is then invited to _that_ channel.
 
 1. Resolve the **context from the channel**: channels are bound to exactly one
    `contextId`, so the session's context is the channel's context. Ensure/create the
-   runtime **entity** (`kind: "session"`, `source: "claude-code"`) in that context;
-   eagerly materialize the context folder.
+   runtime **entity** (`kind: "session"`, `source: "claude-code"`) in that context.
 2. Ensure the **linked-agent vessel** (§5): create/wake the `LinkedAgentWorker` DO for
    this entity and **invite it into the channel with the standard launch primitives**
    (`launchAgentIntoChannel`/`subscribeAgentToChannel` in
@@ -191,43 +198,53 @@ the linked agent is then invited to _that_ channel.
    entity + context + vessel. (The auth service allows this call for `extension`
    callers; the approval gate for first-time agent launches renders through
    `ctx.approvals`, same as shell-extension approvals.)
-4. Write a **launch profile** — a generated directory under
-   `<wsDir>/state/agent-launch/<entityId>/` containing:
-   - `mcp.json` with the bridge entry:
-     `{"mcpServers": {"vibestudio": {"command": "vibestudio", "args": ["claude", "channel-host"]}}}`
-   - `settings.json` with the hooks wiring (§7.4) and policy defaults,
-   - `env` (the variables below),
-   - the `vibestudio-agent` skill made available to the session via settings — the
-     context working tree is never polluted with `.claude/` config.
-5. Return `{ entityId, contextId, channelId, vesselRef, contextFolder, env, argv }`
-   where `argv` is the exact Claude Code invocation:
-   `claude --channels server:vibestudio --dangerously-load-development-channels
---mcp-config <profile>/mcp.json --settings <profile>/settings.json`.
+4. Return one strict, portable **launch declaration**:
+   `{ protocol: "vibestudio.claude-launch.v1", launchId, executable: "claude",
+environment }`. It contains semantic identity and optional subagent duty only. It
+   contains no server URL, context folder, profile directory, skills directory, or
+   already-expanded argv.
+5. The machine that will actually execute Claude validates its local Claude Code
+   version and materializes the declaration below its own disposable launch-state
+   root. That local profile contains `mcp.json`, hook-only `settings.json`, and a
+   mode-`0600` diagnostic `env.json`; its argv points only at those local files. The
+   materializer injects the selected local hub/WebRTC route and profile directory.
+   Workspace skills are served as authenticated MCP resources by the bridge. The launcher removes the profile and calls
+   `release` on exit, launch failure, context mismatch, or denied terminal approval.
 
-Injected environment (single naming scheme, consumed by bridge, CLI, and hooks):
+Portable environment (consumed by bridge, CLI, and hooks):
 
 ```
-VIBESTUDIO_SERVER_URL       HTTP(S) base URL of the workspace server
 VIBESTUDIO_AGENT_TOKEN      agent:<agentId>:<token>   (never the device credential)
 VIBESTUDIO_ENTITY_ID        runtime entity id
 VIBESTUDIO_CONTEXT_ID       context id
 VIBESTUDIO_CHANNEL_ID       primary channel id
+VIBESTUDIO_VESSEL_REF       linked vessel target
 ```
 
-`release({ entityId })` tears down: revoke credential, detach the vessel (agent goes
-offline with proper presence; the vessel and its channel membership persist for
-reattach unless the entity is retired).
+`VIBESTUDIO_SERVER_URL` and `VIBESTUDIO_LAUNCH_PROFILE` exist only in the locally materialized process environment.
+They are never transported in `prepare`.
+
+`release({ entityId, launchId })` revokes only that exact preparation generation's
+credential and removes only its extension-local materialization. A CLI owns and
+removes its exact local materialization. An older process exiting cannot revoke or
+delete a newer launch for the same entity. The vessel goes
+offline through its normal attachment lifecycle; the vessel and channel membership
+persist for reattach unless the entity is retired.
 
 ### 4.3 Launch paths (all call the extension's `prepare`)
 
 - **Terminal panel**: an "Open Claude Code" action on a conversation calls the
   extension over RPC (exactly how the terminal panel drives the shell extension today),
-  then opens a PTY in `contextFolder` with the returned env and argv.
+  materializes the declaration on that host, then opens a PTY in the context projection.
+  The generic launch-adapter result carries one cleanup action that the shell invokes
+  exactly once on exit/disposal and also on approval or spawn failure.
 - **CLI**: `vibestudio claude [--channel <id>]` — calls the extension's `prepare`
   (generic service/extension RPC; the CLI stays Claude-agnostic apart from the command
-  name), then execs Claude Code in the channel's context folder. With no flag, the
-  channel is resolved from the current context (cwd marker / env, §6.2): its existing
-  primary conversation channel. Starting a _new_ conversation is the existing
+  name), verifies the returned context identity against the nearest local binding,
+  materializes locally, and execs Claude Code in that binding's directory. Even with
+  `--channel`, the launcher requires a local binding so Claude's file tools cannot be
+  silently pointed at a different tree. With no flag, the channel is resolved from the
+  binding's existing primary conversation channel. Starting a _new_ conversation is the existing
   conversation-creation flow, after which the agent is invited/launched into it.
 - **Launch adapters (generic shell-extension hook)**: instead of hardcoding
   agent-specific upgrades into the shell extension, it gains one generic extension
@@ -253,26 +270,31 @@ agent vessel whose reasoning loop lives outside the system**: where `AiChatWorke
 Pi in-process, `LinkedAgentWorker` relays to an attached external process. Everything
 else — identity (`do:{source}:LinkedAgentWorker:{entityId}`), `SubscriptionManager`,
 channel envelopes via `onChannelEnvelope`, method provision via `onMethodCall`,
-heartbeats, delivery cursors, fork-cloning, addressing (`shouldRespond` from the vessel
+subscription resources, delivery cursors, fork-cloning, addressing (`shouldRespond` from the vessel
 base) — is **inherited unchanged**. No channel-substrate changes; the
 `participantIsAgentVessel` discriminator, roster, presence, and policies all just apply.
 
-### 5.1 Attachment protocol
+### 5.1 Response-owned bridge protocol
 
-The vessel has an `attachment` state machine: `detached | attached(connectionRef)`.
+There is no attachment lease, heartbeat, detach command, connection watcher, or private
+event callback. The bridge calls `vessel.openBridge({ sessionInfo })`; the returned
+NDJSON response **is** the attachment resource.
 
-- The bridge (§7) connects over WS with the agent credential and calls
-  `vessel.attach({ sessionInfo })`. The RPC layer's entity binding (§3.2) is the
-  authorization — only the credential minted for this entity can attach.
-- While attached, the vessel forwards deliverable conversation input to the bridge via
-  the platform event bus (`rpc.emitToConnection(callerId, connectionId, "linked-agent:event", …)`)
-  — the same layer-1 emit path the channel DO uses for RPC participants, so no new
-  transport machinery. The bridge acks with cursors; the vessel owns the durable
-  delivery cursor exactly as vessels do today.
-- Detach (explicit, connection drop, or heartbeat timeout) → the vessel publishes
-  presence (agent offline/idle), buffers subsequent addressed input, and on reattach
-  resumes from the cursor. Claude Code restarting in the same context folder reattaches
-  to the _same_ vessel: conversation identity survives process churn.
+- The first record is exactly one `subscribed` ACK containing the durable cursors and
+  replay count. No event may precede it. Later records carry deliverable input and
+  permission verdicts.
+- Cancelling the response reader, losing its routed RPC connection, or closing the
+  process releases that exact bridge generation. A replacement `openBridge` fences and
+  closes the prior generation atomically; a late cancel from the old reader cannot
+  detach the new one.
+- The vessel derives online presence from the currently live response. It buffers
+  addressed input durably while no response exists and replays from the last processed
+  turn boundary when a new response opens. Claude Code restarting for the same entity
+  reaches the same vessel and conversation history without preserving a synthetic
+  attachment record.
+- The RPC layer's entity binding (§3.2) authorizes `openBridge`; it is not authorship or
+  intent. Intent remains walkable through the canonical source message → turn → tool
+  invocation chain (§7.4).
 
 ### 5.2 What the vessel decides (semantics stay in userland)
 
@@ -281,9 +303,11 @@ The vessel has an `attachment` state machine: `detached | attached(connectionRef
   session only ever sees input the agent should react to. A Pi vessel and a Claude Code
   session behave identically in a mixed conversation because it is literally the same
   code path.
-- **Trajectory authorship**: the vessel converts attached-process reports (§7.4) into
-  well-formed `agentic.trajectory.v1` sequences — turn framing, ids, idempotency keys —
-  and publishes them. Exactly-once and fork-awareness come from the existing pipeline.
+- **Causal trajectory projection**: the vessel converts attached-process reports
+  (§7.4) into well-formed `agentic.trajectory.v1` sequences — exact triggering message,
+  turn framing, tool request, ids, and idempotency keys — and publishes them. It does
+  not accept or transport an "author" claim; authorship, intent, and blame are queries
+  over those edges. Exactly-once and fork-awareness come from the existing pipeline.
 - **Method provision**: the vessel advertises `prompt({text})`, `interrupt()`,
   `status()` on the channel; calls are relayed to the bridge when attached, and fail
   with a clean "agent offline" terminal when detached.
@@ -295,17 +319,17 @@ The vessel has an `attachment` state machine: `detached | attached(connectionRef
 ### 6.1 Transport: standard RPC over HTTP, WS, and WebRTC
 
 Everything in this plan rides the standard envelope-native RPC (`RpcEnvelope` →
-`ServiceDispatcher`, push via the layer-1 event bus). The vessel↔bridge stream
-(`linked-agent:event`) uses `rpc.emitToConnection` precisely so it inherits every
-transport the RPC layer speaks. `RpcClient` (`src/cli/rpcClient.ts`) gains a third
+`ServiceDispatcher`). The vessel↔bridge link is an ordinary routed streaming RPC
+response, so its lifetime and cancellation inherit every transport the RPC layer
+speaks without a second callback protocol. `RpcClient` (`src/cli/rpcClient.ts`) gains a third
 mode: **WebSocket RPC** to `serverRpcWsUrl` (the server already serves WS RPC for
 panels/app). Selection stays credential/URL-shaped, as today:
 
 - one-shot request/response commands keep HTTP `POST /rpc` (loopback);
-- anything needing server push — the bridge, `channel tail`, `logs --follow` — opens
-  WS on loopback/LAN, or rides **WebRTC** when the credential carries a pairing blob
-  (remote servers). `onEvent`/`stream` become transport-independent client API; the
-  "push is WebRTC-only" special case is deleted.
+- anything needing a long-lived response — the bridge, `channel tail`, `logs --follow`
+  — opens WS on loopback/LAN, or rides **WebRTC** when the credential carries a pairing
+  blob (remote servers). `stream` is the transport-independent client API; resource
+  loss is response termination, not an out-of-band liveness opinion.
 
 **Remote agent auth**: the WebRTC redeemer (`createPairingRedeemer`) accepts the
 `agent:<agentId>:<token>` prefix alongside `refresh:<deviceId>:<token>` — same
@@ -316,36 +340,79 @@ workspace server identically to loopback.
 server host, so a remote human driving the terminal panel still gets a Claude Code
 process on loopback WS with a real local context folder. A Claude Code process on a
 _different_ machine gets full channel-agent connectivity and the full CLI over WebRTC —
-and a real local working tree via **remote context mirrors** (§6.5).
+with the same read-only linked policy — plus a local snapshot export via **remote
+context mirrors** (§6.5).
 
 ### 6.5 Remote context mirrors
 
-Fully-remote sessions get a local working tree, not a consolation prize. New CLI
-surface, built on the primitives that already exist (content-addressed `WorktreeStore`,
-`vcsContextRepoStates` targets, edit-op recording):
+Fully remote sessions can export a local snapshot. The CLI surface is a
+projection client for the canonical semantic workspace state machine
+defined in
+[provenance-aware-diff-merge-plan.md](provenance-aware-diff-merge-plan.md),
+not a second context-local revision protocol:
 
-- `vibestudio context mirror [<contextId>] [dir]` — materializes the context's repos
-  into a local directory over RPC: fetch `{repoPath, stateHash}` targets, stream CAS
-  objects (new `mirror` service methods: `targets`, `objects` — read-side of the
-  projector, exposed over the wire), write the tree, drop the
-  `.vibestudio-context.json` marker so all CLI scoping (§6.2) works identically to a
-  server-side context folder.
-- `--watch` — a file watcher records local changes as **edit ops** against the context
-  head via the existing `vcs.edit` flow (the same uncommitted-edit substrate every
-  context uses), and applies inbound state-hash changes to the local tree. Conflict
-  handling is the context's normal edit/commit semantics — the mirror adds no new
-  merge model; concurrent edits surface exactly like two panels editing one context.
-- Adoption mode (§8.3) composes: on a remote machine, `mirror --watch` + plugin launch
-  inside the mirror directory yields the complete Tier-1 experience — local tools and
-  `vibestudio fs/vcs` see the same tree, so the §8.3 divergence guard passes instead
-  of warning.
+- `vibestudio context mirror [<contextId>] [dir]` — resolves the context's exact
+  working head, pages its repository projections,
+  streams referenced content objects through a narrow projection service,
+  writes the tree, and drops the
+  `.vibestudio-context.json` binding so all CLI scoping (§6.2) works identically to a
+  server-side context folder. The command stops there: it does not infer
+  semantic edits by watching arbitrary filesystem activity. A linked agent may
+  inspect this projection but cannot author managed changes through it.
+
+### 6.6 Managed authoring boundary
+
+There is no supported linked managed-mutation path in this cut. The exact native
+Claude `PreToolUse` hook is durably recorded, including its structural `tool_input`,
+but a hook is an observation: it neither executes the tool through the semantic VCS
+nor scopes a later CLI subprocess. The existing canonical mutation surface is the
+in-process agent tool runner, which automatically wraps service calls in the exact
+trajectory invocation. It cannot be narrowly reused by this external process without
+adding a second tool/identity transport.
+
+Therefore:
+
+- agent-bound managed `fs`/`vcs` mutations and `eval` without a causal parent fail
+  closed at the service boundary;
+- linked instructions expose semantic reads and channel participation, not an
+  edit/commit workflow;
+- native Edit/Write/Bash changes to a materialized or mirrored repository are merely
+  dirty projection bytes and are unsupported;
+- no env-carried invocation ID, ambient current-invocation lookup, filesystem watcher,
+  or post-hoc change inference is added.
+
+This deliberately loses linked implementation/subagent functionality. Restoring it
+requires one canonical invocation-scoped MCP mutation surface that executes the
+semantic operation itself; the hook path remains provenance observation only.
 
 ### 6.2 Context discovery: cwd and env become first-class
 
-Materialized context folders get a marker written at materialization time
-(`WorkspaceVcs.ensureContextFolder`): `<contextFolder>/.vibestudio-context.json` →
-`{ contextId, entityHint?, workspaceId, serverUrl }` (host-owned bookkeeping, excluded
-from VCS projection/diffing).
+Materialized context folders get one strict public identity binding written at
+materialization time (`WorkspaceVcs.ensureContextFolder`):
+
+```json
+{
+  "protocol": "vibestudio.context-binding.v1",
+  "workspaceId": "<durable workspace identity>",
+  "contextId": "<durable context identity>"
+}
+```
+
+`<contextFolder>/.vibestudio-context.json` contains exactly those fields. It has no
+endpoint, credential, entity hint, projection generation, semantic receipt, or
+optional legacy shape. Reach is resolved from the selected paired credential's
+current hub/WebRTC route; an extension process receives its current gateway through
+`VIBESTUDIO_EXTENSION_GATEWAY_URL`. A binding whose `workspaceId` differs from the
+credential is rejected before RPC. Because this file is only a durable locator, it
+does not duplicate agent intent or attribution: those remain projections over the
+semantic command's causal provenance edges.
+
+The host separately keeps disposable crash-recovery state in
+`<contextFolder>/.gad/context-materialization.json`. That private receipt records the
+last materialized semantic basis and repository targets so the host can detect a
+changed basis, remove retired projections, and answer mirror-target reads after a
+restart. It is not a CLI protocol, is never used for reach, and may be rebuilt by
+rematerializing semantic state. Both files are excluded from VCS projection/diffing.
 
 CLI scope resolution precedence (implemented once in `resolveSessionScope`):
 
@@ -374,26 +441,14 @@ vibestudio channel tail <id>                 # live follow over WS
 vibestudio channel roster <id>
 ```
 
-### 6.4 Eval is the full-power surface — treat it that way
+### 6.4 Eval remains in-process and causally scoped
 
-`vibestudio eval` already runs code **inside the system**: server-side in an `EvalDO`
-(userland workerd), scoped to a session entity's context, able to import workspace
-packages, `connectViaRpc` to channels, call services, and operate on the context tree.
-For the Claude Code agent this is the answer to "full functionality of the running
-server" — programmatic, composable, in-context — and the plan hardens it rather than
-duplicating its powers as CLI subcommands:
-
-- **Auto-scoping**: with §6.2, `vibestudio eval` inside a launched session binds to the
-  session's own entity/context (env credential → entity binding) with zero flags; the
-  persistent REPL scope is per-entity, so state survives across invocations within the
-  session.
-- **Policy**: `eval` is in the `agent` caller-kind grant set (§3.1). Eval executes with
-  the _entity's_ scope, not the device's — the entity binding on the connection is what
-  the EvalDO trusts.
-- **Skill**: the `vibestudio-agent` skill (already shipped in dist) is extended with an
-  eval-first section — canonical snippets for channel access, service calls, VCS
-  operations, and structured output from inside the system — and is provisioned into
-  every launched session via the launch profile (§4.2).
+`vibestudio eval` runs code inside an `EvalDO`, but placement alone is not provenance.
+An agent-bound eval must arrive through an exact trajectory invocation, just like a
+managed VCS mutation. In-process agents receive that edge from their tool runner;
+linked CLI subprocesses do not. Linked eval therefore fails closed. Paired direct
+human/device callers retain their authorized eval surface, and the generic CLI docs
+describe it, but linked bridge instructions do not advertise it.
 
 ## 7. The bridge: `vibestudio claude channel-host`
 
@@ -408,14 +463,18 @@ One process, four relays:
 
 - Declares `claude/channel`, `claude/channel/permission`, and tools.
 - `instructions` teach the session the contract: how `<channel source="vibestudio">`
-  events look, that `say` replies to the conversation, that the `vibestudio` CLI —
-  including in-system `eval` — is pre-scoped to this context, and what the meta
-  attributes mean.
+  events look, that `say` replies to the conversation, that read-only CLI discovery is
+  pre-scoped to this context, that mutation/eval fail closed without an in-process
+  causal invocation, and what the meta attributes mean.
 
-### 7.2 Vessel attachment (WS RPC, toward the workspace)
+### 7.2 Vessel response (streaming RPC, toward the workspace)
 
-- Connects with `VIBESTUDIO_AGENT_TOKEN`, calls `vessel.attach`, receives
-  `linked-agent:event` pushes, acks with cursors (§5.1).
+- Connects with `VIBESTUDIO_AGENT_TOKEN` and holds `vessel.openBridge`'s response open.
+  It requires the ACK before binding the hook socket, consumes data records in order,
+  and acks durable delivery cursors (§5.1).
+- Transport recovery opens one replacement response after the routed connection is
+  restored. An unexpected response end is fatal to the channel-host process; there is
+  no independent application retry loop that could mask a broken transport.
 - Inbound → Claude: each vessel-forwarded conversation event becomes
   `notifications/claude/channel`:
 
@@ -450,14 +509,14 @@ profile dir that the bridge listens on (hook processes never need their own serv
 round-trip or credentials). The bridge forwards to `vessel.ingestHookEvent`; the vessel
 authors the trajectory (§5.2):
 
-| Hook             | Trajectory effect (authored by the vessel)                                                                          |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------- |
-| SessionStart     | presence update (active); attach metadata (model, cwd)                                                              |
-| UserPromptSubmit | `message.completed` (role user, source: terminal) — channel readers see the human side of the terminal conversation |
-| PreToolUse       | `invocation.started` (tool name, input summary)                                                                     |
-| PostToolUse      | `invocation.completed` / `invocation.failed`                                                                        |
-| Stop             | final assistant message mirrored as `message.completed` (non-say saliency, §7.5) + `turn.closed`                    |
-| SessionEnd       | detach + presence (offline)                                                                                         |
+| Hook             | Trajectory effect (authored by the vessel)                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| SessionStart     | presence update (active); attach metadata (model, cwd)                                                                            |
+| UserPromptSubmit | exact `message.completed` (role user, source: terminal), then `turn.opened` triggered by that message                             |
+| PreToolUse       | `invocation.started` with tool name and exact structural `tool_input` in `request`                                                |
+| PostToolUse      | `invocation.completed` / `invocation.failed` with a bounded diagnostic output summary, not a claim of exact result retention      |
+| Stop             | final assistant message mirrored as `message.completed` (non-say saliency, §7.5) + `turn.closed`; rejected if no trigger was seen |
+| SessionEnd       | detach + presence (offline)                                                                                                       |
 
 Result: a Claude Code session produces the same durable, forkable trajectory as a Pi
 vessel, rendered by existing projections/cards with no UI special-casing beyond an
@@ -488,7 +547,11 @@ human; `say` → workspace).
 **Turn state (both ways).** `turn.opened`/`turn.closed` publish regardless of which
 surface initiated the turn, so channel participants and the UI always see the agent as
 busy — including busy on behalf of its local human. Channel messages sent mid-turn
-render as pending until the turn closes and delivery lands.
+render as pending until the turn closes and delivery lands. A received channel message
+is not mirrored: the linked `turn.opened` points directly to that canonical message ID,
+including after detached replay. A terminal prompt stores its exact prompt message first
+and points the turn to it. Thus message → turn → invocation is walkable without a second
+prompt copy.
 
 **Permission races (the one real dual-surface conflict).** In interactive mode the
 terminal shows a permission prompt _and_ the relay forwards it (§7.3), so the local
@@ -525,9 +588,10 @@ vessel, and privately runs headless `claude -p --no-tui --channels ...` in the c
 context folder. The linked vessel's
 task duty (`complete` → terminal-settle, §5.2) and §7.4 reporting feed the structured
 progress pipeline unchanged — a Claude Code subagent shows up in the parent's
-SubagentRunCard identically to a Pi subagent, including merge-back of its child
-context. Fan-out, depth gating, and cancellation reuse the existing subagent-run
-machinery without modification; kill/cancel releases the extension-owned headless launch.
+SubagentRunCard identically to a Pi subagent, including semantic review and
+integration of its child context. Fan-out, depth gating, and cancellation reuse
+the existing subagent-run machinery without modification; kill/cancel releases
+the extension-owned headless launch.
 
 The spawn's `config` maps onto the launcher CLI (extension-whitelisted, values
 validated so they can't smuggle flags): `model`, `effort`
@@ -541,48 +605,25 @@ exits without calling `complete`, the extension reports the exit to the linked
 vessel (`reportExternalExit`), which settles the parent's run as `failed` —
 idempotent past a real complete, so runs never dangle as "running".
 
-### 8.3 Sessions we didn't launch: adoption mode + plugin
+### 8.3 Controlled launches only
 
-The vessel is launch-agnostic, so foreign sessions (user's own tmux, VS Code terminal,
-ssh) only need the front half rebuilt: discovery, credentials, configuration.
+An MCP child cannot retrofit filesystem containment around an already-running Claude
+parent. Plugin/adoption mode is therefore deleted, including its per-context hook
+socket and warning-based divergence path. `channel-host` requires the complete
+launcher profile; without it, it refuses and directs the user to `vibestudio claude`.
 
-**Adoption mode (self-orchestrating bridge).** The launch profile becomes an
-optimization, not a requirement. When `vibestudio claude channel-host` starts with no
-`VIBESTUDIO_*` env, it adopts: discovery order env → cwd-upward
-`.vibestudio-context.json` (→ that context's primary conversation channel) → paired
-device credential (workspace/server). It calls the extension's `prepare` itself under
-the device credential (`shell` caller; the extension's `prepare` policy admits
-`shell`/`panel`), which mints the agent credential server-side and runs the standard
-invitation — gated by a **first-adoption approval** in the workspace ("Claude Code
-session on <host> wants to join conversation X as an agent"). Post-handshake it is
-identical to a launched session: same vessel, trajectory, permission relay.
+The launcher executes Claude through Linux bubblewrap. The host filesystem and exact
+context projection are read-only mounts; `/tmp` and one disposable profile-local
+`VIBESTUDIO_LINKED_SCRATCH` directory are writable. Native Edit/Write/Bash attempts
+against the context receive `EROFS`, while scratch stays usable. The launch fails closed
+when bubblewrap is absent or on a platform without an audited backend. `chmod`, Claude
+permission mode, and prompt instructions are not treated as containment.
 
-**The plugin (native distribution).** A `vibestudio` Claude Code plugin (own
-marketplace repo) bundles: the channel entry (spawns `vibestudio claude channel-host`),
-the hooks wiring (§7.4 without our settings injection), the `vibestudio-agent` skill,
-and slash commands — `/vibestudio:connect [channel]`, `/vibestudio:status`,
-`/vibestudio:pair` (interactive QR/deep-link pairing for unpaired machines, guided by
-Claude). Install once, then `claude --channels plugin:vibestudio@<marketplace>` works
-from any directory. Marketplace loading also retires the
-`--dangerously-load-development-channels` requirement once out of research preview;
-our terminal launch (§4.2) switches to the plugin reference too, so there is exactly
-one packaging of the Claude-side glue.
+There are now two explicit states only:
 
-**Degradation tiers** (channels only load at session start — design for tiers, not a
-cliff; the skill teaches Claude to probe its tier and say what's missing):
-
-- **Tier 0 — paired machine, no plugin, no restart**: CLI only. Full fs/vcs/eval plus
-  `channel send/history` — polling-style participation; no push, no vessel presence,
-  no permission relay.
-- **Tier 1 — plugin active**: full linked-agent experience from any directory.
-- **Tier 2 — our terminal launch**: Tier 1 plus context-scoped PTY, zero-setup env,
-  and launch-adapter enrichment.
-
-**cwd/context divergence guard.** A foreign session may sit outside the context
-folder, so Claude's local file tools would touch different bytes than `vibestudio
-fs/vcs` (server-side context tree). Adoption warns loudly on mismatch and requires an
-explicit `--channel` to proceed; it never silently binds a session to a tree it isn't
-looking at.
+- paired CLI, with no linked vessel or linked trajectory;
+- controlled `vibestudio claude` launch, with vessel, exact hook provenance, and
+  OS-enforced read-only projection.
 
 ## 9. Breaking-changes register (for explicit review)
 
@@ -592,17 +633,25 @@ looking at.
 2. **Shell extension API**: `open`/`exec`/session records gain `contextId`; cwd
    confinement becomes context-folder-relative for context sessions; `list()` payload
    shape changes. Terminal panel updated in the same change.
-3. **CLI scope resolution**: precedence becomes flag > env > cwd marker > default
+3. **CLI scope resolution**: precedence becomes flag > env > cwd binding > default
    session file. Behavior change for anyone relying on the implicit `default` session
-   while standing in a context folder.
-4. **CLI transport**: `RpcClient` unifies push (`onEvent`) across WS/WebRTC; the
-   "push is WebRTC-only" special case is removed (internal API change).
+   while standing in a context folder. The only supported paired-device credential
+   schema stores the selected durable `workspaceId`; named session records do the same
+   and compare identity by `serverId` + `workspaceId`, never by mutable workspace name.
+   Earlier credential, session, and endpoint-bearing binding shapes are rejected rather
+   than migrated.
+4. **CLI transport**: `RpcClient.stream` carries response-owned resources across
+   WS/WebRTC; the linked bridge no longer has a transport-specific push callback
+   (internal API change).
 5. **Auth surface**: new token prefix `agent:` in both the WS-auth redeemer and the
    WebRTC pairing redeemer (`createPairingRedeemer`); anything pattern-matching token
    prefixes must be updated. Entity binding stamped on agent-authenticated connections
    is new connection state.
-6. **`ensureContextFolder`** now writes `.vibestudio-context.json` into every
-   materialized context folder; the projector/diff layer must ignore it.
+6. **Context projection protocol**: `ensureContextFolder` writes the strict
+   `vibestudio.context-binding.v1` identity binding into every materialized context
+   folder, while its disposable materialization receipt lives privately under
+   `.gad/`. The projection epoch is bumped; no endpoint-bearing marker or legacy
+   parser remains. The projector/diff layer ignores both host-owned files.
 7. **Approvals service**: new `requestExternal` method callable by `do`; approval
    payloads gain the external-agent capability shape.
 8. **`vibestudio.yml` / extension registry**: new `linked-agent` worker declaration;
@@ -614,8 +663,11 @@ looking at.
 10. **`spawn_subagent` tool schema**: gains `agentKind`; the subagent pipeline's
     child-bring-up branches on it. The claude-code extension owns the headless
     process launch privately; no generic runtime process surface is added.
-11. **New `mirror` service** (host): read-side projection over the wire (`targets`,
-    `objects`) + edit-op writeback path used by `context mirror --watch`.
+11. **New narrow mirror projection service** (host): streams content objects
+    currently reachable from the agent's host-bound context. Reachability is
+    derived for each request, so it does not depend on a prior discovery call or
+    an in-memory authorization registry. Semantic writes are not part of this
+    service.
 
 (Channel substrate: **no breaking changes** — rev 2 deliberately leaves the participant
 model, wire protocol, and schemaVersion untouched.)
@@ -623,10 +675,9 @@ model, wire protocol, and schemaVersion untouched.)
 ## 10. Big-bang implementation
 
 Everything in this plan is **one scope, one integration branch, one landing**. There
-are no milestone boundaries, no partial ships, and no deferred items: the linked-agent
-vessel, context terminals, the extension, the bridge, permission relay, `channel` CLI
-group, adoption mode, the plugin, remote context mirrors, and the Claude Code subagent
-target all merge in the same cut, with the breaking changes of §9 applied
+are no compatibility paths: the linked-agent vessel, context terminals, extension,
+contained bridge, permission relay, `channel` CLI group, remote context mirrors, and
+Claude Code reviewer-subagent target merge in the same cut, with §9 applied
 simultaneously and replaced paths deleted outright (dead-code audit included in the
 cut, per project policy).
 
@@ -636,25 +687,25 @@ shipping order):
 - **W1 Identity & transport** — `agent` caller kind + full policy sweep + `agent ⊆ do`
   policy test, `auth.mintAgentCredential` + connection entity binding, WS transport in
   `RpcClient`, `agent:` prefix in both redeemers (WS + WebRTC).
-- **W2 Linked-agent vessel** — `workspace/workers/linked-agent/`: attachment state
-  machine, addressing gate, trajectory authorship, method provision, task duty,
-  presence/cursor semantics.
+- **W2 Linked-agent vessel** — `workspace/workers/linked-agent/`: one response-owned
+  bridge resource, addressing gate, causal trajectory projection, method provision,
+  task duty, presence/cursor semantics.
 - **W3 Context terminals & orchestration** — shell/panel `contextId`, launch-adapter
   registry (replacing `detectAgent`'s table), `@workspace-extensions/claude-code`
-  (prepare/release, launch profiles), context markers, CLI scope precedence,
+  (prepare/release, launch profiles), context bindings, CLI scope precedence,
   `vibestudio claude`.
-- **W4 Bridge & plugin** — `vibestudio claude channel-host` (MCP channel server,
-  vessel attachment, hooks emit, say/complete, permission relay, adoption mode with
-  discovery + divergence guard), the `vibestudio` Claude Code plugin (channel entry,
-  hooks, skill, slash commands, pairing flow); §4.2 launch references the plugin.
+- **W4 Contained bridge** — `vibestudio claude channel-host` (MCP channel server,
+  response stream, hooks emit, say/complete, permission relay) behind one fail-closed
+  bubblewrap launch. Unmanaged adoption/plugin paths are deleted.
 - **W5 CLI surfaces** — `channel` group (list/history/send/tail/roster), remote
-  context mirrors (`context mirror [--watch]`, `mirror` service), eval auto-scoping,
-  skill rewrite (eval-first, tier probing).
+  context snapshot export (`context mirror`, `mirror` service), explicit linked
+  read-only boundary, and skill rewrite (tier probing).
 - **W6 Approvals & UI** — `approvals.requestExternal`, dual-surface race resolution,
   roster/card badges, terminal↔conversation linking, SubagentRunCard parity for
   Claude Code subagents.
 - **W7 Subagent target** — `spawn_subagent` `agentKind: "claude-code"`, extension-owned
-  headless launch, terminal-settle integration.
+  headless reviewer/orienter launch, terminal-settle integration. It cannot implement
+  managed changes until §6.6 has one canonical mutation surface.
 
 Construction dependencies: W1 → everything; W2 → W4/W6/W7; W3 → W4/W7. W5 is
 independent after W1.
@@ -666,23 +717,25 @@ together, plus typecheck, unit suites, and the boundary checker:
    server; `auth.getConnectionInfo` shows kind `agent` with entity binding; the
    `agent ⊆ do` policy test holds.
 2. A linked vessel exchanges messages and method calls with a Pi vessel on a shared
-   channel; detach/reattach preserves presence and cursor resume.
+   channel; response cancellation removes presence, a replacement response resumes the
+   cursor, and cancellation of the old generation cannot tear down the replacement.
 3. Launching from a conversation (panel action or `vibestudio claude --channel`)
-   opens Claude Code in the channel's materialized context folder; `vibestudio vcs
-status` and `vibestudio eval` inside it need no flags.
+   opens Claude Code in the channel's materialized context folder; read-only
+   `vibestudio vcs status` needs no flags, while eval and managed mutations refuse
+   without an exact causal invocation.
 4. A panel message reaches the live session as a `<channel>` event; the reply lands in
    the conversation; the trajectory shows turns, tool invocations, and mirrored final
    messages; mid-turn channel messages queue to the next turn boundary.
 5. A Claude Code `Bash` permission is approved from the workspace UI; a
    terminal-answered permission auto-resolves its workspace approval card.
-6. On a machine with only a paired CLI, the plugin launch from inside a context folder
-   joins after a workspace-side first-adoption approval; from a non-context directory
-   it refuses without `--channel` and warns about divergence.
-7. On a second machine over WebRTC: `context mirror --watch` + plugin launch inside
-   the mirror yields a working session whose local edits appear as context edit ops in
-   the workspace.
-8. A Pi parent spawns a Claude Code subagent; progress folds into its SubagentRunCard;
-   `complete` settles; the child context merges back.
+6. An unmanaged `channel-host` refuses before adopting identity. A controlled launch
+   proves native context writes fail with `EROFS` and explicit scratch writes pass.
+7. On a second machine over WebRTC: `context mirror` exports the exact context
+   snapshot and establishes zero-flag read-only CLI scoping; managed mutation is
+   refused without a watcher or filesystem reconstruction fallback.
+8. A Pi parent spawns a Claude Code reviewer subagent; progress folds into its
+   SubagentRunCard; `complete` settles; any implementation request returns to the
+   in-process parent.
 
 ## 11. Risks & open questions
 
@@ -714,7 +767,6 @@ status` and `vibestudio eval` inside it need no flags.
   channels; the
   session's context derives from the channel. Fresh isolated contexts come only from
   the subagent/fork machinery.
-- **Resolved (2026-07-06, rev 2)**: the agent's system identity lives in userland as a
-  vessel DO; the CLI remains a thin device client, and in-system programmatic access is
-  `vibestudio eval` (EvalDO, userland, entity-scoped) rather than linking userland code
-  into the CLI.
+- **Corrected (2026-07-15, rev 4)**: the agent's system identity lives in userland as a
+  vessel DO, but identity does not supply mutation causality. Linked eval and managed
+  mutation remain unavailable until one invocation-scoped MCP execution surface exists.

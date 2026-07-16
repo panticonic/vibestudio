@@ -28,7 +28,7 @@ the owning artifacts, and the verification gates for future maintainers.
 | WP | Outcome | Primary artifacts |
 | --- | --- | --- |
 | WP1 zero-config signaling | Default signaling is centralized and used by server spawn, CLI pairing, mobile dev, and smoke scripts. Self-hosted endpoints use the canonical flag or environment variable. | `packages/shared/src/connect.ts`, `scripts/cli/lib/pair-server.mjs`, `docs/webrtc-deployment.md` |
-| WP2 identity/preflight | `identity.pem` is the only accepted DTLS identity. Doctor reports missing/corrupt current identities; repair replaces that one file deliberately. | `src/node/webrtc/cert.ts`, `src/node/webrtc/nodeDatachannelPeer.ts`, `scripts/cli/remote-doctor.mjs`, `scripts/cli/remote-repair-identity.mjs` |
+| WP2 identity/preflight | `identity.pem` is the only accepted DTLS identity. Doctor checks hub control by default or an explicitly selected child. Repair may rotate only an explicit workspace child; hub trust must be restored from its exact backup. | `src/node/webrtc/cert.ts`, `src/node/webrtc/nodeDatachannelPeer.ts`, `scripts/cli/remote-doctor.mjs`, `scripts/cli/remote-repair-identity.mjs` |
 | WP3 remote deploy | SSH deploy/status/log/update/remove automation is implemented with a user systemd unit and version-pinned artifacts. | `scripts/cli/remote-deploy.mjs`, `src/cli/client.ts`, `docs/cli.md`, `workspace/skills/remote-access/SKILL.md` |
 | WP4 invites | Invite creation returns the complete link shape and supports local loopback admin minting for colocated server CLI use. | `packages/service-schemas/src/auth.ts`, `src/server/services/authService.test.ts`, `src/server/hubServer.ts`, `src/cli/remoteClient.ts`, `scripts/cli/lib/connect-grammar.generated.mjs` |
 | WP5 desktop Connect a device | The desktop shell exposes paired-device management, invite creation, QR/pair URL display, countdown, copy, and revoke. | `workspace/apps/shell/components/PairedDevicesSection.tsx`, `workspace/apps/shell/components/ConnectionSettingsDialog.tsx`, `workspace/apps/shell/shell/client.ts`, `workspace/apps/shell/SKILL.md` |
@@ -44,7 +44,7 @@ the owning artifacts, and the verification gates for future maintainers.
 vibestudio remote deploy <user@host> [--artifact <tgz>] [--signal-url <url>] [--port 3030]
 vibestudio remote deploy status|logs|update|remove <user@host>
 vibestudio remote doctor [--signal-url <url>] [--workspace <name> | --identity <identity.pem>]
-vibestudio remote repair-identity --yes [--workspace <name> | --identity <identity.pem>]
+vibestudio remote repair-identity --workspace <name> --yes
 vibestudio remote pair "https://vibestudio.app/pair#..."
 vibestudio remote invite-user --handle <handle> --workspace <name>
 vibestudio remote pair-device [--workspace <name>]

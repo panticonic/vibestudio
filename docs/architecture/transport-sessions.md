@@ -10,12 +10,47 @@ Vibestudio has two identity layers on every RPC transport:
 Code that stores state across process restarts may store `callerId`, panel IDs,
 tokens, and parent/owner relationships. It must not store `connectionId`.
 
+## Hub Control And Workspace Reach
+
+A paired device has one durable identity but two distinct WebRTC reaches:
+
+- The **control reach** terminates at the server hub. Pairing invite rooms and
+  durable device control rooms live here. The client keeps this reach stable
+  while it switches workspaces.
+- The **workspace reach** terminates directly at one workspace child. Children
+  own only device and user rooms for workspace RPC; they do not redeem pairing
+  invites or host a second control plane.
+
+Redeeming an invite atomically turns that same hub-owned invite room into the
+new device's durable control room in the identity database. The authentication
+result returns the new device credential and a one-time
+`PairingContext { workspaceId }`. That context is the exact target selected by
+the invite issuer; it is routing input, not authorship, authorization, or an
+ambient active-workspace hint.
+
+The client then calls `hubControl.routeWorkspace({ workspaceId })` over the
+control connection. The response contains the selected child's
+`workspaceReach` and no replacement control reach. A later workspace switch
+uses the same operation and replaces only the saved workspace reach. Never
+infer the target from a display name, the most recently opened child, or
+the child that happened to be reachable during pairing.
+
+There is no proposed device credential, child pairing activation journal,
+`controlReach` route field, or transport capability between these steps. The
+device credential authenticates identity; the two reaches say where its
+control and workspace sessions terminate.
+
 ## Event Delivery
 
 The event service has two independent delivery paths.
 
-`emit(event, payload)` is pub/sub broadcast. It only reaches sessions that
-called `events.subscribe(event)`.
+`emit(event, payload)` is watched broadcast. It only reaches live
+`events.watch([...], watchId)` responses whose topic set contains the event. The
+response body is the membership resource; cancelling it removes exactly that
+watch. Reopening the same `watchId` atomically replaces its prior topic set.
+Event records carry a monotonic sequence so the client can drain an old response
+and start its replacement without losing or duplicating a broadcast. Snapshot
+providers run only after the replacement has been registered.
 
 `emitToCaller(callerId, event, payload)` is direct caller delivery. It bypasses
 the subscription table and sends to every live session for that durable caller.
@@ -32,30 +67,31 @@ connection-specific delivery explicitly.
 
 ## Session Registration
 
-`RpcServer` registers an `EventSession` for every authenticated WebSocket.
-`EventSession` is the live-session abstraction used by direct delivery. Its
-`connectionId` is only valid while the transport instance is alive.
+`RpcServer` registers exactly one direct event session for each authenticated
+`callerId` + `connectionId`. Direct messages use the ordinary `ws:rpc` event
+envelope, so they are received by the transport's normal RPC event listener.
+Replacing or closing the transport releases that exact session; a late close
+from the replaced socket cannot unregister its successor.
 
-In-process transports that do not have a WebSocket, such as the Electron shell
-IPC subscriber, may register a direct subscriber through `registerSubscriber`.
-Those subscribers still occupy an ephemeral session slot in the event service.
+Connectionless response streams can own watches, but they are not transport
+sessions and are never entered into the direct-address indexes.
 
-Event-name subscriptions are separate from direct delivery. Unsubscribing from
-an event removes only pub/sub membership for the current connection; it does not
-remove direct-address reachability for the caller/session.
+Event watches are separate from direct delivery. Ending a watch response removes
+only that response's watched topics; it does not remove direct-address
+reachability for an authenticated WebSocket session.
 
 ## Recovery
 
 Recovery has two different semantics:
 
-- `resubscribe` is state recovery. It represents current desired subscription
-  state. Late handlers may run immediately after a completed resubscribe for the
-  current generation.
+- `resubscribe` is state recovery. Response-owning clients reopen their current
+  desired watch after the transport reports a recovered session.
 - `cold-recover` is an edge-triggered server-restart repair event. Late handlers
   must not run retroactively, because no new restart happened for them.
 
-Handlers should be idempotent. Replay and resubscribe paths must tolerate
-duplicate, delayed, and missing messages around reconnect boundaries.
+Handlers should be idempotent. A watch replacement keeps its stable logical ID,
+opens the new response before retiring the old one, drains the old response to
+its terminal, and deduplicates broadcast records by sequence.
 
 ## Ownership
 
@@ -65,16 +101,23 @@ Panel ownership is durable only at caller level:
 panelId -> ownerCallerId
 ```
 
-If a handoff has a remembered owner connection, code may try that connection
-first and then fall back to caller-wide delivery if the connection is gone.
-Persisted records should only retain `ownerCallerId`; the currently live
-session is discovered at runtime.
+A handoff that requires one concrete session must use its authenticated
+`connectionId` and fail when that session is gone. It must not silently widen to
+caller-wide delivery. Caller-wide fanout is a separate, explicit product choice.
+Persisted ownership records retain only `ownerCallerId`; ephemeral connection
+selection is discovered and validated at runtime.
 
 ## Invariants
 
 - Never persist `connectionId`.
+- Keep the hub control reach stable and replace only workspace reach on route.
+- Route by exact `workspaceId`; never infer the pairing target from reach.
 - Never assume one `callerId` means one live connection.
 - Use `emitToCaller` for caller-wide direct delivery.
 - Use `emitToConnection` for one transport instance.
 - Treat `resubscribe` as stateful and `cold-recover` as edge-triggered.
-- Keep pub/sub subscriptions and direct-address reachability independent.
+- Keep response-owned watches and direct-address reachability independent.
+- Fence incompatible peers with RPC contract version 2; transport byte
+  compatibility does not imply event/service-contract compatibility.
+- Give ordinary streams a body-idle deadline. Long-lived streams must opt out
+  explicitly with `bodyIdleTimeoutMs: null`.

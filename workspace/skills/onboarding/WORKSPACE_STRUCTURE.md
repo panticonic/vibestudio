@@ -1,6 +1,8 @@
 # Workspace Directory Structure
 
-A Vibestudio workspace is organized into source directories backed by a shared GAD VCS state graph. This structure enables isolated context folders where agents can safely read and write files.
+A Vibestudio workspace is organized into source directories backed by one
+semantic provenance/VCS graph. Isolated context folders materialize exact state
+nodes without creating parallel histories.
 
 ## Layout
 
@@ -34,8 +36,10 @@ source/
   templates/            ← Panel/worker scaffolding templates
   projects/             ← Plain editable repos, not runtime units
 state/
-  .contexts/            ← Per-context folder copies
-  .cache/               ← Build cache
+  .context-projections/
+    v5/                 ← Current-epoch disposable context projections
+  git-checkouts/        ← Operational Git interchange; never workspace source
+  build-sources/        ← Disposable exact semantic/CAS build projections
   .databases/           ← workerd Durable Object SQL state
 ```
 
@@ -49,47 +53,40 @@ state/
 Workspace-wide onboarding lives in `skills/onboarding/` because it describes the
 whole workspace rather than the `meta/` config repo itself.
 
-Like every other source directory, `meta/` is tracked by workspace VCS. This means:
+Like every other source directory, `meta/` participates in the workspace-wide
+semantic VCS. This means:
 
 - It is readable from any context (materialized into the context folder on demand)
-- Agents can edit and commit changes on their context VCS head
-- Pushing `meta/` into its `main` triggers rebuilds and config reloads
-- External git remotes declared under `git.remotes` are imported at startup
-  when missing, then materialized into `.git/config` for interop checkouts. Prefer
-  `git.setSharedRemote(path, { name, url })` for targeted approval and
-  propagation instead of editing a context-local remote by hand. See
+- Agents can author local applications and commit their complete context chain
+- Publishing the committed workspace event triggers affected rebuilds and
+  config reloads
+- External Git upstreams are operationally materialized below
+  `state/git-checkouts/`, never in workspace source. Startup asks the configured
+  provider's `upstreamStatus` and imports only `not-materialized` rows as
+  unpublished semantic candidates. Prefer `git.setSharedRemote(path, remote)`
+  for targeted approval instead of editing an operational checkout by hand. See
   [EXTERNAL_GIT_PROJECTS.md](EXTERNAL_GIT_PROJECTS.md) for config shape,
   approvals, branch declarations, and private repo retry behavior.
 
 ## Context Folders
 
 When a panel or agent session starts, it gets a **context folder** — an isolated
-working tree backed by a context VCS head (`ctx:<contextId>`). Each context can
-read and write files without affecting workspace source or other contexts.
+materialization of one context's working state. Each context has one committed
+event and an exact event/application working head. The disk tree is a
+disposable projection; semantic history lives only in the context graph.
 
-Workspace source changes follow a three-layer build-on-push model on your
-context head:
+Managed edits author changes and append local applications. Comparison and
+integration account for incoming changes in small local decisions; commit
+consumes the complete local chain. Run explicit checks against the context for
+advisory confidence. Protected publication validates semantic ancestry and
+integration, obtains approval, and atomically advances `main`; builds react as
+separate projections. Read
+[vibestudio-vcs](../vibestudio-vcs/SKILL.md) before operating on source.
 
-- **edit** — `vcs.edit` (the `edit`/`write` tools) applies each change as one
-  atomic GAD transition that lands WORKING content on your context head and
-  projects it to disk. No commit, no build, not in `vcs.log`.
-- **commit** — `vcs.commit({ message })` folds your uncommitted working edits
-  into a per-repo snapshot on the context head. Still no build; `main` does not
-  move.
-- **push** — `vcs.push({ repoPaths })` is a fast-forward-only advance of `main`,
-  gated on a successful build of the committed content. This is the only step
-  that produces an authoritative build and recomputes effective versions for the
-  workspace. Use `vcs.previewBuild({ repoPaths })` between edit and commit to
-  dev-build working content without writing a baseline.
-
-Do not edit via `fs.writeFile` and expect it to build; a stray write never lands
-on the head. Existing contexts do not auto-reset when another context pushes.
-
-Context heads are build-addressable, but only when requested explicitly. Use
-`ref: "ctx:<contextId>"` (or a `state:<stateHash>` ref) when you intentionally
-want to build/test code from that context branch. A generic launch in a context
-must omit `ref`: `contextId` gives the runtime access to the context filesystem
-and state, while code still comes from the main workspace build.
+Use `ref: "ctx:<contextId>"` only when intentionally building/testing code from
+that moving context selector. `contextId` alone selects runtime state/files, not
+code provenance. Content-only build selectors are valid for rendering and
+builds but cannot be used as semantic ancestry or mutation authority.
 
 ## Trusted Apps And Extensions
 
@@ -123,17 +120,28 @@ third-party libraries, or larger patch branches an agent is preparing.
 
 Plain projects are still external Git-backed projects when imported that way:
 
-- They appear in the workspace tree once initialized or cloned.
-- They are readable from any context (materialized on demand like other source trees).
+- They appear as shared semantic workspace source only after the exact import
+  candidate is integrated, committed, and published. A host clone by itself is
+  an interchange artifact, not a workspace-state transition.
+- Once published, they are readable from contexts through the ordinary semantic
+  state/materialization path.
 - Shared remotes declared under `git.remotes.projects.<repo>.<remoteName>` are
-  materialized into their `.git/config`. Use object declarations with `url` and
-  `branch` when a workspace project must clone a non-default branch.
-- `git.importProject({ path: "projects/name", remote })` creates a canonical
-  workspace project from a remote and records its shared remote plus matching
-  upstream (`autoPush: false`) in `meta/vibestudio.yml`.
-- Missing configured remotes are imported automatically at startup;
-  `git.completeWorkspaceDependencies()` is available as an explicit retry or
-  backfill operation.
+  configured in the operational checkout under `state/git-checkouts/`. Use
+  object declarations with `url` and `branch` when a workspace project must
+  clone a non-default branch.
+- `git.importProject({ path: "projects/name", remote })` coordinates remote
+  configuration/clone and crosses into the semantic graph through one explicit
+  `vcs.importSnapshot` work unit. It returns a committed candidate context and
+  event without advancing protected `main`. Later pulls use the same exact
+  snapshot import for that stable repository identity; each import authors
+  ordinary changes and follows the same incremental integration path.
+- Startup imports only configured upstreams whose provider status is
+  `not-materialized`. Other states are skipped as `already-materialized`;
+  `git.completeWorkspaceDependencies()` uses the same provider-observed rule as
+  an explicit retry/backfill. Both produce candidates, never an import-only
+  publication.
+- Build V2 reads the published or candidate semantic state through the CAS. It
+  never builds from the operational Git checkout.
 - They are not launchable runtime units and do not become `@workspace/*`
   packages.
 
@@ -146,10 +154,12 @@ credentialed private repo retries, see
 The `workspace/` directory in the Vibestudio source repo is a **template**, never used directly as a live workspace. When a workspace is created:
 
 1. Source directories are copied from the template into `~/.config/vibestudio/workspaces/{name}/source/`
-2. Source directories are ingested into the workspace GAD VCS state graph
+2. Source directories are admitted by exact `vcs.importSnapshot` work units
+   with explicit repository/file identities, one external snapshot tuple per
+   source, and ordinary repository/file changes
 3. State directories are scaffolded fresh
 
 In dev mode (`pnpm dev`), an ephemeral workspace is created from the template
-each run. Workspace-unit changes pushed into `main` in that generated workspace
+each run. Workspace events published to `main` in that generated workspace
 are mirrored back into the checked-in `workspace/` template, so accepted source
 changes made during a dev session persist into the source checkout.

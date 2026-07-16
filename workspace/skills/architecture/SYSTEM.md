@@ -46,7 +46,7 @@ Panels/workers are sandboxed by construction; extensions and apps cross the
 trust line, which is why their install/update/push flows carry richer,
 elevated approvals.
 
-## RPC vs userland services
+## RPC vs workspace services
 
 Two deliberate systems, non-overlapping:
 
@@ -54,14 +54,14 @@ Two deliberate systems, non-overlapping:
   target, one value or one streamed Response. Used for host service calls
   (`fs.read`, `credentials.fetch`, `blobstore.*`), credential proxying, model
   fetches.
-- **Userland services** are workspace-declared workers/DOs resolved by
+- **Workspace services** are workspace-authored workers/DOs or product-sealed services resolved by
   protocol (declared in `meta/vibestudio.yml`, resolved via
   `workers.resolveService`). Conversation-shaped: multiple subscribers,
   replay, participants, structured streaming chunks. Channels are the
   canonical example.
 
 Rule of thumb: point-to-point call/response → RPC; anything with subscribers,
-replay, or durable multi-participant state → declare a userland service.
+replay, or durable multi-participant state → declare a workspace service.
 
 ## Transport identity
 
@@ -117,8 +117,8 @@ identity do through the permission system?" — see SECURITY.md.
 
 ## Contexts
 
-A context is an isolated execution environment: its own materialized **context
-folder** (a projection of workspace state) and context id. Panels sharing a
-context share a filesystem; the chat agent and the panels it spawns typically
-share one. Your context is a **pinned snapshot** — reads do not drift as
-`main` advances under you (see STORAGE.md for the VCS semantics).
+A context is an isolated execution environment with its own materialized
+**context folder**, context ID, committed event, and working head. Panels
+sharing a context share a filesystem; the chat agent and the panels it spawns
+typically share one. Reads stay on that exact event/application state as
+`main` advances elsewhere (see STORAGE.md for the VCS semantics).

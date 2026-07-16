@@ -1,106 +1,115 @@
 ---
 name: provenance-orientation
-description: Orient before you act — what provenance("session") returns, what each item means, the follow-on handles, and the moments to call it.
+description: Orient in Vibestudio's semantic VCS graph from an exact session, managed file, event, application, work unit, change, decision, command, trajectory invocation, or typed node. Use when origin, causation, incorporation, copy lineage, integration decisions, external import boundaries, what is actually known, or history could change the next action.
 ---
 
-# Provenance Orientation
+# Provenance orientation
 
-`provenance("session")` is the **wide view** the per-file provenance blocks
-cannot give you: open contradictions in what you have touched, other sessions'
-uncommitted edits near your work, main movement on your repos since you
-started, and the claims most active around your neighborhood. It is **pull** —
-a query you call, never a briefing pushed at turn open — because a block that
-renders every turn is skimmed by the third turn.
+Read the canonical [Vibestudio VCS skill](../vibestudio-vcs/SKILL.md) before
+walking code history. Provenance is the adjacency of the same semantic VCS
+records used for editing and integration, not a parallel memory product.
 
-It is the same tool, item shape, and paging contract as the per-file block
-(`provenance("<path>")`); it just computes over your session's whole touch-set
-instead of one file.
+## Start with the smallest exact question
 
-## When to call it (the four trigger moments)
-
-Reach for it at the moments where the story is bigger than the file in front
-of you:
-
-1. **Task start** — before you know the terrain.
-2. **Before you settle on a plan** — so a contradiction or a concurrent edit
-   changes the plan while it is still cheap to change.
-3. **After a resume or compaction** — you have lost the working context the
-   in-loop history held; this rebuilds it from the durable graph.
-4. **Whenever a per-file exception line hints beyond the file at hand** — a
-   `⚠ contradicts` or a `session:… has N uncommitted edits` line points at a
-   wider situation; follow it up here.
-
-It is one call, exceptions-first, and cheap (it seeds from the session
-touch-set the DO already reconstructed, served warm where the cache covers it).
-Skipping it saves less than it risks.
-
-## What it returns
+Use the friendly tool for a session, managed path, or known semantic identity:
 
 ```ts
-provenance("session")
-// → { items, shown, total, nextCursor? }
+provenance({ target: "session" });
+provenance({ target: "packages/example/src/index.ts" });
+provenance({ target: "change:…" });
 ```
 
-Each `item`:
+The tool resolves a managed path to the current exact state and stable file
+identity, inspects the selected node, then calls `vcs.neighbors`. Its compact
+`node · …` line appears before the direct edges so intent, command state, and
+invocation metadata are visible without a second lookup. For a file it also
+shows a small exact `vcs.history` preview of the changes that touched that stable
+identity; continue from a returned change node into the causal graph.
 
-```ts
-{
-  line: string,       // one bounded, pre-rendered insight line ending in a handle
-  handle: string,     // the follow-on you can pass back to provenance(...)
-  kind: string,       // claim | commit | file | session | ...
-  exception: boolean,  // true = must-act, rendered at the top regardless of score
-  score: number,      // density rank (exceptions ignore this)
-}
-```
+It accepts these semantic shorthands:
+`event:`, `application:`, `work-unit:`, `change:`, `decision:`, and `command:`.
+Pass `inspect.root`, `neighbors.root`, or either endpoint of a returned edge as
+`root` unchanged. The inspected `node` is a value view, not a reusable root.
+Invocation, turn, and message roots require their complete typed
+`{ kind, logId, head, ...Id }` coordinate returned by an edge; their local IDs
+alone are not global graph coordinates.
 
-`shown` / `total` are the `K of M` count: the view is intentionally partial —
-top items plus a count of the withheld tail. Page the tail with the `after`
-cursor (`provenance("session", { after })`); `nextCursor` carries the next
-page's cursor when more remains.
+Call provenance at a real decision boundary: before relying on unfamiliar code,
+integrating another context, explaining an edit, or attributing copied content.
+A normal file read is enough for a mechanical change whose history does not
+matter.
 
-## What each item means
+## Read immediate edges literally
 
-**Exception class — first, always, regardless of score.** These are the lines
-that demand action, not skimming:
+Each page contains direct typed edges. Important kinds include:
 
-- **Unreconciled contradiction** among claims you have touched — reconcile it,
-  or `relate_claims` them, before you build on either side.
-- **Cross-session uncommitted edit** on a file you have touched — another
-  session has live edits there; check before you collide.
-- **Main movement** on a repo you have touched since your session base — the
-  ground moved under you (host ref-log signal); re-check assumptions that rode
-  on the old main.
+- `caused-by` from work unit to command and, for agent-caused work, from command
+  to the exact trajectory invocation that caused it. A fully paged direct
+  command with no invocation edge is an honest causal endpoint;
+- `part-of-turn` from an invocation to its exact turn, and `triggered-by` from
+  that turn to the exact message that opened it;
+- `applies-work`, `applies-change`, `realizes-change`, and `authored-change` for
+  application, basis-specific realization, and authored-work structure;
+- `imports-repository` from an import work unit to every exact repository state
+  targeted by its external snapshot;
+- `incorporates-change`, `decides-change`, and `counteracts` for
+  semantic relationships;
+- `preserves-content`, `copies-content`, and `incorporates-content` between
+  applied-change nodes for exact coordinate mappings;
+- `parent-event`, `committed-by`, `places-file`, and `contains-repository` for
+  workspace structure.
 
-**Density-ranked orientation — after the exceptions.** The top active claims
-and files in your session's 2-hop neighborhood, scored by the §6 density
-model. This is "what is alive around your work", not an exhaustive dump; there
-is no structural filler — silence here is meaningful.
+Do not flatten executor, cause, initiating intent, authorization, and content
+origin into one “author” value. Walk the relevant edges for the question.
 
-## Follow-on handles
+## Choose the focused public read
 
-Every item line ends in a handle you can hand straight back to `provenance`:
+- `vcs.inspect` returns the exact reusable `root`, one inspected value, and a
+  bounded adjacency preview.
+- `vcs.neighbors` pages immediate edges without hidden traversal state.
+- `vcs.history` pages committed ancestry from an event root or past changes to a
+  stable file identity at an exact state. It is not a second general graph walk.
+- `vcs.blame` traces one exact file range through content-coordinate mappings.
 
-| Handle | Follows to |
-| --- | --- |
-| `claim#<id>` | the claim, its relations, and what asserted it |
-| `commit:<eventid-prefix>` | the commit's message, actor, and touched files |
-| `file:<path>` | that file's per-file provenance block |
-| `session:<head>` | the other session's touch-set behind a concurrency line |
+Continue `neighbors` with the same root and returned cursor. If a question
+changes, begin a new read. Never parse an ID, manufacture a node kind, query
+private semantic tables, or add a client-side graph cache.
 
-Chase a thread when a line flags something live — a contradiction, a hub, a
-claim you cannot reconcile — or when the `K of M` count says the detail you
-need is in the tail. Do not reflexively expand every item.
+## Trust by walking to recorded evidence
 
-## Trust but verify
+An edge says what the system recorded; it does not make every upstream claim
+true. For consequential conclusions, continue to the exact change, work unit,
+decision, command, event, or trajectory evidence. Inspecting a work unit exposes
+its `intentSummary`; inspecting a command exposes its method and terminal state;
+inspecting the typed trajectory-invocation endpoint exposes its canonical tool
+name, turn, status, outcome, and start/completion event references. Continue to
+the turn for its bounded summary and then to the triggering message for its
+exact stored text blocks and original channel-message identity. This is the
+observable intent evidence: do not invent private reasoning, an actor, or an
+authorship assertion from it. Bulky tool arguments remain in the invocation's
+canonical trajectory event rather than being copied into the bounded VCS node;
+the command, work unit, and changes show what semantic action was admitted and
+what actually happened.
 
-Provenance is **recalled, not generated** — a claim is a past judgement with a
-handle, not ground truth. If it matters, follow the handle to the trajectory,
-commit, or edit that produced it before you rely on it.
+A copy should reach its immediate source coordinate; repeated walks may then
+reach the original edit. An integration explanation should reach the decision
+and source changes it accounted for. Channel delivery remains canonical in the
+trajectory log and is projected through the typed message node; do not create a
+parallel VCS copy or cross-system provenance façade.
 
-## Underlying surface
-
-The in-loop `provenance` tool is the affordance. Under it, the DO computes
-`provenanceForSession({ sessionLogId, sessionHead, after? })` on the gad-store
-DO (same item/paging contract as `provenanceForFile`; `gad.provenanceForFile`
-is the eval-reachable file variant). You pass none of the session identity by
-hand — the tool threads it from your vessel.
+When blame reports an import boundary, inspect its terminal ordinary change,
+then the owning import work unit. Report that work unit's `externalSnapshot`—
+its `sourceKind`, `sourceUri`, `snapshotRevision`, and `snapshotDigest`—as
+snapshot-level facts. Its `targetRepositoryIds` vector is the exact complete
+target set, including an identical import with no authored change;
+`imports-repository` neighbors expose the same relation as pageable typed
+edges. URI and revision
+are source-observed; the digest commits the descriptors the semantic workspace
+verified and admitted. Continue through the work unit's command to the causal
+invocation and triggering message when
+importer intent matters, and quote the work unit's exact `intentSummary` rather
+than reconstructing intent from effects. The terminal change's ownership field
+is the exact join; its presence in a bounded authored-change preview is not
+required. State that earlier coordinate authorship is unknown:
+importer intent explains why the bytes entered Vibestudio, but it does not make
+the importer, external revision committer, or current agent their author.

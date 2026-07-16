@@ -1,38 +1,40 @@
 # Dev loop
 
-Extension source authoring happens in the per-repo workspace VCS, like any
-other workspace unit. Each extension is its own versioned repo
-(`extensions/<name>`). The loop is **build-on-push**: `vcs.edit` (via the
-`edit`/`write` tools) lands WORKING content on your per-repo context head with no
-build and no restart; `vcs.commit({ message })` snapshots it; pushing that repo
-into its `main` (a build-gated, ff-only `main`-head advance) is the dev signal.
+Extension source participates in the workspace-wide semantic VCS. Read
+[vibestudio-vcs](../vibestudio-vcs/SKILL.md) before changing it. A successful
+protected publication of a committed workspace event is the dev signal; the
+projected filesystem and derived build are not parallel sources of truth.
 
 ## The flow
 
-1. Edit files under `workspace/extensions/<name>/` with the `edit`/`write`
-   tools — each edit lands on your context head as WORKING content. Nothing
-   builds or restarts.
-2. Optionally dev-build your working content first:
-   `vcs.previewBuild({ repoPaths: ["extensions/<name>"] })` — surfaces
-   `file:line:col` diagnostics without committing or writing a baseline.
-3. Commit the working edits: `vcs.commit({ message: "…" })`.
-4. Push the extension repo into its `main`: `vcs.push({ repoPaths: ["extensions/<name>"] })`.
-5. The push is build-gated; on a successful build the `main`-head advance triggers the extension-specific approval prompt.
-6. On approve, the manager rebuilds the bundle, replaces the running process, and runs `activate(ctx)` again.
-7. On deny, the main-head advance is rejected and the old extension keeps running.
+1. Call `vcs.status`, retain the exact working head, and author managed source
+   edits with that basis and stable command IDs.
+2. Run the ordinary typecheck, tests, and build service for the current context;
+   inspect structured `file:line:col` diagnostics.
+3. If current `main` has relevant changes, compare its exact event and integrate
+   them in small deliberate local steps.
+4. Commit the complete local application chain.
+5. Publish the clean committed event through `vcs.push`, which validates
+   semantic ancestry/integration, obtains publication approval, and atomically
+   advances protected refs.
+6. The `main` advance triggers a separate extension build projection and
+   extension-specific update approval.
+7. Only after a successful build and update approval may the manager replace
+   the process and run `activate(ctx)`. A build, validation, approval, or
+   activation failure leaves the previous extension active.
 
-A `build-failed` push advances nothing and returns structured `file:line:col`
-diagnostics — fix those (edit → commit) and re-push. `vcs.push` rejects outright
-if you still have uncommitted edits — commit first. There is no "save file → hot
-reload" path. Working and committed context-head work does not affect the running
-extension until it is pushed into its `main`.
+An ancestry, integration, publication-approval, or atomic-ref refusal advances
+no protected ref. A later build or activation failure does not roll publication
+back; repair it with a new semantic event. There is no save-file hot reload,
+marker merge, or force path.
 
 ## Dev-session approval
 
 The source approval offers three choices:
 
 - **Allow update** — accept this source update.
-- **Reject update** — reject the main-head advance and keep the old extension running.
+- **Reject update** — decline runtime activation and keep the old extension
+  running; the source event remains published.
 - **Allow extension updates to `<name>` without asking, for the next 4 hours** — the dev-session grant. Stored against the extension identity and consulted before re-prompting.
 
 Pick dev-session while actively iterating. It expires automatically; the next source update outside the 4h window prompts again.
@@ -43,22 +45,10 @@ granting a session.
 
 ## Pushing from a panel or worker
 
-Edits to extension source land on your per-repo context head as WORKING content
-(the `edit`/`write` tools apply through `vcs.edit`). To make them affect the
-running extension, commit them and push the extension repo into its `main`:
-
-```ts
-import { vcs } from "@workspace/runtime";
-
-await vcs.commit({ message: "fix hello extension", repoPaths: ["extensions/<name>"] });
-await vcs.push({ repoPaths: ["extensions/<name>"] });
-```
-
-`vcs.push` works on extension repos the same way it works on panel/worker repos;
-the build-gated, ff-only `main`-head advance is what triggers the rebuild. A
-`build-failed` push advances nothing and returns `file:line:col` diagnostics to
-fix; a push with uncommitted edits is rejected (commit first). The first push can
-prompt; subsequent pushes in a dev session auto-accept.
+Panels and workers use the same semantic VCS protocol as every other caller.
+Use the canonical skill and live `help("vcs")` schema; do not embed a separate
+extension-specific call sequence. The first protected publication can prompt;
+subsequent updates within an approved dev session can auto-accept.
 
 ## Inspector (dev mode only)
 
@@ -107,17 +97,22 @@ To adopt dependency changes (a `@workspace/runtime` push, an `npm` version bump)
 
 ## Common failure shapes
 
-| Symptom                             | Cause                                                                   | Fix                                                                           |
-| ----------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `MANIFEST_KIND`                     | `package.json` is missing `vibestudio.extension` (or has two kind blocks) | Add exactly one `vibestudio.extension` block                                    |
-| `MANIFEST_ACTIVATION`               | `activationEvents` is not `["*"]`                                       | Lazy activation is future work — must be `["*"]` in v1                        |
-| Stays in `error` after update       | `activate()` threw                                                      | Check `lastError` on `workspace.units.list()`; look at the inspector log      |
-| `Cannot find module ...` at runtime | Dep was externalized but missing from runtime install                   | Set `dependencyMode: "external"` and confirm the package is in `dependencies` |
-| `Named export ... not found`        | ESM imported a named export from a CJS package                          | Use `import pkg from "x"; const { fn } = pkg;`                                |
-| `require is not defined`            | Code crossed an ESM/CJS boundary in a bundled dep                       | Switch the dep to `dependencyMode: "external"`                                |
-| 503 from `/_r/ext/<name>/*`         | Extension is `pending-approval`, `building`, or `error`                 | Approve the declaration/update or check `lastError`                           |
-| 413 from fetch endpoint             | Request body exceeded 32 MB                                             | Split the upload or stream to disk via `ctx.fs`                               |
+| Symptom                             | Cause                                                                     | Fix                                                                           |
+| ----------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `MANIFEST_KIND`                     | `package.json` is missing `vibestudio.extension` (or has two kind blocks) | Add exactly one `vibestudio.extension` block                                  |
+| `MANIFEST_ACTIVATION`               | `activationEvents` is not `["*"]`                                         | Lazy activation is future work — must be `["*"]` in v1                        |
+| Stays in `error` after update       | `activate()` threw                                                        | Check `lastError` on `workspace.units.list()`; look at the inspector log      |
+| `Cannot find module ...` at runtime | Dep was externalized but missing from runtime install                     | Set `dependencyMode: "external"` and confirm the package is in `dependencies` |
+| `Named export ... not found`        | ESM imported a named export from a CJS package                            | Use `import pkg from "x"; const { fn } = pkg;`                                |
+| `require is not defined`            | Code crossed an ESM/CJS boundary in a bundled dep                         | Switch the dep to `dependencyMode: "external"`                                |
+| 503 from `/_r/ext/<name>/*`         | Extension is `pending-approval`, `building`, or `error`                   | Approve the declaration/update or check `lastError`                           |
+| 413 from fetch endpoint             | Request body exceeded 32 MB                                               | Split the upload or stream to disk via `ctx.fs`                               |
 
 ## Remove a Declaration
 
-Remove the extension's entry from the `extensions:` list in `meta/vibestudio.yml` (the `edit`/`write` tools land the change as working content), then `vcs.commit({ message })` and push the `meta` repo into its `main` (`vcs.push({ repoPaths: ["meta"] })`). The next reconcile stops the process and deletes its registry entry; the per-extension storage scratch is retained. The workspace source tree stays until you remove those files separately. Userland approval grants the extension received persist (they're keyed by `(principal, extension-name)`); re-declaring under the same name reuses them. The declared set is authoritative.
+Remove the extension's entry from `meta/vibestudio.yml` through the semantic
+adapter, commit the complete local application chain, and publish the resulting
+workspace event. The next reconcile stops the process and deletes its
+registry entry; per-extension storage scratch remains. Remove source separately
+when requested. Approval grants remain keyed by `(principal, extension-name)`;
+re-declaring the same identity reuses them. The declared set is authoritative.

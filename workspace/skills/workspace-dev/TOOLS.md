@@ -70,18 +70,22 @@ Create new projects via eval. Workspace skill packages are auto-resolved — jus
 
 Supported types: `panel`, `package`, `skill`, `project`, `worker`. Each scaffolds into its repo directory (`panels/`, `packages/`, `skills/`, `projects/`, `workers/`). The `skill` type is for a standalone cross-repo skill package. Do not use `projectType: "skill"` to document an existing package, worker, panel, extension, or project.
 
-The scaffold runs the full dev loop for you: it writes the files (edit), commits
-them with a scaffold message (commit), and pushes the new repo so its `main` is
-created from empty (push). The new repo is build-gated green on return; your
-follow-up `edit`/`write` changes are uncommitted working edits — `vcs.commit`
-then `vcs.push` to ship them.
+The scaffold runs the semantic development loop for you: it authors one
+coherent lifecycle work unit, commits the complete local chain from the exact
+working head, and publishes the resulting event through semantic
+ancestry/integration validation, approval, and an atomic protected-ref update.
+It does not make a build guarantee: post-publication build and activation are
+separate projections, and failed activation retains the previous runnable
+artifact.
+Follow-up `edit`/`write` changes remain context-local until you commit the
+complete chain and choose to publish it.
 
 Do **not** use `createProject` for a context-local temporary repo that might
 never be published. A repo path is established by writing any file inside it:
-`write`/`edit`/`vcs.edit` to `projects/tmp-name/note.md` is enough. You may
-leave it as uncommitted working state, `vcs.commit` it as a context-local
-snapshot, or later `vcs.push({ repoPaths: ["projects/tmp-name"] })` if it should
-become visible on `main`.
+`write`/`edit` to `projects/tmp-name/note.md` is enough. You may leave that work
+on the context's working head, commit the local chain as a context event, or
+publish that event when it should become visible on
+`main`.
 
 ### Project-Specific Skill Docs
 
@@ -140,15 +144,15 @@ Execute TypeScript/JavaScript code server-side in your own persistent sandbox (a
 
 `openPanel`/`listPanels`/`getPanelHandle`/`panelTree` are part of the **portable runtime surface** — importable from `@workspace/runtime` (and injected ambiently) in panel, worker, **and server-side eval**. They are host-mediated over RPC: in eval they create/inspect panels via the server. A handful of panel-only extras (`panel.focusPanel`, `buildPanelLink`, `panel.reopen`, `panel.stateArgs`, `adblock`, `journal.Journal`, `agentApi`) are NOT in the eval surface — those need a real panel host:
 
-| API                            | Description                                                                     |
-| ------------------------------ | ------------------------------------------------------------------------------- |
+| API                            | Description                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------ |
 | `openPanel(source, opts?)`     | Open any panel — URLs become browser panels, source paths open workspace panels (eval too) |
-| `buildPanelLink(source, opts)` | Build a URL for panel navigation (panel/component code — not in eval)            |
-| `panel.focusPanel(panelId)`    | Focus an existing panel by ID (panel/component code — not in eval)               |
+| `buildPanelLink(source, opts)` | Build a URL for panel navigation (panel/component code — not in eval)                      |
+| `panel.focusPanel(panelId)`    | Focus an existing panel by ID (panel/component code — not in eval)                         |
 
 `openPanel(source)` creates a new panel for main/pushed code. To run code from
-the current context branch, pass `ref: \`ctx:${ctx.contextId}\`` explicitly (and
-usually `contextId: ctx.contextId` for matching storage). `contextId` alone only
+the current context branch, pass `ref: \`ctx:${ctx.contextId}\``explicitly (and
+usually`contextId: ctx.contextId`for matching storage).`contextId` alone only
 selects the panel's filesystem/storage context; it does not select code.
 
 In **eval**, `rpc` is the same portable client shape used by panels and workers:
@@ -237,7 +241,6 @@ eval({ code: `
   const handle = await workers.create("workers/my-worker", {
     key: "my-worker",
     contextId: ctx.contextId,
-    ref: \`ctx:${ctx.contextId}\`, // for worker code created/edited in this context
   });
   scope.workerId = handle.id; // e.g. "worker:workers/my-worker:my-worker"
   console.log("Worker started:", handle.id, "→ target", handle.targetId);
@@ -258,10 +261,10 @@ eval({ code: `
 })
 ```
 
-`contextId` selects the worker's runtime storage/state partition. It does not
-select the code build. Pass `ref: \`ctx:${ctx.contextId}\`` when launching a
-worker you just created or edited on the current context head. Omit `ref` only
-when you intentionally want the main workspace build.
+`contextId` selects both the worker's runtime state partition and its default
+semantic working state. Omit `ref` to follow the owning context. Pass
+`ref: "main"` only when intentionally pinning protected main, or another exact
+selector when deliberately testing a different semantic state.
 
 Launch/list/retire: `workers.create(source, { key, contextId, env, stateArgs, ref? })` returns a handle (`{ id, targetId, … }`); `workers.list()` lists live regular worker **instances**; `workers.destroy(handleOrId)` retires one. `workspace.units.list()` is the unified **registered-unit/build-health** view (workers, panels, apps, extensions, jobs), so it is also the right answer to workspace-level questions such as “which worker units are running/available?”—but it does not replace instance handles. Discover sources with `workers.listSources()`; use each row's `entry` instead of guessing `index.ts`. The raw `runtime.createEntity/listEntities/retireEntity` methods are the canonical entity-lifecycle lower layer, not redundant aliases for `workspace.units`. A successful create proves `env` configuration was accepted, while value observation requires a narrow worker endpoint/RPC for a named non-secret probe. The `workers` binding also exposes service resolution — `listServices()`, `resolveService(...)`, `resolveDurableObject(...)`, `durableObjectService(...)`. To duplicate or tear down a whole context's durable state (every DO's storage + the file snapshot), use `runtime.cloneContext({ sourceContextId, include? })` → `{ contextId, entities }` and `runtime.destroyContext({ contextId })` — both gated by the context-boundary capability; the low-level cloneDO/destroyDO primitives are server-internal. See [WORKERS.md](WORKERS.md) for details.
 
@@ -271,176 +274,68 @@ the DO owns SQLite through `this.sql`, the manifest service declares
 plus `rpc.call(targetId, method, args)`. See
 [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).
 
-#### Version control (GAD-native, edit → commit → push)
+#### Semantic workspace version control
 
-Workspace version control is GAD-native and **per-repo**. Each workspace repo
-(`packages/foo`, `panels/chat`, `projects/<vault>`, `meta`) is its own versioned
-unit with its own history. The model is three layers:
+Workspace VCS is one semantic graph. A state is a committed event or a local
+work application; repositories, paths, and file listings are views over that
+state. Commands, work units, changes, applications, decisions, events, files,
+and content mappings are directly walkable.
 
-1. **edit** — `vcs.edit` (what the `edit`/`write` tools call) records file
-   changes as **uncommitted working edits** on your context head. They are
-   tracked durably with full provenance and projected to disk so the worktree
-   reflects them, but they are **NOT a commit**: no commit-log entry, no head
-   advance, no build, and they never show in `vcs.log`.
-2. **commit** — `vcs.commit({ message })` folds your uncommitted edits into one
-   deliberate, messaged snapshot per repo, advancing each repo's context head.
-   `message` is mandatory. This is your milestone, queryable via `vcs.log` /
-   `vcs.commitEdits`.
-3. **push** — `vcs.push({ repoPaths })` ships committed snapshots into each
-   repo's `main`. `main` advances **only** via push. Push is **fast-forward-only**
-   and **build-gated**.
+Read the canonical [Vibestudio VCS skill](../vibestudio-vcs/SKILL.md) before
+using this surface. Its references define state nodes, integration decisions,
+whole-chain commit/discard, file identity, counteractions, provenance reads,
+and typed recovery.
 
-```
-// 1. edit (the edit/write tools do this for you; direct call shown for clarity)
-eval({ code: `
-  const result = await services.vcs.edit({
-    edits: [
-      { kind: "write", path: "panels/my-app/index.tsx", content: { kind: "text", text: "..." } },
-    ],
-  });
-  // { head, stateHash, committed: false, status: "uncommitted", editSeq, changedPaths }
-  console.log(result.status, result.changedPaths);
-`
-})
+Core routing:
 
-// 2. commit a deliberate snapshot
-eval({ code: `
-  const commits = await services.vcs.commit({ message: "Wire up the form" });
-  for (const c of commits) console.log(c.repoPath, c.status, c.editCount);
-`
-})
+| Intent                       | Runtime surface                                                                                                         |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Orient in a context          | `vcs.status` returns committed event, working head, main relation, and local counts                                     |
+| Compare committed work       | `vcs.compare` from an exact target state to one source event                                                            |
+| Account for incoming changes | `vcs.integrate` with one explicit adopt, reconcile, or decline decision                                                 |
+| Commit coherent context work | `vcs.commit` consumes the complete local application chain                                                              |
+| Publish committed work       | `vcs.push` advances protected main to one exact committed event                                                         |
+| Read or list managed files   | `vcs.readFile` and `vcs.listFiles` at an event/application state                                                        |
+| Move managed identities      | `vcs.move` preserves file or repository identity                                                                        |
+| Copy managed content         | `vcs.copy` mints file identity and records immediate copy provenance                                                    |
+| Import external content      | `vcs.importSnapshot` records one exact complete snapshot and an honest provenance boundary; it does not import per-path authorship |
+| Undo named changes           | `vcs.revert` authors explicit counteractions                                                                            |
+| Explain history or content   | `vcs.inspect`, `vcs.neighbors`, `vcs.history`, and `vcs.blame`                                                          |
+| Validate a working build     | use the ordinary typecheck, test, and build services for the context                                                    |
 
-// 3. push (build-gated, ff-only)
-eval({ code: `
-  const r = await services.vcs.push({ repoPaths: ["panels/my-app"] });
-  console.log(r.status); // "pushed" | "up-to-date" | "diverged" | "build-failed"
-`
-})
-```
+Every context mutation includes `contextId`, `expectedWorkingHead`, and a stable
+`commandId`. A command ID identifies
+one canonical request digest. Retry the identical request with the same ID only
+when completion is uncertain; after changing any field or receiving a freshness
+failure, observe again and use a new ID.
 
-Source edits must land on the head through `vcs.edit` (i.e. the `edit`/`write`
-tools) — do not edit via `fs.writeFile` and expect it to commit or build, since
-the worktree is a projection and VCS reads GAD state. Reads (`vcs.readFile`,
-`fs.*`, build/preview) see your **working** content (committed head + uncommitted
-edits).
+Comparison returns source changes classified as shared, already satisfied,
+actionable, accounted, or historical. Integrate small groups and continue from
+each returned working head. Commit accepts no selection: it consumes the whole
+local chain. Use another context when work needs an independent commit boundary.
+An integration commit names the exact source event only after its effective
+changes are accounted for. Push creates no ancestry event.
 
-**Push outcomes** — `vcs.push` returns a discriminated union on `status`:
+Managed file operations are semantic operations. Prefer the explicit batch
+forms for refactors: moves preserve identity across paths and repositories;
+copies mint identity while preserving copy ancestry. Managed runtime
+`fs.rename`/`fs.copyFile` and agent `move_file`/`copy_file` are acceptable
+because the adapter resolves exact identity and routes through these commands
+before projection. A shell copy or delete-plus-create
+cannot express those facts.
 
-- `"pushed"` / `"up-to-date"` → green; `main` advanced (or already matched).
-  Carries `reports` (per-repo build reports).
-- `"diverged"` → `main` moved past your context's merge-base, so a
-  fast-forward is impossible. Carries `divergences`. Reconcile with
-  `vcs.merge(repoPath)` (pulls `main` into your head as a merge commit), then
-  `vcs.commit` if conflicts needed resolving, then push again.
-- `"build-failed"` → **no head advanced.** Carries `reports` with structured
-  diagnostics (`file:line:col  severity  message`). Fix the cited lines and
-  re-push.
+Branch on result/error discriminants such as `RevisionChanged`,
+`DependencyBlocked`, `ConflictPresent`, `IntegrationIncomplete`,
+`ScopeTooLarge`, and `IntegrityFailure`.
+Explanatory text is for humans, not control flow. Preserve the user's semantic
+goal across recovery, but rederive applicability, liveness, dependencies, and
+publication reachability at the newly observed working head.
 
-Push **rejects (throws) if you have uncommitted edits** in a repo you're
-pushing — commit first. Push multiple repoPaths to ship them as one atomic
-group (all advance or none).
-
-```
-// Preview-build working content WITHOUT committing (dev preview; no main, no EV baseline)
-eval({ code: `
-  const reports = await services.vcs.previewBuild({ repoPaths: ["panels/my-app"] });
-  for (const rep of reports) {
-    for (const b of rep.builds) {
-      for (const d of b.diagnostics) console.log(\`\${d.file}:\${d.line}:\${d.column} \${d.message}\`);
-    }
-  }
-`
-})
-
-// Drop uncommitted edits (abort / stash-drop) — also clears a pending merge
-eval({ code: `
-  const { discarded, stateHash } = await services.vcs.discardEdits("panels/my-app");
-  console.log("dropped", discarded, "edits");
-`
-})
-```
-
-Raw `vcs` calls are **per-repo** and use repo paths + VCS heads, not filesystem
-cwd values:
-
-| Need | Runtime call |
-| --- | --- |
-| Record working edits (what `edit`/`write` call) | `await vcs.edit({ edits: [...] })` |
-| Commit working edits into a snapshot | `await vcs.commit({ message: "…" })` |
-| Drop uncommitted edits (+ clear pending merge) | `await vcs.discardEdits("panels/my-app")` |
-| A repo's unpushed changes (its committed head vs main) + `uncommitted` count | `await vcs.status("panels/my-app")` |
-| How far a repo is ahead of main + uncommitted/diverged flags | `await vcs.pushStatus(["panels/my-app"])` |
-| A repo's commit history | `await vcs.log("panels/my-app", 50)` |
-| The edit-ops a commit owns | `await vcs.commitEdits("panels/my-app", { eventId })` |
-| File history / blame (commit-lineage order) | `await vcs.fileHistory({ repoPath: "panels/my-app", path: "index.tsx" })` |
-| Walk a commit's ancestry (event DAG) | `await vcs.commitAncestors("panels/my-app", eventId)` |
-| Resolve a repo's head to a state hash | `(await vcs.resolveHead("main", "panels/my-app")).stateHash` |
-| Read a file from a repo's head (working content) | `await vcs.readFile({ path: "index.tsx", repoPath: "panels/my-app" })` |
-| Compare two committed states | `await vcs.diff(leftStateHash, rightStateHash)` |
-| Build-gate committed changes into main (ff-only) | `await vcs.push({ repoPaths: ["panels/my-app"] })` |
-| Preview-build working content (no commit, no main) | `await vcs.previewBuild({ repoPaths: ["panels/my-app"] })` |
-| Reconcile a diverged push (pull main into your head) | `await vcs.merge("panels/my-app")` |
-| Fork a repo to a new path (keep history) | `await vcs.forkRepo("panels/chat", "panels/mychat")` |
-| What your context has touched / drifted | `await vcs.contextStatus()` → `{repoPath, forked, uncommitted, ahead, behind, deleted}[]` |
-| Pull latest main into your context | `await vcs.rebaseContext()` |
-
-`vcs.status(repoPath, head?)` reports a repo subtree's committed
-`{added, removed, changed}` vs that repo's own `main` plus an `uncommitted` count
-(working edits not yet committed) — a state diff, not filesystem dirtiness.
-`vcs.diff` compares two state hashes.
-
-**Context isolation & rebase.** Your context is a *pinned snapshot* — reads don't
-drift as other contexts advance `main`. `vcs.contextStatus()` flags repos you're
-`ahead` on (commit + push them), `uncommitted` on (working edits to commit), or
-`behind` on (main moved past your pin); `vcs.rebaseContext()` merges latest
-`main` into your edited repos and re-pins your base. The context folder is
-**sparse** (a repo's files materialize on first edit/read); `vcs.*`/`fs.*` handle
-materialization for you.
-
-**Forking.** Prefer **`vcs.forkRepo(fromPath, toPath)`** to fork a repo to a new
-path **preserving history** — the new repo's `log` shows the inherited commits and
-your edits build on the forked lineage; its `package.json` name leaf is auto-rewritten
-so it's build-valid (do any deeper renames yourself, then push). The
-**`forkProject(options)`** skill is a from-scratch *source tree copy* (rewrites
-component/class names, no inherited history) when you want a clean independent
-unit. It copies only trackable workspace source and skips platform/generated
-artifacts such as `.gad/`, `.git/`, `node_modules/`, `dist/`, `.env`, and logs.
-Non-dry runs perform edit → commit → push for the new repo.
-
-```ts
-import { forkProject } from "@workspace-skills/workspace-dev";
-
-await forkProject({
-  from: "panels/chat",
-  to: "panels/chat-experiment",
-  title: "Chat Experiment",
-});
-
-const workerPlan = await forkProject({
-  from: "workers/agent-worker",
-  to: "workers/agent-worker-v2",
-  title: "Agent Worker V2",
-  dryRun: true,
-});
-console.log(workerPlan.warnings);
-```
-
-Dry runs return the planned file list, metadata rewrites, and warnings without writing anything to the head. Worker forks rewrite package metadata, obvious worker file names, source strings, and Durable Object class names; pass `classMap` when a worker has more than one class.
-
-Your edits land on your own per-repo context head (`ctx:{contextId}` on each
-repo's `vcs:repo:<path>` log), forked from that repo's `main`. Panels launched in
-your context build and serve from your head automatically. A repo's `main` is
-never touched by agent edits — shipping is the explicit, build-gated
-`vcs.push({ repoPaths })`. A brand-new repo (files created under a new
-`<section>/<name>/`) has no `main` yet; its first `vcs.push` creates `main` from
-empty.
-
-For throwaway project repos, skip scaffolding entirely: write a file such as
-`projects/tmp-name/note.md`. That creates context-local working content for repo
-`projects/tmp-name`; it remains private to the context until you explicitly
-commit and push that repo. `createProject({ projectType: "project", ... })`
-creates only a README, but it also immediately commits and pushes, so it is for
-published workspace projects rather than private scratch space.
+For a project fork, use `forkProject` when package metadata, source names,
+runtime registrations, or Durable Object classes must change as one lifecycle
+intent. Use `vcs.copy` when the desired fact is specifically a set of file
+copies with explicit ancestry. Dry-run unfamiliar worker forks and provide a
+`classMap` when multiple Durable Object classes exist.
 
 #### @workspace-extensions/typecheck-service.checkPanel (recommended)
 
@@ -532,13 +427,13 @@ Available methods:
 | `browserData.detectBrowsers()`                       | Detect all installed browsers and their profiles             |
 | `browserData.startImport(request)`                   | Incrementally import data from a browser profile             |
 | `browserData.getOpenTabs(request)`                   | Preview current Firefox/Chrome-family tabs                   |
-| `browserData.openTabsAsPanels(request)`              | Open current HTTP(S) tabs as Vibestudio browser panels         |
+| `browserData.openTabsAsPanels(request)`              | Open current HTTP(S) tabs as Vibestudio browser panels       |
 | `browserData.getImportHistory()`                     | Get log of past imports                                      |
 | `browserData.getBookmarks(folderPath?)`              | Get bookmarks in a folder                                    |
 | `browserData.searchBookmarks(query)`                 | Search bookmarks by title/URL                                |
 | `browserData.addBookmark(bookmark)`                  | Add a bookmark                                               |
 | `browserData.deleteBookmark(id)`                     | Delete a bookmark                                            |
-| `browserData.getHistory(query)`                      | Query unified imported + Vibestudio browser-panel history      |
+| `browserData.getHistory(query)`                      | Query unified imported + Vibestudio browser-panel history    |
 | `browserData.searchHistory(query, limit?)`           | Full-text search history                                     |
 | `browserData.clearAllHistory()`                      | Clear all history                                            |
 | `browserData.getPasswords()`                         | Get all stored passwords                                     |

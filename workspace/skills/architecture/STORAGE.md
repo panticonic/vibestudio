@@ -1,132 +1,136 @@
 # Theory of State
 
-## The four-way taxonomy
+## Classify every persistent structure
 
-Every persistent structure in the system is exactly one of:
+Every persistent structure is one of:
 
-- **Log** — append-only, hash-chained event sequence. The only source of
-  truth. Trajectory logs (agent conversations), channel logs (pub/sub
-  envelopes), VCS logs (commit/push history), build logs.
-- **Value** — immutable content-addressed bytes in the blobstore
-  (`sha256/<aa>/<bb>/<rest>`): file contents, worktree manifests, large
-  payloads, build artifacts. A digest's bytes never change.
-- **Ref** — a mutable named pointer to log positions or state hashes. The
-  protected refs (`repo → main`) are host-owned and advance only by
-  approval-gated compare-and-swap.
-- **Cache** — anything derived: SQL projection tables, materialized context
-  folders, build outputs. **Cache amnesia** is a design invariant: derived
-  state may be deleted at any time and rebuilt by replaying logs through pure
-  folds.
+- **Log** — an append-only hash-chained sequence for trajectory and channel
+  delivery.
+- **Semantic graph fact** — an immutable typed node or immediate edge: command,
+  work unit, change, application, decision, content mapping, workspace event,
+  or event parent.
+- **Value** — immutable content-addressed bytes or trees used for file content,
+  large payloads, and build artifacts.
+- **Ref** — a mutable named pointer such as a trajectory head, context committed
+  event, context working head, or protected `main` event.
+- **Cache** — a rebuildable index, materialized context folder, or build output.
 
-Two operational corollaries: **journal before dispatch** (an intention is
-recorded in the log before its effect runs; "pending" ≡ intention without
-outcome), and **one code path** for append/fork/replay/integrity across all
-log kinds (`log_kind` is metadata, never a structural switch).
+Never promote a cache, traversal cursor, self-derived digest, or repeated
+projection to authority. Journal an intended external effect before dispatch;
+mint semantic identity before materializing its content projection.
 
-## The unified log envelope
+## Join the trajectory to semantic work once
 
-Every log event is a `LogEnvelope`: `{ logId, head, seq, envelopeId, actor,
-payloadKind, payload, causality?, appendedAt, prevHash, hash }`. The hash
-covers the semantic content plus the chain position, so every log is a
-verifiable hash chain; forks start from the parent fork hash. Integrity
-checking verifies seq contiguity, prevHash linkage, and per-envelope hashes
-identically for every log kind.
+The unified log envelope carries exact log/head coordinates, ordering,
+causality, actor, payload identity, and hash-chain integrity. A model-visible
+trajectory contains messages, turns, tool invocations, model changes,
+compactions, and summaries. Semantic file mutations are not copied into that
+log: the workspace graph owns commands, work units, changes, applications, and
+events. The invocation-to-command edge is their one exact join.
 
-Schema of record: `workers/gad-store/index.ts`. Heads live in `log_heads`,
-events in `log_events`; `trajectory_*` tables are projections of trajectory
-logs, channel envelopes are rows whose head has `log_kind = 'channel'`.
-(Older docs' `pi_branches`/`pi_entries`/`pi_sessions` are superseded names
-for the same model.)
+An agent-caused semantic command points to its verified ingress coordinate from
+that trajectory; an authorized direct command stops honestly at itself. Neither
+copies actor/invocation fields into every VCS node or creates another invocation
+registry. Executor, initiating intent, authorization, incorporation, and blame
+are separate graph walks. Approvals and runtime diagnostics remain with their
+domain owners; there is no sidecar provenance or claims ledger.
 
-Unbounded payload fields never sit in SQL rows — they are spilled to the
-blobstore as `vibestudio.blob-ref.v1` stored values; rows keep bounded
-previews plus content-addressed refs (`*_ref_json` columns). Reads are
-ref-only unless a caller explicitly hydrates.
+## Use one semantic workspace graph
 
-## Two ledgers per agent
+A committed state is a workspace event. A local state is the latest work
+application. Each context stores two pointers:
 
-GAD (the workspace provenance system) separates:
+- `committedEventId` — its immutable local commit boundary;
+- `workingHead` — the committed event when clean, otherwise the latest local
+  application.
 
-- the **model-visible trajectory** — messages, model changes, compactions,
-  summaries: entries that can be re-materialized into prompt context; and
-- **sidecar provenance** — tool dispatches, file observations/mutations,
-  approvals, claims, contradictions, indexing work: never implicitly
-  materialized into context.
+Each application points to its exact event/application basis and applies one
+work unit. Every edit, move, copy, integration decision, or revert appends one
+ordinary local application. Commit consumes the complete local chain and
+creates one event; discard drops the complete chain. There is no parallel
+composition or partial-commit state machine.
 
-This is why `gad-context` and the `provenance("session")` orientation workflow
-exist as *pull* surfaces: rich provenance is recorded about everything, but
-only deliberate reads bring it into a model's context.
+One authenticated workspace fact map holds typed repository and file states.
+Repository manifests map paths to stable file IDs. File state owns placement,
+content, mode, size, and tombstone predecessor. A content edit changes one file
+fact; a move preserves file ID; a copy mints file ID. The copy change itself
+owns one typed source endpoint (state, repository, file, path, and content),
+from which both the `authored-copy-source` adjacency and each application's
+ordinary mapped content edge are derived. Do not add a copy-source table,
+payload convention, or copy-specific traversal graph.
 
-## Worktree states and the VCS authority model
+Work units group coherent intent. Changes record expressive edit, lifecycle,
+move, copy, import, and counteraction semantics. Applications record how work
+was applied to an exact basis. Integration decisions account for exact source
+changes by adopting, reconciling with truthful state evidence, or declining
+with rationale. Immediate content edges preserve, copy, or incorporate exact
+coordinates, so blame walks transitively without storing transitive snapshots.
 
-Workspace source state is content-addressed: file versions point to blob
-hashes; manifest nodes form a recursive tree; a **state hash** covers the
-manifest root. Authority over source is split three ways:
+Import creates an explicit evidence barrier. Exact snapshot bytes may be known
+while earlier external origin remains unknown; provenance stops honestly where
+evidence stops.
 
-1. The server's **content store** (blobstore) owns trees — every state hash
-   resolves to an immutable mirrored tree; all tree reads (path resolution,
-   diffs, build sources, materialization) go through it.
-2. The server's **ProtectedRefStore** owns protected refs: `repo → main` advances
-   only by compare-and-swap through the approval gate. Nothing in userland
-   can move `main` directly.
-3. The **gad DO** owns semantics: provenance and history, edit/commit/revert
-   composition, merge computation, status, and push orchestration. It
-   composes and build-validates a candidate state, requests the CAS, and
-   records provenance via write-ahead publish intents.
+Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md) for the operating procedure.
 
-Your **edit → commit → push** workflow is the userland face of this split:
+## Separate semantics from host effects
 
-- an *edit* is a tracked working change on your context head, projected to
-  disk so it builds, with per-op provenance (actor, turn, invocation);
-- a *commit* folds working edits into a messaged, content-addressed snapshot
-  in the DO's history;
-- a *push* is the only operation that touches host authority: fast-forward
-  only, build-gated (esbuild + tsc; failure means no head moved),
-  approval-gated (`workspace-repo-write`), atomic across grouped repos.
+The semantic workspace authority owns contexts, events, work, changes,
+applications, decisions, content lineage, comparisons, command journaling, and
+the durable effect outbox.
 
-VCS is per-repo (each `panels/x`, `packages/y`, `meta`, … has its own log,
-`main`, and `ctx:*` heads). Your context is a pinned snapshot; divergence is
-surfaced (`diverged` push result) and resolved by explicit merge, never by
-force-advance. File mutations record state transitions (input state → output
-state + hunks), which is what makes per-edit provenance and blame queries
-possible.
+Two narrow host-effect ports consume exact requests and return receipts:
 
-## Where runtime state lives
+- workspace content observation/materialization;
+- approval-gated protected-ref compare-and-swap.
 
-- **Durable Object SQL** is the single durable SQL primitive. Userland
-  persistence = own a DO, use `this.sql`; schema ownership stays in the DO
-  class (`createTables`/`schemaVersion`/`migrate`). There is no shared
-  database service.
-- **Framework-internal DOs** (host-registered, not workspace units): `EvalDO`
-  (per-agent eval scope), `WorkspaceDO` (panel tree/entity state),
-  `BrowserDataDO` (imported browser data), `WebhookStoreDO`.
-- **Blobstore** — per-workspace content-addressed store with HTTP + RPC
-  surface; immutable, dedup on write, no verify-on-read, GC driven by the
-  reachability layer above (delete is trusted-caller only).
-- **On disk** (host state directory, outside your file root): DO SQLite
-  files, blob store, build store, per-context folders, device credentials.
+These ports do not interpret changes, conflicts, integration completeness, or
+ancestry. They are not another VCS. The semantic authority performs no direct
+filesystem or protected-ref effect.
 
-## The build system
+The build subsystem is a separate content consumer, not a semantic effect port.
+It can be invoked explicitly against an exact context for advisory feedback or
+react to published source to produce runtime artifacts. Its observations and
+artifacts do not authorize publication, advance refs, or become semantic
+history.
 
-Builds are content-addressed and demand-driven:
+Materialized context folders and host content-tree digests are projections.
+Build keys identify derived artifacts. None is semantic revision identity.
 
-- An **effective version (EV)** = hash of a unit's content + all transitive
-  internal deps (+ global build keys). Same EV ⇒ same artifact, cache hit.
-- Builds materialize sources from the content store (not from disk), run
-  esbuild strategies per unit kind, and store artifacts content-addressed.
-- **State advance is the build trigger**: a successful `vcs.push` advances
-  refs, which recomputes EVs for affected units and rebuilds them. This is
-  the same gate that gives push its authoritative diagnostics — the push
-  report is the primary build signal, not a background poller.
-- Runtime provenance: every running unit knows which EV/artifact it runs, so
-  rollback and update adoption are ref moves, not rebuilds.
+## Walk provenance directly
 
-## Why this shape
+Expose one typed node vocabulary across `inspect`, `neighbors`, `history`, and
+`blame`. Define each relation once with its exact allowed endpoint kinds and
+derive the identical canonical edge from either incident node. Persist only
+immediate normalized facts, never a second adjacency graph. Page adjacency in deterministic order
+with one opaque cursor; keep traversal state in the caller and restart from the
+root if a mutable trajectory grows. Derive ancestry from event parents and
+content origin from coordinate mappings.
 
-The log/value/ref/cache discipline is what makes the rest of the system
-cheap: forking a conversation, forking a workspace, replaying projections,
-auditing provenance, resuming after crash (write-ahead intents + durable
-scan records), and verifying integrity are all the *same* operation family —
-walk a hash chain, re-run pure folds. When you design new userland state,
-follow the same taxonomy: append events, content-address big values, keep
-projections rebuildable, and never make a cache the source of truth.
+If a proposed persistent object merely summarizes facts reachable through
+these edges, make it a rebuildable cache or delete it.
+
+## Store runtime state with its owner
+
+- Durable Object SQL is the durable SQL primitive; each DO owns its schema.
+- The per-workspace blobstore owns immutable content-addressed values.
+- The host state directory owns DO databases, blob/build stores, projected
+  context folders, and device credentials.
+- Framework-internal DOs own their bounded runtime concerns; workspace units do
+  not acquire host authority from filesystem position.
+
+## Build from content, publish events
+
+Builds are content-addressed and demand-driven. An effective version derives
+from one unit's content, transitive internal dependencies, and global build
+keys. Equal effective versions reuse artifacts. An explicit context build is
+an advisory check; a post-publication build is a derived projection.
+
+Protected `vcs.push` publishes an already committed event. The semantic
+authority validates event ancestry and integration facts; the publication gate
+obtains approval and atomically advances protected refs. Publication creates no
+source-history event and has no build precondition.
+
+Runtime activation consumes derived artifacts and fails closed. If the newly
+published source cannot be built, validated, or started, its artifact is not
+activated and the previous runnable artifact remains selected. The semantic
+publication remains true; a repair is a new ordinary event.

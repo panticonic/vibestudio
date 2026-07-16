@@ -356,54 +356,55 @@ async function example() {
 }
 ```
 
-### Workspace VCS (per-repo, build-gated)
+### Workspace VCS (semantic and workspace-atomic)
 
-VCS is **per-repo**. Each repo — every `section/<name>` under `packages/
-panels/ workers/ extensions/ apps/ about/ skills/ templates/ projects/`, plus
-the flat `meta` repo — is a first-class versioned unit with its own log
-(`vcs:repo:<repoPath>`), `main` head, and `ctx:*` context heads. There is no
-whole-workspace version: each repo is its own versioned unit, and the **push is
-the build gate**.
+Vibestudio has one workspace ancestry graph. Repository and file views are
+focused projections of an exact event or application state, not independent
+logs or staging boundaries. Managed edits author intent-bearing work units and
+append applications to a context's working head. Commit records the complete
+local application chain as one workspace event.
 
-Edits are edit-first: the `edit`/`write` tools record working edits on your
-context head and project them to disk atomically. Seal those edits with
-`vcs.commit`, then advance a repo's `main` with **push**. `vcs.status(repoPath,
-head?)` (positional args) reports one repo's unpushed changes vs its own `main`.
-`vcs.push` is **build-gated**: it bundles + type-checks the candidate, and if
-that fails **no head advances** and you get structured diagnostics back.
+Writing the first managed file for a brand-new panel records its repository
+lifecycle through the managed filesystem adapter. Use `vcs.edit` for direct
+semantic content changes and `vcs.move` / `vcs.copy` for explicit identity
+operations. Every mutation carries the exact `expectedWorkingHead` it observed
+and a stable `commandId`. Reuse a command ID only to recover an uncertain
+identical response. Disk is a projection of the returned working head.
 
-A **brand-new** panel needs no init: create `panels/my-panel/` files (Quick
-Start above), then the first `vcs.push({ repoPaths: ["panels/my-panel"] })`
-_creates_ its `main` from empty as the repo's first commit, build-gated. To
-branch off an existing panel **keeping its history**, fork it
-(`vcs.forkRepo("panels/chat", "panels/mychat")` — preserves the log lineage and
-rewrites the `package.json` name leaf; rename the remaining component/contract
-identifiers yourself, then push).
+Publication is also workspace-wide. Run the ordinary build service against the
+exact context state, commit the complete local chain, then use `vcs.push` to
+approval-gate and atomically advance protected `main`. If main advanced, compare
+its event, integrate source changes through local decisions, recommit, and retry.
+There is no repository-group push, staging path, or rebase shortcut.
 
 ```typescript
-import { vcs } from "@workspace/runtime";
+import { contextId, vcs } from "@workspace/runtime";
 
-// One repo's unpushed changes (context head vs that repo's main):
-const status = await vcs.status("panels/my-panel");
-
-// Build-gate the change into main. Read the result; never leave a repo red.
-const result = await vcs.push({ repoPaths: ["panels/my-panel"] });
-if (result.status === "build-failed") {
-  for (const report of result.reports)
-    for (const build of report.builds)
-      for (const d of build.diagnostics)
-        console.error(`${d.file}:${d.line}:${d.column}  ${d.severity}  [${d.source}] ${d.message}`);
+const command = (operation: string) =>
+  `panel-dev:${operation}:${contextId}:${crypto.randomUUID()}`;
+const status = await vcs.status({ contextId });
+if (status.mainRelation === "behind" || status.mainRelation === "diverged") {
+  throw new Error("Compare and integrate current main before committing");
 }
-// status: "pushed" | "up-to-date" → main already has the candidate state.
-// status: "diverged" → main moved; merge "main" into your head and re-push.
+const committed = await vcs.commit({
+  commandId: command("commit"),
+  contextId,
+  expectedWorkingHead: status.workingHead,
+  message: "Implement panel change",
+});
+const result = await vcs.push({
+  commandId: command("publish"),
+  contextId,
+  expectedCommittedEventId: committed.event.eventId,
+  expectedMainEventId: status.mainEventId,
+});
+console.log(`published ${result.eventId} as main ${result.mainEventId}`);
 ```
 
-Pass several repos (`vcs.push({ repoPaths: ["packages/ui", "panels/notes"] })`)
-for an **atomic group push** — every listed repo advances or none does — when a
-change spans repos or breaks a dependent. Content-only repos
-(`projects/<vault>`, `meta`) push ungated. The CLI mirrors this:
-`vibestudio vcs push --repo <p>` (repeat `--repo` for a group),
-`vibestudio vcs status/log --repo <p>`.
+Read the canonical
+[Vibestudio VCS skill](workspace/skills/vibestudio-vcs/SKILL.md) for
+compare/integrate decisions, complete-chain commit, move/copy provenance,
+typed recovery, and protected publication.
 
 ---
 
@@ -608,7 +609,7 @@ right approval and trust-scope behavior.
 
 ## Channel Services
 
-Real-time panel messaging is implemented as a workspace-owned userland service.
+Real-time panel messaging is implemented as a workspace-authored service.
 Use the workspace-local panel development docs for the current client package
 and examples.
 

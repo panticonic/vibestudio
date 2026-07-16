@@ -5,6 +5,7 @@ aggregation) and WP6 (stable `user:<userId>` ids). Implements **two strictly sep
 presence systems — keeping them separate is the whole point.
 
 Obeys the host-boundary invariants (`plan §0.1`) as its central design constraint:
+
 - **9.1 Channel presence** is userland-only — the host never learns about channels (INV-1).
 - **9.2 Workspace user presence** is a host surface built from the host's own session facts —
   never from channels (INV-2). The two are **never derived from each other**.
@@ -23,10 +24,11 @@ zero channel coupling.
 
 **Out of scope (owned by other specs in this same cutover):** the session `userId` tagging
 (WP4); human channel identity (WP6). The hub cross-workspace presence view **is in scope here**
-and is built (§4.4); only channel-*derived* cross-workspace presence is excluded (it would
+and is built (§4.4); only channel-_derived_ cross-workspace presence is excluded (it would
 violate INV-1).
 
 **Exit criteria:**
+
 1. Channel presence aggregates a user's multiple panels into one `user:<userId>` presence with
    `online|idle|away|offline` + last-seen — entirely in the channel layer.
 2. A `workspacePresence.list()` + `workspace-presence-changed` event answer "who's in this
@@ -38,13 +40,13 @@ violate INV-1).
 
 ## 2. The invariant, restated
 
-| | 9.1 Channel presence | 9.2 Workspace user presence |
-|---|---|---|
-| Question | Who's in this *conversation*? | Who's *connected to this workspace*? |
-| Owner | userland channel DO | host session registry |
-| Source | roster membership + heartbeat | live RPC connections + `subject.userId` |
-| Host knows channels? | **never** (INV-1) | n/a — no channels involved |
-| Emits | presence envelopes in the channel | `{userId, handle, online, lastSeen}` only |
+|                      | 9.1 Channel presence                 | 9.2 Workspace user presence               |
+| -------------------- | ------------------------------------ | ----------------------------------------- |
+| Question             | Who's in this _conversation_?        | Who's _connected to this workspace_?      |
+| Owner                | userland channel DO                  | host session registry                     |
+| Source               | open subscription response resources | live RPC connections + `subject.userId`   |
+| Host knows channels? | **never** (INV-1)                    | n/a — no channels involved                |
+| Emits                | presence envelopes in the channel    | `{userId, handle, online, lastSeen}` only |
 
 **Transport/session liveness is the host's to surface (9.2); pubsub channel membership is
 userland's alone (9.1).**
@@ -54,10 +56,11 @@ userland's alone (9.1).**
 ## 3. Channel presence (userland-only) — §9.1
 
 Build on the existing userland foundation:
+
 - join/leave/update presence envelopes — `publishPresenceEvent` (`channel-do.ts:592-615`);
 - typing signals — `setTypingState` (`:1217`) → `broadcastPresenceSignal` (`:615`);
-- heartbeat + eviction — `touch` (`:945`), `evictStaleParticipants` /
-  `PARTICIPANT_STALE_MS` (`:1777-1825`).
+- one long-lived `subscribe` response per delivery session; body cancellation,
+  abrupt transport close, and generation replacement all terminate that exact session.
 
 Additions (all userland, in the channel DO / `agentic-core`):
 
@@ -67,8 +70,8 @@ Additions (all userland, in the channel DO / `agentic-core`):
   the userId the host stamped on the caller (INV-3) — the host does not aggregate and does not
   see the channel (INV-1).
 - **Status model.** `online | idle | away | offline` + optional custom status in presence
-  metadata. `idle`/`away` derived userland-side from heartbeat recency + client
-  activity/visibility — never from a host signal.
+  metadata. `idle`/`away` derive userland-side from real channel activity —
+  never from a periodic liveness signal or host signal.
 - **Last-seen.** Persist last-seen on leave in the channel DO (today leave deletes the row),
   so an offline user still renders "last seen 5m ago." Add a `last_seen` column / retained
   presence row.
@@ -83,6 +86,7 @@ Additions (all userland, in the channel DO / `agentic-core`):
 A first-class, boundary-clean surface built from facts the host already owns.
 
 ### 4.1 Source of truth
+
 The host session/connection registry: `ConnectionRegistry` (`rpcServer.ts:228-378`) and
 `SessionRegistry` (`rpcServer/sessionRegistry.ts`), each tagged with the verified
 `subject.userId` (WP4 §2). "User X is present in workspace W" ⟺ X has ≥1 live connection
@@ -96,6 +100,7 @@ present user with `endpoints: 2`, going offline only when the last endpoint drop
 logical user (optionally exposing the endpoint count), never N rows for one person.
 
 ### 4.2 The service
+
 A new host service:
 
 ```ts
@@ -122,12 +127,14 @@ workspacePresence.list(): WorkspacePresenceEntry[];
   conversation, no pubsub reference.
 
 ### 4.3 Boundary guard
+
 `workspacePresenceService.ts` must not import or reference `workspace/` / `pubsub-channel` /
 any channel concept. `scripts/check-host-workspace-imports.mjs` (`pnpm check:host-boundary`)
 guards it. It reads the session registry and the WP0 §3.7 shared identity DB (read-only) only
 (never a channel roster).
 
 ### 4.4 Hub cross-workspace view (built)
+
 Because the hub routes user sessions to children, it answers "which workspaces is user X
 connected to" from **its own routing table** (WP1 §5) — pure session facts, still no channels.
 This is the only sanctioned cross-workspace presence, and it is **part of this cutover** (not
@@ -149,12 +156,12 @@ deferred). Children report their live sessions up to the hub for this aggregate 
 
 - **Channel aggregation (9.1):** a user with two panels shows **one** `user:<id>` channel
   presence; closing one panel keeps them online; closing both → offline with last-seen.
-- **Status:** idle/away derive from heartbeat recency, userland-side, with no host input.
+- **Status:** idle/away derive from channel activity, userland-side, with no host input.
 - **Workspace presence (9.2):** two users connect to a workspace; `workspacePresence.list`
   returns both online; disconnect → offline + `lastSeen`; `workspace-presence-changed` fires.
-- **Separation:** a user present in a *channel* but whose workspace-presence is computed only
+- **Separation:** a user present in a _channel_ but whose workspace-presence is computed only
   from sessions — killing the channel (userland) does not change 9.2; killing the connection
-  (host) drives 9.2 but 9.1 reacts via its own heartbeat, independently.
+  (host) drives 9.2 while the routed response terminal independently releases 9.1.
 - **Boundary:** `workspacePresenceService` imports no `workspace/`; `pnpm check:host-boundary`
   green; the emitted payload contains no channel fields.
 
@@ -162,15 +169,15 @@ deferred). Children report their live sessions up to the hub for this aggregate 
 
 ## 7. File-change checklist
 
-| File | Change |
-|---|---|
-| `workspace/workers/pubsub-channel/channel-do.ts` | account-aggregated channel presence keyed `user:<id>`; status model; last-seen persistence |
-| `workspace/packages/agentic-protocol/participant-ref.ts` | `status`/`avatar`/`color` in public whitelist (`:17-26`) |
-| `workspace/packages/agentic-core/*` | roster→account presence projection |
-| `src/server/services/workspacePresenceService.ts` | **new** host service + `workspace-presence-changed` event, session-registry fed, zero channel coupling |
-| `src/server/rpcServer.ts` / `rpcServer/sessionRegistry.ts` | consume WP4 `listUsersWithLiveConnections()`; drive presence on connect/drop |
-| `workspace/apps/shell/*` | render workspace presence in the panel-forest UI |
-| (guard) `scripts/check-host-workspace-imports.mjs` | ensure the new host service passes |
+| File                                                       | Change                                                                                                 |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `workspace/workers/pubsub-channel/channel-do.ts`           | account-aggregated channel presence keyed `user:<id>`; status model; last-seen persistence             |
+| `workspace/packages/agentic-protocol/participant-ref.ts`   | `status`/`avatar`/`color` in public whitelist (`:17-26`)                                               |
+| `workspace/packages/agentic-core/*`                        | roster→account presence projection                                                                     |
+| `src/server/services/workspacePresenceService.ts`          | **new** host service + `workspace-presence-changed` event, session-registry fed, zero channel coupling |
+| `src/server/rpcServer.ts` / `rpcServer/sessionRegistry.ts` | consume WP4 `listUsersWithLiveConnections()`; drive presence on connect/drop                           |
+| `workspace/apps/shell/*`                                   | render workspace presence in the panel-forest UI                                                       |
+| (guard) `scripts/check-host-workspace-imports.mjs`         | ensure the new host service passes                                                                     |
 
 ---
 

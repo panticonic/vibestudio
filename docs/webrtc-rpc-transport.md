@@ -234,12 +234,14 @@ with remote mode (§8), and the parser is **rewritten to accept only the new for
 
 ```
 vibestudio://connect?room=<uuid>&fp=<dtls-sha256>&code=<pairing-secret>
-   &sig=<signaling-endpoint>&v=<proto-version>&ice=<turn-policy>&srv=<server/workspace-id>
+   &sig=<signaling-endpoint>&v=<proto-version>&ice=<turn-policy>
 ```
 
 `fp` is the server's persistent-cert DTLS SHA-256 (proven pinnable in §11).
 `sig`/`v` decouple us from a hard-coded signaling host and allow protocol
-evolution. `srv` lets the client label/disambiguate servers.
+evolution. Pairing reach contains transport coordinates only; semantic identity
+comes from the authenticated `serverId` and exact `workspaceId` returned by the
+control plane.
 
 ## 3. Panel RPC over the pipe — N principals, one channel
 

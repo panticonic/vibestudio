@@ -94,10 +94,10 @@ panel resolves them inside its context, whose root mirrors the workspace root
 (`skills/…`, `panels/…`, `packages/…`). Use `skills/my-skill/renderer.tsx`, not
 `workspace/skills/my-skill/renderer.tsx` (the latter resolves to a non-existent
 `<context>/workspace/…` and fails with ENOENT). This matches the action-bar file
-convention. The file must exist in the panel's context: it is copied from the
-working tree (uncommitted included) when the context is first created, so a file
-added to an already-open context's repo only appears in a freshly created
-context (or after the repo is re-synced).
+convention. The file must exist at the panel context's projected working
+head. A file added after a panel was opened appears after that context is
+reprojected or the panel is recreated; do not infer source state from an
+incidental disk snapshot.
 
 Cleared types are tombstoned at a sequence — re-registering re-activates the
 typeId without resurrecting previously cleared instances. Pagination and
@@ -264,13 +264,10 @@ components. So:
 
 ## Caveats
 
-- Workspace source is built from your context head's working state, in lockstep
-  with your edits. If the module lives in a workspace unit, edit it via the
-  `edit`/`write` tools or `vcs.edit` — each working edit lands on your context
-  head and projects to disk, so the channel can load it immediately (no commit
-  needed for the build to pick it up; `vcs.commit`/`vcs.push` are for sealing and
-  shipping milestones). Do not edit via `fs.writeFile` and expect it to load.
-  (Same constraint as eval imports — see SKILL.md.)
+- Workspace source is built from the context's exact working head. If the
+  module lives in a managed workspace unit, mutate it through the semantic
+  adapter and follow [vibestudio-vcs](../vibestudio-vcs/SKILL.md) for commit and
+  publication. The projected disk tree is not a second source of truth.
 - Custom messages are panel-rendered. Headless sessions receive the events
   but won't materialize React output.
 - Don't reuse a `typeId` for unrelated shapes — registry updates are

@@ -113,10 +113,12 @@ Codebase (paths verified 2026-07-07):
   non-sentinel request to `http://127.0.0.1:<port>` bypasses the proxy entirely —
   local inference needs **no egress-proxy changes**, only an explicit loopback auth
   mode in the executor (§6.3).
-- **"Connected" in the picker today = credential presence**, not health:
-  `workspace/panels/chat/index.tsx:452-469` matches stored credential audiences
-  against model `baseUrl`. Picker component:
-  `workspace/packages/agentic-chat/components/ModelPicker.tsx` (React 19 + Radix).
+- **Model availability is catalog-owned**: the model-settings worker matches
+  credential summaries to model base URLs and only reports a cloud model ready
+  when the credential is active or has an exact persisted renewal recipe. An
+  expired, non-renewable credential is `needs-setup/credential-expired`. Picker
+  component: `workspace/packages/agentic-chat/components/ModelPicker.tsx`
+  (React 19 + Radix).
 - **Extensions are verified principals** (`packages/shared/src/principalKinds.ts`,
   commit `fadaa83d`) — they participate in capability approvals and attribution.
 
@@ -581,7 +583,7 @@ source, not the sink.
 type ModelAvailability =
   | { state: "ready"; detail?: "running" | "credentialed" }
   | { state: "startable"; detail: "will-load-on-use" }      // local, not currently loaded
-  | { state: "needs-setup"; detail: "no-credential" | "not-installed" }
+  | { state: "needs-setup"; detail: "no-credential" | "credential-expired" | "not-installed" }
   | { state: "starting" }
   | { state: "downloading"; progress: number; phase: "active" | "queued" | "paused" }
   | { state: "error"; message: string };
@@ -589,19 +591,14 @@ type ModelAvailability =
 
 Computed in the model-settings worker and shipped on every catalog entry:
 
-- **Cloud providers**: credential presence decides `needs-setup` vs candidate, then
-  a live probe confirms it — one cheap authenticated models-endpoint request per
-  credentialed provider, 30-minute TTL, refreshed eagerly when the picker opens. An
-  expired key or a provider outage shows as `error` in the picker *before* the user
-  burns a turn discovering it. The chat panel's private `refreshConnectedRefs`
-  heuristic (`panels/chat/index.tsx:452-469`) is **deleted**; the worker's
-  availability is the one source for picker, agent config, and fallback logic alike.
-  Probe authorization is settled at connect time, not per probe: stored-credential
-  use is caller-authorized with a human-approval fallback
-  (`src/server/services/credentialService.ts:3550`), so the connect flow records a
-  standing grant for the model-settings worker against the provider's
-  models-endpoint audience as part of the user's one connect consent — probes always
-  take the already-permitted fast path and can never generate approval prompts.
+- **Cloud providers**: the credential owner projects a secret-free lifecycle
+  summary. Storage presence alone is not readiness. An unexpired credential is
+  usable; an expired credential is usable only when persisted refresh material and
+  a complete OAuth refresh recipe are both present. Incomplete records fail closed
+  as `credential-expired`. The model-settings worker owns this overlay for the
+  picker, agent config, fallback logic, and CLI alike. Provider reachability and
+  upstream token rejection remain use-time facts; availability does not perform
+  side-effecting probes or open approval prompts.
 - **Local models**: live, from `status()` + `models.changed` events — `ready`
   (utility server / loaded in main), `startable` (installed; the executor's
   `ensureLoaded` call starts/loads it on first use, §6.3), `downloading`, `error`
@@ -837,8 +834,8 @@ off or ships half-enabled. The order below only sequences local verification:
    (HF search/download/resume, GGUF-folder import); curated catalog.
 4. **Fallback semantics** — availability pass in `pickFallbackModel`; offline
    first-run default; fallback banner; retry-local card; unattended auto-failover.
-5. **Availability + picker rewrite** — worker-computed availability (credential +
-   TTL'd cloud probes + live local status); delete the chat panel's connected-refs
+5. **Availability + picker rewrite** — worker-computed availability (credential
+   lifecycle + live local status); delete the chat panel's connected-refs
    heuristic; new `ModelPicker`.
 6. **Panel** — the full §9 surface.
 7. **CLI + e2e green** — §11.1 commands; §11.2 suite passing in CI; benchmarks wired

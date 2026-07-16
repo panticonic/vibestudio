@@ -71,22 +71,17 @@ or handle the refresh token directly in JS.
 
 ## Terminal Client
 
-The terminal target produces a Node ESM entry and the server can launch it as a
-supervised app process. A terminal remote client should:
+The terminal target produces a Node ESM entry and the workspace server can
+launch it as a supervised app process. A terminal app should:
 
 - connect over `/rpc` with the runner-provided principal grant
 - use app identity and manifest capabilities for privileged calls
-- call `hubControl.pairDevice` to mint another-device invites for its acting
-  user, or `hubControl.inviteUser` as root/admin to create a new user
-- parse or accept pairing invites when acting as an external CLI client
-- call `/auth/complete-pairing` for external device bootstrap flows
-- store external device credentials in CLI/user config, not in trusted app
-  bundle state
+- keep workspace work on the child session; account/device/workspace-catalog
+  control belongs to a human shell's separate stable hub session
 
 The built-in `@workspace-apps/remote-cli` is the canonical terminal app shape:
-it connects as an app principal, lists workspace status, and can ask the hub to
-mint another-device pairing material for its acting user. It is declared in the
-template so it is available for server pairing/debugging, but it stays dormant until the shell UI or
+it connects as an app principal and lists workspace status. It is declared in
+the template so it is available for debugging, but it stays dormant until the shell UI or
 `workspace.units.restart("@workspace-apps/remote-cli")` starts it.
 
 Fresh workspaces created from the product template trust their initial declared
@@ -96,10 +91,10 @@ approval path.
 
 ## Pairing Invite Creation
 
-Use the typed `hubControl` service. `pairDevice` always binds the invite to the
-authenticated user's own account; `inviteUser` creates a new user and is
-root/admin-gated. The child forwards the host-stamped subject over its private
-hub control channel, so callers cannot choose the user identity in wire args.
+Pairing invite creation belongs to the stable hub session held by desktop,
+mobile, and external CLI shells. A workspace app has only its exact child
+session and cannot deputy a hub-control request. `pairDevice` binds an invite to
+the authenticated shell's account; `inviteUser` is root/admin-gated.
 
 ## URL And Transport Rules
 
@@ -134,8 +129,9 @@ loaded.
 
 When testing pairing or remote-server state without a shell UI:
 
-1. Start the hub with `--ready-file`; on a fresh identity DB, redeem one of
-   `rootInvites` with the CLI to become root.
+1. Start the hub with `--ready-file`; on a fresh identity DB, redeem the one
+   `rootInvite` with the CLI to become root. Its deep link and HTTPS/QR URL are
+   presentation carriers for the same invitation fact, not separate invites.
 2. Select a workspace and inspect/resolve approvals through the authenticated
    workspace services. Do not mint a shell principal from a process token.
 3. Use `workspace.units.list/restart/logs/diagnostics` from an authenticated

@@ -107,6 +107,25 @@ CLI credentials and agent sessions are stored below
 and session files. The server's local admin token is stored separately in the
 same configuration root.
 
+## Model credentials
+
+Connect a model provider, or renew a credential that can no longer refresh:
+
+```sh
+vibestudio model connect openai-codex
+```
+
+The CLI always uses the system browser for interactive OAuth sign-in. The
+command accepts exactly one provider and no browser-selection flag; `--json`
+and `--plain` follow the normal structured-output rules. Its result contains
+only the provider ID and a secret-free credential summary. Authorization URLs,
+callbacks, access tokens, and refresh tokens are never printed.
+
+`model connect` currently supports providers with a canonical browser OAuth
+flow, including `openai-codex`. Providers that use API keys still collect those
+secrets through Model Settings; the CLI does not introduce a second secret-input
+or credential-storage path.
+
 ## Remote Deploy
 
 Deploy or manage a remote server over SSH/systemd:
@@ -127,21 +146,29 @@ absolute path resolved from `command -v vibestudio` on the host (so it survives
 nvm / user-prefix npm installs). Deploy then polls the loopback gateway
 `/healthz` for hub readiness and waits for the managed `default` workspace
 identity before running `remote doctor` over SSH. Pairing invites are minted by
-the hub and routed to the selected workspace; deploy itself does not consume or
-print an invite.
+the hub with an exact target workspace ID; their rooms remain on the stable hub
+control ingress. Deploy itself does not consume or print an invite.
 
 `update` reuses `deploy` and explicitly restarts the unit, so a new build
 replaces the running old binary. `remove` disables and deletes the unit; add
 `--purge` to also uninstall the `@panticonic/vibestudio-server` npm package and
-delete the WebRTC identity material (every paired device must then re-pair).
-Workspace source directories are always left intact.
+delete workspace-child WebRTC reaches. Hub control identity, accounts, and
+device pairing remain intact; clients obtain fresh workspace reaches through
+the hub after reinstall. Workspace source directories are always left intact.
 
-`remote doctor` runs a checklist: the `node-datachannel` native addon, absence of
-the deleted `VIBESTUDIO_WEBRTC_CERT`/`KEY` env vars, the `identity.pem` layout
-(present, mode `0600`, cert+key), signaling reachability (a real `role=answerer`
-room dial, not the endpoint root), and — when a deployed unit is present on the
-host — the unit's active state and gateway port. Server-only checks are skipped,
-not failed, when run as a client-side preflight.
+`remote doctor` runs a checklist: the `node-datachannel` native addon, the
+selected `identity.pem` layout (present, mode `0600`, cert+key), signaling
+reachability (a real `role=answerer` room dial, not the endpoint root), and —
+when a deployed unit is present on the host — the unit's active state and
+gateway port. It checks the stable hub control identity by default;
+`--workspace` explicitly selects one child identity. Server-only checks are
+skipped, not failed, when run as a client-side preflight.
+
+`remote repair-identity` requires an explicit `--workspace` and rotates only
+that child's reach. Device pairing remains valid and clients only re-route that
+workspace. Hub control identity rotation is intentionally unsupported because
+that identity is account/device trust, not a replaceable reach cache; restore
+its exact backup instead.
 
 `remote serve`, `mobile pair`, and server startup resolve signaling as:
 flag > `VIBESTUDIO_WEBRTC_SIGNAL_URL` > hosted default
@@ -201,6 +228,10 @@ mode-`0600` artifacts default to
 `${XDG_CONFIG_HOME:-~/.config}/vibestudio/system-test-runs/<run-id>/`; pass
 `--out-dir` to choose another artifact root; each run gets its own subdirectory.
 Exact test names are used to avoid accidental substring expansion.
+Each test has one five-minute agent-turn budget by default, shared by all phases
+of an orchestrated test. Pass `--test-timeout-ms N` to replace that budget in
+milliseconds; a timeout produces a terminal errored test result with captured
+diagnostics and cleanup evidence.
 
 ## Mobile
 
@@ -264,6 +295,13 @@ the CLI, and that service dispatches transport work through the configured
 `providers.gitInterop` extension. Runtime code does not invoke the extension by
 package name. Provider helpers such as the GitHub skill can then publish through
 the same routed API.
+
+`vcs git pull` and `vcs git import` stop at a committed semantic candidate;
+they do not advance protected `main`. Their results identify the candidate
+context and event. While `vcs git status` reports `integration-required`, use
+the ordinary semantic compare/integrate/check/commit workflow and publish
+explicitly. Outgoing export and Git push remain blocked until that candidate is
+accounted for.
 
 See [git-upstream.md](./git-upstream.md) for the two-layer model, approvals,
 `git.upstreams` config, and divergence repair workflow.

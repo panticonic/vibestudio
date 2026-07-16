@@ -64,33 +64,34 @@ substring. `limit` (default 500, max 5000) keeps the **most recent** matches.
 ## Live tailing (streaming)
 
 New records are pushed as batched **`server-log:append`** events
-(`{ records: ServerLogRecord[] }`). The pattern (same as `vcs.subscribeHead`):
+(`{ records: ServerLogRecord[] }`):
 
 ```ts
-// 1. Listen BEFORE subscribing, keyed by seq to dedupe.
-const off = rpc.on("event:server-log:append", (ev) => {
-  const { records } = ev.payload as { records: ServerLogRecord[] };
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
+
+// The client owns one long-lived response for its complete desired topic set.
+const events = new EventsClient(rpc);
+const off = events.on("server-log:append", ({ records }) => {
   for (const r of records)
     if (r.seq > lastSeq) {
       lastSeq = r.seq;
       render(r);
     }
 });
+await events.subscribe("server-log:append");
 
-// 2. Server-side subscription for this connection.
-await rpc.call("main", "events.subscribe", ["server-log:append"]);
-
-// 3. Seed/catch up (also after any reconnect):
+// Seed/catch up after opening the watch so the seq cursor closes the race.
 const snap = await rpc.call("main", "serverLog.query", [{ sinceSeq: lastSeq }]);
 
-// 4. ALWAYS pair with an unsubscribe on teardown:
+// Teardown cancels the response; there is no separate server-side lease.
 off();
-await rpc.call("main", "events.unsubscribe", ["server-log:append"]);
+await events.unsubscribeAll();
 ```
 
 From eval'd agent code, `services.serverLog.*` works for queries; for
-streaming prefer polling `query({ sinceSeq })` in a loop — it is cheap
-(in-memory) and avoids leaking push subscriptions from short-lived runs.
+short bounded inspection prefer one `query({ sinceSeq })`. If an agent truly
+needs live following, it must own and cancel an `events.watch` response (the
+`EventsClient` pattern above); never create an unowned background follower.
 
 ## Where else these logs live
 

@@ -33,8 +33,9 @@ if (ctx.readOnly && methodDef?.access?.sensitivity !== "read") {
 Read-only-ness is derived from the method's declared `access.sensitivity` (the canonical
 signal in `MethodAccessDescriptor`). `"read"` means non-mutating. Examples:
 `blobstore.has/stat/getText/grep`, `fs.readFile/readdir/stat/glob`,
-`vcs.status/log/diff/readFile`, `workspace.list/get/config`, and the `*.get*/list/status`
-family across services. The mutating tiers (`write`/`admin`/`destructive`) are refused.
+`vcs.status/compare/inspect/neighbors/history/blame/readFile/listFiles`,
+`workspace.list/get/config`, and the `*.get*/list/status` family across services.
+The mutating tiers (`write`/`admin`/`destructive`) are refused.
 
 This is **trusted metadata, not verified** — the dispatcher has no semantic visibility
 into a handler's side effects, so the `sensitivity` tag is authored (bootstrapped during

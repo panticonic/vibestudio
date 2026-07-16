@@ -1,58 +1,43 @@
 # App Development Loop
 
-The dev loop is **build-on-push**: you edit working content, optionally preview a
-dev build, then commit and push. Builds are authoritative only at push — `main`
-advances only via a build-gated, fast-forward-only push.
-
-The three layers:
-
-- **edit** (`vcs.edit`, or the `edit`/`write` tools) — applies a change to your
-  WORKING content on your context head. No commit, no build, not in `vcs.log`.
-  A stray `fs.writeFile` that never lands on the head is not an edit.
-- **commit** (`vcs.commit({ message })`) — folds your uncommitted working edits
-  into a per-repo snapshot on the context head. Still no build; `main` does not
-  move.
-- **push** (`vcs.push({ repoPaths })`) — fast-forward-only advance of `main`,
-  gated on a successful build of the committed content. This is the only step
-  that produces an authoritative app build.
-
-Between edit and commit you can run an on-demand **preview build** with
-`vcs.previewBuild({ repoPaths })` — it builds your WORKING content so you can
-catch type/build errors before committing, and it does NOT write an EV baseline
-or advance any head.
+App development uses the workspace-wide semantic VCS. Read
+[vibestudio-vcs](../vibestudio-vcs/SKILL.md) before changing source. An app edit
+authors a coherent work unit and appends one local application. Commit consumes
+the complete local application chain; publication advances protected `main`
+after semantic ancestry/integration validation, approval, and one atomic ref
+update. Builds are separate source projections.
 
 ## Standard Loop
 
-1. Edit files under `apps/<name>` with the `edit`/`write` tools (which apply
-   through `vcs.edit`) — each edit lands on your context head as WORKING content.
-   No build runs.
-2. Run focused type/tests where available. Use
-   `vcs.previewBuild({ repoPaths: ["apps/<name>"] })` to dev-build your working
-   content and surface `file:line:col` diagnostics without committing.
-3. Commit the working edits: `vcs.commit({ message: "…" })`.
-4. Push the app repo into its `main` (build-gated, ff-only):
-   `vcs.push({ repoPaths: ["apps/<name>"] })`. The push triggers the
-   authoritative build; on success `main` advances.
-5. Approve the app install/update/source-change prompt if the trusted identity
-   changed.
-6. Use the target-specific update prompt to adopt the new build, or keep the
-   currently loaded build until you are ready.
+1. Call `vcs.status` and retain the exact `workingHead`. Author source through
+   the managed edit/write adapter or `vcs.edit` with that basis and a stable
+   command ID. Use `vcs.move`/`vcs.copy` for identity changes.
+2. Run focused typechecks, tests, and the ordinary build service against the
+   current context.
+3. When `main` advanced, compare its exact event and integrate useful changes
+   in small local steps. Test between steps.
+4. Commit the complete local application chain. Split unrelated work into a
+   different context instead of staging a subset.
+5. Push the clean committed event through the protected publication boundary.
+   An ancestry, integration, authorization, approval, or atomic-ref failure
+   advances no protected ref.
+6. Let the post-publication build projection derive the app artifact. Approve
+   the app install/update/source-change prompt if the trusted identity changed.
+7. Use the target-specific update prompt to adopt a successful new build, or
+   keep the currently loaded build until you are ready.
 
-A `build-failed` push advances nothing and returns structured `file:line:col`
-diagnostics — fix those (edit → commit) and re-push. A `diverged` push means
-`main` moved under you; reconcile with `vcs.merge("apps/<name>")` (commit any
-conflict resolution), then push again. `vcs.push` rejects outright if you still
-have uncommitted edits — commit first.
-
-For context agents, this means making edits through the workspace `edit`/`write`
-tools (which apply through `vcs.edit`) rather than direct shell file writes, then
-committing and pushing. See `workspace-dev/TOOLS.md` for common helper patterns.
+An explicit check returns structured diagnostics but has no ref authority. A
+stale or diverged publication must return to exact comparison, deliberate
+semantic integration, whole-chain commit, and protected publication: observe
+current `main`, compare exact state nodes, adopt/reconcile/decline incoming
+changes in local steps, commit the complete chain, and retry publication.
+Follow the typed recovery table in the canonical VCS skill.
 
 In development, app reconciliation prints an app status diagnostic with source,
 target, active EV, build key, source HEAD, and clean/dirty state. Here
-"dirty" means the repo's context head has committed changes ahead of `main` (or
-uncommitted working edits) that the running trusted app build does not yet
-include — not filesystem dirtiness. Set `VIBESTUDIO_APP_DEV_STATUS=0` to silence
+"dirty" means the context's committed event is ahead of `main` (or its
+working head carries applications) that the running trusted app build does not yet include
+— not filesystem dirtiness. Set `VIBESTUDIO_APP_DEV_STATUS=0` to silence
 the diagnostic, or `VIBESTUDIO_APP_DEV_STATUS=1` to force it outside
 `NODE_ENV=development`.
 
@@ -76,13 +61,15 @@ to be used until the update is approved, depending on the reconcile path.
 
 ## Update Errors And Rollback
 
-Push-gated rebuilds keep the previous active app build until the new build
-validates. If the build or target validation fails, the push reports
-`build-failed`, the previous active build stays in use, the app status becomes
-`error`, `apps:status` includes the active build key and effective version that
-remain in use, and `apps:lifecycle` emits `type: "update-error"` with the
-failure message. The shell and mobile clients surface these events through their
-notification/toast surfaces.
+Publication-triggered rebuilds keep the previous active app build until the new
+artifact validates and is eligible for activation. If build, target validation,
+or activation fails, semantic `main` remains at the published event while the
+previous active build stays in use. App status becomes `error`, `apps:status`
+includes the active build key and effective version that remain in use, and
+`apps:lifecycle` emits `type: "update-error"` with the failure message. The
+shell and mobile clients surface these events through their notification/toast
+surfaces. Repair with a new semantic event; do not roll back source history to
+pretend the failed publication did not happen.
 
 Successful app updates record the replaced build in app version history and emit
 `apps:lifecycle` with `type: "update-available"`. Adoption is explicit for
@@ -125,9 +112,13 @@ Common failure modes:
 - missing `panel-hosting` blocks view service methods
 - missing app event subscriber breaks shell event subscriptions
 - unsupported capability rejects app loading
-- app source edited via a stray `fs.writeFile` that never landed on the head (use `edit`/`write`), so the working content — and the push build — did not change
-- edits left uncommitted, so `vcs.push` rejected them (run `vcs.commit({ message })` first)
-- changes committed but never pushed, so `main` and the active build did not advance
+- app source changed outside the managed adapter, so no authored work unit was
+  recorded at the working head
+- unrelated work was placed in the same context even though it needed a
+  separate commit boundary
+- current `main` contains changes that have not been compared and integrated
+- changes were committed but never published, so `main` and the active build
+  did not advance
 
 ## React Native App Loop
 

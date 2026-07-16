@@ -309,21 +309,25 @@ for (const r of scope.results.results.filter((r) => !r.result.passed)) {
 ```
 
 If lifecycle events show `turn.opened` but no assistant message, tool call, or
-`turn.closed`, query the agent debug port instead of adding sleeps or timeouts:
+`turn.closed`, compare durable GAD health with the activation-local agent view:
 
 ```typescript
+const health = await gad.inspectAgentHealth({ channelId: chat.channelId });
 const debug = await chat.callMethod(agentParticipantId, "getDebugState", {});
 console.log(JSON.stringify(debug, null, 2).slice(0, 4000));
 ```
 
-The default AI agent exposes this read-only method for stall diagnosis. It
-captures dispatcher state, runner phase, persisted pending work, checkpoints,
-and recent lifecycle/debug events. See `docs/agent-debug-port.md` for the full
-field guide.
+The local snapshot never hydrates its folded loop through GAD. Treat
+`loaded: false` as an explicit activation-local absence and use `health` for
+durable terminality and provenance. For an out-of-band or cross-channel probe,
+use the channel DO's bounded `inspectAgent` path described in
+`docs/agent-debug-port.md`.
 
-A `vcs.push` is build-gated and returns its own diagnostics, but if a build
-failure shows up on the server's state-triggered background build path (separate
-from a push), inspect the build event buffer before retrying:
+VCS publication is semantic ancestry/integration validation, approval, and an
+atomic protected-ref update; it does not run or certify a build. Invoke an
+explicit build against the test context when build confidence is part of the
+test. If a failure appears on the state-triggered post-publication build path,
+inspect the build event buffer before repairing source:
 
 ```typescript
 // Eval uses the same portable `rpc.call(target, method, args)` shape as panels/workers.
@@ -336,13 +340,11 @@ return {
 ```
 
 `build.listRecentBuildEvents` can be filtered with a unit name or
-workspace-relative path. State-triggered events include `trigger.head`,
-`trigger.stateHash`, and `trigger.changedPaths`. Builds run authoritatively at
-the push gate. A `vcs.commit(...)` returns a repo-rooted `stateHash` and
-`changedPaths`; build events expose the workspace-rooted trigger state. Pass the
-unit path here for the matching build-event lookup. A
-`vcs.edit(...)` (uncommitted working change) does not build — use
-`vcs.previewBuild({ repoPaths })` for an on-demand build of working content.
+workspace-relative path. State-triggered events identify the exact build
+revision and changed workspace view. Correlate the explicit check or derived
+artifact with the semantic event and test trajectory; never treat the build as
+publication authority. For activation failures, verify the new artifact was
+rejected and the previous runnable artifact remained selected.
 
 ## Phase 3: Classify the Root Cause
 
@@ -368,28 +370,41 @@ For each failure, determine the root cause category and act accordingly:
 - **Validation too strict** → loosen the validator, but only after confirming the agent's response is correct
 - **Prompt truly underspecified** → clarify only the user-visible goal or required output marker; never add implementation details that hide a docs or runtime bug
 - **Long-running task** → inspect where progress stopped and fix the blocked operation
-- **Published test repo survives into a later run** → set `workspaceRepoFixture: true` on the mutating `TestCase`; do not add a fixed repository basename or cleanup steps to the user prompt. The harness owns a unique `system-test-*` namespace, stale-fixture cleanup, serialization, teardown, and cleanup diagnostics.
+- **Published test work survives into a later run** → select
+  `CONTENT_WORKSPACE_REPO_FIXTURE` on the mutating `TestCase`, or
+  `BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE` when the behavior requires a real
+  buildable package; do not add a fixed repository basename, seed recipe, or
+  cleanup steps to the user prompt. The harness imports one exact
+  `system-test-*` repository on a fresh task line without publishing it. If a
+  task event reaches main, cleanup intersects that first-parent task line with
+  current main history and counteracts only the published task work, newest
+  first, before one commit and push. This also removes extra repository
+  identities the task authored and reports them as a scope failure. Newer local
+  work and a fixture that never reached main disappear with the task context.
+  The harness never inventories or prefix-deletes ambient sibling work, invents
+  a fixture-only deletion path, or serializes fixture tests behind a global
+  lock.
 
 **Default assumption: the infrastructure is wrong, not the test.** Only classify as a test bug after reading the service code and confirming the API works correctly.
 
 ## Phase 4: Identify Files to Change
 
-| Symptom                       | Likely files                                                                                                    |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| fs operation failed           | `src/server/services/fsService.ts`, `workspace/packages/runtime/src/panel/fs.ts`                                |
-| DO storage operation failed   | `src/server/internalDOs/*`, `workspace/packages/runtime/src/worker/durable-base.ts`                             |
-| GAD VCS operation failed      | `src/server/services/vcsService.ts`, `src/server/gadVcs/`, `workspace/packages/runtime/src/shared/vcsClient.ts` |
-| external Git operation failed | `packages/git/src/client.ts`, `src/server/services/gitInteropService.ts`                                        |
-| Build failed                  | `src/server/buildV2/`, `build.mjs`                                                                              |
-| Worker/DO issue               | `src/server/services/workerService.ts`, `workspace/packages/runtime/src/worker/`                                |
-| Panel lifecycle               | `src/main/panelOrchestrator.ts`, `src/server/services/bridgeService.ts`                                         |
-| Credential/OAuth error        | `src/server/services/credentialService.ts`, `workspace/packages/runtime/src/shared/credentials.ts`              |
-| Harness crash                 | `workspace/packages/harness/src/entry.ts`, `src/server/harnessManager.ts`                                       |
-| PubSub issue                  | `workspace/packages/pubsub/src/`, `workspace/workers/pubsub-channel/`                                           |
-| Skill import                  | `src/server/buildV2/`, package.json exports                                                                     |
-| Agent behavior                | `workspace/workers/agent-worker/ai-chat-worker.ts`, harness config                                              |
-| RPC routing                   | `src/shared/serviceDispatcher.ts`, `packages/rpc/src/`                                                          |
-| Error swallowed               | Search for `.catch(` and empty catch blocks near the failure site                                               |
+| Symptom                       | Likely files                                                                                                                                                                                   |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fs operation failed           | `src/server/services/fsService.ts`, `workspace/packages/runtime/src/panel/fs.ts`                                                                                                               |
+| DO storage operation failed   | `src/server/internalDOs/*`, `workspace/packages/runtime/src/worker/durable-base.ts`                                                                                                            |
+| Semantic VCS operation failed | `packages/service-schemas/src/vcs.ts`, `src/server/services/vcsService.ts`, `workspace/packages/semantic-control-plane/src/semanticVcs*`, `workspace/packages/runtime/src/shared/vcsClient.ts` |
+| external Git operation failed | `packages/git/src/client.ts`, `src/server/services/gitInteropService.ts`                                                                                                                       |
+| Build failed                  | `src/server/buildV2/`, `build.mjs`                                                                                                                                                             |
+| Worker/DO issue               | `src/server/services/workerService.ts`, `workspace/packages/runtime/src/worker/`                                                                                                               |
+| Panel lifecycle               | `src/main/panelOrchestrator.ts`, `src/server/services/bridgeService.ts`                                                                                                                        |
+| Credential/OAuth error        | `src/server/services/credentialService.ts`, `workspace/packages/runtime/src/shared/credentials.ts`                                                                                             |
+| Harness crash                 | `workspace/packages/harness/src/entry.ts`, `src/server/harnessManager.ts`                                                                                                                      |
+| PubSub issue                  | `workspace/packages/pubsub/src/`, `workspace/workers/pubsub-channel/`                                                                                                                          |
+| Skill import                  | `src/server/buildV2/`, package.json exports                                                                                                                                                    |
+| Agent behavior                | `workspace/workers/agent-worker/ai-chat-worker.ts`, harness config                                                                                                                             |
+| RPC routing                   | `src/shared/serviceDispatcher.ts`, `packages/rpc/src/`                                                                                                                                         |
+| Error swallowed               | Search for `.catch(` and empty catch blocks near the failure site                                                                                                                              |
 
 ## Phase 5: Prepare an Editable Checkout
 
@@ -399,10 +414,11 @@ Pick the checkout type based on what failed.
 
 If the bug is in workspace-owned runtime source — from your file root that is
 `apps/`, `extensions/`, `packages/`, `panels/`, `workers/`, or `skills/` —
-edit the files directly in your context with the `edit`/`write` tools (which
-record working edits through `vcs.edit`). Each edit lands as an UNCOMMITTED
-working change projected to disk; seal a milestone with `vcs.commit(message)` and
-ship it (build-gated) with `vcs.push`. These trees are live build inputs.
+edit the files directly in your context with the `edit`/`write` tools. Then use
+the canonical [Vibestudio VCS protocol](../vibestudio-vcs/SKILL.md): retain the
+exact working state, integrate current main through local incremental decisions
+when necessary, commit the complete local chain, and publish the exact committed
+event. These trees are live build inputs.
 
 For `apps/` bugs, read `skills/appdev/SKILL.md` before
 editing. App fixes can require target-specific validation: Electron host chrome,
@@ -429,11 +445,17 @@ writes `meta/dogfood.json`.
 In this mode, `projects/vibestudio` is still a plain project, not a Build V2
 runtime unit, but it is a **self-edit target**:
 
-- Host-checkout mirroring is unavailable under GAD VCS.
+- Host-checkout mirroring is an external effect of the semantic VCS; it is not
+  a second authority available to the test subject.
 - Changes in `projects/vibestudio` prepare an external Git branch or patch; they
   do not hot-patch the running Vibestudio server.
 - Verification requires restarting Vibestudio from that checkout, applying the
   patch in the host checkout, or handing the branch to a developer.
+- Restarting from a patched host checkout still does not import that checkout's
+  `workspace/` subtree into an existing semantic workspace. Publish workspace
+  runtime changes through semantic VCS, or use a freshly seeded pre-release
+  workspace whose exact `systemEpoch` matches the host. Never clear only the
+  build cache to force a mixed host/userland generation.
 
 Userland code can detect this mode by reading `meta/dogfood.json`:
 
@@ -467,8 +489,10 @@ Prefer an existing `projects/vibestudio` workspace repo when it exists. If it
 does not exist yet and the workspace is not dogfood-managed, import it with
 `git.importProject()`. That uses one workspace config approval showing the
 destination path, remote URL, and branch; records the shared remote and matching
-upstream with `autoPush: false` in `meta/vibestudio.yml`; clones into canonical
-workspace source; and propagates the repo into contexts. The same API can import
+upstream with `autoPush: false` in `meta/vibestudio.yml`; and clones one exact
+Git snapshot as a committed semantic candidate. It does not propagate that
+candidate into protected `main`. Integrate and publish the candidate through the
+ordinary VCS protocol before using it as shared source. The same API can import
 panels, packages, skills, workers, templates, about pages, and plain projects by
 choosing the destination path.
 
@@ -481,7 +505,7 @@ eval({
       await fs.stat(dir);
       console.log(dir + " already exists");
     } catch {
-      await git.importProject({
+      const imported = await git.importProject({
         path: dir,
         remote: {
           name: "origin",
@@ -489,6 +513,7 @@ eval({
           branch: "main",
         },
       });
+      console.log("Import candidate:", imported.candidate);
     }
 
     scope.checkoutDir = dir;
@@ -528,65 +553,64 @@ await fs.writeFile("projects/vibestudio/src/server/services/fsService.ts", fixed
 
 ## Phase 7: Publish, then Verify
 
-**Critical:** The model is edit → commit → push. `vcs.edit` (and the `edit`/`write`
-tools) records UNCOMMITTED working changes projected to disk; `vcs.commit(message)`
-seals them onto your context head; `vcs.push` is the fast-forward-only build gate
-that ships them into `main`. A stray `fs.writeFile` that never lands on the head is
-not tracked and has no effect on the VCS.
+For workspace-owned source, publication is a semantic protocol:
 
-```typescript
-// For workspace runtime units, editing via edit/write/vcs.edit records an
-// UNCOMMITTED working change. Seal it with vcs.commit(message), then ship it
-// (build-gated) with vcs.push so the build runs authoritatively.
-// const committed = await services.vcs.commit({ message: "fix: describe the change" });
-// const pushed = await services.vcs.push({ repoPaths: [scope.checkoutDir] });
-// // push is ff-only: if it returns { status: "diverged" }, reconcile with
-// // vcs.merge(repoPath) + vcs.commit(message), then re-push.
+1. Observe the context's exact working state, committed event, and current main.
+2. Confirm the repair is represented by coherent work units and changes, not
+   only by projected bytes.
+3. If main moved, compare its exact event and incorporate incoming changes
+   through truthful local adopt/reconcile/decline decisions.
+4. Commit the complete local application chain, adding the integrated source
+   event as a parent when applicable.
+5. Run explicit checks against the context when the repair needs build or type
+   confidence; their diagnostics are advisory and move no ref.
+6. Push the exact clean committed event against the main event you observed.
+7. Treat ancestry, integration, authorization, approval, or atomic-ref failure
+   as a typed no-write result. Repair the cause and continue from newly observed
+   state.
+8. Inspect post-publication build and activation projections separately. A
+   failed activation must retain the previous runnable artifact while the
+   published source remains on `main`.
 
-// For plain external project repos, use @vibestudio/git with credentials.gitHttp():
-// const externalGit = new GitClient(fs, { http: credentials.gitHttp() });
-// await externalGit.addAll(scope.checkoutDir);
-// await externalGit.commit({ dir: scope.checkoutDir, message: `fix: describe the change` });
-// await externalGit.push({ dir: scope.checkoutDir, remote: "origin", ref: branchName });
+Every semantic mutation has a stable `commandId`. Retry the same ID only for an
+identical request whose response may have been lost. After a freshness failure
+or any request change, re-observe the basis and use a new ID. See
+[typed recovery](../vibestudio-vcs/references/typed-recovery.md).
 
-// Then rebuild if the fix touched workspace runtime units. Plain projects
-// such as projects/vibestudio are not Build V2 live inputs.
-if (!scope.checkoutDir.startsWith("projects/")) {
-  const buildResult = await chat.rpc.call("main", "build.recompute", []);
-  console.log("Build recomputed:", buildResult);
-}
+For plain external project repositories, continue to use `@vibestudio/git`
+with `credentials.gitHttp()`. External Git commits and pushes do not hot-patch
+the running server; restart from that checkout or hand off the branch/patch
+before retesting server changes.
 
-// If checkoutDir is projects/vibestudio, this is an external project edit. It
-// does not hot-patch the running server under GAD VCS; restart from that
-// checkout or hand off the branch/patch before re-testing server changes.
+Choose the restart boundary that owns the changed code:
 
-// For panel fixes, check types in the current context before re-testing.
-if (scope.checkoutDir.startsWith("panels/")) {
-  const typecheck = await chat.rpc.call("main", "extensions.invoke", [
-    "@workspace-extensions/typecheck-service",
-    "checkPanel",
-    [scope.checkoutDir],
-  ]);
-  console.log("Type errors:", typecheck);
-}
+- For host-only changes, restart the current source server. Host modules load
+  from the checkout on each process start.
+- For changes under `workspace/` (including this skill, agents, workers, and
+  userland packages), stop the current server and start
+  `pnpm server:live --ephemeral`. The ephemeral workspace is copied fresh from
+  the checkout template. A named `--bootstrap-workspace` is durable product
+  state: restarting it correctly preserves its semantic source and build
+  projections, so it must never be treated as a checkout-sync mechanism.
 
-// Re-run the specific failed test
-const runner = new HeadlessRunner(contextId);
-const tester = new TestRunner(runner);
-const retest = await tester.runOne(failedTest);
-console.log(`Re-test: ${retest.result.passed ? "PASS" : "FAIL"}`);
-```
+Before assuming a repair failed, verify:
 
-Before assuming a fix failed, verify provenance:
+- the test's context and active build ref correspond to the returned event;
+- the intended work unit, changes, and application are present;
+- the publication receipt points at the committed event, while any build
+  artifact separately names that exact semantic state;
+- a moved file retained its `fileId`, or a copied file has the expected new ID
+  plus its exact `authored-copy-source` relation and `copies-content` mappings;
+- the source server was restarted when host code changed, and workspace-source
+  changes were exercised through a fresh ephemeral checkout;
+- external project changes were actually applied to the server under test.
+- every worker/DO runtime image selects the intended context/main state and
+  its build metadata derives from that exact semantic state;
+- the manifest's `systemEpoch` matches the host before any runtime starts.
 
-- the checkout containing the edit is the context the test is using
-- the edit landed on the head via `edit`/`write`/`vcs.edit` and was sealed with `vcs.commit` (not a stray `fs.writeFile`)
-- the build/reload consumed the committed state (an uncommitted `vcs.edit` does not build — commit + push, or use `vcs.previewBuild`)
-- external project edits under `projects/` were applied to the server under test
-
-Planned hardening: expose a runtime build-provenance API with context id,
-source path, state hash, dirty flag, build timestamp, and artifact id, then include
-it automatically in system-test failure reports.
+Then rerun the exact failed test through the CLI, followed by its category and
+smoke coverage. Inspect any new failure trajectory rather than adding prompt
+instructions or timing delays.
 
 ## Phase 8: Iterate or Finalize
 
@@ -601,28 +625,43 @@ if (retest.result.passed) {
 
 ## Tips
 
-- **Start with smoke tests.** They're fast and catch the most common issues.
-- **One fix per branch.** Don't bundle unrelated fixes.
-- **Always create a branch** before making changes.
+- **Start with the smallest relevant exact test.** Run `doctor` and discover its
+  current name first; run the affected category and smoke only after the exact
+  test passes.
+- **Keep each repair semantically coherent.** Don't bundle unrelated fixes.
+- **Use the isolated semantic task context for workspace-owned source.** Create
+  a Git branch only when editing a plain external project repository.
 - **Check type errors before committing.** Use the `@workspace-extensions/typecheck-service` extension.
 - **Re-run the full smoke suite after fixing.** Your fix might break something else.
-- **Declare published repo fixtures.** Any agentic case that may create or fork
-  a workspace repo must use `workspaceRepoFixture: true`; isolated agent
-  contexts alone do not undo `vcs.push` to workspace `main`.
+- **Declare typed repository fixtures.** Any agentic case that may create or
+  fork workspace source must select the `projects/...` content fixture or the
+  seeded `packages/...` buildable-package fixture. The baseline is local; normal
+  `vcs.push` is what makes it shared. Cleanup derives the newest published task
+  event from exact event ancestry and counteracts that task's published semantic
+  work in reverse causal order; it does not infer ownership from paths or a
+  workspace inventory.
 - **Use `projects/` for plain external repos.** They are editable and can have
   shared remotes, but they are not live runtime units.
-- **Shared remotes are clone declarations.** `git.setSharedRemote()` records
+- **Shared remotes are transport declarations.** `git.setSharedRemote()` records
   and propagates remotes for a workspace repo that exists or will exist later;
-  configured missing repos are imported automatically at startup.
+  startup completion asks the provider's `upstreamStatus` and imports only
+  `not-materialized` checkouts.
 - **Use `git.importProject()` to create a workspace repo from a remote.** It
-  clones into canonical workspace source, records the shared remote and matching
-  upstream with auto-push off, and makes the repo available to future contexts.
-  Use the destination path to choose the category, such as `panels/name`,
-  `skills/name`, `workers/name`, or `projects/name`.
+  clones into operational server state under `state/git-checkouts/`, records the
+  shared remote and matching upstream with auto-push off, and returns a
+  committed candidate context and event. Compare and integrate that candidate
+  incrementally, check it, commit the complete chain, and explicitly publish it
+  before treating the repo as available to other contexts. Build V2 reads exact
+  semantic/CAS state, never this checkout. Use the destination path to choose
+  the category, such as `panels/name`, `skills/name`, `workers/name`, or
+  `projects/name`.
 - **Use `git.completeWorkspaceDependencies()` as a retry/backfill.** It imports
-  each configured remote whose workspace repo is missing and reports imported,
-  skipped, and failed paths. Pass `{ credentialId }` for private repo retries;
-  startup auto-import has no interactive credential argument.
+  each configured upstream whose provider status is `not-materialized` and
+  reports imported, skipped, and failed paths, including candidate coordinates
+  for each successful import. Other provider-reported states are skipped as
+  `already-materialized`, including `integration-required`. Pass
+  `{ credentialId }` for private repo retries; startup auto-import has no
+  interactive credential argument.
 - **If an API is confusing, fix the API.** Don't add comments explaining the confusion.
 - **If an error message is unhelpful, fix the error message.** Don't add try/catch wrappers that translate it.
 - **If a service is missing a method, add the method.** Don't chain multiple calls to work around it.

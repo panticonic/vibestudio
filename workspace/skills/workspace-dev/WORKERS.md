@@ -12,7 +12,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `id` | value |  |  |
 | `contextId` | value |  |  |
 | `rpc` | value |  | Portable RPC client (the full createRpcClient). |
-| `fs` | value |  | Per-context filesystem sandbox. Paths are context-root-relative. For valid workspace-repo paths, writeFile, appendFile, truncate, chmod, unlink/rmdir/rm, copyFile destinations, and supported renames into or within repos route through GAD working edits; tracked-to-scratch renames and open with write flags are rejected. mkdir and utimes remain direct filesystem operations. Platform-ignored paths and paths outside reserved workspace source roots are local scratch. |
+| `fs` | value |  | Per-context filesystem sandbox. Paths are context-root-relative. The semantic workspace records managed mutations before projection; moves preserve file identity and copies mint a new identity with exact copy provenance. Tracked-to-scratch renames, managed empty-directory mkdir, and open with write flags are rejected. Scratch mkdir and utimes remain direct filesystem operations. Platform-excluded paths and paths outside reserved workspace source roots are local scratch. |
 | `callMain` | value |  | Call a `main` (server) service method: callMain("fs.readFile", path). |
 | `parent` | value |  | This runtime's parent panel handle (a no-panel handle when there is none). |
 | `getParent` | value |  | Get the parent panel handle, or null when there is no parent. |
@@ -25,15 +25,15 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
 | `browserData` | namespace | `detectBrowsers`, `getOpenTabs`, `openTabsAsPanels`, `startImport`, `getImportHistory`, `getProfileImportState`, `previewImport`, `getCookieDomains`, `getHistoryDomains`, `getPasswordOrigins`, `getAutofillFieldNames`, `getDomainReadiness`, `getAutocompleteDebug`, `getBookmarks`, `addBookmark`, `updateBookmark`, `deleteBookmark`, `moveBookmark`, `searchBookmarks`, `getHistory`, `deleteHistoryEntry`, `deleteHistoryRange`, `clearAllHistory`, `searchHistory`, `searchHistoryForAutocomplete`, `recordHistoryVisit`, `updateHistoryTitle`, `getPasswords`, `getPasswordForSite`, `addPassword`, `updatePassword`, `deletePassword`, `updatePasswordLastUsed`, `addNeverSavePassword`, `isNeverSavePassword`, `getNeverSavePasswordOrigins`, `removeNeverSavePassword`, `getAutofillSuggestions`, `getSearchEngines`, `setDefaultEngine`, `getPermissions`, `setPermission`, `exportBookmarks`, `exportPasswords`, `exportCookies`, `exportAll`, `getCookies`, `deleteCookie`, `clearCookies` | Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export. |
-| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `createDisposableRemote`, `publishToDisposableRemote`, `pushDisposableRemote`, `inspectDisposableRemote`, `removeDisposableRemote`, `resetExportMarker`, `commitMapping`, `importProject`, `completeWorkspaceDependencies` | Typed external Git operations routed through the workspace's configured gitInterop provider. |
-| `vcs` | namespace | `edit`, `commit`, `discardEdits`, `readFile`, `listFiles`, `revert`, `status`, `log`, `diff`, `resolveHead`, `workspaceViewWithRepoAt`, `merge`, `abortMerge`, `pendingMerge`, `push`, `pushStatus`, `previewBuild`, `commitEdits`, `fileHistory`, `commitAncestors`, `editsByActor`, `editsByTurn`, `editsByInvocation`, `forkRepo`, `contextStatus`, `rebaseContext`, `recall` | Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance. |
-| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryEvents`, `appendChannelEnvelope`, `appendChannelEnvelopeWithRegistryMutation`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections`, `provenanceForFile`, `provenanceForSession`, `provenanceForClaim` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
+| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `createDisposableRemote`, `publishToDisposableRemote`, `pushDisposableRemote`, `inspectDisposableRemote`, `removeDisposableRemote`, `commitMapping`, `importProject`, `completeWorkspaceDependencies` | Typed external Git operations routed through the workspace's configured gitInterop provider. |
+| `vcs` | namespace | `edit`, `move`, `copy`, `integrate`, `revert`, `commit`, `discard`, `importSnapshot`, `push`, `status`, `compare`, `inspect`, `neighbors`, `history`, `blame`, `resolveRepository`, `readFile`, `listFiles` | Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, and directly walkable provenance. |
+| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryEvents`, `appendChannelEnvelope`, `appendChannelEnvelopeWithRegistryMutation`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
 | `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree`, `delete`, `list`, `putBytes`, `readText` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string \| null. Runtime-only putBytes(Uint8Array \| ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` | Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings. |
 | `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on`, `list`, `reload` |  |
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
-| `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `sourceTree`, `findUnitForPath`, `units` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles. |
+| `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles. |
 | `openPanel` | value |  | Open a workspace or browser panel and return a PanelHandle. |
 | `listPanels` | value |  | Alias for runtime.panelTree.list(). |
 | `getPanelHandle` | value |  | Alias for runtime.panelTree.get(id, kind?). |
@@ -53,6 +53,10 @@ filesystem/storage context and `ref` selects the code build. Never rely on
 `contextId` to imply `ctx:<contextId>`; pass `ref` explicitly when replacing a
 panel with context-branch code.
 
+For workers and Durable Objects, the owning `contextId` also selects the
+default semantic working state. Omit `ref` to follow that context; use `ref: "main"` only
+to pin protected main, or another explicit immutable selector deliberately.
+
 ## Worker Lifecycle and Environment Bindings
 
 Discover launchable sources with `await workers.listSources()`. The result
@@ -67,7 +71,6 @@ delegates to the canonical runtime entity service):
 const handle = await workers.create("workers/my-worker", {
   key: `probe-${crypto.randomUUID()}`,
   contextId: ctx.contextId,
-  ref: `ctx:${ctx.contextId}`, // omit only when intentionally using main
   env: { NON_SECRET_PROBE: "configured" },
 });
 
@@ -102,8 +105,7 @@ export default {
     const runtime = createWorkerRuntime(env);
     if (exposedForWorker !== env.WORKER_ID) {
       runtime.rpc.expose("observeConfiguredValue", () => ({
-        value:
-          typeof env["NON_SECRET_PROBE"] === "string" ? env["NON_SECRET_PROBE"] : null,
+        value: typeof env["NON_SECRET_PROBE"] === "string" ? env["NON_SECRET_PROBE"] : null,
       }));
       exposedForWorker = env.WORKER_ID;
     }
@@ -267,13 +269,14 @@ export class TodoStore extends DurableObjectBase {
   @rpc({ callers: ["panel", "app", "do", "worker"] })
   listTodos(): Array<{ id: string; title: string; done: boolean; updatedAt: string }> {
     this.ensureReady();
-    return (this.sql.exec(`SELECT * FROM todos ORDER BY updated_at DESC`).toArray() as TodoRow[])
-      .map((row) => ({
-        id: row.id,
-        title: row.title,
-        done: row.done === 1,
-        updatedAt: row.updated_at,
-      }));
+    return (
+      this.sql.exec(`SELECT * FROM todos ORDER BY updated_at DESC`).toArray() as TodoRow[]
+    ).map((row) => ({
+      id: row.id,
+      title: row.title,
+      done: row.done === 1,
+      updatedAt: row.updated_at,
+    }));
   }
 }
 ```
@@ -344,51 +347,46 @@ test process and does not exercise service resolution, workerd persistence, or
 the RPC/policy boundary. Do not import `createTestDO` from agent eval or
 production panel/worker/DO code.
 
-## Durable Object Schema & Migrations
+## Durable Object Schema Epochs
 
-`DurableObjectBase` owns SQLite schema lifecycle — never run `CREATE TABLE` /
-`ALTER TABLE` ad hoc in handlers. Define the schema declaratively and version
-it:
+`DurableObjectBase` owns SQLite schema lifecycle. Define the one exact current
+schema in `createTables`; never interpret or translate an older shape in a
+handler:
 
 ```ts
 export class MyStoreDO extends DurableObjectBase {
-  // Bump this when the schema changes. Persisted per-instance; instances
-  // upgrade lazily on their next request.
+  // Bump this for any schema-shape change. It identifies one exact pre-release
+  // epoch; it is not a sequence of layouts the current code can read.
   static override schemaVersion = 2;
 
-  // Idempotent CREATE TABLE IF NOT EXISTS statements for the CURRENT schema.
-  // Runs on every init (fresh and upgraded instances alike).
+  // Idempotent declarations for the exact CURRENT schema. These may rerun to
+  // complete an interrupted initialization of this same epoch.
   protected override createTables(): void {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS items (
       id TEXT PRIMARY KEY, label TEXT NOT NULL, archived INTEGER DEFAULT 0
     )`);
   }
 
-  // Step persisted data forward when an instance is below schemaVersion.
-  // Runs BEFORE createTables(), once, inside init. Make each step idempotent.
-  protected override migrate(fromVersion: number, _toVersion: number): void {
-    if (fromVersion < 2) {
-      this.sql.exec(`ALTER TABLE items ADD COLUMN archived INTEGER DEFAULT 0`);
-    }
-  }
-
-  // Optional: tables that must exist before the version is recorded as ready.
-  // Failed validation throws and retries on the next request.
+  // Optional validation before this epoch is recorded as ready.
   protected override requiredTables(): readonly string[] {
     return ["items"];
   }
 }
 ```
 
-Rules of thumb:
+For any table, column, index, trigger, view, or virtual-table shape change, bump
+`schemaVersion` and change only the current declarations. On the next
+`fetch()`/`alarm()`, an instance at an older epoch discards all of its
+non-framework SQLite objects and every application key in the base `state`
+table, then creates and validates the current schema from empty storage. The
+base handles FTS/virtual-table shadows as part of that whole-object reset.
 
-- **Additive changes** (new table, new nullable/defaulted column) — bump
-  `schemaVersion`, add the `ALTER` to `migrate`, update `createTables`.
-- **Never** renumber or reuse versions; an instance whose stored version is
-  *newer* than the code's `schemaVersion` refuses to start (downgrade guard).
-- Schema init is lazy (first `fetch()`/`alarm()`) and retried on failure, so a
-  throwing migration surfaces in `workspace.units.diagnostics` for the source
-  and the instance stays on its old version until fixed.
+There is deliberately no `migrate` hook. Do not add `ALTER` sequences, old
+table readers, selected-row preservation, compatibility flags, or per-version
+drop lists. A current-epoch activation may rerun idempotent `createTables` after
+an interrupted initialization; that is crash recovery, not old-schema support.
+An instance stamped with a newer epoch refuses to start, preventing an older
+binary from silently destroying storage.
 
 ## Durable Object RPC Exposure & Authorization
 
@@ -431,7 +429,7 @@ broad reads → `["do","panel","server"]`; admin/destructive → `["server","she
 
 ### Identity-level tightening (inline)
 
-The kind floor is coarse — *any* DO is `"do"`. When a method must accept only ONE
+The kind floor is coarse — _any_ DO is `"do"`. When a method must accept only ONE
 specific caller (this agent's own EvalDO, the agent's own PubSubChannel, a known
 class), add an inline check ON TOP of the floor using the server-authenticated
 caller, which cannot be forged:
@@ -450,8 +448,9 @@ async onChannelOp(channelId: string): Promise<void> {
 ### When to add a USER-APPROVAL gate
 
 Reachability (Layers 1–2) answers "may this caller reach the method"; it never
-asks the user. For a *userland-useful but sensitive* action, require a user
+asks the user. For a _userland-useful but sensitive_ action, require a user
 decision:
+
 - **Built-in host actions** (credentials, external opens, git writes, project
   imports, webhooks, publishing main, spawning workers): call the existing
   runtime API and let Vibestudio's built-in capability-permission flow prompt — do
@@ -590,19 +589,19 @@ ordinary context file edits and test temp directories, do not prompt.
 
 ## Agent Debug Port
 
-The default AI agent worker exposes a read-only participant method named
-`getDebugState`. Use it when a channel appears stuck, especially after
-`turn.opened` with no assistant message, tool call, or `turn.closed` event:
+Use GAD first for durable trajectory state, then the agent's activation-local
+debug snapshot when a channel appears stuck:
 
 ```ts
+const health = await gad.inspectAgentHealth({ channelId: chat.channelId });
 const debug = await chat.callMethod(agentParticipantId, "getDebugState", {});
 console.log(JSON.stringify(debug, null, 2).slice(0, 4000));
 ```
 
-The response includes dispatcher state, runner phase, persisted pending work,
-channel checkpoints, and recent lifecycle/debug events. Do not add sleeps or
-timeouts to diagnose these stalls; inspect the debug state and fix the blocked
-operation. See `../../../docs/agent-debug-port.md` for the full field guide.
+`getDebugState` contains only already-loaded loop state plus local SQLite
+outboxes. A loop with `loaded: false` is not hydrated through GAD; use `health`
+for the durable answer. See `../../../docs/agent-debug-port.md` for the exact
+contract.
 
 `chat.callMethod` is scoped to the current channel. To inspect a standard agent
 debug method for another channel, resolve that channel's DO and use its
@@ -617,7 +616,9 @@ const debug = await rpc.call(channel.targetId, "inspectAgent", [
 ```
 
 The channel DO only exposes `getDebugState`, `getAgentSettings`, and
-`inspectMethodSuspensions` through this route.
+`inspectMethodSuspensions` through this route. It resolves the exact entity,
+uses a dedicated read-only agent RPC rather than `onMethodCall`, and bounds the
+probe to five seconds. A retired agent fails before inspection dispatch.
 
 ## Host Server Logs
 
@@ -628,12 +629,8 @@ workerd supervision, routing, RPC dispatch, gateway reconnects, idle exit, or
 startup/shutdown.
 
 ```ts
-const recent = await rpc.call("main", "serverLog.query", [
-  { level: "warn", limit: 100 },
-]);
-const build = await rpc.call("main", "serverLog.query", [
-  { tag: "BuildV2", limit: 100 },
-]);
+const recent = await rpc.call("main", "serverLog.query", [{ level: "warn", limit: 100 }]);
+const build = await rpc.call("main", "serverLog.query", [{ tag: "BuildV2", limit: 100 }]);
 ```
 
 For live following, open `about/server-logs` or subscribe to

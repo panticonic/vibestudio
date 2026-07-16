@@ -91,9 +91,9 @@ their own UI. Relevant event types are:
   loaded by clients. Payload includes app id, source, target, build key,
   effective version, previous build metadata, `canRollback`, and an
   `adoptionPolicy`.
-- `update-error`: a pushed build failed to build or validate. The previous
-  active build remains selected. Payload includes the error and rollback
-  availability.
+- `update-error`: source was published, but its derived build or activation
+  failed. The previous active build remains selected. Payload includes the
+  error and rollback availability.
 - `rolled-back`: the server switched the app back to a previous trusted build.
 
 Adoption policies are target-aware. `prompt` means the client should keep its
@@ -182,13 +182,14 @@ Guidelines:
 - Keep native host code outside `workspace/apps/mobile`; the workspace mobile
   app should consume native host APIs through its service wrappers.
 - Do not import server/main internals from workspace app code.
-- Edit app source via the `edit`/`write` tools (which apply through `vcs.edit`):
-  each edit lands on your context head as WORKING content. To make it the active
-  build, `vcs.commit({ message })` then `vcs.push({ repoPaths: ["apps/<name>"] })`
-  — the push is build-gated and is what advances `main`. Use
-  `vcs.previewBuild({ repoPaths })` to dev-build working content before
-  committing. Do not edit via `fs.writeFile` and expect it to update the active
-  build.
+- Treat app source as part of the workspace semantic graph. Read
+  [vibestudio-vcs](../vibestudio-vcs/SKILL.md), author against an exact working
+  head, build or test that state, commit the complete local application chain,
+  and publish only after semantic ancestry/integration validation and approval.
+  Builds and tests are explicit advisory checks, while post-publication builds
+  are derived projections. Managed move/copy operations preserve file identity
+  and provenance; raw filesystem mutation is not an alternate source-authority
+  path.
 
 ## Choosing Apps vs Panels vs Extensions
 

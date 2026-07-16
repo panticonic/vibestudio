@@ -4,7 +4,8 @@
 > event flow below still hold, but persistence is migrating to the unified
 > log model (`docs/stage0-unified-log-spec.md`, `docs/ws1-agent-loop-spec.md`,
 > `docs/ws2-channel-spec.md`): storage of record is `log_heads`/`log_events`
-> with `trajectory_*` projections in `workspace/workers/gad-store/index.ts`.
+> with `trajectory_*` projections in
+> `workspace/packages/semantic-control-plane/src/index.ts`.
 > Read the `pi_sessions`/`delivery_cursor`/`pending_calls` DO-table detail as
 > historical; the specs win where they disagree.
 
@@ -31,7 +32,7 @@ Panel (browser)          Channel DO (workerd)     Worker DO (workerd, embeds Pi)
      │                        │                        │
 ```
 
-- **Channel DO** — workspace-owned userland service. Forkable
+- **Channel DO** — workspace-authored service. Forkable
   history, `this.sql`-backed message storage, participant roster, ephemeral and
   persisted message routing. Enforces participant handle uniqueness so the
   channel-tools extension can use bare method names without collision.
@@ -222,5 +223,4 @@ Vibestudio-bound.
 
 - **Pi-architecture deep dive**: `docs/pi-architecture.md`
 - **Pi SDK reference**: `node_modules/@mariozechner/pi-coding-agent/README.md`
-- **Worker authoring**: `workspace/workers/README.md`
 - **workspace-dev skill**: `workspace/skills/workspace-dev/WORKERS.md`

@@ -30,7 +30,10 @@ ask the user to paste the value into chat.
 Use the `credentials` namespace exported by `@workspace/runtime`. Its public
 methods include `store`, `requestCredentialInput`, `connect`, `fetch`,
 `hookForUrl`, `gitHttp`, and `forAudience`; lower-level wire transports are not
-an alternative public API.
+an alternative public API. When working as a direct service/RPC caller instead
+of through this runtime client, use the exact wire method
+`credentials.storeCredential`; do not call a wire method named
+`credentials.store`.
 
 ## UX Rules
 
@@ -91,6 +94,13 @@ not compose redirects or receive the access token. Do not pass client secrets
 through userland; use `credentials.configureClient()` for flows that need
 stored OAuth client material. A saved `configId` is bound to its OAuth authorize
 and token URLs; use a new `configId` if those endpoints change.
+
+Set `persistRefreshToken: true` when the provider issues durable refresh tokens
+and the connection should renew without another sign-in. The host persists the
+token together with its exact public-client recipe or exact client-config
+version. Check `stored.lifecycle.canRefresh`; requested `offline_access` or a
+stored credential by itself is not proof of renewability. `stored.scopes`
+reports the provider-granted scope when the token response supplies it.
 
 ```ts
 const stored = await credentials.connect({
@@ -201,7 +211,7 @@ For an external repository that should live under workspace source, use
 `git.importProject()` with the destination path:
 
 ```ts
-await git.importProject({
+const imported = await git.importProject({
   path: "skills/example",
   remote: {
     name: "origin",
@@ -210,19 +220,32 @@ await git.importProject({
   },
   credentialId: "cred_github_...",
 });
+
+console.log(imported.candidate.contextId, imported.candidate.eventId);
 ```
 
-Repos declared in `meta/vibestudio.yml` are imported automatically at startup.
-Use `git.completeWorkspaceDependencies()` as an explicit retry/backfill when a
-configured workspace repo is still missing. For private repos, pass a
-credential id on the retry call because startup auto-import has no interactive
-`credentialId` argument.
+The clone produces a committed semantic candidate and does not advance
+protected `main`. Bring `imported.candidate.eventId` into the intended working
+context with ordinary `vcs.compare` and small `vcs.integrate` steps, check it,
+commit the complete local chain, and call `vcs.push` explicitly when
+publication is intended.
+
+At startup, the configured Git provider reports operational checkout state via
+`upstreamStatus`. Vibestudio clones/imports only `not-materialized`
+declarations; other reported states are skipped as `already-materialized`, even
+when a candidate is still `integration-required`. Use
+`git.completeWorkspaceDependencies()` for the same explicit retry/backfill flow.
+For private repos, pass a credential id on the retry call because startup import
+has no interactive `credentialId` argument. Operational clones live below
+server `state/git-checkouts/` and never become Build V2 source directly.
 
 `git.importProject()` uses one workspace config approval covering the shared
 remote and upstream; the prompt shows the destination path, remote URL, and
 branch. Both declarations are written to `meta/vibestudio.yml` before clone,
-with `autoPush: false`, so a failed clone can be retried from config. For the
-full model, see `skills/onboarding/EXTERNAL_GIT_PROJECTS.md`.
+with `autoPush: false`. That setting controls only later outgoing Git pushes; it
+does not publish the candidate. A failed clone reports whether its declarations
+were rolled back or remain `not-materialized`. For the full model, see
+`skills/onboarding/EXTERNAL_GIT_PROJECTS.md`.
 
 ## Provider Setup UI Pattern
 

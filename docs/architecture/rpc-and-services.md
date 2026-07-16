@@ -1,6 +1,6 @@
 # RPC And Userland Services
 
-Vibestudio has a small platform RPC layer and a userland-service pattern for
+Vibestudio has a small platform RPC layer and a workspace-service pattern for
 stateful protocols. This is intentional: they solve different problems and are
 scoped to non-overlapping responsibilities. This doc fixes the boundary in
 writing so future contributors don't route stateful protocols through the
@@ -11,7 +11,7 @@ platform layer.
 | System | Shape | Use for |
 |---|---|---|
 | `@vibestudio/rpc` | Stateless point-to-point method calls + HTTP-Response streaming | Service calls (`credentials.fetch`, `fs.read`, `blobstore.putText`), URL-bound credential proxying, model SDK fetches |
-| Userland services | Workspace-declared workers and Durable Objects resolved by protocol | Stateful channels, durable conversation state, multi-participant flows, and any workspace-owned protocol |
+| Workspace services | Workspace-authored workers and Durable Objects, plus explicitly product-sealed services, resolved by protocol | Stateful channels, durable conversation state, multi-participant flows, and semantic control-plane protocols |
 
 If you're routing a single call/response, possibly with a streaming body,
 between two endpoints, use rpc. If you're building anything with subscribers,
@@ -29,7 +29,7 @@ caller. The streaming primitive added in
 `@vibestudio/rpc/types#StreamingMethodHandler` is a sink-based
 HEAD→DATA*→END frame stream, mirroring HTTP chunked transfer.
 
-**userland services can be conversation-shaped.** A call may have multiple
+**Workspace services can be conversation-shaped.** A call may have multiple
 subscribers observing it; chat needs missed-context replay if a panel
 disconnects mid-conversation; participants have presence and metadata
 beyond `selfId`; method *results* can carry structured binary
@@ -124,6 +124,13 @@ frontend-dev loop, `workspace.listSkills` for skill discovery). Apply it when:
   callers carry a host-verified `agentBinding` instead of `.code`; gates must
   treat them as first-class subjects — see `panelAccessPermission.ts` — and
   cannot rely on the capability grant store, which keys on code identity).
+
+`agentBinding` is a derived view, not credential authority. The presented agent
+secret authenticates only one exact entity id. The host resolves that live
+session's normalized agent entity/channel edge, context, and owner before
+stamping the per-request view; retired or unbound entities fail closed. Agent
+intent and authorship are separate provenance traversals and never credential
+fields.
 
 When in doubt, leave the allow list alone and let eval carry it. The policy
 matrix golden (`__servicePolicyMatrix.golden.json`) makes every widening a
