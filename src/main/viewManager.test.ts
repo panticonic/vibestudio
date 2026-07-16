@@ -361,6 +361,52 @@ describe("ViewManager", () => {
         height: 260,
       });
     });
+
+    it("keeps a visible content overlay above a panel appended later", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      const hostedShellView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        panelId: "panel-1",
+        bounds: { x: 260, y: 32, width: 940, height: 768 },
+      });
+      (hostedShellView.webContents.getURL as unknown as Mock).mockReturnValue(
+        "file:///shell/index.html"
+      );
+      vm.showContentOverlay({
+        surface: "approval-card",
+        bounds: { x: 260, y: 32, width: 940, height: 768 },
+        props: { approvalId: "approval-1" },
+        theme: { appearance: "dark" },
+      });
+
+      const results = (WebContentsView as unknown as Mock).mock.results;
+      const overlayView = results[results.length - 1]?.value;
+      const children = mockWindow.contentView.children as unknown[];
+      expect(children.indexOf(overlayView)).toBeGreaterThan(children.indexOf(panelView));
+
+      // A recreated or late-loaded panel is appended at the top. Its managed
+      // order is still valid, but it must not cover the already-open overlay.
+      mockWindow.contentView.addChildView(panelView);
+      vm.updatePanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        bounds: { x: 260, y: 32, width: 940, height: 768 },
+      });
+
+      expect(children.indexOf(overlayView)).toBeGreaterThan(children.indexOf(panelView));
+    });
   });
 
   describe("native panel slots", () => {

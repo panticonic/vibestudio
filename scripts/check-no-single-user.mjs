@@ -168,7 +168,7 @@ export const RULES = [
     id: "ready-file-credential-secret",
     pattern: /\b(?:adminToken|pairingCodes?)\??\s*:/,
     message:
-      "client-facing ready files are secret-free — rootInvites replaces flat pairingCode(s), and adminToken is never exposed",
+      "client-facing ready files expose one rootInvite and never expose adminToken or parallel pairing-code fields",
     includeTests: false,
     files:
       /^(?:src\/main\/|src\/cli\/|scripts\/|workspace\/apps\/mobile\/src\/|workspace\/apps\/shell\/)/,
@@ -182,9 +182,10 @@ export const RULES = [
   },
   {
     id: "nested-hub-credential",
-    pattern: /\bhubUrl\b|\bhubCredential\b/,
+    pattern:
+      /["']hubUrl["']|\bhubUrl\s*[?:]|\.\s*hubUrl\b|\[\s*["']hubUrl["']\s*\]|\bhubCredential\b/,
     message:
-      "client hubUrl/nested hub credentials are deleted — store one global device credential plus selected child reach",
+      "persisted client hubUrl/nested hub credentials are deleted — store one global device credential plus selected child reach",
     includeTests: false,
     files:
       /^(?:src\/cli\/|src\/main\/services\/(?:remoteCred|deviceCredential)|packages\/service-schemas\/src\/remoteCred|workspace\/apps\/mobile\/src\/)/,

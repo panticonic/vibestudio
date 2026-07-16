@@ -7,8 +7,7 @@ import {
 const READY_KEYS = new Set([
   "mode",
   "gatewayUrl",
-  "connectUrl",
-  "rootInvites",
+  "rootInvite",
   "serverId",
   "serverBootId",
   "gatewayPort",
@@ -22,7 +21,6 @@ const INVITE_KEYS = new Set([
   "sig",
   "v",
   "ice",
-  "srv",
   "code",
   "deepLink",
   "pairUrl",
@@ -31,7 +29,7 @@ const INVITE_KEYS = new Set([
   "serverId",
   "serverBootId",
 ]);
-const INVITE_REQUIRED_KEYS = [...INVITE_KEYS].filter((key) => key !== "srv");
+const INVITE_REQUIRED_KEYS = [...INVITE_KEYS];
 const WORKSPACE_KEYS = new Set(["workspaceId", "name", "lastOpened", "running", "ephemeral"]);
 
 function objectRecord(value, label) {
@@ -98,7 +96,6 @@ function parseInvite(value, label, ready) {
   if (invite.ice !== "all" && invite.ice !== "relay") {
     throw new Error(`${label}.ice must be all or relay`);
   }
-  if (invite.srv !== undefined) assertNonEmptyString(invite.srv, `${label}.srv`);
   for (const [field, pattern] of [
     ["serverId", /^srv_[A-Za-z0-9_-]{24}$/],
     ["serverBootId", /^boot_[A-Za-z0-9_-]{24}$/],
@@ -132,8 +129,7 @@ function parseInvite(value, label, ready) {
       parsed.code !== invite.code ||
       parsed.sig !== signaling.url ||
       parsed.v !== invite.v ||
-      parsed.ice !== invite.ice ||
-      parsed.srv !== invite.srv
+      parsed.ice !== invite.ice
     ) {
       throw new Error(`${label}.${field} does not match the invite coordinates`);
     }
@@ -168,7 +164,6 @@ export function parseHubReadyPayload(value) {
   assertExactKeys(ready, READY_KEYS, [...READY_KEYS], "hub ready file");
   if (ready.mode !== "hub") throw new Error("hub ready file mode must be hub");
   assertHttpUrl(ready.gatewayUrl, "hub ready file gatewayUrl");
-  assertHttpUrl(ready.connectUrl, "hub ready file connectUrl");
   if (typeof ready.serverId !== "string" || !/^srv_[A-Za-z0-9_-]{24}$/.test(ready.serverId)) {
     throw new Error("hub ready file serverId has an unexpected format");
   }
@@ -193,16 +188,6 @@ export function parseHubReadyPayload(value) {
     throw new Error("hub ready file workspaces must be an array");
   ready.workspaces.forEach(parseWorkspace);
 
-  if (ready.rootInvites !== null) {
-    const invites = objectRecord(ready.rootInvites, "hub ready file rootInvites");
-    assertExactKeys(
-      invites,
-      new Set(["desktop", "mobile"]),
-      ["desktop", "mobile"],
-      "hub ready file rootInvites"
-    );
-    parseInvite(invites.desktop, "hub ready file rootInvites.desktop", ready);
-    parseInvite(invites.mobile, "hub ready file rootInvites.mobile", ready);
-  }
+  if (ready.rootInvite !== null) parseInvite(ready.rootInvite, "hub ready file rootInvite", ready);
   return ready;
 }

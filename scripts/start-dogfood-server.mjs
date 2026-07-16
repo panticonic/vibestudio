@@ -65,14 +65,47 @@ function copyWorkspaceTemplate(wsDir) {
     throw new Error(`Workspace template not found under ${repoRoot}`);
   }
 
+  const existingProject = path.join(sourceRoot, projectPath);
+  const heldProject = path.join(wsDir, ".dogfood-project-sync");
+  if (fs.existsSync(heldProject)) {
+    throw new Error(`Interrupted dogfood source sync left ${heldProject}; recover or remove it first`);
+  }
+  if (
+    fs.existsSync(existingProject) &&
+    !fs.existsSync(path.join(existingProject, ".git"))
+  ) {
+    throw new Error(`${existingProject} exists but is not a git repo`);
+  }
+
+  fs.mkdirSync(wsDir, { recursive: true });
+  if (fs.existsSync(existingProject)) fs.renameSync(existingProject, heldProject);
+
+  // Dogfood source is a generated snapshot, not a mutable compatibility layer.
+  // Replace it exactly so repository deletions cannot survive as ghost files.
+  fs.rmSync(sourceRoot, { recursive: true, force: true });
   fs.mkdirSync(sourceRoot, { recursive: true });
-  fs.cpSync(templateDir, sourceRoot, {
-    recursive: true,
-    filter: (src) => {
-      const name = path.basename(src);
-      return name !== ".git" && name !== "node_modules" && name !== ".cache";
-    },
-  });
+  try {
+    fs.cpSync(templateDir, sourceRoot, {
+      recursive: true,
+      filter: (src) => {
+        const name = path.basename(src);
+        return name !== ".git" && name !== "node_modules" && name !== ".cache";
+      },
+    });
+    if (fs.existsSync(heldProject)) {
+      const restoredProject = path.join(sourceRoot, projectPath);
+      fs.rmSync(restoredProject, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(restoredProject), { recursive: true });
+      fs.renameSync(heldProject, restoredProject);
+    }
+  } catch (error) {
+    if (fs.existsSync(heldProject)) {
+      fs.rmSync(existingProject, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(existingProject), { recursive: true });
+      fs.renameSync(heldProject, existingProject);
+    }
+    throw error;
+  }
   fs.mkdirSync(path.join(sourceRoot, "projects"), { recursive: true });
   fs.mkdirSync(path.join(wsDir, "state"), { recursive: true });
 }
@@ -121,7 +154,6 @@ function setProjectOrigin(projectDir, remoteUrl) {
 }
 
 function writeDogfoodRemoteConfig(wsDir, remoteUrl) {
-  if (!remoteUrl) return;
   const [section, ...repoParts] = projectPath.split("/");
   const repoKey = repoParts.join("/");
   if (!section || !repoKey) {
@@ -129,6 +161,19 @@ function writeDogfoodRemoteConfig(wsDir, remoteUrl) {
   }
   const configPath = path.join(wsDir, "source", "meta", "vibestudio.yml");
   const config = YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {};
+  if (!remoteUrl) {
+    const repository = config.git?.remotes?.[section]?.[repoKey];
+    if (!repository || typeof repository !== "object" || !("origin" in repository)) return;
+    delete repository.origin;
+    if (Object.keys(repository).length === 0) delete config.git.remotes[section][repoKey];
+    if (Object.keys(config.git.remotes[section]).length === 0) delete config.git.remotes[section];
+    if (Object.keys(config.git.remotes).length === 0) delete config.git.remotes;
+    if (Object.keys(config.git).length === 0) delete config.git;
+    const tmpPath = `${configPath}.tmp`;
+    fs.writeFileSync(tmpPath, YAML.stringify(config), "utf8");
+    fs.renameSync(tmpPath, configPath);
+    return;
+  }
   config.git ??= {};
   config.git.remotes ??= {};
   config.git.remotes[section] ??= {};
@@ -144,8 +189,8 @@ export function bootstrapWorkspace(name, opts = {}) {
   const configPath = path.join(wsDir, "source", "meta", "vibestudio.yml");
   if (!fs.existsSync(configPath)) {
     console.log(`[dogfood] Creating workspace "${name}" at ${wsDir}`);
-    copyWorkspaceTemplate(wsDir);
   }
+  copyWorkspaceTemplate(wsDir);
   const projectDir = path.join(wsDir, "source", projectPath);
   if (fs.existsSync(projectDir)) {
     if (!fs.existsSync(path.join(projectDir, ".git"))) {
@@ -237,9 +282,7 @@ export function createDogfoodPairHooks({ workspaceName }) {
           "dogfood-server always uses a persistent managed workspace; --dev is not supported"
         );
       }
-      bootstrapWorkspace(workspaceName, {
-        gitRemoteUrl: repoRoot,
-      });
+      bootstrapWorkspace(workspaceName);
       printDirtyWarning();
       buildServer();
     },

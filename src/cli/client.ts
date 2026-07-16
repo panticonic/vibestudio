@@ -35,6 +35,8 @@ import { vcsCommands } from "./agent/vcsCommands.js";
 import { evalCommands } from "./agent/evalCommand.js";
 import { channelCommands } from "./channelCommands.js";
 import { contextCommands } from "./contextCommands.js";
+import { connectModelProvider } from "./modelConnect.js";
+import { createModelCommands } from "./modelCommands.js";
 import { panelCommands } from "./panelCommands.js";
 import { systemTestCommands } from "./systemTestCommands.js";
 import { remoteHost } from "./remoteHeadlessHost.js";
@@ -138,7 +140,7 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
 
 function requirePairedCredentials(): DeviceCredential {
   const credentials = loadCliCredentials();
-  if (!credentials) throw new AuthError("not paired");
+  if (!credentials) throw new AuthError(NOT_PAIRED_GUIDANCE);
   return credentials;
 }
 
@@ -579,10 +581,9 @@ const remoteCommands: CliCommand[] = [
     "remote",
     "repair-identity",
     "remote-repair-identity.mjs",
-    "Regenerate the WebRTC identity file",
+    "Regenerate one workspace child's WebRTC identity",
     {
-      usage:
-        "vibestudio remote repair-identity --yes [--workspace <name> | --identity <identity.pem>]",
+      usage: "vibestudio remote repair-identity --workspace <name> --yes",
       passthroughHelp: true,
     }
   ),
@@ -875,6 +876,9 @@ const commandRegistry: CliCommand[] = [
   ...remoteCommands,
   ...terminalCommands,
   ...mobileCommands,
+  ...createModelCommands({
+    connect: (providerId) => connectModelProvider(requirePairedCredentials(), providerId),
+  }),
   ...agentCommands,
   ...fsCommands,
   ...vcsCommands,
@@ -889,6 +893,7 @@ const GROUP_ORDER = [
   "remote",
   "terminal",
   "mobile",
+  "model",
   "agent",
   "fs",
   "vcs",
@@ -1062,6 +1067,7 @@ const GROUP_DESCRIPTIONS: Record<string, string> = {
   remote: "pairing, servers, workspaces, and remote hosts",
   terminal: "launch the terminal workspace app",
   mobile: "develop, install, inspect, and pair mobile clients",
+  model: "connect and renew model-provider credentials",
   agent: "sessions, diagnostics, services, and workspace skills",
   fs: "read and edit files in the active agent context",
   vcs: "inspect, commit, merge, and push workspace repositories",

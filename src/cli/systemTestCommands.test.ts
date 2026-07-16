@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearShellTokenCache } from "./rpcClient.js";
+import { ConnectionError } from "./output.js";
 
 interface RpcRequest {
   method: string;
@@ -33,9 +34,10 @@ function writeCredentials(root: string): void {
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
     JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 4,
       kind: "device",
       url: "webrtc://room-cli/_workspace/dev",
+      workspaceId: "ws_dev",
       workspaceName: "dev",
       serverId: `srv_${"S".repeat(24)}`,
       deviceId: `dev_${"D".repeat(24)}`,
@@ -61,9 +63,11 @@ function writeCredentials(root: string): void {
   fs.writeFileSync(
     path.join(dir, "agent-sessions", "default.json"),
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 3,
       name: "default",
-      serverUrl: "webrtc://room-cli/_workspace/dev",
+      serverId: `srv_${"S".repeat(24)}`,
+      workspaceId: "ws_dev",
+      workspaceName: "dev",
       entityId: "session:default",
       contextId: "ctx_1",
       scopeKey: "default",
@@ -160,9 +164,11 @@ describe("vibestudio system-test commands", () => {
     fs.writeFileSync(
       path.join(sessionsDir, "system-tests.json"),
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 3,
         name: "system-tests",
-        serverUrl: "webrtc://room-cli/_workspace/dev",
+        serverId: `srv_${"S".repeat(24)}`,
+        workspaceId: "ws_dev",
+        workspaceName: "dev",
         entityId: "session:stale",
         contextId: "ctx_stale",
         scopeKey: "system-tests",
@@ -212,57 +218,6 @@ describe("vibestudio system-test commands", () => {
     });
   });
 
-  it("records a doctor-verified loopback gateway for later headless polling", async () => {
-    transportMock.handle = (body) => {
-      if (body.method === "eval.run") {
-        return {
-          success: true,
-          console: "",
-          returnValue: {
-            ok: true,
-            checks: [
-              {
-                name: "server",
-                ok: true,
-                detail: "reachable",
-                data: {
-                  serverUrl: "http://127.0.0.1:3031",
-                  protocol: "http",
-                  externalHost: "127.0.0.1",
-                  gatewayPort: 3031,
-                  serverId: `srv_${"S".repeat(24)}`,
-                  serverBootId: "boot_local",
-                  workspaceId: "ws_local",
-                  callerKind: "do",
-                },
-              },
-            ],
-          },
-        };
-      }
-      return null;
-    };
-    const { main } = await import("./client.js");
-
-    await expect(main(["system-test", "doctor", "--json"])).resolves.toBe(0);
-
-    const target = JSON.parse(
-      fs.readFileSync(path.join(root, ".config", "vibestudio", "system-test-target.json"), "utf8")
-    );
-    expect(target).toMatchObject({
-      schemaVersion: 1,
-      pairedUrl: "webrtc://room-cli/_workspace/dev",
-      workspaceName: "dev",
-      serverUrl: "http://127.0.0.1:3031",
-      serverId: `srv_${"S".repeat(24)}`,
-      serverBootId: "boot_local",
-      workspaceId: "ws_local",
-    });
-    expect(
-      fs.statSync(path.join(root, ".config", "vibestudio", "system-test-target.json")).mode & 0o777
-    ).toBe(0o600);
-  });
-
   it("starts a detached durable run and saves local routing metadata", async () => {
     transportMock.handle = (body) => {
       if (body.method === "eval.startRun") {
@@ -308,12 +263,18 @@ describe("vibestudio system-test commands", () => {
         path.join(root, ".config", "vibestudio", "system-test-runs", value.runId, "run.json"),
         "utf8"
       )
-    ) as { ownerId: string; artifactDir: string; config: { names: string[] } };
+    ) as {
+      ownerId: string;
+      artifactDir: string;
+      config: { names: string[]; testTimeoutMs: number };
+    };
     expect(stored.ownerId).toBe("session:default");
     expect(stored.artifactDir).toBe(
       path.join(root, ".config", "vibestudio", "system-test-runs", value.runId)
     );
     expect(stored.config.names).toEqual(["eval-return-value"]);
+    expect(stored.config.testTimeoutMs).toBe(5 * 60 * 1_000);
+    expect(args.code).toContain('"testTimeoutMs":300000');
   });
 
   it("preserves a custom artifact directory across detached status and run listing", async () => {
@@ -417,6 +378,126 @@ describe("vibestudio system-test commands", () => {
 
     await expect(main(["system-test", "wait", runId, "--poll-ms", "1", "--json"])).resolves.toBe(1);
     expect(output()).toMatchObject({ runId, status: "done", progress: { elapsedMs: 10_000 } });
+  });
+
+  it("keeps monitoring a durable run across a transient status transport failure", async () => {
+    const runId = "st_transient_status";
+    const dir = path.join(root, ".config", "vibestudio", "system-test-runs", runId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "run.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        runId,
+        createdAt: 1,
+        serverUrl: "webrtc://room-cli/_workspace/dev",
+        sessionName: "default",
+        ownerId: "session:default",
+        contextId: "ctx_1",
+        subKey: "default",
+        config: { names: ["eval-return-value"], all: false, concurrency: 1 },
+      })
+    );
+    let reads = 0;
+    transportMock.handle = (body) => {
+      if (body.method !== "eval.getRun") return null;
+      reads += 1;
+      if (reads === 1) {
+        throw Object.assign(new Error("transient gateway read failure"), {
+          errorKind: "transport",
+        });
+      }
+      return {
+        status: "done",
+        result: {
+          success: true,
+          console: "",
+          returnValue: { runId, passed: 1, failed: 0, errored: 0, toolFailureCount: 0 },
+        },
+      };
+    };
+    const { main } = await import("./client.js");
+
+    await expect(
+      main(["system-test", "status", runId, "--wait", "--poll-ms", "1", "--json"])
+    ).resolves.toBe(0);
+    expect(reads).toBe(2);
+    expect(output()).toMatchObject({ runId, status: "done" });
+  });
+
+  it("keeps monitoring a durable run across a transient direct-gateway reset", async () => {
+    const runId = "st_transient_direct_gateway";
+    const dir = path.join(root, ".config", "vibestudio", "system-test-runs", runId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "run.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        runId,
+        createdAt: 1,
+        serverUrl: "webrtc://room-cli/_workspace/dev",
+        sessionName: "default",
+        ownerId: "session:default",
+        contextId: "ctx_1",
+        subKey: "default",
+        config: { names: ["eval-return-value"], all: false, concurrency: 1 },
+      })
+    );
+    let reads = 0;
+    transportMock.handle = (body) => {
+      if (body.method !== "eval.getRun") return null;
+      reads += 1;
+      if (reads === 1) {
+        throw new ConnectionError("cannot reach http://127.0.0.1:3030: read ECONNRESET");
+      }
+      return {
+        status: "done",
+        result: {
+          success: true,
+          console: "",
+          returnValue: { runId, passed: 1, failed: 0, errored: 0, toolFailureCount: 0 },
+        },
+      };
+    };
+    const { main } = await import("./client.js");
+
+    await expect(
+      main(["system-test", "status", runId, "--wait", "--poll-ms", "1", "--json"])
+    ).resolves.toBe(0);
+    expect(reads).toBe(2);
+    expect(output()).toMatchObject({ runId, status: "done" });
+  });
+
+  it("does not retry an access failure while monitoring a durable run", async () => {
+    const runId = "st_status_access";
+    const dir = path.join(root, ".config", "vibestudio", "system-test-runs", runId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "run.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        runId,
+        createdAt: 1,
+        serverUrl: "webrtc://room-cli/_workspace/dev",
+        sessionName: "default",
+        ownerId: "session:default",
+        contextId: "ctx_1",
+        subKey: "default",
+        config: { names: ["eval-return-value"], all: false, concurrency: 1 },
+      })
+    );
+    let reads = 0;
+    transportMock.handle = (body) => {
+      if (body.method !== "eval.getRun") return null;
+      reads += 1;
+      throw Object.assign(new Error("run scope is unauthorized"), { errorKind: "access" });
+    };
+    const { main } = await import("./client.js");
+
+    await expect(
+      main(["system-test", "status", runId, "--wait", "--poll-ms", "1", "--json"])
+    ).resolves.toBe(1);
+    expect(reads).toBe(1);
   });
 
   it("includes durable per-test progress while a detached run is active", async () => {
@@ -786,11 +867,14 @@ describe("vibestudio system-test commands", () => {
     };
     const { main } = await import("./client.js");
 
-    await expect(main(["system-test", "rerun", runId, "--json"])).resolves.toBe(0);
+    await expect(
+      main(["system-test", "rerun", runId, "--test-timeout-ms", "250", "--json"])
+    ).resolves.toBe(0);
 
     const start = transportMock.rpcBodies.find((body) => body.method === "eval.startRun")!;
     const code = String((start.args[0] as { code: string }).code);
     expect(code).toContain('"names":["failed-test","probe-test"]');
+    expect(code).toContain('"testTimeoutMs":250');
     expect(transportMock.rpcBodies.map((body) => body.method)).toEqual([
       "eval.startRun",
       "eval.getRun",

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeMarker, writeState } from "./contextCommands.js";
+import { writeContextBinding, writeState } from "./contextCommands.js";
 import type { RpcClient } from "./rpcClient.js";
 
 const tmpDirs: string[] = [];
@@ -26,7 +26,7 @@ function mockClient(results: Record<string, (args: unknown[]) => unknown>): RpcC
   } as unknown as RpcClient;
 }
 
-describe("context mirror write path", () => {
+describe("context snapshot mirror", () => {
   it("writes every streamed file with its mode and decoded bytes", async () => {
     const dir = mkTemp();
     let pages = 0;
@@ -71,29 +71,31 @@ describe("context mirror write path", () => {
     expect(fs.statSync(runPath).mode & 0o111).not.toBe(0);
   });
 
-  it("drops the .vibestudio-context.json marker with contextId + workspaceId + serverUrl", async () => {
+  it("writes the exact durable context binding", async () => {
     const dir = mkTemp();
     const client = mockClient({
       "auth.getConnectionInfo": () => ({ workspaceId: "ws_42" }),
     });
-    await writeMarker(client, dir, "ctx_7", "https://server.example");
-    const marker = JSON.parse(fs.readFileSync(path.join(dir, ".vibestudio-context.json"), "utf8"));
-    expect(marker).toEqual({
-      contextId: "ctx_7",
+    await writeContextBinding(client, dir, "ctx_7");
+    const binding = JSON.parse(fs.readFileSync(path.join(dir, ".vibestudio-context.json"), "utf8"));
+    expect(binding).toEqual({
+      protocol: "vibestudio.context-binding.v1",
       workspaceId: "ws_42",
-      serverUrl: "https://server.example",
+      contextId: "ctx_7",
     });
+    if (process.platform !== "win32") {
+      expect(fs.statSync(path.join(dir, ".vibestudio-context.json")).mode & 0o777).toBe(0o644);
+    }
   });
 
-  it("still writes a usable marker when workspaceId can't be resolved", async () => {
+  it("refuses to write an ambiguous binding without workspaceId", async () => {
     const dir = mkTemp();
     const client = mockClient({
       "auth.getConnectionInfo": () => {
         throw new Error("offline");
       },
     });
-    await writeMarker(client, dir, "ctx_7", "https://server.example");
-    const marker = JSON.parse(fs.readFileSync(path.join(dir, ".vibestudio-context.json"), "utf8"));
-    expect(marker).toEqual({ contextId: "ctx_7", serverUrl: "https://server.example" });
+    await expect(writeContextBinding(client, dir, "ctx_7")).rejects.toThrow("offline");
+    expect(fs.existsSync(path.join(dir, ".vibestudio-context.json"))).toBe(false);
   });
 });

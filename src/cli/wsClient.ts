@@ -11,7 +11,7 @@
  * `refresh:<deviceId>:<token>` for a paired device, or `agent:<agentId>:<token>`
  * for an entity-scoped agent credential. The server's WS-auth redeemer resolves
  * either into the connection's principal + kind (see authService
- * createPairingRedeemer); the client never asserts its own identity.
+ * createWorkspaceCredentialRedeemer); the client never asserts its own identity.
  */
 
 import {

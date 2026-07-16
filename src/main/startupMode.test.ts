@@ -96,6 +96,20 @@ describe("resolveStartupMode interactive desktop policy", () => {
     });
   });
 
+  it("selects the canonical hub-owned ephemeral workspace in development", () => {
+    mockIsDev.mockReturnValue(true);
+
+    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
+      kind: "local",
+      wsDir: "/tmp/workspaces/dev",
+      workspaceName: "dev",
+      workspaceId: "dev",
+      isEphemeral: true,
+      autoApproveStartupUnits: false,
+    });
+    expect(mockResolveLocalWorkspaceStartup).not.toHaveBeenCalled();
+  });
+
   it("opens the chooser only when explicitly requested via --choose-connection", () => {
     mockIsDev.mockReturnValue(true);
     setArgv([mod.CHOOSE_CONNECTION_ARG]);
@@ -162,36 +176,39 @@ describe("resolveStartupMode interactive desktop policy", () => {
     ).toEqual(["--foo", "--workspace", "default"]);
   });
 
-  it("builds ephemeral-workspace relaunch args that pin the name and tag it disposable", () => {
+  it("builds relaunch args for the canonical hub-owned ephemeral workspace", () => {
     expect(
-      mod.ephemeralWorkspaceRelaunchArgs("dev-abc123", [
+      mod.ephemeralWorkspaceRelaunchArgs([
         "--foo",
         "--workspace",
         "old",
         mod.EPHEMERAL_WORKSPACE_ARG,
       ])
-    ).toEqual([
-      "--foo",
-      "--workspace",
-      "dev-abc123",
-      mod.WORKSPACE_CREATE_IF_MISSING_ARG,
-      mod.EPHEMERAL_WORKSPACE_ARG,
-    ]);
+    ).toEqual(["--foo", "--workspace", "dev", mod.EPHEMERAL_WORKSPACE_ARG]);
   });
 
-  it("marks an --ephemeral-workspace launch as ephemeral so will-quit deletes it", () => {
-    mockResolveWorkspaceName.mockReturnValue("dev-abc123");
-    setArgv([
-      "--workspace",
-      "dev-abc123",
-      mod.WORKSPACE_CREATE_IF_MISSING_ARG,
-      mod.EPHEMERAL_WORKSPACE_ARG,
-    ]);
+  it("routes an --ephemeral-workspace relaunch through the hub-owned lifecycle", () => {
+    mockResolveWorkspaceName.mockReturnValue("dev");
+    setArgv(["--workspace", "dev", mod.EPHEMERAL_WORKSPACE_ARG]);
 
-    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
+    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
       kind: "local",
+      wsDir: "/tmp/workspaces/dev",
+      workspaceName: "dev",
+      workspaceId: "dev",
       isEphemeral: true,
+      autoApproveStartupUnits: false,
     });
+    expect(mockResolveLocalWorkspaceStartup).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-canonical names tagged as ephemeral", () => {
+    mockResolveWorkspaceName.mockReturnValue("dev-abc123");
+    setArgv(["--workspace", "dev-abc123", mod.EPHEMERAL_WORKSPACE_ARG]);
+
+    expect(() => mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toThrow(
+      /canonical workspace "dev"/
+    );
   });
 
   it("passes create-if-missing only for explicitly selected local workspace launches", () => {

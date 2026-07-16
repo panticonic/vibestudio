@@ -12,7 +12,6 @@ import {
 } from "electron";
 import * as path from "path";
 import * as fs from "node:fs";
-import { randomBytes } from "node:crypto";
 import { EventService } from "@vibestudio/shared/eventsService";
 // Silence Electron security warnings in dev; panels run in isolated webviews.
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
@@ -156,11 +155,15 @@ import {
   shouldRequestSingleInstanceLock,
   getPendingUserDataDir,
   chooseConnectionRelaunchArgs,
+  EPHEMERAL_DEV_WORKSPACE_NAME,
+  ephemeralWorkspaceRelaunchArgs,
+  resolveEphemeralDevStartupMode,
   workspaceRelaunchArgs,
   type StartupMode,
   type ConnectedStartupMode,
 } from "./startupMode.js";
 import { establishServerSession, type SessionConnection } from "./serverSession.js";
+import { getLocalHubLogPath } from "./hubProcessManager.js";
 import {
   loadStoredRemotePairing,
   clearStoredRemotePairing,
@@ -171,10 +174,13 @@ import { relaunchApp } from "./relaunchApp.js";
 import type { ServerClient } from "./serverClient.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
 import { RemoteCdpHostProviderSocket } from "./remoteCdpHostProviderSocket.js";
-import { isValidEventName } from "@vibestudio/shared/events";
 import { HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT } from "@vibestudio/shared/hostTargetLaunchGate";
 import { resolveGatewayRouteUrl } from "@vibestudio/shared/appArtifacts";
-import { createServerEventBridge, type ServerHostTargetChangeEvent } from "./serverEventBridge.js";
+import {
+  createServerEventBridge,
+  notificationAttention,
+  type ServerHostTargetChangeEvent,
+} from "./serverEventBridge.js";
 import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
 import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
@@ -192,7 +198,6 @@ import { autofillMethods } from "@vibestudio/service-schemas/autofill";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import { createEventsServiceDefinition } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
-import { eventsMethods } from "@vibestudio/service-schemas/events";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
 import { callerHasPlatformCapability, viewHasAppCapability } from "./services/appCapabilities.js";
@@ -234,6 +239,7 @@ let startupMode: StartupMode;
 let workspaceId: string = "unknown";
 let bootstrapStartupError: { message: string; detail?: string; logPath?: string } | null = null;
 let retryWorkspaceName: string | null = crashLoopWorkspaceName;
+let retryWorkspaceIsEphemeral = false;
 
 if (localServerCrashLoopCode) {
   bootstrapStartupError = {
@@ -1407,10 +1413,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
       pendingPairLink,
       pendingPairConfirmed: startupInvocation.pendingPairConfirmed,
       startupError: bootstrapStartupError,
-      serverLogPath:
-        startupMode.kind === "local"
-          ? path.join(startupMode.wsDir, "state", "logs", "server.log")
-          : null,
+      serverLogPath: startupMode.kind === "local" ? getLocalHubLogPath() : null,
       startupDetail: bootstrapStartupDetail,
     };
   }
@@ -1426,10 +1429,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
     pendingPairLink,
     pendingPairConfirmed: startupInvocation.pendingPairConfirmed,
     startupError: bootstrapStartupError,
-    serverLogPath:
-      startupMode.kind === "local"
-        ? path.join(startupMode.wsDir, "state", "logs", "server.log")
-        : null,
+    serverLogPath: startupMode.kind === "local" ? getLocalHubLogPath() : null,
     startupDetail: bootstrapStartupDetail,
   };
 }
@@ -1454,7 +1454,11 @@ function installBootstrapConnectionHandlers(): void {
   ipcMain.handle("vibestudio:bootstrap:retry-startup", (event) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:retry-startup");
     relaunchApp({
-      args: retryWorkspaceName ? workspaceRelaunchArgs(retryWorkspaceName) : process.argv.slice(1),
+      args: retryWorkspaceIsEphemeral
+        ? ephemeralWorkspaceRelaunchArgs()
+        : retryWorkspaceName
+          ? workspaceRelaunchArgs(retryWorkspaceName)
+          : process.argv.slice(1),
     });
   });
 
@@ -1468,16 +1472,25 @@ function installBootstrapConnectionHandlers(): void {
     });
   });
 
-  ipcMain.handle("vibestudio:bootstrap:open-log", async (event, rawPath: unknown) => {
+  ipcMain.handle("vibestudio:bootstrap:open-log", (event, rawPath: unknown) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:open-log");
     const expectedPath =
       bootstrapStartupError?.logPath ??
-      (startupMode.kind === "local"
-        ? path.join(startupMode.wsDir, "state", "logs", "server.log")
-        : null);
+      (startupMode.kind === "local" ? getLocalHubLogPath() : null);
     if (typeof rawPath !== "string" || !expectedPath) return;
     if (path.resolve(rawPath) !== path.resolve(expectedPath)) return;
-    await shell.openPath(rawPath);
+    // Opening a file may outlive the bootstrap renderer: a successful startup
+    // replaces that renderer while the OS opener is still pending. Reply now
+    // and keep the host-owned action independent of that handoff.
+    void shell
+      .openPath(rawPath)
+      .then((message) => {
+        if (message) log.warn(`[bootstrap] Could not open server log: ${message}`);
+      })
+      .catch((error) => {
+        log.warn(`[bootstrap] Could not open server log: ${formatUnknownError(error)}`);
+      });
+    return { ok: true };
   });
 
   // The chooser handlers resolve the in-process choice instead of relaunching.
@@ -1503,9 +1516,14 @@ function installBootstrapConnectionHandlers(): void {
     if (!isDev()) {
       throw new Error("Ephemeral workspaces are only available in development mode");
     }
-    const name = `dev-${randomBytes(4).toString("hex")}`;
-    log.info(`[bootstrap] Launching ephemeral dev workspace "${name}" by user request`);
-    resolveChooserChoice({ kind: "local", name, ephemeral: true });
+    log.info(
+      `[bootstrap] Launching hub-owned ephemeral dev workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}" by user request`
+    );
+    resolveChooserChoice({
+      kind: "local",
+      name: EPHEMERAL_DEV_WORKSPACE_NAME,
+      ephemeral: true,
+    });
     return { ok: true };
   });
 
@@ -1874,42 +1892,44 @@ app.on("ready", async () => {
     if (choice.kind === "local") {
       // Resolve (creating if missing) the chosen local workspace in-process and
       // promote `startupMode` to local so the connected setup spawns its server.
-      let startup: ReturnType<typeof resolveLocalWorkspaceStartup>;
       retryWorkspaceName = choice.name;
-      try {
-        startup = resolveLocalWorkspaceStartup({
-          appRoot: getAppRoot(),
-          centralData,
-          name: choice.name,
-          init: true,
-          isDev: isDev(),
-        });
-      } catch (error) {
-        bootstrapWorkspaceRpcReady = false;
-        bootstrapStartupError = {
-          message: `Could not open workspace “${choice.name}”: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          detail: formatUnknownError(error),
+      retryWorkspaceIsEphemeral = choice.ephemeral;
+      if (choice.ephemeral) {
+        startupMode = resolveEphemeralDevStartupMode();
+        workspaceId = startupMode.workspaceId;
+        log.info(`[bootstrap] Ephemeral workspace chosen: ${workspaceId}`);
+      } else {
+        let startup: ReturnType<typeof resolveLocalWorkspaceStartup>;
+        try {
+          startup = resolveLocalWorkspaceStartup({
+            appRoot: getAppRoot(),
+            centralData,
+            name: choice.name,
+            init: true,
+          });
+        } catch (error) {
+          bootstrapWorkspaceRpcReady = false;
+          bootstrapStartupError = {
+            message: `Could not open workspace “${choice.name}”: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            detail: formatUnknownError(error),
+          };
+          return;
+        }
+        const autoApproveStartupUnits =
+          process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" || startup.resolved.created;
+        startupMode = {
+          kind: "local",
+          wsDir: startup.resolved.wsDir,
+          workspaceName: startup.resolved.name,
+          workspaceId: startup.resolved.workspace.config.id,
+          isEphemeral: false,
+          autoApproveStartupUnits,
         };
-        return;
+        workspaceId = startupMode.workspaceId;
+        log.info(`[bootstrap] Local workspace chosen: ${workspaceId} (${startupMode.wsDir})`);
       }
-      const isEphemeral = choice.ephemeral;
-      const autoApproveStartupUnits =
-        process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" ||
-        (startup.resolved.created && !isEphemeral);
-      startupMode = {
-        kind: "local",
-        wsDir: startup.resolved.wsDir,
-        workspaceName: startup.resolved.name,
-        workspaceId: startup.resolved.workspace.config.id,
-        // The chooser distinguishes the ephemeral button explicitly; the
-        // resolved name path never tags ephemeral, so carry the user's intent.
-        isEphemeral,
-        autoApproveStartupUnits,
-      };
-      workspaceId = startupMode.workspaceId;
-      log.info(`[bootstrap] Local workspace chosen: ${workspaceId} (${startupMode.wsDir})`);
     } else {
       // Remote: leave startupMode pending; the fresh pairing becomes the session.
       pendingRemotePairing = choice.pairing;
@@ -1930,12 +1950,8 @@ app.on("ready", async () => {
   performance.mark("startup:services-registered");
 
   let serverClientRef: import("./serverClient.js").ServerClient | null = null;
-  const serverEventSubscriptions = createServerEventSubscriptionBridge({
-    getServerClient: () => serverClientRef,
-    log,
-  });
   const recoverShellStateFromServer = async (_kind: "resubscribe" | "cold-recover") => {
-    await serverEventSubscriptions.replay({ force: true });
+    await serverEventSubscriptions.recover();
     if (recoveredLocalServerCrash) {
       eventService.emit("notification:show", {
         id: "local-server-crash-recovered",
@@ -1968,6 +1984,47 @@ app.on("ready", async () => {
     });
   }
 
+  const handleAttentionRequired = (title: string, message: string) => {
+    const focusWindow = () => applicationWindow.showAndFocus();
+    applicationWindow.requestAttention();
+    app.setBadgeCount(1);
+    if (Notification.isSupported()) {
+      const nativeNotification = new Notification({
+        title,
+        body: message,
+        urgency: "critical",
+      });
+      nativeNotification.on("click", focusWindow);
+      nativeNotification.show();
+    }
+  };
+  const handleWorkspaceRoute = (
+    route: import("@vibestudio/service-schemas/hubControl").HubWorkspaceRoute
+  ) => {
+    const name = route.workspace;
+    try {
+      persistStoredRemoteWorkspaceRoute(route);
+      log.info(`[App] Relaunching into workspace "${name}"`);
+      const args = workspaceRelaunchArgs(name);
+      const location = panelLocationForWorkspaceRelaunch;
+      panelLocationForWorkspaceRelaunch = null;
+      if (location?.workspace === name) {
+        args.push(createPanelDeepLink(location));
+      } else if (location) {
+        log.warn(
+          `[App] Dropping stale panel-location relaunch for "${location.workspace ?? "unknown"}" while switching to "${name}"`
+        );
+      }
+      relaunchApp({ args });
+    } catch (error) {
+      panelLocationForWorkspaceRelaunch = null;
+      log.error(
+        `[App] Refusing workspace relaunch before its route is durable: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  };
   const handleServerEvent = createServerEventBridge({
     eventService,
     getPanelOrchestrator: () => panelOrchestrator,
@@ -1984,52 +2041,20 @@ app.on("ready", async () => {
         ttl: 0,
       });
     },
-    onAttentionRequired: (title, message) => {
-      const focusWindow = () => applicationWindow.showAndFocus();
-      applicationWindow.requestAttention();
-      app.setBadgeCount(1);
-      if (Notification.isSupported()) {
-        const nativeNotification = new Notification({
-          title,
-          body: message,
-          urgency: "critical",
-        });
-        nativeNotification.on("click", focusWindow);
-        nativeNotification.show();
-      }
-    },
+    onAttentionRequired: handleAttentionRequired,
     onAppHostTargetChanged: retryElectronHostTargetLaunchAfterAppEvent,
     resolveAppAvailableEvent: resolveElectronAppAvailablePayload,
     onApprovalPendingChanged: (pending) => {
       approvalAttention?.handlePendingChanged(pending);
       retryElectronHostTargetLaunchAfterApprovalChange(pending);
     },
-    onWorkspaceRelaunchRequested: (name, route) => {
-      try {
-        persistStoredRemoteWorkspaceRoute(route);
-        log.info(`[App] Relaunching into workspace "${name}"`);
-        const args = workspaceRelaunchArgs(name);
-        const location = panelLocationForWorkspaceRelaunch;
-        panelLocationForWorkspaceRelaunch = null;
-        if (location?.workspace === name) {
-          args.push(createPanelDeepLink(location));
-        } else if (location) {
-          log.warn(
-            `[App] Dropping stale panel-location relaunch for "${location.workspace ?? "unknown"}" while switching to "${name}"`
-          );
-        }
-        relaunchApp({ args });
-      } catch (error) {
-        panelLocationForWorkspaceRelaunch = null;
-        log.error(
-          `[App] Refusing workspace relaunch before its route is durable: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      }
-    },
     onCredentialCaptureRequest: (payload) =>
       handleCredentialSessionCaptureRequest(payload as CredentialSessionCaptureRequest),
+  });
+  const serverEventSubscriptions = createServerEventSubscriptionBridge({
+    getServerClient: () => serverClientRef,
+    onEvent: handleServerEvent,
+    log,
   });
 
   try {
@@ -2040,9 +2065,7 @@ app.on("ready", async () => {
     // from empty → connected). This mirrors what ServerClient's own
     // onConnectionStatusChanged callback will emit a few moments later
     // once the WS lifecycle begins.
-    const remoteHost =
-      pendingRemotePairing?.srv ??
-      (!skipRemotePairingLaunch ? storedRemoteAtLaunch?.workspacePairing.srv : undefined);
+    const remoteHost = !skipRemotePairingLaunch ? storedRemoteAtLaunch?.workspaceName : undefined;
     const isRemoteSession = pendingRemotePairing !== null || remotePairedAtLaunch;
     bootstrapStartupDetail = isRemoteSession
       ? `Connecting to ${remoteHost || "the paired server"}…`
@@ -2056,7 +2079,6 @@ app.on("ready", async () => {
       remoteHost,
     });
 
-    let previousStatus: import("./serverClient.js").ConnectionStatus | null = null;
     // null mode = no local spawn; establishServerSession connects either the
     // fresh pairing (pendingRemotePairing) or a stored pairing over WebRTC.
     const connectedStartupMode: ConnectedStartupMode | null =
@@ -2068,7 +2090,6 @@ app.on("ready", async () => {
         pendingPairLabel: readPendingPairLabel(),
         skipStoredRemote: skipRemotePairingLaunch,
         centralData,
-        onServerEvent: handleServerEvent,
         onMainSessionTerminalClose: (error) => {
           const message = error.message || "The paired server ended this session.";
           eventService.emit("server-connection-changed", {
@@ -2115,14 +2136,6 @@ app.on("ready", async () => {
               }
             }
           }
-          // On every transition into "connected" (including the very first one
-          // and any subsequent reconnect), replay shell subscriptions. The
-          // first callback may fire before `serverClientRef` is assigned; the
-          // post-establish replay below covers that startup ordering.
-          if (status === "connected" && previousStatus !== "connected") {
-            void serverEventSubscriptions.replay({ force: true });
-          }
-          previousStatus = status;
         },
         onReconnectProgress: (progress) => {
           eventService.emit("server-connection-changed", {
@@ -2155,20 +2168,21 @@ app.on("ready", async () => {
       throw error;
     }
     serverClientRef = serverSession.serverClient;
-    serverEventSubscriptions.add("apps:available");
-    serverEventSubscriptions.add("apps:status");
-    serverEventSubscriptions.add("extensions:status");
-    serverEventSubscriptions.add("host-targets:changed");
-    serverEventSubscriptions.add(HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT);
-    serverEventSubscriptions.add("external-open:open");
-    serverEventSubscriptions.add("browser-panel:open");
-    serverEventSubscriptions.add("panel-tree-updated");
-    serverEventSubscriptions.add("panel-title-updated");
-    serverEventSubscriptions.add("panel:runtimeLeaseChanged");
-    serverEventSubscriptions.add("shell-approval:pending-changed");
-    serverEventSubscriptions.add("workspace:relaunch-requested");
-    serverEventSubscriptions.add("credential:capture-request");
-    await serverEventSubscriptions.replay({ force: true });
+    await serverEventSubscriptions.retainAll([
+      "build:complete",
+      "apps:available",
+      "apps:status",
+      "extensions:status",
+      "host-targets:changed",
+      HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT,
+      "external-open:open",
+      "browser-panel:open",
+      "panel-tree-updated",
+      "panel-title-updated",
+      "panel:runtimeLeaseChanged",
+      "shell-approval:pending-changed",
+      "credential:capture-request",
+    ]);
     // Seed badge/seen-set from approvals already pending at launch without
     // firing OS notifications for them — the bar shows them once the shell
     // window is up.
@@ -2212,7 +2226,7 @@ app.on("ready", async () => {
     // Forwards server-service calls to the server, dispatches Electron-local
     // services to the local dispatcher.
     const { IpcDispatcher } = await import("./ipcDispatcher.js");
-    new IpcDispatcher({
+    const ipcDispatcher = new IpcDispatcher({
       dispatcher,
       serverClient: conn.serverClient,
       getShellWebContents: () => applicationWindow.viewManager?.getShellWebContents() ?? null,
@@ -2259,8 +2273,21 @@ app.on("ready", async () => {
           if (launch) await applyReadyElectronLaunchResult(launch);
         }
       },
-      eventService,
     });
+    // Account- and caller-addressed events arrive on the authenticated server
+    // session, independently of the response-owned server watch. Preserve that
+    // addressing across Electron IPC; the renderer binds them with rpc.on().
+    for (const event of [
+      "user-notifications-changed",
+      "notification:show",
+      "notification:dismiss",
+    ] as const) {
+      conn.serverClient.onDirectEvent(event, (payload) => {
+        const attention = notificationAttention(event, payload);
+        if (attention) handleAttentionRequired(attention.title, attention.message);
+        ipcDispatcher.sendEventToShell(event, payload);
+      });
+    }
     log.info(`[PanelHTTP] Using server's panel HTTP via gateway port ${conn.gatewayPort}`);
 
     const gatewayBasePath = (() => {
@@ -2480,6 +2507,14 @@ app.on("ready", async () => {
         remoteHost: undefined,
       })
     );
+    const { createHubControlHostService } = await import("./services/hubControlService.js");
+    electronContainer.registerRpc(
+      createHubControlHostService({
+        client: conn.hubControlClient,
+        getViewManager,
+        onWorkspaceRoute: handleWorkspaceRoute,
+      })
+    );
     electronContainer.registerRpc(
       createPanelShellService({
         panelOrchestrator,
@@ -2521,12 +2556,9 @@ app.on("ready", async () => {
         },
       })
     );
-    // Workspace operations live entirely on the server now (single source of
-    // truth, accessible to panels/workers/shell). The shell renderer's
-    // `workspace.*` calls reach the server by default because only true
-    // Electron-local services are routed here. Workspace.select (relaunch) is
-    // signalled from the server via the workspace:relaunch-requested event
-    // (handled by the server event bridge).
+    // Current-workspace operations route to the selected child. Server-wide
+    // catalog/account control routes to the stable hub through the host service
+    // above; the child is never a control-plane deputy.
     electronContainer.registerRpc(createSettingsService({ serverClient: sc, getViewManager }));
     const { createRemoteCredService } = await import("./services/remoteCredService.js");
     electronContainer.registerRpc(
@@ -2574,7 +2606,6 @@ app.on("ready", async () => {
       const { createBrowserSessionSyncService } = await import("./services/browserSessionSync.js");
       electronContainer.registerManaged(
         createBrowserSessionSyncService({
-          eventService,
           serverClient: sc,
           browserDataClient: createBrowserDataClient(sc),
         })
@@ -2609,20 +2640,9 @@ app.on("ready", async () => {
         removeNeverSaveOrigin: (ctx, args) => invokeAutofill(ctx, "removeNeverSaveOrigin", args),
       }),
     });
-    // Events service — local subscription on main's EventService plus a
-    // bridge-owned server subscription. Main owns the remote subscription set:
-    // renderer unmount/remount churn can remove local listeners, but it must
-    // not race a remote unsubscribe against a newer remote subscribe and leave
-    // server-originated approval/notification events stranded.
-    //
-    // The workspace shell now runs as an app view, so an app with
-    // `panel-hosting` has the same event-bus role.
+    // Each local watch retains its server topics for exactly the lifetime of
+    // its response. The bridge folds all retained topics into one server watch.
     {
-      const baseEventsService = createEventsServiceDefinition(eventService, {
-        snapshots: {
-          "panel-tree-updated": () => panelRegistry?.getPanelTreeSnapshot(),
-        },
-      });
       const shouldForwardServerEvents = (caller: ServiceContext["caller"]): boolean => {
         if (callerHasPlatformCapability(caller.runtime.id, caller.runtime.kind, "panel-hosting")) {
           return true;
@@ -2631,34 +2651,17 @@ app.on("ready", async () => {
         const viewInfo = applicationWindow.viewManager?.getViewInfo(caller.runtime.id) ?? null;
         return viewHasAppCapability(caller.runtime.id, viewInfo, "panel-hosting");
       };
-      electronContainer.registerRpc({
-        ...baseEventsService,
-        handler: defineServiceHandler("events", eventsMethods, {
-          subscribe: async (ctx, args) => {
-            const result = await baseEventsService.handler(ctx, "subscribe", args);
-            const eventName = args[0];
-            if (shouldForwardServerEvents(ctx.caller) && isValidEventName(eventName)) {
-              serverEventSubscriptions.add(eventName);
-            }
-            return result;
+      electronContainer.registerRpc(
+        createEventsServiceDefinition(eventService, {
+          snapshots: {
+            "panel-tree-updated": () => panelRegistry?.getPanelTreeSnapshot(),
           },
-          unsubscribe: async (ctx, args) => {
-            const result = await baseEventsService.handler(ctx, "unsubscribe", args);
-            const eventName = args[0];
-            if (shouldForwardServerEvents(ctx.caller) && isValidEventName(eventName)) {
-              serverEventSubscriptions.delete(eventName);
-            }
-            return result;
+          onWatchOpened: (events, ctx) => {
+            if (!shouldForwardServerEvents(ctx.caller)) return undefined;
+            return serverEventSubscriptions.retainMany(events);
           },
-          unsubscribeAll: async (ctx, args) => {
-            const result = await baseEventsService.handler(ctx, "unsubscribeAll", args);
-            if (shouldForwardServerEvents(ctx.caller)) {
-              serverEventSubscriptions.clear();
-            }
-            return result;
-          },
-        }),
-      });
+        })
+      );
     }
 
     await electronContainer.startAll();
@@ -2901,11 +2904,9 @@ app.on("ready", async () => {
     // Fail-fast: clean up all partial state, show error, and exit.
     const cleanupPromises: Promise<void>[] = [];
 
-    if (serverSession?.serverClient) {
+    if (serverSession) {
       cleanupPromises.push(
-        serverSession.serverClient
-          .close()
-          .catch((e) => console.error("[App] serverClient cleanup error:", e))
+        serverSession.close().catch((e) => console.error("[App] session cleanup error:", e))
       );
     }
     // Leave the local hub running: it is detached by design, the
@@ -2932,9 +2933,7 @@ app.on("ready", async () => {
         detail: remoteStartupFailed
           ? "The saved pairing was kept unless the server rejected it. Check the server or choose another workspace."
           : "Retry the startup, or choose another server or workspace.",
-        ...(startupMode.kind === "local"
-          ? { logPath: path.join(startupMode.wsDir, "state", "logs", "server.log") }
-          : {}),
+        ...(startupMode.kind === "local" ? { logPath: getLocalHubLogPath() } : {}),
       };
       remotePairedAtLaunch = false;
       log.error(`[bootstrap] Startup failed; keeping recovery window open: ${message}`);
@@ -3050,9 +3049,7 @@ app.on("will-quit", (event) => {
         session.hubProcessManager?.detach();
         if (session.hubProcessManager) console.log("[App] Hub left running (detached)");
       }
-      await session.serverClient
-        .close()
-        .catch((e) => console.error("[App] Server client close error:", e));
+      await session.close().catch((e) => console.error("[App] Session close error:", e));
     })();
     stopPromises.push(cleanupThenClose);
   }

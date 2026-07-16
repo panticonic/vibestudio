@@ -1486,10 +1486,11 @@ export class ViewManager {
     }
 
     // No-op check: the layer tree is already correct when (a) the desired
-    // views appear in the child list in the desired relative order, and
-    // (b) no other *visible managed* view sits above them. Overlay views
-    // (shell overlay, autofill dropdown) are unmanaged and always belong on
-    // top, so they're ignored here.
+    // managed views appear in relative order, (b) no other visible managed
+    // view sits above them, and (c) visible shell overlays remain above the
+    // managed stack. A newly appended panel can preserve the relative managed
+    // order while still covering an existing overlay, so overlays must be part
+    // of this check even though they are not managed views.
     const children = this.window.contentView.children as Electron.View[] | undefined;
     if (children && desired.length > 0) {
       const childIndex = new Map<Electron.View, number>();
@@ -1514,6 +1515,20 @@ export class ViewManager {
             alreadyOrdered = false;
             break;
           }
+        }
+      }
+      if (alreadyOrdered) {
+        const visibleShellOverlays = [
+          this.nativeShellOverlay.getVisibleView(),
+          this.shellContentOverlay.getVisibleView(),
+        ].filter((view): view is Electron.WebContentsView => view !== null);
+        for (const view of visibleShellOverlays) {
+          const idx = childIndex.get(view);
+          if (idx === undefined || idx < prevIndex) {
+            alreadyOrdered = false;
+            break;
+          }
+          prevIndex = idx;
         }
       }
       if (alreadyOrdered) return;

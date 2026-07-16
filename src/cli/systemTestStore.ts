@@ -21,83 +21,14 @@ export interface StoredSystemTestRun {
     all: boolean;
     model?: string;
     concurrency: number;
-    testTimeoutMs?: number;
+    testTimeoutMs: number;
   };
-}
-
-/**
- * A doctor-verified direct route to a locally running workspace gateway.
- *
- * Pairing remains the source of identity and the fallback transport. This
- * record only avoids renegotiating the single-peer WebRTC room for every
- * system-test status poll when the server has explicitly reported a loopback
- * gateway that this same CLI host can reach.
- */
-export interface StoredSystemTestTarget {
-  schemaVersion: 1;
-  pairedUrl: string;
-  workspaceName: string;
-  serverUrl: string;
-  serverId: string;
-  serverBootId: string;
-  workspaceId: string;
-  verifiedAt: number;
 }
 
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
 
 export function systemTestRunRoot(): string {
   return path.join(cliConfigRoot(), "system-test-runs");
-}
-
-export function systemTestTargetPath(): string {
-  return path.join(cliConfigRoot(), "system-test-target.json");
-}
-
-export function saveSystemTestTarget(target: StoredSystemTestTarget): void {
-  writeFileAtomicSync(systemTestTargetPath(), JSON.stringify(target, null, 2), { mode: 0o600 });
-}
-
-export function loadSystemTestTarget(): StoredSystemTestTarget | null {
-  const file = systemTestTargetPath();
-  if (!fs.existsSync(file)) return null;
-  try {
-    const value = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<StoredSystemTestTarget>;
-    const allowed = new Set([
-      "schemaVersion",
-      "pairedUrl",
-      "workspaceName",
-      "serverUrl",
-      "serverId",
-      "serverBootId",
-      "workspaceId",
-      "verifiedAt",
-    ]);
-    if (
-      Object.keys(value).some((key) => !allowed.has(key)) ||
-      value.schemaVersion !== 1 ||
-      typeof value.pairedUrl !== "string" ||
-      typeof value.workspaceName !== "string" ||
-      typeof value.serverUrl !== "string" ||
-      typeof value.serverId !== "string" ||
-      typeof value.serverBootId !== "string" ||
-      typeof value.workspaceId !== "string" ||
-      !Number.isSafeInteger(value.verifiedAt) ||
-      (value.verifiedAt ?? 0) <= 0
-    ) {
-      throw new Error("invalid schema");
-    }
-    return value as StoredSystemTestTarget;
-  } catch (error) {
-    throw new Error(
-      `Could not read system-test target ${file}: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-}
-
-export function clearSystemTestTarget(): void {
-  const file = systemTestTargetPath();
-  if (fs.existsSync(file)) fs.unlinkSync(file);
 }
 
 export function systemTestRunDir(runId: string): string {

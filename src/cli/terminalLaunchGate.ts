@@ -19,6 +19,7 @@ import type {
   HostTargetLaunchSessionSnapshot,
 } from "@vibestudio/shared/hostTargets";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { isWebRtcCredential } from "./credentialStore.js";
 import { typedClient } from "./typedClients.js";
 import { refreshShell, RpcClient, type DeviceCredential } from "./rpcClient.js";
@@ -175,7 +176,16 @@ interface TerminalLaunchEventClient {
 }
 
 interface EventServerClient {
-  call(service: string, method: string, args: unknown[]): Promise<unknown>;
+  stream(
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: { signal?: AbortSignal }
+  ): Promise<Response>;
+  on(
+    event: string,
+    listener: (event: import("@vibestudio/rpc").RpcEventContext) => void
+  ): () => void;
   close(): Promise<void>;
 }
 
@@ -184,7 +194,6 @@ async function createEventServerClient(
   opts: {
     serverUrl: string;
     refreshAuthToken: () => Promise<string>;
-    onServerEvent: (event: string, payload: unknown) => void;
     onRecovery: () => void | Promise<void>;
   }
 ): Promise<EventServerClient> {
@@ -194,7 +203,6 @@ async function createEventServerClient(
     serverUrl: opts.serverUrl,
     reconnect: true,
     logPrefix: "TerminalLaunchGate",
-    onServerEvent: opts.onServerEvent,
     onRecovery: opts.onRecovery,
     adapter: {
       now: () => Date.now(),
@@ -209,9 +217,8 @@ async function createEventServerClient(
   await transport.connectAndWait();
   const rpc = createRpcClient({ selfId: "admin", callerKind: "server", transport });
   return {
-    call(service, method, args) {
-      return rpc.call("main", `${service}.${method}`, args);
-    },
+    stream: (targetId, method, args, options) => rpc.stream(targetId, method, args, options),
+    on: (event, listener) => rpc.on(event, listener),
     close() {
       return transport.close();
     },
@@ -235,26 +242,24 @@ async function createTerminalLaunchEventClient(
     revision += 1;
     for (const waiter of [...waiters]) waiter();
   };
-  const subscribeAll = async (nextClient: EventServerClient | null) => {
-    if (!nextClient) return;
-    await Promise.all(eventNames.map((event) => nextClient.call("events", "subscribe", [event])));
-  };
   const shellToken = (await refreshShell(creds)).shellToken;
   let client: EventServerClient | null = null;
+  let events: EventsClient | null = null;
   client = await createEventServerClient(shellToken, {
     serverUrl: creds.url,
     refreshAuthToken: async () => (await refreshShell(creds)).shellToken,
-    onServerEvent: (event, payload) => {
+    onRecovery: () => events?.recover(),
+  });
+  events = new EventsClient(client);
+  for (const event of eventNames) {
+    events.on(event, (payload) => {
       if (isLaunchSessionEventForTarget(target, event, payload)) {
         lastSession = payload;
         notify();
       }
-    },
-    onRecovery: async () => {
-      await subscribeAll(client);
-    },
-  });
-  await subscribeAll(client);
+    });
+  }
+  await events.subscribeAll(eventNames);
   return {
     waitForLaunchSessionChange(sessionId, timeoutMs) {
       if (lastSession?.sessionId === sessionId && revision !== observedRevision) {
@@ -275,8 +280,9 @@ async function createTerminalLaunchEventClient(
         waiters.add(done);
       });
     },
-    close() {
-      return client?.close() ?? Promise.resolve();
+    async close() {
+      await events?.unsubscribeAll().catch(() => {});
+      await client?.close();
     },
   };
 }
@@ -296,11 +302,12 @@ async function createWebRtcTerminalLaunchEventClient(
     for (const waiter of [...waiters]) waiter();
   };
   const rpc = new RpcClient(creds);
+  const events = new EventsClient(rpc);
   const cleanups: Array<() => void> = [];
   try {
     for (const event of eventNames) {
       cleanups.push(
-        await rpc.onEvent(event, (payload) => {
+        events.on(event, (payload) => {
           if (isLaunchSessionEventForTarget(target, event, payload)) {
             lastSession = payload;
             notify();
@@ -308,11 +315,8 @@ async function createWebRtcTerminalLaunchEventClient(
         })
       );
     }
-    const subscribeAll = async () => {
-      await Promise.all(eventNames.map((event) => rpc.call("events.subscribe", [event])));
-    };
-    cleanups.push(await rpc.onRecovery(subscribeAll));
-    await subscribeAll();
+    cleanups.push(await rpc.onRecovery(() => events.recover()));
+    await events.subscribeAll(eventNames);
   } catch (error) {
     for (const cleanup of cleanups.splice(0)) cleanup();
     await rpc.close();
@@ -341,6 +345,7 @@ async function createWebRtcTerminalLaunchEventClient(
     },
     async close() {
       for (const cleanup of cleanups.splice(0)) cleanup();
+      await events.unsubscribeAll().catch(() => {});
       await rpc.close();
     },
   };
