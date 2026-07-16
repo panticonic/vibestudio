@@ -31,20 +31,18 @@ class FakeSocket implements WsLike {
       data: JSON.stringify({
         success: true,
         type: "ws:auth-result",
-        contractVersion: 1,
+        contractVersion: 2,
       }),
     });
   }
 }
 
 describe("createServerWsTransport", () => {
-  it("preserves selected workspace paths and delivers pushed server events", async () => {
+  it("preserves selected workspace paths", async () => {
     const sockets: FakeSocket[] = [];
-    const events: Array<{ event: string; payload: unknown }> = [];
     const transport = createServerWsTransport({
       selfId: "shell:mobile",
       serverUrl: "https://server.example/_workspace/dev",
-      onServerEvent: (event, payload) => events.push({ event, payload }),
       adapter: {
         now: () => Date.now(),
         getAuthToken: async () => "grant",
@@ -55,7 +53,6 @@ describe("createServerWsTransport", () => {
         },
       },
     });
-
     const connected = transport.connectAndWait();
     await Promise.resolve();
     sockets[0]?.open();
@@ -63,21 +60,5 @@ describe("createServerWsTransport", () => {
     await connected;
 
     expect(sockets[0]?.url).toBe("wss://server.example/_workspace/dev/rpc");
-
-    const payload = { pending: [{ approvalId: "approval-1", kind: "credential" }] };
-    sockets[0]?.onmessage?.({
-      data: JSON.stringify({
-        type: "ws:event",
-        event: "event:shell-approval:pending-changed",
-        payload,
-      }),
-    });
-
-    expect(events).toEqual([
-      {
-        event: "event:shell-approval:pending-changed",
-        payload,
-      },
-    ]);
   });
 });

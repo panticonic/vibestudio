@@ -136,7 +136,7 @@ export const fsMethods = defineServiceMethods({
   // File content
   readFile: {
     description:
-      'Read a file\'s contents. Overloaded: with an encoding string (or Node-style `{ encoding: "utf8" }`) the bytes are decoded and returned as a string; without one, raw bytes are returned base64-encoded in a binary envelope. (Server/shell callers prepend a contextId as the first argument.)',
+      "Read a file's contents. Managed workspace files are resolved through the semantic authority at the context's exact working head, so projected disk bytes are never treated as authoritative; scratch paths read directly from the context filesystem. Overloaded: with an encoding string (or Node-style `{ encoding: \"utf8\" }`) the bytes are decoded and returned as a string; without one, raw bytes are returned base64-encoded in a binary envelope. (Server/shell callers prepend a contextId as the first argument.)",
     args: z.union([
       z.tuple([z.string(), fsReadEncodingSchema.optional()]),
       z.tuple([z.string(), z.string(), fsReadEncodingSchema.optional()]),
@@ -151,7 +151,7 @@ export const fsMethods = defineServiceMethods({
   },
   writeFile: {
     description:
-      "Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. For such callers, a valid workspace-repo file becomes a GAD working edit; platform-ignored paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope.",
+      "Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. Managed workspace files are recorded as semantic VCS operations before the accepted working head is projected; platform-excluded paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope.",
     args: z.union([
       z.tuple([z.string(), fsDataSchema]),
       z.tuple([z.string(), z.string(), fsDataSchema]),
@@ -165,7 +165,7 @@ export const fsMethods = defineServiceMethods({
   },
   appendFile: {
     description:
-      "Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. For context-bound callers, a valid workspace-repo file becomes a GAD working edit; platform-ignored paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope.",
+      "Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. Managed workspace files are recorded as attributed semantic VCS operations before projection; platform-excluded paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope.",
     args: z.union([
       z.tuple([z.string(), fsDataSchema]),
       z.tuple([z.string(), z.string(), fsDataSchema]),
@@ -188,25 +188,25 @@ export const fsMethods = defineServiceMethods({
   },
   mkdir: {
     description:
-      "Create a directory directly on the context filesystem projection (not as a GAD working edit); with `recursive` it creates missing parents and returns the first-created path relative to the context root, otherwise returns undefined.",
+      "Create a scratch directory directly on the context filesystem. Managed workspace paths reject mkdir because empty directories have no semantic fact; author a file instead and its parent directories are implicit. With `recursive`, scratch mkdir creates missing parents and returns the first-created path relative to the context root; otherwise it returns undefined.",
     args: z.union([
       z.tuple([z.string(), mkdirOptionsSchema.optional()]),
       z.tuple([z.string(), z.string(), mkdirOptionsSchema.optional()]),
     ]),
     returns: z.string().optional(),
     access: WRITE_ACCESS,
-    examples: [{ args: ["/a/b/c", { recursive: true }] }],
+    examples: [{ args: ["/.tmp/a/b/c", { recursive: true }] }],
   },
   rmdir: {
     description:
-      "Remove a directory. For context-bound callers, a valid workspace-repo path routes subtree removal through GAD; a scratch directory is removed directly and throws if it is not empty.",
+      "Remove a directory. The semantic workspace records a managed subtree removal atomically before projection; a scratch directory is removed directly and throws if it is not empty.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
     returns: voidSchema,
     access: DESTRUCTIVE_ACCESS,
   },
   rm: {
     description:
-      "Remove a file or directory; `recursive` deletes a directory's contents and `force` suppresses errors for missing paths. For context-bound callers, a valid workspace-repo path routes the removal through GAD; scratch paths are removed directly.",
+      "Remove a file or directory; `recursive` deletes a directory's contents and `force` suppresses errors for missing paths. The semantic workspace records managed removals atomically before projection; scratch paths are removed directly.",
     args: z.union([
       z.tuple([z.string(), rmOptionsSchema.optional()]),
       z.tuple([z.string(), z.string(), rmOptionsSchema.optional()]),
@@ -249,14 +249,14 @@ export const fsMethods = defineServiceMethods({
   // File manipulation
   unlink: {
     description:
-      "Delete a single file (not a directory). For context-bound callers, a valid workspace-repo path routes the deletion through GAD; a scratch path is deleted directly.",
+      "Delete a single file (not a directory). The semantic workspace records a managed deletion before projection; a scratch path is deleted directly.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
     returns: voidSchema,
     access: DESTRUCTIVE_ACCESS,
   },
   copyFile: {
     description:
-      "Copy a file between context-root-relative paths, overwriting the destination. For context-bound callers, a valid workspace-repo destination becomes a GAD working edit; a platform-ignored destination or one outside reserved workspace source roots stays context-local scratch. Routed destinations under reserved roots must use canonical casing and valid repo shape.",
+      "Copy a file between context-root-relative paths. Managed destinations must be vacant: managed-to-managed copies mint a distinct file identity with exact copy provenance, while scratch-to-managed copies author an ordinary file creation caused by this copy invocation. Scratch content has no earlier semantic origin to preserve. Scratch destinations retain ordinary filesystem overwrite semantics. A platform-excluded destination or one outside reserved workspace source roots stays context-local scratch. Routed destinations under reserved roots must use canonical casing and valid repo shape.",
     args: z.union([
       z.tuple([z.string(), z.string()]),
       z.tuple([z.string(), z.string(), z.string()]),
@@ -267,7 +267,7 @@ export const fsMethods = defineServiceMethods({
   },
   rename: {
     description:
-      "Move or rename a context-root-relative file or directory. For context-bound callers, scratch-to-scratch renames are direct; scratch-to-repo and repo-to-repo moves become GAD working edits. Moving a tracked repo path out to scratch is rejected so source state cannot bypass VCS. Routed endpoints under reserved workspace source roots must use canonical casing and valid repo shape.",
+      "Move or rename a context-root-relative file or directory. Scratch-to-scratch renames are direct. The semantic workspace records managed-to-managed moves before projection and preserves stable file identity. Generic scratch-to-managed rename is refused because a path cannot prove new-import versus trusted atomic-replacement intent; use `copyFile` for a vacant managed import or an explicit managed write/edit for replacement, and the refused rename leaves the scratch source intact. Moving a tracked managed path out to scratch is also refused. Routed endpoints under reserved workspace source roots must use canonical casing and valid repo shape.",
     args: z.union([
       z.tuple([z.string(), z.string()]),
       z.tuple([z.string(), z.string(), z.string()]),
@@ -276,7 +276,7 @@ export const fsMethods = defineServiceMethods({
     access: WRITE_ACCESS,
     examples: [
       { args: ["/.tmp/tmp-ab12", "/.tmp/todo.md"] },
-      { args: ["/.tmp/tmp-ab12", "/projects/demo/notes/todo.md"] },
+      { args: ["/projects/demo/notes/draft.md", "/projects/demo/notes/todo.md"] },
     ],
   },
   realpath: {
@@ -295,7 +295,7 @@ export const fsMethods = defineServiceMethods({
   },
   truncate: {
     description:
-      "Truncate (or zero-extend) a file to the given byte length (default 0). For context-bound callers, a valid workspace-repo file routes through GAD; a scratch file is changed directly.",
+      "Truncate (or zero-extend) a file to the given byte length (default 0). The semantic workspace records a managed file update before projection; a scratch file is changed directly.",
     args: z.union([
       z.tuple([z.string(), z.number().optional()]),
       z.tuple([z.string(), z.string(), z.number().optional()]),
@@ -313,7 +313,7 @@ export const fsMethods = defineServiceMethods({
   },
   symlink: {
     description:
-      "Create a symbolic link inside context-local scratch. Both the link and its resolved target must remain inside the caller's context root; absolute-looking targets are interpreted relative to that virtual root and stored as contained relative targets. Workspace-repo link paths are rejected because GAD does not represent symlink entries.",
+      "Create a symbolic link inside context-local scratch. Both the link and its resolved target must remain inside the caller's context root; absolute-looking targets are interpreted relative to that virtual root and stored as contained relative targets. Managed workspace link paths are rejected because the semantic file manifest does not represent symlink entries.",
     args: z.union([
       z.tuple([z.string(), z.string(), z.enum(["file", "dir", "junction"]).optional()]),
       z.tuple([z.string(), z.string(), z.string(), z.enum(["file", "dir", "junction"]).optional()]),
@@ -324,7 +324,7 @@ export const fsMethods = defineServiceMethods({
   },
   chmod: {
     description:
-      "Change a path's Unix permission bits (mode). For context-bound callers, a valid workspace-repo file routes through GAD; a scratch path is changed directly.",
+      "Change a path's Unix permission bits (mode). The semantic workspace records a managed file mode change before projection; a scratch path is changed directly.",
     args: z.union([
       z.tuple([z.string(), z.number()]),
       z.tuple([z.string(), z.string(), z.number()]),
@@ -335,7 +335,7 @@ export const fsMethods = defineServiceMethods({
   },
   utimes: {
     description:
-      "Set a path's access and modification timestamps (seconds since the epoch) directly on the context filesystem projection; this does not create a GAD working edit.",
+      "Set a path's access and modification timestamps (seconds since the epoch) directly on the context filesystem projection; timestamps carry no semantic workspace fact.",
     args: z.union([
       z.tuple([z.string(), z.number(), z.number()]),
       z.tuple([z.string(), z.string(), z.number(), z.number()]),

@@ -1,13 +1,13 @@
 /**
  * `mirror` service — the read-side of the context projector, over the wire
  * (plan §6.5, breaking change §9.11). It lets a remote CLI materialize a
- * context's repos into a local working tree it can drive with `vibestudio
- * fs/vcs`: `targets` returns the per-repo content-addressed states, and
- * `objects` streams the CAS tree content for a state in size-bounded pages.
+ * context's repos into a local snapshot: `targets` returns repository
+ * projections of one exact workspace state, and `objects` streams the CAS tree
+ * content for a state in size-bounded pages.
  *
- * It holds NO write/merge semantics — inbound updates and local edit writeback
- * ride the existing `vcs.edit`/context substrate. This is a pure projection
- * read, a sibling of `worktree.scan` on the fetch side.
+ * It holds no write or merge semantics. A mirror is a pure projection read,
+ * never a second working tree whose filesystem changes are reconstructed into
+ * semantic edits.
  */
 
 import { z } from "zod";
@@ -68,7 +68,7 @@ export const mirrorMethods = defineServiceMethods({
     args: z.tuple([mirrorTargetsArgsSchema]),
     returns: z.array(mirrorTargetSchema),
     description:
-      "The per-repo { repoPath, stateHash } targets a context resolves to (read-side of the projector). Fetch these, then stream each state's tree via `objects`.",
+      "Return repository content projections for a context's exact working head. Each {repoPath,stateHash} is a content-only projector target, never ancestry or a semantic revision. Stream its immutable tree through `objects`.",
     policy: MIRROR_POLICY,
     access: { sensitivity: "read" },
   },
@@ -76,7 +76,7 @@ export const mirrorMethods = defineServiceMethods({
     args: z.tuple([mirrorObjectsArgsSchema]),
     returns: mirrorObjectsResultSchema,
     description:
-      "Stream the content-addressed tree for a `stateHash` as size-bounded pages of { path, mode, content (base64), size }. Page with the returned `next` cursor until absent; optionally restrict to `paths`.",
+      "Stream one content-only repository tree as bounded pages of {path,mode,content,size}. Agent callers may read only states currently reachable from their host-bound context; no prior `targets` call is required. A stateHash never grants workspace history or provenance. Page with `next` until absent and optionally restrict to paths.",
     policy: MIRROR_POLICY,
     access: { sensitivity: "read" },
   },

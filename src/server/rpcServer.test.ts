@@ -1,5 +1,7 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { WebSocket } from "ws";
+import type { IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { RpcServer } from "./rpcServer.js";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
@@ -27,6 +29,9 @@ import {
 } from "@vibestudio/rpc/protocol/sessionNegotiation";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
+import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
+import { EventService } from "@vibestudio/shared/eventsService";
+import type { DeferralRegistry } from "./services/deferralRegistry.js";
 
 function makeRecord(
   id: string,
@@ -62,12 +67,15 @@ type TestRpcServer = {
     getCallerConnections(callerId: string): WsClientState[];
   };
   sessions: { hasSession(callerId: string): boolean };
+  disconnectTimers: Map<string, ReturnType<typeof setTimeout>>;
+  pendingAuthentications: Map<unknown, ReturnType<typeof setTimeout> | null>;
   connectionReconnectWaiters: Map<string, { resolve: () => void; reject: (err: Error) => void }>;
   reconnectWaiters: Map<
     string,
     { promise: Promise<void>; resolve: () => void; reject: (err: Error) => void }
   >;
-  handleAuth(ws: unknown, token: string | null, connectionId: string): void;
+  deferrals: Pick<DeferralRegistry, "createApi" | "cancelAll" | "size">;
+  handleAuth(ws: unknown, token: string | null, connectionId: string): Promise<void>;
   handleConnection(ws: unknown): void;
   handleMessage(client: WsClientState, data: Buffer): void;
   handleRoute(
@@ -103,6 +111,13 @@ type TestRpcServer = {
     method?: string
   ): { ok: boolean; reason?: string };
   sendToWs(ws: unknown, msg: unknown): void;
+  resolveCausalParent(
+    caller: ReturnType<typeof createVerifiedCaller>,
+    message: {
+      causalParent?: import("@vibestudio/rpc").RpcCausalParent;
+      parentRequestId?: string;
+    }
+  ): Promise<import("@vibestudio/rpc").RpcCausalParent | undefined>;
 };
 
 function testServer(server: RpcServer): TestRpcServer {
@@ -165,6 +180,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
               effectiveVersion: "ev-test",
             }
           : null,
+      verifyExactCausalInvocation: async () => true,
       ...opts,
     }),
   };
@@ -503,7 +519,7 @@ describe("RpcServer attachWebRtcPipe (v2 pipe contract)", () => {
 });
 
 describe("RpcServer attachWebRtcPipe — negative handshake fails closed (un-authed open)", () => {
-  // A redeemer that (like the real createPairingRedeemer) ASSUMES a string token
+  // A redeemer that (like the real transport-specific redeemers) assumes a string token
   // — its presence proves the missing/non-string-token guard runs BEFORE any
   // downstream string operation (`token.startsWith(...)`) that would otherwise
   // throw uncaught / into a swallowing catch that strands the session.
@@ -644,6 +660,42 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     expect(Buffer.from(frames[1]!.payload, "base64").toString()).toBe("hello!");
   });
 
+  it("returns a body-less panel bridge stream on its envelope lane", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    dispatcher.dispatch.mockResolvedValue(new Response("hello!", { status: 200 }));
+
+    const control: SessionControlFrame[] = [];
+    const bulk: Array<{ streamId: number; type: number; payload: Uint8Array }> = [];
+    const shim = new SessionWebSocketShim(
+      "panel-session",
+      {
+        writeControl: (bytes) => {
+          control.push(decodeControlFrame(new TextDecoder().decode(bytes)));
+          return Promise.resolve();
+        },
+        writeBulkFrame: (streamId, type, payload) => {
+          bulk.push({ streamId, type, payload });
+          return Promise.resolve();
+        },
+        dropBulkStream: () => {},
+        bulkPendingBytes: () => 0,
+      },
+      () => {}
+    );
+    const client = createClient();
+    client.ws = shim as unknown as WebSocket;
+
+    await handleRpc(server, client, streamRequest("bridge-stream"));
+
+    const frames = control
+      .filter((frame): frame is Extract<SessionControlFrame, { t: "rpc" }> => frame.t === "rpc")
+      .map((frame) => frame.envelope.message)
+      .filter((message) => message.type === "stream-frame");
+    expect(frames.map((frame) => frame.frameType)).toEqual([FRAME_HEAD, FRAME_DATA, FRAME_END]);
+    expect(Buffer.from(frames[1]!.payload, "base64").toString()).toBe("hello!");
+    expect(bulk).toHaveLength(0);
+  });
+
   it("AWAITS each binary frame send — the producer loop suspends until the pipe accepts the frame", async () => {
     const { server, dispatcher } = setupStreamingServer();
     const encoderUtf8 = new TextEncoder();
@@ -720,6 +772,42 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     expect(frames.some((f) => f.frameType === FRAME_END)).toBe(false);
   });
 
+  it("an abrupt close cancels only that connection generation's active streams", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    let oldCancelled = false;
+    let replacementCancelled = false;
+    const stalledResponse = (onCancel: () => void) =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("open"));
+          },
+          cancel: onCancel,
+        })
+      );
+    dispatcher.dispatch
+      .mockResolvedValueOnce(stalledResponse(() => (oldCancelled = true)))
+      .mockResolvedValueOnce(stalledResponse(() => (replacementCancelled = true)));
+
+    // A reconnect may preserve its logical connection id while replacing the
+    // concrete socket/session object. Stream ownership follows that concrete
+    // generation, not the reusable route label.
+    const oldClient = createClientWithConnection("panel:nav-a", "conn-stable");
+    const replacement = createClientWithConnection("panel:nav-a", "conn-stable");
+    const oldDone = handleRpc(server, oldClient, streamRequest("old-stream"));
+    const replacementDone = handleRpc(server, replacement, streamRequest("new-stream"));
+    await flushAsync();
+
+    testServer(server).handleClose(oldClient, 1006, "ICE failed");
+    await oldDone;
+    expect(oldCancelled).toBe(true);
+    expect(replacementCancelled).toBe(false);
+
+    testServer(server).handleClose(replacement, 1006, "replacement closed");
+    await replacementDone;
+    expect(replacementCancelled).toBe(true);
+  });
+
   it("terminates a session whose bufferedAmount (incl. bulk backlog) exceeds the hard limit", () => {
     const { server } = createServer();
     const control: SessionControlFrame[] = [];
@@ -743,10 +831,50 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     expect(written).not.toBe(false);
     expect(shim.bufferedAmount).toBeGreaterThan(128 * 1024 * 1024);
 
-    testServer(server).sendToWs(shim, { type: "ws:event", event: "x", payload: 1 });
+    testServer(server).sendToWs(shim, {
+      type: "ws:routed",
+      envelope: {
+        from: "main",
+        target: "panel:test",
+        delivery: { caller: { callerId: "main", callerKind: "server" } },
+        provenance: [{ callerId: "main", callerKind: "server" }],
+        message: { type: "event", fromId: "main", event: "test", payload: 1 },
+      },
+    });
 
     expect(shim.readyState).toBe(3); // terminated — the slow session, not the pipe
     expect(control.some((frame) => frame.t === "closed")).toBe(true);
+  });
+});
+
+describe("RpcServer deferred result lifecycle", () => {
+  it("does not deliver a settled result to a retired caller", async () => {
+    const created = createServer();
+    const callerId = "do:workers/agent-worker:AiChatWorker:cancelled";
+    const caller = makeRecord(callerId, "do");
+    created.entityCache._onActivate(caller);
+    const callTarget = vi.spyOn(created.server, "callTarget");
+    let resolveWork!: (value: unknown) => void;
+
+    testServer(created.server)
+      .deferrals.createApi({
+        callerId,
+        requestId: "deferred-cancelled",
+        service: "credentials",
+        method: "resolveCredential",
+      })
+      .run(() => new Promise((resolve) => (resolveWork = resolve)));
+
+    created.entityCache._onRetire({
+      ...caller,
+      status: "retired",
+      retiredAt: Date.now(),
+    });
+    resolveWork({ decision: "session" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(callTarget).not.toHaveBeenCalled();
   });
 });
 
@@ -813,6 +941,44 @@ describe("RpcServer relay behavior", () => {
         "extension.invoke"
       )
     ).toEqual({ ok: true });
+  });
+
+  it("composes a host relay boundary with the invariant extension boundary", () => {
+    const relayAuthorization = vi.fn(({ targetId }: { targetId: string }) =>
+      targetId === "panel:allowed"
+        ? ({ ok: true } as const)
+        : ({ ok: false, reason: `Host denies relay to ${targetId}` } as const)
+    );
+    const { server } = createServer({ relayAuthorization });
+
+    expect(
+      testServer(server).checkRelayAuth("panel:nav-a", "panel", "panel:allowed", "tools.invoke")
+    ).toEqual({ ok: true });
+    expect(
+      testServer(server).checkRelayAuth(
+        "panel:nav-a",
+        "panel",
+        "do:workers/example:Store:key",
+        "tools.invoke"
+      )
+    ).toEqual({
+      ok: false,
+      reason: "Host denies relay to do:workers/example:Store:key",
+    });
+
+    relayAuthorization.mockClear();
+    expect(
+      testServer(server).checkRelayAuth(
+        "panel:nav-a",
+        "panel",
+        "@workspace-extensions/git-bridge",
+        "extension.invoke"
+      )
+    ).toEqual({
+      ok: false,
+      reason: expect.stringContaining("cannot directly relay host-control method"),
+    });
+    expect(relayAuthorization).not.toHaveBeenCalled();
   });
 
   it("replaces forged WS route identity with the authenticated panel principal", () => {
@@ -1031,7 +1197,7 @@ describe("RpcServer relay behavior", () => {
     ).rejects.toMatchObject({ code: "DO_NOT_CREATED" });
   });
 
-  it("refreshes workerd connection details after ensureDO before retrying DO relay", async () => {
+  it("does not replay a DO relay when the target retires during the failed dispatch", async () => {
     const { server, entityCache } = createServer();
     const targetId = "do:workers/example:Store:key";
     entityCache._onActivate(makeRecord(targetId, "do"));
@@ -1041,41 +1207,87 @@ describe("RpcServer relay behavior", () => {
     const fetchError = Object.assign(new TypeError("fetch failed"), {
       cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }),
     });
-    const fetchMock = vi
-      .fn()
-      .mockRejectedValueOnce(fetchError)
-      .mockResolvedValueOnce(
-        // Envelope-native: the DO replies with a response envelope; relayToDO unwraps result.
-        new Response(
-          JSON.stringify({
-            from: "do",
-            target: "main",
-            delivery: { caller: { callerId: "do", callerKind: "do" } },
-            provenance: [],
-            message: { type: "response", requestId: "x", result: { ok: true } },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      );
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => {
+      entityCache._onRetire({
+        ...makeRecord(targetId, "do"),
+        status: "retired",
+        retiredAt: Date.now(),
+      });
+      throw fetchError;
+    });
     vi.stubGlobal("fetch", fetchMock);
-    server.setEnsureDO(
-      vi.fn(async () => {
-        server.setWorkerdUrl("http://127.0.0.1:2222");
-      })
-    );
 
     await expect(
       testServer(server).relayToDO("panel:nav-a", "panel", targetId, "ping", [])
-    ).resolves.toEqual({ ok: true });
+    ).rejects.toMatchObject({ cause: fetchError });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(entityCache.resolveActive(targetId)).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toMatch(/^http:\/\/127\.0\.0\.1:1111\//);
-    expect(fetchMock.mock.calls[1]?.[0]).toMatch(/^http:\/\/127\.0\.0\.1:2222\//);
+  });
+
+  it("verifies and preserves an exact causal parent across WS ingress into a DO relay", async () => {
+    const verifyExactCausalInvocation = vi.fn(async () => true);
+    const { server, entityCache } = createServer({ verifyExactCausalInvocation });
+    const targetId = "do:workers/example:Store:key";
+    entityCache._onActivate(makeRecord(targetId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          from: targetId,
+          target: "main",
+          delivery: { caller: { callerId: targetId, callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "do-response", result: { ok: true } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const binding = {
+      entityId: "entity:agent",
+      contextId: "context:agent",
+      channelId: "channel:agent",
+      agentId: "agent:stable",
+      userId: "user:one",
+    };
+    const client = createClient("do:agents:Agent:one");
+    client.caller = createVerifiedCaller(client.caller.runtime.id, "do", null, binding);
+    registerClient(server, client);
+    const causalParent = {
+      kind: "trajectory-invocation" as const,
+      ...channelTrajectoryFor(binding.channelId),
+      invocationId: "invocation:tool",
+    };
+    const request: RpcMessage = {
+      type: "request",
+      requestId: "do-causal-relay",
+      fromId: client.caller.runtime.id,
+      method: "store.write",
+      args: [{ value: 1 }],
+      causalParent,
+    };
+
+    await testServer(server).handleRoute(
+      client,
+      targetId,
+      request,
+      undefined,
+      clientEnvelope(client, targetId, request)
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    const relayed = JSON.parse(String(init.body)) as { message: { causalParent?: unknown } };
+    expect(relayed.message.causalParent).toEqual(causalParent);
   });
 
   it("projects the host-verified account subject into DO caller attribution", async () => {
     const { server, entityCache } = createServer();
-    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    const targetId = "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane";
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
@@ -1101,259 +1313,6 @@ describe("RpcServer relay behavior", () => {
       callerKind: "panel",
       userId: "user-1",
     });
-  });
-
-  it("mints a vcsPush invocation token resolving to the ORIGINATING caller (§4)", async () => {
-    // Narrow-host P3 attribution: a userland `vcsPush` dispatch to the
-    // single-writer DO (targetId === vcsWriterIdentity) mints an on-behalf-of
-    // token recording the ORIGINATING caller. The DO threads it back into
-    // refs.updateMains, which resolves it against THIS table to attribute the
-    // advance — the whole reason the push flip must be client-side (a
-    // host-service forward would erase the originating principal here).
-    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
-    const vcsInvocations = new VcsInvocationTable();
-    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
-    const { server, entityCache } = createServer({
-      vcsInvocations,
-      getVcsWriterIdentity: () => targetId,
-    });
-    entityCache._onActivate(makeRecord(targetId, "do"));
-    server.setWorkerdUrl("http://127.0.0.1:1111");
-    server.setWorkerdGatewayToken("gateway-token");
-
-    let tokenSeen: string | undefined;
-    let resolvedCallerId: string | undefined;
-    let sizeDuringDispatch = -1;
-    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
-      const envelope = JSON.parse(init.body) as { message?: { invocationToken?: string } };
-      tokenSeen = envelope.message?.invocationToken;
-      if (tokenSeen) {
-        // Resolve WHILE the dispatch is in flight (the token window is open).
-        resolvedCallerId = vcsInvocations.resolve(tokenSeen)?.caller.runtime.id;
-        sizeDuringDispatch = vcsInvocations.size();
-      }
-      return new Response(
-        JSON.stringify({
-          from: "do",
-          target: "main",
-          delivery: { caller: { callerId: "do", callerKind: "do" } },
-          provenance: [],
-          message: { type: "response", requestId: "x", result: { status: "pushed" } },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await testServer(server).relayToDO("panel:nav-a", "panel", targetId, "vcsPush", [
-      { repoPaths: ["packages/a"], sourceHead: "ctx:c1" },
-    ]);
-
-    // Minted, threaded, and resolved to the originating caller (NOT the DO).
-    expect(tokenSeen).toBeTruthy();
-    expect(resolvedCallerId).toBe("panel:nav-a");
-    expect(sizeDuringDispatch).toBe(1);
-    // The window closes when the dispatch settles — replay fails closed.
-    expect(vcsInvocations.size()).toBe(0);
-    expect(vcsInvocations.resolve(tokenSeen!)).toBeNull();
-  });
-
-  it("attributes routed extension VCS writer dispatches to the parent invocation caller", async () => {
-    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
-    const vcsInvocations = new VcsInvocationTable();
-    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
-    const parentCaller = {
-      callerId: "@workspace-apps/shell",
-      callerKind: "app" as const,
-      repoPath: "apps/shell",
-      effectiveVersion: "ev-parent",
-      contextId: "ctx-parent",
-    };
-    const resolveExtensionInvocation = vi.fn(() => ({
-      caller: {
-        callerId: "@workspace-extensions/git-bridge",
-        callerKind: "extension" as const,
-      },
-      chainCaller: parentCaller,
-    }));
-    const { server, entityCache } = createServer({
-      vcsInvocations,
-      getVcsWriterIdentity: () => targetId,
-      resolveExtensionInvocation,
-    });
-    entityCache._onActivate(makeRecord(targetId, "do"));
-    entityCache._onActivate(
-      makeRecord(parentCaller.callerId, "app", {
-        contextId: parentCaller.contextId,
-        repoPath: parentCaller.repoPath,
-        effectiveVersion: parentCaller.effectiveVersion,
-      })
-    );
-    server.setWorkerdUrl("http://127.0.0.1:1111");
-    server.setWorkerdGatewayToken("gateway-token");
-
-    let tokenSeen: string | undefined;
-    let contextSeen: string | undefined;
-    let resolvedCallerId: string | undefined;
-    let resolvedRepoPath: string | undefined;
-    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
-      const envelope = JSON.parse(init.body) as {
-        message?: { invocationToken?: string; callerContextId?: string };
-      };
-      tokenSeen = envelope.message?.invocationToken;
-      contextSeen = envelope.message?.callerContextId;
-      const record = tokenSeen ? vcsInvocations.resolve(tokenSeen) : null;
-      resolvedCallerId = record?.caller.runtime.id;
-      resolvedRepoPath = record?.caller.code?.repoPath;
-      return new Response(
-        JSON.stringify({
-          from: "do",
-          target: "main",
-          delivery: { caller: { callerId: "do", callerKind: "do" } },
-          provenance: [],
-          message: { type: "response", requestId: "req-ext-vcs", result: { status: "pushed" } },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const extensionClient = createClient("@workspace-extensions/git-bridge");
-    extensionClient.caller = createVerifiedCaller("@workspace-extensions/git-bridge", "extension");
-
-    handleRoute(server, extensionClient, targetId, {
-      type: "request",
-      requestId: "req-ext-vcs",
-      fromId: extensionClient.caller.runtime.id,
-      method: "vcsPush",
-      args: [{ repoPaths: ["packages/a"], sourceHead: "ctx:ctx-parent" }],
-      parentInvocationToken: "parent-token",
-    });
-
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(resolveExtensionInvocation).toHaveBeenCalledWith(
-      "@workspace-extensions/git-bridge",
-      "parent-token"
-    );
-    expect(tokenSeen).toBeTruthy();
-    expect(resolvedCallerId).toBe(parentCaller.callerId);
-    expect(resolvedRepoPath).toBe(parentCaller.repoPath);
-    expect(contextSeen).toBe(parentCaller.contextId);
-    await vi.waitFor(() => expect(vcsInvocations.size()).toBe(0));
-  });
-
-  it("threads the caller's HOST-RESOLVED context id to the writer DO (row 11)", async () => {
-    // Source-head confinement: the relay resolves the ORIGINATING caller's
-    // context registration (`entityCache.resolveContext`) at the same chokepoint
-    // that mints the token, and threads it as `message.callerContextId`. The
-    // writer DO uses it to confine a sandboxed push to its own `ctx:` head. Never
-    // client-asserted — resolved host-side here.
-    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
-    const vcsInvocations = new VcsInvocationTable();
-    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
-    const { server, entityCache } = createServer({
-      vcsInvocations,
-      getVcsWriterIdentity: () => targetId,
-    });
-    // Register the caller with a context registration.
-    entityCache._onActivate(makeRecord("panel:ctx-a", "panel", { contextId: "ctx-42" }));
-    entityCache._onActivate(makeRecord(targetId, "do"));
-    server.setWorkerdUrl("http://127.0.0.1:1111");
-    server.setWorkerdGatewayToken("gateway-token");
-
-    let contextSeen: string | undefined;
-    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
-      const envelope = JSON.parse(init.body) as { message?: { callerContextId?: string } };
-      contextSeen = envelope.message?.callerContextId;
-      return new Response(
-        JSON.stringify({
-          from: "do",
-          target: "main",
-          delivery: { caller: { callerId: "do", callerKind: "do" } },
-          provenance: [],
-          message: { type: "response", requestId: "x", result: { status: "pushed" } },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await testServer(server).relayToDO("panel:ctx-a", "panel", targetId, "vcsPush", [
-      { repoPaths: ["packages/a"], sourceHead: "ctx:ctx-42" },
-    ]);
-    expect(contextSeen).toBe("ctx-42");
-  });
-
-  it("does NOT thread a context id to a NON-writer DO dispatch (row 11)", async () => {
-    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
-    const vcsInvocations = new VcsInvocationTable();
-    const writerId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
-    const otherId = "do:workers/example:Store:key";
-    const { server, entityCache } = createServer({
-      vcsInvocations,
-      getVcsWriterIdentity: () => writerId,
-    });
-    entityCache._onActivate(makeRecord("panel:ctx-a", "panel", { contextId: "ctx-42" }));
-    entityCache._onActivate(makeRecord(otherId, "do"));
-    server.setWorkerdUrl("http://127.0.0.1:1111");
-    server.setWorkerdGatewayToken("gateway-token");
-
-    let contextSeen: string | undefined = "unset";
-    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
-      const envelope = JSON.parse(init.body) as { message?: { callerContextId?: string } };
-      contextSeen = envelope.message?.callerContextId;
-      return new Response(
-        JSON.stringify({
-          from: "do",
-          target: "main",
-          delivery: { caller: { callerId: "do", callerKind: "do" } },
-          provenance: [],
-          message: { type: "response", requestId: "x", result: { ok: true } },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await testServer(server).relayToDO("panel:ctx-a", "panel", otherId, "ping", []);
-    expect(contextSeen).toBeUndefined();
-  });
-
-  it("does NOT mint an invocation token for a NON-writer DO dispatch", async () => {
-    // Only the single-writer DO identity mints a token; any other DO target
-    // (targetId !== vcsWriterIdentity) relays without one.
-    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
-    const vcsInvocations = new VcsInvocationTable();
-    const writerId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
-    const otherId = "do:workers/example:Store:key";
-    const { server, entityCache } = createServer({
-      vcsInvocations,
-      getVcsWriterIdentity: () => writerId,
-    });
-    entityCache._onActivate(makeRecord(otherId, "do"));
-    server.setWorkerdUrl("http://127.0.0.1:1111");
-    server.setWorkerdGatewayToken("gateway-token");
-
-    let tokenSeen: string | undefined = "unset";
-    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
-      const envelope = JSON.parse(init.body) as { message?: { invocationToken?: string } };
-      tokenSeen = envelope.message?.invocationToken;
-      return new Response(
-        JSON.stringify({
-          from: "do",
-          target: "main",
-          delivery: { caller: { callerId: "do", callerKind: "do" } },
-          provenance: [],
-          message: { type: "response", requestId: "x", result: { ok: true } },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await testServer(server).relayToDO("panel:nav-a", "panel", otherId, "ping", []);
-    expect(tokenSeen).toBeUndefined();
-    expect(vcsInvocations.size()).toBe(0);
   });
 
   it("rejects distinct live panel runtime connections for the same caller", () => {
@@ -2112,6 +2071,130 @@ describe("RpcServer live caller gate", () => {
 });
 
 describe("RpcServer caller identity", () => {
+  it("accepts an existing exact causal parent only for the presenter's bound trajectory", async () => {
+    const { server } = createServer();
+    const binding = {
+      entityId: "entity:agent",
+      contextId: "context:agent",
+      channelId: "channel:agent",
+      agentId: "agent:stable",
+      userId: "user:one",
+    };
+    const caller = createVerifiedCaller("do:agents:Agent:one", "do", null, binding);
+    const trajectory = channelTrajectoryFor(binding.channelId);
+    const causalParent = {
+      kind: "trajectory-invocation" as const,
+      ...trajectory,
+      invocationId: "invocation:tool",
+    };
+
+    await expect(testServer(server).resolveCausalParent(caller, { causalParent })).resolves.toEqual(
+      causalParent
+    );
+    await expect(
+      testServer(server).resolveCausalParent(caller, {
+        causalParent: {
+          ...causalParent,
+          ...channelTrajectoryFor("channel:sibling"),
+        },
+      })
+    ).rejects.toThrow(/does not match/);
+    await expect(
+      testServer(server).resolveCausalParent(createVerifiedCaller("worker:one", "worker"), {
+        causalParent,
+      })
+    ).rejects.toThrow(/host-bound agent trajectory/);
+  });
+
+  it("fails closed when exact causal invocation evidence is unavailable or missing", async () => {
+    const binding = {
+      entityId: "entity:agent",
+      contextId: "context:agent",
+      channelId: "channel:agent",
+      agentId: "agent:stable",
+      userId: "user:one",
+    };
+    const caller = createVerifiedCaller("do:agents:Agent:one", "do", null, binding);
+    const causalParent = {
+      kind: "trajectory-invocation" as const,
+      ...channelTrajectoryFor(binding.channelId),
+      invocationId: "invocation:missing",
+    };
+    const unavailable = createServer({ verifyExactCausalInvocation: undefined }).server;
+    await expect(
+      testServer(unavailable).resolveCausalParent(caller, { causalParent })
+    ).rejects.toThrow(/verification is unavailable/);
+
+    const verifyExactCausalInvocation = vi.fn(async () => false);
+    const missing = createServer({ verifyExactCausalInvocation }).server;
+    await expect(testServer(missing).resolveCausalParent(caller, { causalParent })).rejects.toThrow(
+      /does not exist/
+    );
+    expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+  });
+
+  it("rejects nonexistent causal parents before unary and streaming service dispatch", async () => {
+    const verifyExactCausalInvocation = vi.fn(async () => false);
+    const { server } = createServer({ verifyExactCausalInvocation });
+    const dispatcher = testServer(server).dispatcher;
+    dispatcher.getPolicy.mockReturnValue({ allowed: ["do"] });
+    dispatcher.getMethodPolicy.mockReturnValue(undefined);
+    const binding = {
+      entityId: "entity:agent",
+      contextId: "context:agent",
+      channelId: "channel:agent",
+      agentId: "agent:stable",
+      userId: "user:one",
+    };
+    const client = createClient();
+    client.caller = createVerifiedCaller("do:agents:Agent:one", "do", null, binding);
+    const causalParent = {
+      kind: "trajectory-invocation" as const,
+      ...channelTrajectoryFor(binding.channelId),
+      invocationId: "invocation:missing",
+    };
+
+    await handleRpc(server, client, {
+      ...rpcRequest("unary-missing-cause", "vcs.status"),
+      causalParent,
+    });
+    await handleRpc(server, client, {
+      type: "stream-request",
+      requestId: "stream-missing-cause",
+      fromId: client.caller.runtime.id,
+      method: "files.stream",
+      args: [],
+      causalParent,
+    });
+
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
+    const messages = (client.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(([raw]) =>
+      JSON.parse(String(raw))
+    );
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          envelope: expect.objectContaining({
+            message: expect.objectContaining({
+              requestId: "unary-missing-cause",
+              error: expect.stringContaining("does not exist"),
+              errorCode: "EACCES",
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          envelope: expect.objectContaining({
+            message: expect.objectContaining({
+              requestId: "stream-missing-cause",
+              frameType: FRAME_ERROR,
+            }),
+          }),
+        }),
+      ])
+    );
+    expect(verifyExactCausalInvocation).toHaveBeenCalledTimes(2);
+  });
+
   function rpcRequest(requestId: string, method: string) {
     return {
       type: "request" as const,
@@ -2212,7 +2295,7 @@ describe("RpcServer caller identity", () => {
 
     ws.emitMessage({
       type: "ws:auth",
-      contractVersion: 1,
+      contractVersion: 2,
       token: "pairing-code",
       connectionId: "pairing-conn",
     });
@@ -2231,6 +2314,38 @@ describe("RpcServer caller identity", () => {
     expect(authResults).not.toContainEqual(expect.objectContaining({ success: true }));
   });
 
+  it("returns the fresh pairing target with the issued credential", async () => {
+    const { server } = createServer({
+      redeemPairingCredential: async () => ({
+        callerId: "shell:dev_fresh",
+        callerKind: "shell",
+        deviceCredential: { deviceId: "dev_fresh", refreshToken: "refresh-secret" },
+        pairingContext: { workspaceId: "workspace-1" },
+        subject: { userId: "usr_alice", handle: "alice" },
+      }),
+    });
+    const ws = createTestWs();
+    testServer(server).handleConnection(ws);
+
+    ws.emitMessage({
+      type: "ws:auth",
+      contractVersion: 2,
+      token: "pairing-code",
+      connectionId: "pairing-conn",
+    });
+    await flushAsync();
+
+    const authResults = ws.send.mock.calls.map(([raw]) => JSON.parse(String(raw)));
+    expect(authResults).toContainEqual(
+      expect.objectContaining({
+        type: "ws:auth-result",
+        success: true,
+        deviceCredential: { deviceId: "dev_fresh", refreshToken: "refresh-secret" },
+        pairingContext: { workspaceId: "workspace-1" },
+      })
+    );
+  });
+
   it("rolls back every admission registry when an asynchronous auth task fails", async () => {
     const { server, tokenManager } = createServer({
       userSubjectSource: {
@@ -2247,7 +2362,7 @@ describe("RpcServer caller identity", () => {
 
     ws.emitMessage({
       type: "ws:auth",
-      contractVersion: 1,
+      contractVersion: 2,
       token,
       connectionId: "failed-admission",
     });
@@ -2277,6 +2392,42 @@ describe("RpcServer caller identity", () => {
     const callers = testServer(server).connections.getCallerConnections("electron-main");
     expect(callers).toHaveLength(1);
     expect(callers[0]!.caller.runtime.kind).toBe("shell");
+  });
+
+  it("registers one direct event session for the authenticated transport lifetime", () => {
+    const eventService = new EventService();
+    const { server, tokenManager } = createServer({
+      eventService,
+      userSubjectSource: {
+        resolve: () => ({ userId: "usr_root", handle: "root" }),
+      },
+    });
+    const remoteToken = tokenManager.createToken("electron-main", "shell");
+    const ws = createTestWs();
+
+    testServer(server).handleAuth(ws, remoteToken, "conn-events");
+    expect(eventService.emitToConnection("electron-main", "conn-events", "focus-address-bar")).toBe(
+      true
+    );
+
+    const messages = ws.send.mock.calls.map(([raw]) => JSON.parse(String(raw)));
+    expect(messages.filter((message) => message.type === "ws:rpc")).toEqual([
+      expect.objectContaining({
+        envelope: expect.objectContaining({
+          message: {
+            type: "event",
+            fromId: "main",
+            event: "focus-address-bar",
+          },
+        }),
+      }),
+    ]);
+
+    const admitted = testServer(server).connections.getCallerConnections("electron-main")[0]!;
+    testServer(server).handleClose(admitted, 1006, "network");
+    expect(eventService.emitToConnection("electron-main", "conn-events", "focus-address-bar")).toBe(
+      false
+    );
   });
 
   it("accepts WS authentication when a connection grant resolves to a shell host principal", () => {
@@ -2391,6 +2542,7 @@ describe("RpcServer caller identity", () => {
           callerId: "@workspace-apps/shell",
           callerKind: "app" as const,
         },
+        causalParent: null,
       })),
     });
     const client = createClient("@workspace-extensions/tools");
@@ -2405,7 +2557,7 @@ describe("RpcServer caller identity", () => {
 
     await handleRpc(server, client, {
       ...rpcRequest("req-app-chain", "workspace.getInfo"),
-      parentInvocationToken: "inv-app",
+      parentRequestId: "request:app",
     });
 
     expect(dispatched).toHaveLength(1);
@@ -2418,6 +2570,254 @@ describe("RpcServer caller identity", () => {
         effectiveVersion: "",
       },
     });
+    expect(dispatched[0]).not.toHaveProperty("causalParent");
+  });
+
+  it("derives a nested extension VCS call's causal parent from its host invocation", async () => {
+    const causalParent = {
+      kind: "trajectory-invocation" as const,
+      logId: "trajectory:channel:agent-1",
+      head: "main",
+      invocationId: "invocation:tool-1",
+    };
+    const resolveExtensionInvocation = vi.fn(() => ({
+      caller: {
+        callerId: "do:agents/AgentDO:agent-1",
+        callerKind: "do" as const,
+      },
+      causalParent,
+    }));
+    const verifyExactCausalInvocation = vi.fn(async () => true);
+    const { server } = createServer({
+      resolveExtensionInvocation,
+      verifyExactCausalInvocation,
+    });
+    const client = createClient("@workspace-extensions/tools");
+    client.caller = createVerifiedCaller("@workspace-extensions/tools", "extension");
+    const dispatched: unknown[] = [];
+    testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["extension"] });
+    testServer(server).dispatcher.getMethodPolicy.mockReturnValue(undefined);
+    testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: unknown) => {
+      dispatched.push(ctx);
+      return { ok: true };
+    });
+
+    await handleRpc(server, client, {
+      ...rpcRequest("req-agent-extension-vcs", "vcs.status"),
+      parentRequestId: "request:agent-tool",
+    });
+
+    expect(resolveExtensionInvocation).toHaveBeenCalledWith(
+      "@workspace-extensions/tools",
+      "request:agent-tool"
+    );
+    expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject({
+      caller: { runtime: { id: "@workspace-extensions/tools", kind: "extension" } },
+      causalParent,
+    });
+  });
+});
+
+describe("RpcServer caller retirement", () => {
+  it("queues a self-revocation response before closing and skips reconnect grace", async () => {
+    const onClientDisconnect = vi.fn();
+    const { server, tokenManager } = createServer({ onClientDisconnect });
+    server.initHandlers();
+    const callerId = "shell:device-self";
+    tokenManager.ensureToken(callerId, "shell");
+    const client = createClient(callerId);
+    client.caller = createVerifiedCaller(callerId, "shell", null, null, {
+      userId: "user-1",
+      handle: "user1",
+    });
+    const order: string[] = [];
+    client.ws.send = vi.fn(() => order.push("response"));
+    client.ws.close = vi.fn(() => order.push("close"));
+    registerClient(server, client);
+    const dispatcher = testServer(server).dispatcher;
+    dispatcher.getPolicy.mockReturnValue({ allowed: ["shell"] });
+    dispatcher.getMethodPolicy.mockReturnValue(undefined);
+    dispatcher.dispatch.mockImplementation(async () => {
+      expect(tokenManager.revokeToken(callerId)).toBe(true);
+      expect(client.ws.close).not.toHaveBeenCalled();
+      return { revoked: true };
+    });
+
+    await handleRpc(server, client, {
+      type: "request",
+      requestId: "revoke-self",
+      fromId: callerId,
+      method: "hubControl.revokeDevice",
+      args: [],
+    });
+
+    expect(order).toEqual(["response", "close"]);
+    const retirement = server.retireCaller(callerId);
+    expect(server.retireCaller(callerId)).toBe(retirement);
+    let settled = false;
+    void retirement.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    testServer(server).handleClose(client, 4001, "Token revoked");
+    await retirement;
+    expect(testServer(server).disconnectTimers.size).toBe(0);
+    expect(testServer(server).reconnectWaiters.size).toBe(0);
+    expect(testServer(server).connectionReconnectWaiters.size).toBe(0);
+    expect(onClientDisconnect).toHaveBeenCalledOnce();
+  });
+
+  it("closes idle sibling connections immediately but lets the active response drain", async () => {
+    const { server, tokenManager } = createServer();
+    server.initHandlers();
+    const callerId = "shell:device-many";
+    tokenManager.ensureToken(callerId, "shell");
+    const active = createClientWithConnection(callerId, "conn-active");
+    active.caller = createVerifiedCaller(callerId, "shell", null, null, {
+      userId: "user-1",
+      handle: "user1",
+    });
+    const idle = createClientWithConnection(callerId, "conn-idle");
+    idle.caller = active.caller;
+    registerClient(server, active);
+    registerClient(server, idle);
+    const dispatcher = testServer(server).dispatcher;
+    dispatcher.getPolicy.mockReturnValue({ allowed: ["shell"] });
+    dispatcher.getMethodPolicy.mockReturnValue(undefined);
+    dispatcher.dispatch.mockImplementation(async () => {
+      tokenManager.revokeToken(callerId);
+      expect(idle.ws.close).toHaveBeenCalledWith(4001, "Token revoked");
+      expect(active.ws.close).not.toHaveBeenCalled();
+      return true;
+    });
+
+    await handleRpc(server, active, {
+      type: "request",
+      requestId: "revoke-many",
+      fromId: callerId,
+      method: "hubControl.revokeDevice",
+      args: [],
+    });
+    expect(active.ws.send).toHaveBeenCalledOnce();
+    expect(active.ws.close).toHaveBeenCalledWith(4001, "Token revoked");
+
+    const retired = server.retireCaller(callerId);
+    testServer(server).handleClose(idle, 4001, "Token revoked");
+    testServer(server).handleClose(active, 4001, "Token revoked");
+    await retired;
+  });
+
+  it("allows a fresh credential generation after the old transport fully retires", async () => {
+    const { server, tokenManager } = createServer({
+      userSubjectSource: {
+        resolve: () => ({ userId: "user-1", handle: "user1" }),
+      },
+    });
+    server.initHandlers();
+    const callerId = "shell:device-stable";
+    tokenManager.ensureToken(callerId, "shell");
+    const first = createClient(callerId);
+    first.caller = createVerifiedCaller(callerId, "shell", null, null, {
+      userId: "user-1",
+      handle: "user1",
+    });
+    registerClient(server, first);
+
+    tokenManager.revokeToken(callerId);
+    const retired = server.retireCaller(callerId);
+    testServer(server).handleClose(first, 4001, "Token revoked");
+    await retired;
+
+    const nextToken = tokenManager.ensureToken(callerId, "shell");
+    const next = createTestWs();
+    await testServer(server).handleAuth(next, nextToken, "next");
+
+    const authResults = next.send.mock.calls.map(([raw]) => JSON.parse(String(raw)));
+    expect(authResults).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "ws:auth-result", success: true })])
+    );
+  });
+});
+
+describe("RpcServer terminal lifecycle", () => {
+  it("can own a gateway WebSocket upgrade without a second RPC path", () => {
+    const { server } = createServer();
+    server.initHandlers();
+    const waitingSocket = createTestWs();
+    const internal = server as unknown as {
+      wss: {
+        handleUpgrade(
+          req: IncomingMessage,
+          socket: Duplex,
+          head: Buffer,
+          done: (ws: WebSocket) => void
+        ): void;
+      };
+    };
+    const upgrade = vi
+      .spyOn(internal.wss, "handleUpgrade")
+      .mockImplementation((_req, _socket, _head, done) => done(waitingSocket as never));
+
+    server.handleGatewayWsUpgrade({} as IncomingMessage, {} as Duplex, Buffer.alloc(0));
+
+    expect(upgrade).toHaveBeenCalledOnce();
+    expect(testServer(server).pendingAuthentications.has(waitingSocket)).toBe(true);
+  });
+
+  it("releases owned work and ignores delayed socket closes after idempotent stop", async () => {
+    const { server, tokenManager } = createServer();
+    const disposeRevocation = vi.fn();
+    vi.spyOn(tokenManager, "onRevoke").mockReturnValue(disposeRevocation);
+    server.initHandlers();
+
+    const waitingSocket = createTestWs();
+    server.handleGatewayWsConnection(waitingSocket as never);
+    expect(testServer(server).pendingAuthentications.size).toBe(1);
+
+    let deferredSignal: AbortSignal | undefined;
+    testServer(server)
+      .deferrals.createApi({
+        callerId: "worker:pending",
+        requestId: "request-pending",
+        service: "approval",
+        method: "request",
+      })
+      .run(
+        (signal) =>
+          new Promise(() => {
+            deferredSignal = signal;
+          })
+      );
+    expect(testServer(server).deferrals.size).toBe(1);
+
+    const client = createClient("panel:nav-a");
+    registerClient(server, client);
+    await server.stop();
+    await server.stop();
+
+    expect(disposeRevocation).toHaveBeenCalledTimes(1);
+    expect(waitingSocket.close).toHaveBeenCalledWith(1001, "Server shutting down");
+    expect(testServer(server).pendingAuthentications.size).toBe(0);
+    expect(deferredSignal?.aborted).toBe(true);
+    expect(testServer(server).deferrals.size).toBe(0);
+    expect(testServer(server).sessions.hasSession("panel:nav-a")).toBe(false);
+
+    // A real WebSocket emits close asynchronously after closeAll(). That late
+    // callback must remain pure cleanup and must not recreate grace state.
+    testServer(server).handleClose(client, 1001, "Server shutting down");
+    expect(testServer(server).disconnectTimers.size).toBe(0);
+    expect(testServer(server).reconnectWaiters.size).toBe(0);
+    expect(testServer(server).connectionReconnectWaiters.size).toBe(0);
+    expect(testServer(server).sessions.hasSession("panel:nav-a")).toBe(false);
+
+    expect(() => server.initHandlers()).toThrow("cannot be restarted");
+    const lateSocket = createTestWs();
+    server.handleGatewayWsConnection(lateSocket as never);
+    expect(lateSocket.close).toHaveBeenCalledWith(1001, "Server shutting down");
   });
 });
 

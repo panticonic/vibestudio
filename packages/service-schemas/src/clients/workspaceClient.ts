@@ -2,16 +2,17 @@
  * Typed workspace client — derives its RPC call surface from the shared
  * `workspaceMethods` schema table (`workspace.ts`), the
  * single source of truth for the workspace service's wire contract. Only the
- * non-RPC conveniences (`switchTo` alias, `units.watch()` event subscription)
+ * non-RPC conveniences (`units.watch()` event subscription)
  * are hand-written here.
  */
 
 import type { RpcCaller } from "@vibestudio/rpc";
+import type { EventName } from "@vibestudio/shared/events";
 import {
   createTypedServiceClient,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
-import { eventsMethods } from "../events.js";
+import { EventsClient } from "./eventsClient.js";
 import { workspaceMethods, type WorkspaceUnitStatus } from "../workspace.js";
 import type { WorkspaceTreeNode } from "../workspace.js";
 
@@ -28,7 +29,6 @@ export type {
 } from "../workspace.js";
 
 type WorkspaceTypedClient = TypedServiceClient<typeof workspaceMethods>;
-type EventsTypedClient = TypedServiceClient<typeof eventsMethods>;
 
 export type WorkspaceUnitsClient = WorkspaceTypedClient["units"] & {
   /** Current unit status rows; ergonomic alias for `list()`. */
@@ -49,16 +49,12 @@ export type WorkspaceProjectsClient = {
 };
 
 export type WorkspaceClient = Omit<WorkspaceTypedClient, "units"> & {
-  /** Alias for the wire method `workspace.select` (switch + relaunch). */
-  switchTo(name: string): Promise<void>;
   units: WorkspaceUnitsClient;
   /** Ergonomic project discovery; distinct from `workspace.list()` (workspace catalog). */
   projects: WorkspaceProjectsClient;
 };
 
-type WorkspaceRpc = RpcCaller & {
-  on?: (event: string, listener: (event: { payload: unknown }) => void) => () => void;
-};
+type WorkspaceRpc = RpcCaller;
 
 export function createWorkspaceClient(rpc: WorkspaceRpc): WorkspaceClient {
   const typed = createTypedServiceClient("workspace", workspaceMethods, (svc, method, args) =>
@@ -71,7 +67,6 @@ export function createWorkspaceClient(rpc: WorkspaceRpc): WorkspaceClient {
   };
   return {
     ...typed,
-    switchTo: (name) => typed.select(name),
     units: {
       ...typed.units,
       status: listUnits,
@@ -97,48 +92,11 @@ function collectProjectUnitPaths(nodes: readonly WorkspaceTreeNode[]): string[] 
   return [...new Set(paths)].sort();
 }
 
-const SUBSCRIBE_MAX_ATTEMPTS = 4;
-
-/**
- * Subscribe to one topic, retrying with exponential backoff. On a
- * connectionless DO/worker a failed `events.subscribe` means no server→DO push
- * for that topic — the watch would be silently deaf. Retry, and if every
- * attempt fails (or the watch closed mid-retry), surface it via a warning
- * rather than swallowing the rejection.
- */
-async function subscribeWithRetry(
-  events: EventsTypedClient,
-  topic: string,
-  isClosed: () => boolean,
-  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))
-): Promise<void> {
-  for (let attempt = 0; attempt < SUBSCRIBE_MAX_ATTEMPTS; attempt++) {
-    if (isClosed()) return;
-    try {
-      await events.subscribe(topic);
-      return;
-    } catch (err) {
-      if (attempt === SUBSCRIBE_MAX_ATTEMPTS - 1) {
-        console.warn(
-          `[workspace.watch] events.subscribe("${topic}") failed after ` +
-            `${SUBSCRIBE_MAX_ATTEMPTS} attempts; this watch will not receive ` +
-            `"${topic}" pushes:`,
-          err
-        );
-        return;
-      }
-      await sleep(100 * Math.pow(2, attempt));
-    }
-  }
-}
-
 function createUnitsWatch(
   rpc: WorkspaceRpc,
   listUnits: () => Promise<WorkspaceUnitStatus[]>
 ): AsyncIterable<WorkspaceUnitStatus[]> {
-  const events = createTypedServiceClient("events", eventsMethods, (svc, method, args) =>
-    rpc.call("main", `${svc}.${method}`, args)
-  ) as EventsTypedClient;
+  const events = new EventsClient(rpc);
   return {
     [Symbol.asyncIterator]() {
       let closed = false;
@@ -163,10 +121,6 @@ function createUnitsWatch(
             console.warn("[workspace.watch] snapshot refresh failed:", err);
           });
       };
-      // Topics this watch reflects. We MUST `events.subscribe` each (not just
-      // register an `rpc.on` listener): a connectionless DO/worker only receives
-      // server→DO pushes for topics it explicitly subscribed. The matching
-      // `rpc.on` channel is `event:<topic>`.
       const topics = [
         "extensions:status",
         "extensions:health",
@@ -175,18 +129,11 @@ function createUnitsWatch(
         "apps:status",
         "apps:lifecycle",
         "workspace:unit-log",
-      ];
-      const unsubscribers = topics
-        .map((topic) => rpc.on?.(`event:${topic}`, pushSnapshot))
-        .filter((unsubscribe): unsubscribe is () => void => typeof unsubscribe === "function");
-      // Subscribing is what makes this watch live on a connectionless DO/worker
-      // (only explicitly-subscribed topics get server→DO pushes). A swallowed
-      // subscribe rejection would leave `watch()` permanently deaf to that topic
-      // while the initial snapshot masks the failure — so retry with backoff and
-      // surface a final rejection instead of silently dropping it.
-      for (const topic of topics) {
-        void subscribeWithRetry(events, topic, () => closed);
-      }
+      ] satisfies EventName[];
+      const unsubscribers = topics.map((topic) => events.on(topic, pushSnapshot));
+      void events.subscribeAll(topics).catch((err) => {
+        if (!closed) console.warn("[workspace.watch] event watch failed:", err);
+      });
 
       pushSnapshot();
       return {
@@ -202,9 +149,7 @@ function createUnitsWatch(
         return(): Promise<IteratorResult<WorkspaceUnitStatus[]>> {
           closed = true;
           for (const unsubscribe of unsubscribers) unsubscribe();
-          for (const topic of topics) {
-            void events.unsubscribe(topic).catch(() => {});
-          }
+          void events.unsubscribeAll().catch(() => {});
           if (pendingResolve) {
             pendingResolve({ done: true, value: undefined });
             pendingResolve = null;

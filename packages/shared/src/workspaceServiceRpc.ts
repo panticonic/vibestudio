@@ -8,7 +8,7 @@ export interface DORefParam {
   objectKey: string;
 }
 
-export type ResolvedUserlandService = {
+export type ResolvedWorkspaceService = {
   name?: string;
   title?: string;
   description?: string;
@@ -34,8 +34,7 @@ export interface DurableObjectServiceClient {
 
 export const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibestudio.gad.workspace.v1";
 
-/** The userland VCS service (P5c): the gad-store DO's `vcs*` surface behind
- *  the `vcs` manifest-service declaration. */
+/** The product-sealed semantic VCS protocol implemented by the control plane. */
 export const VCS_SERVICE_PROTOCOL = "vibestudio.vcs.v1";
 
 export function doTargetId(ref: DORefParam): string {
@@ -64,7 +63,7 @@ export async function resolveDurableObjectService(
   query: string,
   objectKey?: string | null
 ): Promise<ResolvedDurableObjectTarget> {
-  const service = await rpc.call<ResolvedUserlandService>("main", "workers.resolveService", [
+  const service = await rpc.call<ResolvedWorkspaceService>("main", "workers.resolveService", [
     query,
     objectKey ?? null,
   ]);
@@ -100,10 +99,4 @@ export function createDurableObjectServiceClient(
 
 export function createGadServiceClient(rpc: RpcCallerLike): DurableObjectServiceClient {
   return createDurableObjectServiceClient(rpc, GAD_WORKSPACE_SERVICE_PROTOCOL);
-}
-
-/** Client for the userland `vcs` service (read/history surface on the
- *  gad-store DO: vcsFileHistory / vcsLog / vcsCommitEdits / …). */
-export function createVcsUserlandClient(rpc: RpcCallerLike): DurableObjectServiceClient {
-  return createDurableObjectServiceClient(rpc, VCS_SERVICE_PROTOCOL);
 }

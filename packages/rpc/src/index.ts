@@ -1,6 +1,6 @@
 /**
  * `@vibestudio/rpc` — stateless point-to-point RPC with fetch-shaped
- * streaming. Stateful userland services can layer their own protocols
+ * streaming. Stateful workspace services can layer their own protocols
  * on top of the same runtime service-resolution path.
  */
 
@@ -14,6 +14,7 @@ export type {
   RpcMessage,
   RpcTransport,
   RpcCallOptions,
+  RpcCausalParent,
   RpcStreamOptions,
   AuthenticatedCaller,
   ExposedMethods,
@@ -41,11 +42,12 @@ export type {
   StreamingMethodFrame,
   ParentPortEnvelope,
   RpcErrorKind,
+  RpcErrorData,
 } from "./types.js";
-export { RemoteRpcError, RpcBoundaryError, rpcErrorKindOf } from "./errors.js";
+export { RemoteRpcError, RpcBoundaryError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
 
 export { isParentPortEnvelope } from "./types.js";
-export { createRpcClient, defineContract } from "./client.js";
+export { createRpcClient, defineContract, withCausalParent } from "./client.js";
 export { bytesToBase64, base64ToBytes } from "./base64.js";
 export {
   TERMINAL_CLOSE_CODES,

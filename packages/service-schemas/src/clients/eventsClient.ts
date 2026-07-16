@@ -1,49 +1,246 @@
 /**
- * EventsClient -- Shared event subscription RPC wrappers.
+ * Client-side owner of one destructive `events.watch` response.
  *
- * Wraps events-related server RPC calls for subscribing to and
- * unsubscribing from shell events (panel-tree-updated, theme changes, etc.).
+ * Topic changes replace the response with a new response over the complete
+ * desired set. Cancelling that response is the only unsubscribe operation.
+ * Direct-address events are delivered by the authenticated RPC transport and
+ * broadcast events are delivered by the owned watch response.
  */
-import type { RpcClient } from "@vibestudio/rpc";
-import type { EventName } from "@vibestudio/shared/events";
-import { eventsMethods } from "../events.js";
-import {
-  createTypedServiceClient,
-  type TypedServiceClient,
-} from "@vibestudio/shared/typedServiceClient";
+import type { RpcCaller } from "@vibestudio/rpc";
+import type { EventName, EventPayloads } from "@vibestudio/shared/events";
+import { readEventWatchRecords } from "@vibestudio/service-schemas/events";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
+
+type Listener<E extends EventName> = (payload: EventPayloads[E]) => void;
+type EventsRpc = Pick<RpcCaller, "stream">;
+
+interface ActiveWatch {
+  generation: number;
+  controller: AbortController;
+  terminal: Promise<void>;
+  settled: boolean;
+}
+
 export class EventsClient {
-  private typed: TypedServiceClient<typeof eventsMethods>;
-  private subscriptions = new Set<EventName>();
+  private readonly rpc: EventsRpc;
+  private readonly subscriptions = new Set<EventName>();
+  private readonly listeners = new Map<EventName, Set<(payload: unknown) => void>>();
+  private active: ActiveWatch | null = null;
+  private pending: ActiveWatch | null = null;
+  private generation = 0;
+  private readonly watchId = crypto.randomUUID();
+  private serverEpoch: string | null = null;
+  private readonly lastSequenceByEvent = new Map<EventName, number>();
+  private refreshQueue: Promise<void> = Promise.resolve();
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryDelayMs = 250;
+
   constructor(
-    rpc: Pick<RpcClient, "call">,
-    recoveryCoordinator?: Pick<RecoveryCoordinator, "registerResubscribeHandler">
+    rpc: EventsRpc,
+    recoveryCoordinator?: Pick<
+      RecoveryCoordinator,
+      "registerResubscribeHandler" | "registerColdRecoverHandler"
+    >
   ) {
-    this.typed = createTypedServiceClient("events", eventsMethods, (service, method, args) =>
-      rpc.call("main", `${service}.${method}`, args)
-    );
-    recoveryCoordinator?.registerResubscribeHandler("events-client", () => this.resubscribeAll());
+    this.rpc = rpc;
+    const recover = () => this.queueRefresh();
+    recoveryCoordinator?.registerResubscribeHandler("events-client", recover);
+    recoveryCoordinator?.registerColdRecoverHandler("events-client", recover);
   }
+
   async subscribe(event: EventName): Promise<void> {
+    if (this.subscriptions.has(event)) return;
     this.subscriptions.add(event);
+    await this.queueRefresh();
+  }
+
+  async subscribeAll(events: Iterable<EventName>): Promise<void> {
+    let changed = false;
+    for (const event of events) {
+      if (this.subscriptions.has(event)) continue;
+      this.subscriptions.add(event);
+      changed = true;
+    }
+    if (changed) await this.queueRefresh();
+  }
+
+  async unsubscribe(event: EventName): Promise<void> {
+    if (!this.subscriptions.delete(event)) return;
+    await this.queueRefresh();
+  }
+
+  async unsubscribeMany(events: Iterable<EventName>): Promise<void> {
+    let changed = false;
+    for (const event of events) changed = this.subscriptions.delete(event) || changed;
+    if (changed) await this.queueRefresh();
+  }
+
+  async unsubscribeAll(): Promise<void> {
+    if (this.subscriptions.size === 0 && !this.active) return;
+    this.subscriptions.clear();
+    await this.queueRefresh();
+  }
+
+  /** Re-open the desired watch after the transport reports a recovered session. */
+  recover(): Promise<void> {
+    return this.queueRefresh();
+  }
+
+  on<E extends EventName>(event: E, listener: Listener<E>): () => void {
+    let listeners = this.listeners.get(event);
+    if (!listeners) {
+      listeners = new Set();
+      this.listeners.set(event, listeners);
+    }
+    listeners.add(listener as (payload: unknown) => void);
+    return () => {
+      listeners?.delete(listener as (payload: unknown) => void);
+      if (listeners?.size === 0) {
+        this.listeners.delete(event);
+      }
+    };
+  }
+
+  private queueRefresh(): Promise<void> {
+    const refresh = this.refreshQueue.then(() => this.refresh());
+    this.refreshQueue = refresh.catch(() => {});
+    return refresh;
+  }
+
+  private async refresh(): Promise<void> {
+    this.clearRetry();
+    const previous = this.active;
+    if (this.subscriptions.size === 0) {
+      this.active = null;
+      this.pending?.controller.abort();
+      this.pending = null;
+      previous?.controller.abort();
+      await previous?.terminal.catch(() => {});
+      return;
+    }
+
+    const generation = ++this.generation;
+    const controller = new AbortController();
+    let resolveAck!: () => void;
+    let rejectAck!: (error: Error) => void;
+    const ack = new Promise<void>((resolve, reject) => {
+      resolveAck = resolve;
+      rejectAck = reject;
+    });
+    let acknowledged = false;
+    let watchEpoch: string | null = null;
+    const next: ActiveWatch = {
+      generation,
+      controller,
+      terminal: Promise.resolve(),
+      settled: false,
+    };
+    const terminal = (async () => {
+      try {
+        const response = await this.rpc.stream(
+          "main",
+          "events.watch",
+          [[...this.subscriptions].sort(), this.watchId],
+          { signal: controller.signal, bodyIdleTimeoutMs: null }
+        );
+        for await (const record of readEventWatchRecords(response)) {
+          if (record.kind === "watching") {
+            if (acknowledged) throw new Error("Event watch sent more than one ACK");
+            if (record.epoch !== this.serverEpoch) {
+              this.serverEpoch = record.epoch;
+              this.lastSequenceByEvent.clear();
+            }
+            watchEpoch = record.epoch;
+            acknowledged = true;
+            this.retryDelayMs = 250;
+            resolveAck();
+            continue;
+          }
+          if (!acknowledged) throw new Error("Event watch delivered data before its ACK");
+          if (watchEpoch !== this.serverEpoch) continue;
+          if (record.kind === "snapshot") {
+            const previousSequence = this.lastSequenceByEvent.get(record.event) ?? 0;
+            if (record.sequence < previousSequence) continue;
+            this.lastSequenceByEvent.set(record.event, record.sequence);
+            this.deliver(record.event, record.payload);
+            continue;
+          }
+          const previousSequence = this.lastSequenceByEvent.get(record.event) ?? 0;
+          if (record.sequence <= previousSequence) continue;
+          this.lastSequenceByEvent.set(record.event, record.sequence);
+          this.deliver(record.event, record.payload);
+        }
+        if (!acknowledged) throw new Error("Event watch closed before its ACK");
+        const isOwned =
+          this.pending?.generation === generation ||
+          (!this.pending && this.active?.generation === generation);
+        if (!controller.signal.aborted && isOwned) {
+          throw new Error("Event watch closed unexpectedly");
+        }
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        if (!acknowledged) rejectAck(failure);
+        throw failure;
+      }
+    })();
+    next.terminal = terminal.finally(() => {
+      next.settled = true;
+    });
+    void next.terminal.catch(() => {});
+    this.pending = next;
+    void terminal.then(
+      () => this.watchTerminated(generation, controller),
+      () => this.watchTerminated(generation, controller)
+    );
     try {
-      await this.typed.subscribe(event);
+      await ack;
+      this.active = next;
+      this.pending = null;
     } catch (error) {
-      this.subscriptions.delete(event);
+      controller.abort();
+      if (this.pending === next) this.pending = null;
+      if (previous?.settled && this.active === previous) this.active = null;
+      this.scheduleRecovery();
       throw error;
     }
   }
-  async unsubscribe(event: EventName): Promise<void> {
-    this.subscriptions.delete(event);
-    await this.typed.unsubscribe(event);
-  }
-  async unsubscribeAll(): Promise<void> {
-    this.subscriptions.clear();
-    await this.typed.unsubscribeAll();
-  }
-  async resubscribeAll(): Promise<void> {
-    for (const event of this.subscriptions) {
-      await this.typed.subscribe(event);
+
+  private watchTerminated(generation: number, controller: AbortController): void {
+    if (controller.signal.aborted || this.active?.generation !== generation) return;
+    if (this.pending) {
+      this.active = null;
+      return;
     }
+    this.active = null;
+    this.scheduleRecovery();
+  }
+
+  private scheduleRecovery(): void {
+    if (this.subscriptions.size === 0 || this.retryTimer) return;
+    const delayMs = this.retryDelayMs;
+    this.retryDelayMs = Math.min(this.retryDelayMs * 2, 10_000);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      void this.queueRefresh().catch((error: unknown) => {
+        console.warn("[EventsClient] event watch recovery failed:", error);
+      });
+    }, delayMs);
+    (this.retryTimer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+  }
+
+  private deliver(event: EventName, payload: unknown): void {
+    for (const listener of this.listeners.get(event) ?? []) {
+      try {
+        listener(payload);
+      } catch (error) {
+        console.error(`[EventsClient] listener for ${event} failed:`, error);
+      }
+    }
+  }
+
+  private clearRetry(): void {
+    if (!this.retryTimer) return;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = null;
   }
 }

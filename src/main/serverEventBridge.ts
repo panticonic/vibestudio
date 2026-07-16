@@ -1,18 +1,17 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
-import { isValidEventName, type EventName } from "@vibestudio/shared/events";
+import type { EventName } from "@vibestudio/shared/events";
 import type { PanelTreeSnapshot } from "@vibestudio/shared/types";
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import {
-  HubWorkspaceRouteSchema,
-  type HubWorkspaceRoute,
-} from "@vibestudio/service-schemas/hubControl";
 import type { ServerClient } from "./serverClient.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { AppOrchestrator, AppAvailableEvent } from "./appOrchestrator.js";
-import { handleExternalOpenPayload, type ExternalOpenPayload } from "./oauthLoopbackHandoff.js";
+import {
+  handleExternalOpenPayload,
+  type ExternalOpenPayload,
+} from "../node/oauthLoopbackHandoff.js";
 
 export interface ServerEventBridgeDeps {
   eventService: EventService;
@@ -29,8 +28,6 @@ export interface ServerEventBridgeDeps {
   onAppHostTargetChanged?(event: ServerHostTargetChangeEvent): void;
   /** Resolve server app artifact route references for this Electron connection. */
   resolveAppAvailableEvent?(payload: unknown): unknown | null;
-  /** The server asked the shell to relaunch into a different workspace. */
-  onWorkspaceRelaunchRequested?(name: string, route: HubWorkspaceRoute): void;
   /**
    * The server asked the shell to run an interactive session credential
    * capture. The handler answers with `credentials.completeCapture`.
@@ -48,15 +45,34 @@ export interface ServerHostTargetChangeEvent {
   payload: unknown;
 }
 
+/** Parse the one notification shape that asks the desktop host for OS-level attention. */
+export function notificationAttention(
+  event: EventName,
+  payload: unknown
+): { title: string; message: string } | null {
+  if (event !== "notification:show") return null;
+  const notification = payload as { id?: unknown; title?: unknown; message?: unknown };
+  if (
+    typeof notification.id !== "string" ||
+    !notification.id.startsWith("chat-attention:") ||
+    typeof notification.title !== "string"
+  ) {
+    return null;
+  }
+  return {
+    title: notification.title,
+    message: typeof notification.message === "string" ? notification.message : "",
+  };
+}
+
 /**
- * Normalizes raw server events before they enter the local shell event bus.
- *
- * Raw server events are either direct control-plane messages such as
- * `build:complete`, or EventService frames prefixed as `event:<name>`. Any event
- * requiring local Electron state, ID translation, or side effects is consumed
- * here. Only normalized shell events are re-emitted to the renderer.
+ * Applies typed workspace events from the response-owned server watch before
+ * they enter the local shell event bus. Events requiring Electron state, ID
+ * translation, or side effects are consumed here; all others are re-emitted.
  */
-export function createServerEventBridge(deps: ServerEventBridgeDeps) {
+export function createServerEventBridge(
+  deps: ServerEventBridgeDeps
+): (event: EventName, payload: unknown) => void {
   const emitNormalized = (event: EventName, payload: unknown): void => {
     (deps.eventService.emit as (e: EventName, d: unknown) => void)(event, payload);
   };
@@ -65,24 +81,23 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       client.call(service, method, args)
     );
 
-  return function handleServerEvent(event: string, payload: unknown): void {
+  return function handleServerEvent(bareEvent: EventName, payload: unknown): void {
     const panelOrchestrator = deps.getPanelOrchestrator();
     const appOrchestrator = deps.getAppOrchestrator?.() ?? null;
 
-    if (event === "build:complete") {
+    if (bareEvent === "build:complete") {
       const { source, error } = payload as { source?: unknown; error?: unknown };
-      if (typeof source === "string") {
-        panelOrchestrator?.applyBuildComplete(
-          source,
-          typeof error === "string" ? error : undefined
-        );
+      if (typeof source !== "string") {
+        deps.warn("[build] ignored malformed build:complete event without a source");
+        return;
       }
+      if (!panelOrchestrator) {
+        deps.warn(`[build] could not apply completion for ${source}: panel host is not ready`);
+        return;
+      }
+      panelOrchestrator.applyBuildComplete(source, typeof error === "string" ? error : undefined);
       return;
     }
-
-    if (!event.startsWith("event:")) return;
-
-    const bareEvent = event.slice("event:".length);
     if (bareEvent === "external-open:open") {
       const external = payload as ExternalOpenPayload;
       const transactionId = external.oauthLoopback?.transactionId;
@@ -103,9 +118,13 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
         openExternal: deps.openExternal,
         forwardOAuthCallback: (request) => {
           const client = deps.getServerClient();
-          return client
-            ? credentialsClientFor(client).forwardOAuthCallback(request)
-            : Promise.resolve();
+          if (!client) throw new Error("The workspace server connection is unavailable");
+          return credentialsClientFor(client).forwardOAuthCallback(request);
+        },
+        cancelOAuth: (transactionId) => {
+          const client = deps.getServerClient();
+          if (!client) throw new Error("The workspace server connection is unavailable");
+          return credentialsClientFor(client).cancelOAuth({ transactionId });
         },
       })
         .catch((err: unknown) => {
@@ -121,33 +140,8 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       return;
     }
 
-    if (bareEvent === "workspace:relaunch-requested") {
-      const parsed = HubWorkspaceRouteSchema.safeParse(
-        payload && typeof payload === "object" ? (payload as { route?: unknown }).route : undefined
-      );
-      const name =
-        payload && typeof payload === "object" ? (payload as { name?: unknown }).name : undefined;
-      if (typeof name === "string" && parsed.success && parsed.data.workspace === name) {
-        deps.onWorkspaceRelaunchRequested?.(name, parsed.data);
-      } else {
-        deps.warn("[workspace] ignored malformed relaunch route");
-      }
-      return;
-    }
-
-    if (bareEvent === "notification:show") {
-      const notification = payload as { id?: unknown; title?: unknown; message?: unknown };
-      if (
-        typeof notification.id === "string" &&
-        notification.id.startsWith("chat-attention:") &&
-        typeof notification.title === "string"
-      ) {
-        deps.onAttentionRequired?.(
-          notification.title,
-          typeof notification.message === "string" ? notification.message : ""
-        );
-      }
-    }
+    const attention = notificationAttention(bareEvent, payload);
+    if (attention) deps.onAttentionRequired?.(attention.title, attention.message);
 
     if (bareEvent === "credential:capture-request") {
       const request = payload as Record<string, unknown>;
@@ -227,9 +221,7 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
           deps.warn(`[apps] failed to apply app availability: ${message}`);
           deps.notifyError?.("App availability could not be updated", message);
         });
-      if (isValidEventName(bareEvent)) {
-        emitNormalized(bareEvent, appPayload);
-      }
+      emitNormalized(bareEvent, appPayload);
       return;
     }
 
@@ -242,9 +234,7 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       if (!target || target === "electron") {
         deps.onAppHostTargetChanged?.({ event: bareEvent, payload });
       }
-      if (isValidEventName(bareEvent)) {
-        emitNormalized(bareEvent, payload);
-      }
+      emitNormalized(bareEvent, payload);
       return;
     }
 
@@ -284,8 +274,6 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       // Fall through — the renderer's approval bar consumes the same event.
     }
 
-    if (isValidEventName(bareEvent)) {
-      emitNormalized(bareEvent, payload);
-    }
+    emitNormalized(bareEvent, payload);
   };
 }

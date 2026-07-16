@@ -1,4 +1,4 @@
-import type { RpcErrorKind } from "./types.js";
+import type { RpcErrorData, RpcErrorKind } from "./types.js";
 
 /** Locally categorized failure ready to cross an RPC boundary. */
 export class RpcBoundaryError extends Error {
@@ -6,7 +6,8 @@ export class RpcBoundaryError extends Error {
     message: string,
     public readonly errorKind: RpcErrorKind,
     public readonly code?: string,
-    cause?: unknown
+    cause?: unknown,
+    public readonly errorData?: RpcErrorData
   ) {
     super(message);
     if (cause !== undefined) {
@@ -27,11 +28,18 @@ export class RemoteRpcError extends Error {
   constructor(
     message: string,
     public readonly errorKind: RpcErrorKind,
-    public readonly code?: string
+    public readonly code?: string,
+    public readonly errorData?: RpcErrorData
   ) {
     super(message);
     this.name = "RemoteRpcError";
   }
+}
+
+/** Read only an explicitly structured error payload; never infer from prose. */
+export function rpcErrorDataOf(error: unknown): RpcErrorData | undefined {
+  if (error === null || typeof error !== "object" || !("errorData" in error)) return undefined;
+  return (error as { errorData?: RpcErrorData }).errorData;
 }
 
 /** Preserve an explicit domain category, otherwise use the boundary's fallback. */

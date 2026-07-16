@@ -1,5 +1,7 @@
 export type {
   ClientPlatform,
+  DeviceCredential,
+  PairingContext,
   ToolExecutionResult,
   WsAuthMessage,
   WsRpcMessage,
@@ -8,7 +10,6 @@ export type {
   WsClientMessage,
   WsAuthResultMessage,
   WsRpcResponseMessage,
-  WsEventMessage,
   WsRoutedMessage,
   WsRoutedEventErrorMessage,
   WsRoutedResponseErrorMessage,

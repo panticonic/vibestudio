@@ -3,11 +3,10 @@
  *
  * Wraps workspace-related server RPC calls, delegating to a typed client
  * derived from the shared `workspaceMethods` schema table. Platform-specific
- * operations (like workspace.select which requires app restart on Electron)
- * are intentionally excluded; each platform handles those independently.
+ * Server-wide catalog operations intentionally live on `hubControl` and are
+ * absent from this current-workspace client.
  */
 import type { RpcClient } from "@vibestudio/rpc";
-import type { WorkspaceEntry } from "@vibestudio/shared/types";
 import type {
   HostTarget,
   HostTargetCandidate,
@@ -31,20 +30,6 @@ export class WorkspaceClient {
   }
   getInfo(): ReturnType<typeof this.typed.getInfo> {
     return this.typed.getInfo();
-  }
-  list(): Promise<WorkspaceEntry[]> {
-    return this.typed.list();
-  }
-  create(
-    name: string,
-    opts?: {
-      forkFrom?: string;
-    }
-  ): Promise<WorkspaceEntry> {
-    return this.typed.create(name, opts);
-  }
-  delete(name: string): Promise<void> {
-    return this.typed.delete(name);
   }
   getActive(): Promise<string> {
     return this.typed.getActive();

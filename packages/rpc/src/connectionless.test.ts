@@ -47,8 +47,9 @@ function makeClient(fetchImpl: typeof fetch) {
 describe("createConnectionlessRpcClient", () => {
   describe("callDeferred", () => {
     it("surfaces a {deferred,requestId} ack (does NOT complete on the initial POST)", async () => {
-      const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-        new Response(JSON.stringify({ deferred: true, requestId: "caller-rid" }), { status: 200 }),
+      const fetchMock = vi.fn(
+        async (_url: unknown, _init?: RequestInit) =>
+          new Response(JSON.stringify({ deferred: true, requestId: "caller-rid" }), { status: 200 })
       );
       const { client } = makeClient(fetchMock as unknown as typeof fetch);
       const ack = await client.callDeferred("main", "credentials.resolveCredential", [{}], {
@@ -79,7 +80,7 @@ describe("createConnectionlessRpcClient", () => {
         const rid = (env.message as { requestId: string }).requestId;
         return new Response(
           JSON.stringify(responseEnvelope(rid, { error: "boom", errorCode: "EBOOM" })),
-          { status: 200 },
+          { status: 200 }
         );
       });
       const { client } = makeClient(fetchMock as unknown as typeof fetch);
@@ -95,7 +96,11 @@ describe("createConnectionlessRpcClient", () => {
 
       const response = await respond(requestEnvelope("ping", ["x"]));
       expect(response).not.toBeNull();
-      expect(response!.message).toMatchObject({ type: "response", requestId: "q1", result: "pong-x" });
+      expect(response!.message).toMatchObject({
+        type: "response",
+        requestId: "q1",
+        result: "pong-x",
+      });
       // The response was captured locally — never POSTed.
       expect(fetchMock).not.toHaveBeenCalled();
     });
@@ -112,15 +117,20 @@ describe("createConnectionlessRpcClient", () => {
     it("fires a matching event listener with no response", async () => {
       const { client, deliver } = makeClient(vi.fn() as unknown as typeof fetch);
       const seen: unknown[] = [];
-      client.on("event:vcs:head:main", (ev) => seen.push(ev.payload));
+      client.on("vcs:publication", (ev) => seen.push(ev.payload));
       deliver({
         from: "main",
         target: SELF,
         delivery: { caller: caller() },
         provenance: [caller()],
-        message: { type: "event", fromId: "main", event: "event:vcs:head:main", payload: { head: "h2" } },
+        message: {
+          type: "event",
+          fromId: "main",
+          event: "vcs:publication",
+          payload: { publicationId: "p2" },
+        },
       });
-      expect(seen).toEqual([{ head: "h2" }]);
+      expect(seen).toEqual([{ publicationId: "p2" }]);
     });
   });
 });

@@ -12,6 +12,7 @@ import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { EntityCache } from "../../packages/shared/src/runtime/entityCache.js";
 import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.js";
 import type { UserSubject } from "../../packages/identity/src/types.js";
+import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 
 function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): EntityRecord {
   return {
@@ -32,6 +33,9 @@ function createTestSetup(opts?: {
   entityCache?: EntityCache;
   userSubjectSource?: UserSubjectSource;
   membershipGate?: (subject: UserSubject | undefined) => boolean;
+  verifyExactCausalInvocation?: ConstructorParameters<
+    typeof RpcServer
+  >[0]["verifyExactCausalInvocation"];
 }) {
   const tokenManager = new TokenManager();
   const adminToken = "test-admin-token";
@@ -82,6 +86,7 @@ function createTestSetup(opts?: {
     entityCache,
     userSubjectSource: opts?.userSubjectSource,
     membershipGate: opts?.membershipGate,
+    verifyExactCausalInvocation: opts?.verifyExactCausalInvocation,
   });
 
   return {
@@ -139,6 +144,7 @@ function toEnvelope(body: Record<string, unknown>): Record<string, unknown> {
       method: body["method"],
       args: body["args"] ?? [],
       ...(body["deferrable"] ? { deferrable: true } : {}),
+      ...(body["causalParent"] ? { causalParent: body["causalParent"] } : {}),
     },
   };
 }
@@ -158,6 +164,7 @@ function toStreamEnvelope(body: Record<string, unknown>): Record<string, unknown
       method: body["method"],
       args: body["args"] ?? [],
       ...(body["readOnly"] ? { readOnly: true } : {}),
+      ...(body["causalParent"] ? { causalParent: body["causalParent"] } : {}),
     },
   };
 }
@@ -355,6 +362,51 @@ describe("RpcServer HTTP POST /rpc", () => {
   });
 
   describe("verified runtime identity", () => {
+    it("rejects an HTTP causal parent before dispatch when its exact invocation is absent", async () => {
+      await gateway.stop();
+      await setup.server.stop();
+
+      const verifyExactCausalInvocation = vi.fn(async () => false);
+      setup = createTestSetup({ verifyExactCausalInvocation });
+      setup.server.initHandlers();
+      gateway = new Gateway({
+        tokenManager: setup.tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => setup.server,
+      });
+      port = await gateway.start(0);
+      const binding = {
+        entityId: "entity:agent",
+        contextId: "context:agent",
+        channelId: "channel:agent",
+        agentId: "agent:stable",
+        userId: "user:one",
+      };
+      const token = setup.tokenManager.ensureToken("agent:one", "agent", {
+        agentBinding: binding,
+      });
+      const causalParent = {
+        kind: "trajectory-invocation" as const,
+        ...channelTrajectoryFor(binding.channelId),
+        invocationId: "invocation:missing",
+      };
+
+      const result = await postRpc(port, token, {
+        targetId: "main",
+        method: "build.status",
+        args: [],
+        causalParent,
+      });
+
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({
+        error: expect.stringContaining("does not exist"),
+        errorCode: "EACCES",
+      });
+      expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
+      expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+    });
+
     it("uses a verified concrete DO caller for service dispatch", async () => {
       await gateway.stop();
       await setup.server.stop();
@@ -883,6 +935,59 @@ describe("RpcServer HTTP POST /rpc", () => {
         error: expect.stringContaining("cannot directly relay host-control method"),
       });
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("rejects an absent exact causal invocation before HTTP streaming dispatch", async () => {
+      await gateway.stop();
+      await setup.server.stop();
+      const verifyExactCausalInvocation = vi.fn(async () => false);
+      setup = createTestSetup({ verifyExactCausalInvocation });
+      setup.server.initHandlers();
+      gateway = new Gateway({
+        tokenManager: setup.tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => setup.server,
+      });
+      port = await gateway.start(0);
+      const binding = {
+        entityId: "entity:agent",
+        contextId: "context:agent",
+        channelId: "channel:agent",
+        agentId: "agent:stable",
+        userId: "user:one",
+      };
+      const token = setup.tokenManager.ensureToken("agent:stream", "agent", {
+        agentBinding: binding,
+      });
+      const causalParent = {
+        kind: "trajectory-invocation" as const,
+        ...channelTrajectoryFor(binding.channelId),
+        invocationId: "invocation:missing-stream",
+      };
+
+      const res = await fetch(`http://127.0.0.1:${port}/rpc/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(
+          toStreamEnvelope({
+            targetId: "main",
+            method: "credentials.proxyFetch",
+            args: [{ url: "https://example.com/", method: "GET" }],
+            causalParent,
+          })
+        ),
+      });
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        errorCode: "EACCES",
+        error: expect.stringContaining("does not exist"),
+      });
+      expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
+      expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
     });
 
     it("denies a caller-kind not in the credentials service policy", async () => {

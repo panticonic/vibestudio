@@ -1,8 +1,20 @@
-import { AuthError, networkErrorMessage } from "./output.js";
-import { serverAuthRouteUrl, serverRpcHttpUrl } from "@vibestudio/shared/connect";
-import { isWebRtcCredential, type CliStoredPairing } from "./credentialStore.js";
+import { AuthError, ConnectionError, networkErrorMessage } from "./output.js";
+import {
+  selectedWorkspacePath,
+  serverAuthRouteUrl,
+  serverRpcHttpUrl,
+} from "@vibestudio/shared/connect";
+import {
+  isWebRtcCredential,
+  canonicalStoredPairing,
+  saveCliCredentials,
+  type CliCredentials,
+  type CliStoredPairing,
+} from "./credentialStore.js";
+import { resolveLocalHubControlTransport } from "./localHubTransport.js";
+import { HubWorkspaceRouteSchema } from "@vibestudio/service-schemas/hubControl";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
-import type { RpcErrorKind, RpcStreamOptions } from "@vibestudio/rpc";
+import type { RpcErrorData, RpcErrorKind, RpcStreamOptions } from "@vibestudio/rpc";
 import {
   RefreshAgentResponseSchema,
   RefreshShellResponseSchema,
@@ -20,9 +32,10 @@ import type { z } from "zod";
  */
 
 export interface DeviceCredential {
-  schemaVersion: 3;
+  schemaVersion: 4;
   kind: "device";
   url: string;
+  workspaceId: string;
   workspaceName: string;
   serverId: string;
   deviceId: string;
@@ -49,10 +62,20 @@ export interface RawTokenCredential {
 
 export type RefreshAgentResponse = z.infer<typeof RefreshAgentResponseSchema>;
 
-export type RpcClientCredential =
-  | (Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
-      Partial<Pick<DeviceCredential, "workspacePairing">>)
-  | RawTokenCredential;
+/**
+ * One device-authenticated RPC endpoint. Unlike a complete CLI credential,
+ * this does not select a workspace and therefore never participates in local
+ * workspace routing. It is used for already-resolved HTTP endpoints and for
+ * non-workspace WebRTC endpoints such as hub control.
+ */
+export interface DeviceEndpointCredential {
+  url: string;
+  deviceId: string;
+  refreshToken: string;
+  pairing?: CliStoredPairing;
+}
+
+export type RpcClientCredential = DeviceCredential | DeviceEndpointCredential | RawTokenCredential;
 
 /** Shared surface of the persistent WS and WebRTC clients. */
 interface PersistentRpcClient {
@@ -73,6 +96,20 @@ function isRawTokenCredential(creds: RpcClientCredential): creds is RawTokenCred
   return typeof (creds as RawTokenCredential).token === "string";
 }
 
+function isCompleteCliCredentials(creds: RpcClientCredential): creds is CliCredentials {
+  const candidate = creds as Partial<CliCredentials>;
+  return (
+    candidate.schemaVersion === 4 &&
+    candidate.kind === "device" &&
+    typeof candidate.workspaceId === "string" &&
+    candidate.workspaceId.length > 0 &&
+    typeof candidate.workspaceName === "string" &&
+    typeof candidate.serverId === "string" &&
+    candidate.controlPairing !== undefined &&
+    candidate.workspacePairing !== undefined
+  );
+}
+
 /** Extract the `<agentId>` from an `agent:<agentId>:<secret>` token. */
 function agentIdFromToken(token: string): string {
   const rest = token.startsWith("agent:") ? token.slice("agent:".length) : token;
@@ -89,7 +126,8 @@ export class RpcError extends Error {
   constructor(
     message: string,
     public readonly errorCode?: string,
-    public readonly errorKind: RpcErrorKind = "application"
+    public readonly errorKind: RpcErrorKind = "application",
+    public readonly errorData?: RpcErrorData
   ) {
     super(message);
     this.name = "RpcError";
@@ -108,11 +146,15 @@ function responseRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+}
+
 async function fetchOrAuthError(url: URL, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch (error) {
-    throw new AuthError(`cannot reach ${url.origin}: ${networkErrorMessage(error)}`);
+    throw new ConnectionError(`cannot reach ${url.origin}: ${networkErrorMessage(error)}`);
   }
 }
 
@@ -196,19 +238,29 @@ export class RpcClient {
 
   private webRtcClient: Promise<import("./webrtcClient.js").WebRtcRpcClient> | null = null;
   private wsClient: Promise<import("./wsClient.js").WsRpcClient> | null = null;
+  private localWorkspaceClient: Promise<RpcClient | null> | null = null;
+  private readonly cliCredentials: CliCredentials | null;
   private keepPushOpen = false;
   private retainedConnections = 0;
 
   constructor(creds: RpcClientCredential) {
     this.url = creds.url;
-    this.pairing = creds.workspacePairing;
     if (isRawTokenCredential(creds)) {
+      this.pairing = creds.workspacePairing;
+      this.cliCredentials = null;
       this.rawToken = creds.token;
       this.deviceId = null;
       this.refreshToken = null;
       this.callerId = `agent:${agentIdFromToken(creds.token)}`;
       this.callerKind = "agent";
     } else {
+      if (isCompleteCliCredentials(creds)) {
+        this.cliCredentials = creds;
+        this.pairing = creds.workspacePairing;
+      } else {
+        this.cliCredentials = null;
+        this.pairing = creds.pairing;
+      }
       this.rawToken = null;
       this.deviceId = creds.deviceId;
       this.refreshToken = creds.refreshToken;
@@ -292,6 +344,8 @@ export class RpcClient {
     args: unknown[] = []
   ): Promise<T> {
     if (this.isWebRtc) {
+      const local = await this.ensureLocalWorkspaceClient();
+      if (local) return await local.callTarget<T>(targetId, method, args);
       return await this.dispatchWebRtc<T>(targetId, method, args);
     }
     return await this.dispatch<T>(targetId, method, args);
@@ -299,11 +353,9 @@ export class RpcClient {
 
   /**
    * `callTarget` over the PERSISTENT push transport (WS, or WebRTC when paired),
-   * not the one-shot HTTP path. A subsequent {@link onEvent} on this same client
-   * receives pushes the call registers — e.g. `channel subscribe`, whose
-   * `channel:message` emits are routed to the subscribing connection. A plain
-   * HTTP `callTarget` would register against a transient request connection that
-   * never receives emits.
+   * not the one-shot HTTP path. Use this for unary calls whose peer may issue
+   * routed callbacks over the same authenticated connection. Long-lived
+   * resources use {@link stream} so the response itself owns their lifetime.
    */
   async callTargetPush<T = unknown>(
     targetId: string,
@@ -348,10 +400,36 @@ export class RpcClient {
   async close(): Promise<void> {
     const webRtc = this.webRtcClient;
     const ws = this.wsClient;
+    const local = this.localWorkspaceClient;
     this.webRtcClient = null;
     this.wsClient = null;
-    if (webRtc) await (await webRtc).close();
-    if (ws) await (await ws).close();
+    this.localWorkspaceClient = null;
+    const resources = [
+      ...(webRtc ? [{ label: "WebRTC client", close: async () => (await webRtc).close() }] : []),
+      ...(ws ? [{ label: "WebSocket client", close: async () => (await ws).close() }] : []),
+      ...(local
+        ? [
+            {
+              label: "local workspace client",
+              close: async () => {
+                await (await local)?.close();
+              },
+            },
+          ]
+        : []),
+    ];
+    const settled = await Promise.allSettled(resources.map((resource) => resource.close()));
+    const failures = settled.flatMap((result, index) => {
+      if (result.status !== "rejected") return [];
+      const resource = resources[index];
+      return resource
+        ? [new Error(`${resource.label} close failed`, { cause: result.reason })]
+        : [new Error("Unknown CLI resource close failed", { cause: result.reason })];
+    });
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "CLI connections could not all be closed");
+    }
   }
 
   /**
@@ -420,6 +498,7 @@ export class RpcClient {
           error?: unknown;
           errorCode?: unknown;
           errorKind?: unknown;
+          errorData?: unknown;
         }
       | undefined;
     if (!message || message.type !== "response") {
@@ -436,7 +515,8 @@ export class RpcClient {
       throw new RpcError(
         message.error,
         typeof message.errorCode === "string" ? message.errorCode : undefined,
-        message.errorKind
+        message.errorKind,
+        message.errorData as RpcErrorData | undefined
       );
     }
     if (!("result" in message)) {
@@ -497,8 +577,67 @@ export class RpcClient {
   }
 
   /** Select the credential's one persistent push/stream transport. */
-  private persistentClient(): Promise<PersistentRpcClient> {
-    return this.isWebRtc ? this.ensureWebRtcClient() : this.ensureWsClient();
+  private async persistentClient(): Promise<PersistentRpcClient> {
+    if (!this.isWebRtc) return await this.ensureWsClient();
+    const local = await this.ensureLocalWorkspaceClient();
+    return local ? await local.persistentClient() : await this.ensureWebRtcClient();
+  }
+
+  private ensureLocalWorkspaceClient(): Promise<RpcClient | null> {
+    if (!this.cliCredentials) return Promise.resolve(null);
+    if (!this.localWorkspaceClient) {
+      this.localWorkspaceClient = this.openLocalWorkspaceClient();
+    }
+    return this.localWorkspaceClient;
+  }
+
+  private async openLocalWorkspaceClient(): Promise<RpcClient | null> {
+    const credentials = this.cliCredentials;
+    if (!credentials) return null;
+    const local = await resolveLocalHubControlTransport(credentials);
+    if (!local) return null;
+    const control = new RpcClient({
+      url: local.serverUrl,
+      deviceId: credentials.deviceId,
+      refreshToken: credentials.refreshToken,
+    });
+    let rawRoute: unknown;
+    try {
+      rawRoute = await control.call("hubControl.routeWorkspace", [
+        { workspaceId: credentials.workspaceId },
+      ]);
+    } finally {
+      await control.close().catch(() => undefined);
+    }
+    const route = HubWorkspaceRouteSchema.parse(rawRoute);
+    const expectedPath = selectedWorkspacePath(credentials.workspaceName);
+    const routedUrl = new URL(route.serverUrl);
+    const localUrl = new URL(local.serverUrl);
+    if (
+      route.serverId !== credentials.serverId ||
+      route.workspaceId !== credentials.workspaceId ||
+      route.workspace !== credentials.workspaceName ||
+      routedUrl.protocol !== "http:" ||
+      !isLoopbackHostname(routedUrl.hostname) ||
+      !isLoopbackHostname(localUrl.hostname) ||
+      routedUrl.port !== localUrl.port ||
+      routedUrl.pathname.replace(/\/$/, "") !== expectedPath ||
+      routedUrl.search ||
+      routedUrl.hash
+    ) {
+      throw new Error("The local hub routed the paired device to a different server or workspace");
+    }
+    const refreshedCredentials: CliCredentials = {
+      ...credentials,
+      url: `webrtc://${route.workspaceReach.room}${expectedPath}`,
+      workspacePairing: canonicalStoredPairing(route.workspaceReach),
+    };
+    saveCliCredentials(refreshedCredentials);
+    return new RpcClient({
+      url: route.serverUrl.replace(/\/$/, ""),
+      deviceId: credentials.deviceId,
+      refreshToken: credentials.refreshToken,
+    });
   }
 
   private ensureWsClient(): Promise<import("./wsClient.js").WsRpcClient> {
@@ -532,7 +671,11 @@ function toRpcError(error: unknown): Error {
   const kind = isRpcErrorKind((error as { errorKind?: unknown } | null)?.errorKind)
     ? (error as { errorKind: RpcErrorKind }).errorKind
     : "application";
-  return new RpcError(message, code, kind);
+  const errorData =
+    error !== null && typeof error === "object" && "errorData" in error
+      ? (error as { errorData?: RpcErrorData }).errorData
+      : undefined;
+  return new RpcError(message, code, kind, errorData);
 }
 
 function isRpcErrorKind(value: unknown): value is RpcErrorKind {

@@ -118,6 +118,21 @@ describe("HttpRpcHandler", () => {
     expect(configured.handleRequest).not.toHaveBeenCalled();
   });
 
+  it("encodes a void RPC result explicitly on the JSON wire", async () => {
+    const configured = deps({ handleRequest: vi.fn(async () => undefined) });
+    const handler = new HttpRpcHandler(configured);
+    const { res, captured } = response();
+
+    await handler.handle(request({ body: JSON.stringify(rpcEnvelope()) }), res);
+
+    expect(captured.status).toBe(200);
+    expect(JSON.parse(captured.body).message).toMatchObject({
+      type: "response",
+      requestId: "request-1",
+      result: null,
+    });
+  });
+
   it("dispatches with the authenticated caller and emits a response envelope", async () => {
     const configured = deps();
     const handler = new HttpRpcHandler(configured);

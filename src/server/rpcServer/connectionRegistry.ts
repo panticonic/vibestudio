@@ -215,19 +215,6 @@ export class ConnectionRegistry {
     return count;
   }
 
-  forEachControlPlane(fn: (client: WsClientState) => void): void {
-    for (const callerClients of this.callerConnections.values()) {
-      for (const client of callerClients.values()) {
-        if (
-          (client.caller.runtime.kind === "server" || client.caller.runtime.kind === "shell") &&
-          client.ws.readyState === WebSocket.OPEN
-        ) {
-          fn(client);
-        }
-      }
-    }
-  }
-
   closeAll(code: number, reason: string): void {
     for (const transports of this.transports.values()) {
       for (const transport of transports.values()) {

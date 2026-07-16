@@ -3,7 +3,7 @@
  * protocol that lets **N logically-authenticated sessions multiplex over one
  * pipe** (the WebRTC control DataChannel). It generalizes the WebSocket RPC
  * protocol (`ws:auth`/`ws:auth-result`/`ws:rpc`/`ws:route`/`ws:routed`/
- * `ws:event` in `wsProtocol.ts`) by tagging every frame with a `sid`
+ * routed and RPC messages in `wsProtocol.ts`) by tagging every frame with a `sid`
  * (session id) and lifting the auth handshake out of the socket.
  *
  * Today the `ws:auth → ws:auth-result` handshake is bound to one WebSocket and
@@ -28,7 +28,7 @@
  */
 
 import type { AuthenticatedCaller, CallerKind, RpcEnvelope, RpcErrorKind } from "../types.js";
-import type { ClientPlatform } from "./wsProtocol.js";
+import type { ClientPlatform, DeviceCredential, PairingContext } from "./wsProtocol.js";
 
 /** v2 = `hello` preamble negotiation (§1.1) + self-describing bulk mux (§1.2).
  * Pre-release: v1 peers are not served — a `hello` with `proto !== 2` is a
@@ -62,7 +62,6 @@ export const SESSION_CLOSED = "closed" as const; // server→client: session ter
 export const SESSION_RPC = "rpc" as const; // request/response/event to or from the server principal ('main')
 export const SESSION_ROUTE = "route" as const; // caller-to-caller request/response/event (ws:route)
 export const SESSION_ROUTED = "routed" as const; // delivered caller-to-caller frame (ws:routed)
-export const SESSION_EVENT = "event" as const; // server→client direct event (ws:event)
 export const SESSION_ROUTED_RESPONSE_ERROR = "routed-response-error" as const;
 export const SESSION_ROUTED_EVENT_ERROR = "routed-event-error" as const;
 export const SESSION_STREAM_OPEN = "stream-open" as const; // begin a bulk stream (envelope.message is a stream-request)
@@ -104,7 +103,9 @@ export interface SessionOpenResultFrame {
    * Present only when this session authenticated by redeeming a one-time pairing
    * code: the freshly issued device credential to persist for reconnects.
    */
-  deviceCredential?: { deviceId: string; refreshToken: string };
+  deviceCredential?: DeviceCredential;
+  /** Present with a freshly issued credential; never repeated on refresh auth. */
+  pairingContext?: PairingContext;
   error?: string;
   /** Terminal close codes (4090 lease denied, 4001 revoked, …) — do NOT reconnect this session. */
   terminal?: boolean;
@@ -143,13 +144,6 @@ export interface SessionRoutedFrame {
   t: typeof SESSION_ROUTED;
   sid: string;
   envelope: RpcEnvelope;
-}
-
-export interface SessionEventFrame {
-  t: typeof SESSION_EVENT;
-  sid: string;
-  event: string;
-  payload: unknown;
 }
 
 export interface SessionRoutedResponseErrorFrame {
@@ -229,7 +223,6 @@ export type SessionControlFrame =
   | SessionRpcFrame
   | SessionRouteFrame
   | SessionRoutedFrame
-  | SessionEventFrame
   | SessionRoutedResponseErrorFrame
   | SessionRoutedEventErrorFrame
   | SessionStreamOpenFrame
@@ -256,7 +249,6 @@ const FRAME_TAGS = new Set<string>([
   SESSION_RPC,
   SESSION_ROUTE,
   SESSION_ROUTED,
-  SESSION_EVENT,
   SESSION_ROUTED_RESPONSE_ERROR,
   SESSION_ROUTED_EVENT_ERROR,
   SESSION_STREAM_OPEN,
@@ -291,9 +283,7 @@ export function decodeControlFrame(data: string): SessionControlFrame {
       typeof hello.contractVersion !== "number" ||
       typeof hello.maxMsg !== "number"
     ) {
-      throw new Error(
-        "Session control frame 'hello' missing numeric proto/contractVersion/maxMsg"
-      );
+      throw new Error("Session control frame 'hello' missing numeric proto/contractVersion/maxMsg");
     }
   }
   return parsed as SessionControlFrame;
@@ -303,19 +293,29 @@ export function decodeControlFrame(data: string): SessionControlFrame {
 // Type guards (cheap, for the demux switch)
 // ---------------------------------------------------------------------------
 
-export const isSessionOpen = (f: SessionControlFrame): f is SessionOpenFrame => f.t === SESSION_OPEN;
-export const isSessionOpenResult = (f: SessionControlFrame): f is SessionOpenResultFrame => f.t === SESSION_OPEN_RESULT;
-export const isSessionClose = (f: SessionControlFrame): f is SessionCloseFrame => f.t === SESSION_CLOSE;
-export const isSessionClosed = (f: SessionControlFrame): f is SessionClosedFrame => f.t === SESSION_CLOSED;
+export const isSessionOpen = (f: SessionControlFrame): f is SessionOpenFrame =>
+  f.t === SESSION_OPEN;
+export const isSessionOpenResult = (f: SessionControlFrame): f is SessionOpenResultFrame =>
+  f.t === SESSION_OPEN_RESULT;
+export const isSessionClose = (f: SessionControlFrame): f is SessionCloseFrame =>
+  f.t === SESSION_CLOSE;
+export const isSessionClosed = (f: SessionControlFrame): f is SessionClosedFrame =>
+  f.t === SESSION_CLOSED;
 export const isSessionRpc = (f: SessionControlFrame): f is SessionRpcFrame => f.t === SESSION_RPC;
-export const isSessionRoute = (f: SessionControlFrame): f is SessionRouteFrame => f.t === SESSION_ROUTE;
-export const isSessionRouted = (f: SessionControlFrame): f is SessionRoutedFrame => f.t === SESSION_ROUTED;
-export const isSessionEvent = (f: SessionControlFrame): f is SessionEventFrame => f.t === SESSION_EVENT;
-export const isSessionStreamOpen = (f: SessionControlFrame): f is SessionStreamOpenFrame => f.t === SESSION_STREAM_OPEN;
-export const isSessionStreamCancel = (f: SessionControlFrame): f is SessionStreamCancelFrame => f.t === SESSION_STREAM_CANCEL;
-export const isSessionPing = (f: SessionControlFrame): f is SessionPingFrame => f.t === SESSION_PING;
-export const isSessionPong = (f: SessionControlFrame): f is SessionPongFrame => f.t === SESSION_PONG;
-export const isSessionHello = (f: SessionControlFrame): f is SessionHelloFrame => f.t === SESSION_HELLO;
+export const isSessionRoute = (f: SessionControlFrame): f is SessionRouteFrame =>
+  f.t === SESSION_ROUTE;
+export const isSessionRouted = (f: SessionControlFrame): f is SessionRoutedFrame =>
+  f.t === SESSION_ROUTED;
+export const isSessionStreamOpen = (f: SessionControlFrame): f is SessionStreamOpenFrame =>
+  f.t === SESSION_STREAM_OPEN;
+export const isSessionStreamCancel = (f: SessionControlFrame): f is SessionStreamCancelFrame =>
+  f.t === SESSION_STREAM_CANCEL;
+export const isSessionPing = (f: SessionControlFrame): f is SessionPingFrame =>
+  f.t === SESSION_PING;
+export const isSessionPong = (f: SessionControlFrame): f is SessionPongFrame =>
+  f.t === SESSION_PONG;
+export const isSessionHello = (f: SessionControlFrame): f is SessionHelloFrame =>
+  f.t === SESSION_HELLO;
 
 // ---------------------------------------------------------------------------
 // Server-side negotiation contract — the responsibilities the per-logical-session
@@ -354,7 +354,7 @@ export interface SessionNegotiator {
 export function openResultFor(
   sid: string,
   outcome: SessionAuthOutcome,
-  serverBootId: string,
+  serverBootId: string
 ): SessionOpenResultFrame {
   if (!outcome.ok) {
     return {

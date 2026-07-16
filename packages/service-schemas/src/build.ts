@@ -100,7 +100,7 @@ export type BuildDiagnosticWire = z.infer<typeof buildDiagnosticSchema>;
  * (path/role/contentType/integrity) — never byte content — plus the structured
  * diagnostics produced while building it.
  */
-export const repoBuildTargetSchema = z
+export const unitBuildTargetSchema = z
   .object({
     target: z.enum(["runtime", "library:panel", "library:worker"]),
     exportPath: z.string().optional(),
@@ -120,24 +120,22 @@ export const repoBuildTargetSchema = z
     diagnostics: z.array(buildDiagnosticSchema),
   })
   .strict();
-export type RepoBuildTargetWire = z.infer<typeof repoBuildTargetSchema>;
+export type UnitBuildTargetWire = z.infer<typeof unitBuildTargetSchema>;
 
 /**
- * Per-repo build gate report — an agent-actionable error contract, not a blob.
- * One per repo touched by a push (pushed repos + EV-changed dependents).
+ * Agent-actionable report for one explicitly requested unit build.
+ * Build results are observations about source content, never publication gates.
  */
-export const repoBuildReportSchema = z
+export const unitBuildReportSchema = z
   .object({
     repoPath: z.string(),
     unitName: z.string().optional(),
     kind: z.string(),
-    role: z.enum(["pushed", "dependent"]),
-    required: z.boolean(),
     status: z.enum(["ok", "failed", "skipped"]),
-    builds: z.array(repoBuildTargetSchema),
+    builds: z.array(unitBuildTargetSchema),
   })
   .strict();
-export type RepoBuildReportWire = z.infer<typeof repoBuildReportSchema>;
+export type UnitBuildReportWire = z.infer<typeof unitBuildReportSchema>;
 
 export const aboutPageMetaSchema = z
   .object({
@@ -226,42 +224,34 @@ export const recentBuildEventSchema = z
     diagnostics: z.array(buildDiagnosticSchema).optional(),
     trigger: z
       .object({
-        head: z.string(),
-        stateHash: z.string(),
-        sinceStateHash: z.string().nullable(),
-        eventId: z.string().nullable(),
-        headHash: z.string().nullable(),
-        actor: z.object({ id: z.string(), kind: z.string() }).nullable(),
-        transitionKind: z.enum(["snapshot", "edit", "merge", "merge-resolution"]),
+        publicationId: z.string(),
+        resultHostRefsBasisDigest: z.string(),
+        appliedAt: z.number().int().nonnegative(),
+        workspaceStateHash: z.string(),
         changedPaths: z.array(z.string()),
-        fileChanges: z.array(
-          z.object({
-            kind: z.enum(["added", "removed", "changed"]),
-            path: z.string(),
-            oldContentHash: z.string().nullable(),
-            newContentHash: z.string().nullable(),
-            oldMode: z.number().int().nullable(),
-            newMode: z.number().int().nullable(),
-          })
+        repositories: z.array(
+          z
+            .object({
+              repoPath: z.string(),
+              previousStateHash: z.string().nullable(),
+              nextStateHash: z.string().nullable(),
+              fileChanges: z.array(
+                z
+                  .object({
+                    kind: z.enum(["added", "removed", "changed"]),
+                    path: z.string(),
+                    oldContentHash: z.string().nullable(),
+                    newContentHash: z.string().nullable(),
+                    oldExecutable: z.boolean().nullable(),
+                    newExecutable: z.boolean().nullable(),
+                  })
+                  .strict()
+              ),
+            })
+            .strict()
         ),
-        editOps: z.array(
-          z.object({
-            kind: z.enum(["replace", "write", "create", "delete", "chmod"]),
-            path: z.string(),
-            oldContentHash: z.string().nullable(),
-            newContentHash: z.string().nullable(),
-            hunks: z.unknown().optional(),
-            mode: z.number().int().nullable().optional(),
-          })
-        ),
-        origin: z
-          .object({
-            callerId: z.string(),
-            callerKind: z.string(),
-            code: z.unknown().optional(),
-          })
-          .optional(),
       })
+      .strict()
       .optional(),
     timestamp: z.string(),
   })
@@ -339,41 +329,19 @@ export const buildMethods = defineServiceMethods({
       .nullable(),
     access: READ_ACCESS,
   },
-  validate: {
-    description:
-      "Gad-facing push validation (narrow-host VCS): build + cache + classify a composed candidate workspace view. Keyed by (viewHash, repoPaths, baseViewHash) — repoPaths are the pushed repos (buildable pushed units gate absolutely; content-only skip) and baseViewHash drives the dependent regression gate (a dependent also red on the base is informational; omitted ⇒ failed dependents gate absolutely). IDEMPOTENT: never promotes the EV baseline or records provenance, so it is safe to call on candidates that are never published.",
-    args: z.tuple([
-      z
-        .object({
-          viewHash: z
-            .string()
-            .describe("Composed candidate workspace view (state:… hash) to build and classify."),
-          repoPaths: z
-            .array(z.string())
-            .describe("Workspace-relative repo roots being pushed (pushed-role units)."),
-          baseViewHash: z
-            .string()
-            .optional()
-            .describe(
-              "Composed view BEFORE the push for the dependent regression gate; omitted ⇒ failed dependents gate absolutely."
-            ),
-        })
-        .strict(),
-    ]),
-    returns: z.array(repoBuildReportSchema),
-    access: BUILD_ACCESS,
-  },
   getBuildReport: {
     description:
-      "Queryable companion to the synchronous push gate: build a unit (runtime, or library targets for packages) at the given workspace state (omitted = main HEAD) and return its agent-actionable RepoBuildReport with structured esbuild + tsc diagnostics. Does NOT advance any head.",
+      "Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return an agent-actionable unit build report with structured esbuild + tsc diagnostics. This advisory projection does not publish source, authorize publication, or advance any head.",
     args: z.tuple([
       z.string().describe("Unit name or workspace-relative path."),
       z
         .string()
         .optional()
-        .describe("Workspace state to build from: omitted = main HEAD, or a 'state:…' hash."),
+        .describe(
+          "Workspace state to build from: omitted = main HEAD, 'ctx:<contextId>' = that context's exact working head, or a 'state:…' hash."
+        ),
     ]),
-    returns: repoBuildReportSchema,
+    returns: unitBuildReportSchema,
     access: BUILD_ACCESS,
   },
   getEffectiveVersion: {

@@ -1,84 +1,125 @@
 import type { EventName } from "@vibestudio/shared/events";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import type { ServerClient } from "./serverClient.js";
 
-type ServerEventClient = Pick<ServerClient, "call">;
-
 export interface ServerEventSubscriptionBridge {
-  add(event: EventName): void;
-  delete(event: EventName): void;
-  clear(): void;
-  replay(opts?: { force?: boolean }): Promise<void>;
+  retain(event: EventName): () => void;
+  retainMany(events: Iterable<EventName>): () => void;
+  retainAll(events: Iterable<EventName>): Promise<() => void>;
+  recover(): Promise<void>;
+  close(): Promise<void>;
 }
 
+/**
+ * One response-owned watch from Electron main to the workspace server.
+ *
+ * Local consumers retain topics. Topic-set changes replace the exact response;
+ * transport recovery reopens it. There are no confirmation tables, retry
+ * timers, callback subscribers, or inferred liveness.
+ */
 export function createServerEventSubscriptionBridge(deps: {
-  getServerClient(): ServerEventClient | null;
-  log?: Pick<Console, "info" | "warn">;
+  getServerClient(): Pick<ServerClient, "stream"> | null;
+  onEvent(event: EventName, payload: unknown): void;
+  log?: Pick<Console, "warn">;
 }): ServerEventSubscriptionBridge {
-  const desired = new Set<EventName>();
-  const confirmed = new Set<EventName>();
-  const inFlight = new Map<EventName, Promise<void>>();
-  const retryTimers = new Map<EventName, ReturnType<typeof setTimeout>>();
+  const rpc = {
+    stream(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: Parameters<ServerClient["stream"]>[3]
+    ): Promise<Response> {
+      if (targetId !== "main") throw new Error(`Unexpected event watch target: ${targetId}`);
+      const client = deps.getServerClient();
+      if (!client) throw new Error("Workspace server event transport is not connected");
+      const dot = method.indexOf(".");
+      return client.stream(method.slice(0, dot), method.slice(dot + 1), args, options);
+    },
+  };
+  const events = new EventsClient(rpc);
+  const references = new Map<EventName, number>();
+  const stopListening = new Map<EventName, () => void>();
   const log = deps.log ?? console;
 
-  const ensureRemote = (event: EventName): Promise<void> => {
-    if (confirmed.has(event)) return Promise.resolve();
-    const existing = inFlight.get(event);
-    if (existing) return existing;
-
-    const client = deps.getServerClient();
-    if (!client) return Promise.resolve();
-
-    const pending = client
-      .call("events", "subscribe", [event])
-      .then(() => {
-        confirmed.add(event);
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.warn(`[events] forward subscribe(${event}) to server failed: ${msg}`);
-        if (desired.has(event) && !retryTimers.has(event)) {
-          retryTimers.set(
-            event,
-            setTimeout(() => {
-              retryTimers.delete(event);
-              void ensureRemote(event);
-            }, 2_000)
-          );
+  const acquireMany = (requestedEvents: Iterable<EventName>) => {
+    const acquired = [...new Set(requestedEvents)];
+    const first: EventName[] = [];
+    for (const event of acquired) {
+      const previous = references.get(event) ?? 0;
+      references.set(event, previous + 1);
+      if (previous !== 0) continue;
+      first.push(event);
+      stopListening.set(
+        event,
+        events.on(event, (payload) => deps.onEvent(event, payload))
+      );
+    }
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      const removed: EventName[] = [];
+      for (const event of acquired) {
+        const remaining = (references.get(event) ?? 1) - 1;
+        if (remaining > 0) {
+          references.set(event, remaining);
+          continue;
         }
-      })
-      .finally(() => {
-        inFlight.delete(event);
+        references.delete(event);
+        stopListening.get(event)?.();
+        stopListening.delete(event);
+        removed.push(event);
+      }
+      void events.unsubscribeMany(removed).catch((error: unknown) => {
+        log.warn(
+          `[events] server watch replacement failed: ${error instanceof Error ? error.message : String(error)}`
+        );
       });
-    inFlight.set(event, pending);
-    return pending;
+    };
+    return { release, first };
+  };
+
+  const retain = (event: EventName): (() => void) => {
+    const acquired = acquireMany([event]);
+    if (acquired.first.length > 0) {
+      void events.subscribeAll(acquired.first).catch((error: unknown) => {
+        log.warn(
+          `[events] server watch failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    }
+    return acquired.release;
   };
 
   return {
-    add(event) {
-      desired.add(event);
-      void ensureRemote(event);
-    },
-    delete(event) {
-      desired.delete(event);
-      // Remote subscriptions are intentionally monotonic within one server
-      // connection. Main is the bridge owner: renderer unmount churn should
-      // not be able to race a late unsubscribe against a newer subscribe and
-      // strand the shell with only a local subscription.
-    },
-    clear() {
-      desired.clear();
-      for (const timer of retryTimers.values()) clearTimeout(timer);
-      retryTimers.clear();
-    },
-    async replay(opts = {}) {
-      if (opts.force) {
-        confirmed.clear();
-        inFlight.clear();
+    retain,
+    retainMany(requestedEvents) {
+      const acquired = acquireMany(requestedEvents);
+      if (acquired.first.length > 0) {
+        void events.subscribeAll(acquired.first).catch((error: unknown) => {
+          log.warn(
+            `[events] server watch failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+        });
       }
-      if (desired.size === 0) return;
-      const events = [...desired];
-      log.info(`[events] replaying ${events.length} shell subscription(s) to server`);
-      await Promise.all(events.map((event) => ensureRemote(event)));
+      return acquired.release;
+    },
+    async retainAll(requestedEvents) {
+      const acquired = acquireMany(requestedEvents);
+      try {
+        await events.subscribeAll(acquired.first);
+      } catch (error) {
+        acquired.release();
+        throw error;
+      }
+      return acquired.release;
+    },
+    recover: () => events.recover(),
+    async close() {
+      references.clear();
+      for (const stop of stopListening.values()) stop();
+      stopListening.clear();
+      await events.unsubscribeAll();
     },
   };
 }

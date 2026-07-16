@@ -1,4 +1,4 @@
-import { createRpcClient, defineContract } from "./client.js";
+import { createRpcClient, defineContract, withCausalParent } from "./client.js";
 import { createInProcessNetwork, inProcessTransport } from "./transports/inProcess.js";
 import type { EnvelopeRpcTransport, RpcConnectionStatus, RpcEnvelope } from "./types.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
@@ -74,6 +74,36 @@ const flushMicrotasks = async (): Promise<void> => {
 };
 
 describe("createRpcClient", () => {
+  it("automatically seals one exact causal parent onto scoped calls", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "do:agent",
+      callerKind: "do",
+      transport: fake.transport,
+    });
+    const causalParent = {
+      kind: "trajectory-invocation" as const,
+      logId: "trajectory:bound",
+      head: "main",
+      invocationId: "invocation:tool",
+    };
+    const controller = new AbortController();
+    const pending = withCausalParent(rpc, causalParent).call("main", "vcs.edit", [], {
+      signal: controller.signal,
+      causalParent: {
+        kind: "trajectory-invocation",
+        logId: "trajectory:forged",
+        head: "main",
+        invocationId: "invocation:forged",
+      },
+    });
+    await flushMicrotasks();
+
+    expect(fake.sent[0]?.message).toMatchObject({ causalParent });
+    controller.abort();
+    await expect(pending).rejects.toThrow(/aborted/);
+  });
+
   it("does local dispatch without using the transport", async () => {
     const network = createInProcessNetwork();
     const transport = inProcessTransport("self", network);
@@ -97,7 +127,11 @@ describe("createRpcClient", () => {
     const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
 
     b.expose("deny", () => {
-      throw new RpcBoundaryError("not allowed", "access", "EACCES");
+      throw new RpcBoundaryError("not allowed", "access", "EACCES", undefined, {
+        code: "Unauthorized",
+        operation: "test",
+        message: "not allowed",
+      });
     });
     b.exposeStreaming("deny-stream", async (_request, sink) => {
       await sink({
@@ -106,6 +140,7 @@ describe("createRpcClient", () => {
         message: "not allowed",
         code: "EACCES",
         errorKind: "access",
+        errorData: { code: "Unauthorized", operation: "test", message: "not allowed" },
       });
     });
 
@@ -114,12 +149,14 @@ describe("createRpcClient", () => {
       message: "not allowed",
       errorKind: "access",
       code: "EACCES",
+      errorData: { code: "Unauthorized", operation: "test", message: "not allowed" },
     });
     await expect(a.stream("b", "deny-stream", [])).rejects.toMatchObject({
       name: "RemoteRpcError",
       message: "not allowed",
       errorKind: "access",
       code: "EACCES",
+      errorData: { code: "Unauthorized", operation: "test", message: "not allowed" },
     });
   });
 
@@ -292,6 +329,76 @@ describe("createRpcClient", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/plain");
     await expect(response.text()).resolves.toBe("hello");
+  });
+
+  it("allows a response body to remain idle after HEAD when explicitly unbounded", async () => {
+    vi.useFakeTimers();
+    try {
+      const network = createInProcessNetwork();
+      const a = createRpcClient({
+        selfId: "a",
+        transport: inProcessTransport("a", network),
+        streamIdleTimeoutMs: 10,
+      });
+      const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
+
+      b.exposeStreaming("subscription", async (_req, sink) => {
+        await sink({
+          kind: "head",
+          status: 200,
+          statusText: "OK",
+          headerPairs: [],
+          finalUrl: "",
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await sink({ kind: "chunk", bytes: new TextEncoder().encode("later") });
+        await sink({ kind: "end", bytesIn: 5 });
+      });
+
+      const response = await a.stream("b", "subscription", [], { bodyIdleTimeoutMs: null });
+      const body = response.text();
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(body).resolves.toBe("later");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails an ordinary response body that exceeds its idle deadline", async () => {
+    vi.useFakeTimers();
+    let handlerAborted = false;
+    try {
+      const network = createInProcessNetwork();
+      const a = createRpcClient({
+        selfId: "a",
+        transport: inProcessTransport("a", network),
+        streamIdleTimeoutMs: 10,
+      });
+      const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
+
+      b.exposeStreaming("stalled", async (req, sink) => {
+        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        await new Promise<void>((resolve) => {
+          req.signal.addEventListener(
+            "abort",
+            () => {
+              handlerAborted = true;
+              resolve();
+            },
+            { once: true }
+          );
+        });
+      });
+
+      const response = await a.stream("b", "stalled", []);
+      const read = response.body!.getReader().read();
+      const rejected = expect(read).rejects.toThrow("response body timed out while idle");
+      await vi.advanceTimersByTimeAsync(11);
+      await rejected;
+      await vi.waitFor(() => expect(handlerAborted).toBe(true));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("delegates stream() to the transport's stream hook when present (connectionless path)", async () => {

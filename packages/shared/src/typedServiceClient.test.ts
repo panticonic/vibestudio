@@ -10,13 +10,13 @@ const methods = defineServiceMethods({
     args: z.tuple([z.string(), z.object({ limit: z.number() }).optional()]),
   },
   "hostTargets.selection.get": { args: z.tuple([z.string()]) },
+  voidResult: { args: z.tuple([]), returns: z.void() },
+  nullableResult: { args: z.tuple([]), returns: z.string().nullable() },
 });
 
 describe("createTypedServiceClient", () => {
   it("forwards flat and dotted methods with the full method name", async () => {
-    const call = vi.fn(async (_s: string, method: string) =>
-      method === "ping" ? "pong" : null
-    );
+    const call = vi.fn(async (_s: string, method: string) => (method === "ping" ? "pong" : null));
     const client = createTypedServiceClient("demo", methods, call);
 
     await expect(client.ping()).resolves.toBe("pong");
@@ -53,13 +53,18 @@ describe("createTypedServiceClient", () => {
     );
   });
 
+  it("decodes wire null as logical void without changing nullable domain results", async () => {
+    const client = createTypedServiceClient("demo", methods, async () => null);
+
+    await expect(client.voidResult()).resolves.toBeUndefined();
+    await expect(client.nullableResult()).resolves.toBeNull();
+  });
+
   it("rejects method names that collide with a group prefix", () => {
     const colliding = defineServiceMethods({
       "units.list": { args: z.tuple([]) },
       units: { args: z.tuple([]) },
     });
-    expect(() => createTypedServiceClient("demo", colliding, async () => null)).toThrow(
-      /collides/
-    );
+    expect(() => createTypedServiceClient("demo", colliding, async () => null)).toThrow(/collides/);
   });
 });

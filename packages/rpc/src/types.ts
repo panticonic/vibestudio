@@ -6,8 +6,24 @@
  */
 
 import type { DecodedFramedStream } from "./protocol/streamCodec.js";
-
 export type { DecodedFramedStream };
+
+/**
+ * Coordinate of the upstream trajectory invocation selected by the trusted
+ * calling vessel as the cause of an RPC call.
+ *
+ * This is provenance, not identity or authority. The receiving host accepts it
+ * only when the authenticated caller is bound to the named trajectory; the
+ * semantic command later verifies that the invocation exists at that head.
+ * The coordinate is exact once selected, but selecting the invocation that
+ * actually spawned the call remains the vessel's responsibility.
+ */
+export interface RpcCausalParent {
+  kind: "trajectory-invocation";
+  logId: string;
+  head: string;
+  invocationId: string;
+}
 
 /**
  * RPC request message sent between endpoints.
@@ -19,30 +35,13 @@ export interface RpcRequest {
   method: string;
   args: unknown[];
   /**
-   * Set only by extension callers, echoing an opaque host-issued token from
-   * the inbound extension invocation frame. The server resolves attribution
-   * from its active-invocation table; callers never supply identity directly.
+   * Set only by extension callers, echoing the host-issued request identity
+   * from the inbound extension invocation frame. It is an exact call edge,
+   * not an authorization credential or a second invocation identity.
    */
-  parentInvocationToken?: string;
-  /**
-   * Set only by the HOST on a userland `vcs` DO dispatch: an opaque,
-   * host-minted correlation nonce for on-behalf-of attribution (the DO echoes
-   * it into `refs.updateMains`; the host resolves it against its own
-   * invocation table). NOT a credential — it carries no identity and grants
-   * none; see docs/narrow-host-vcs-plan.md §4.
-   */
-  invocationToken?: string;
-  /**
-   * Set only by the HOST on a userland `vcs` DO dispatch, at the SAME relay
-   * chokepoint that mints {@link invocationToken}: the originating caller's
-   * host-resolved context registration id (`entityCache.resolveContext`), or
-   * absent when the caller has none. HOST-VERIFIED, never client-asserted — a
-   * sandboxed caller cannot set or influence it. The vcs writer DO reads it
-   * read-at-entry to structurally confine a sandboxed push's `ctx:` source head
-   * to the caller's OWN context (docs/narrow-host-vcs-plan.md §3, register row
-   * 11). Carries no authority of its own; it only scopes source-head selection.
-   */
-  callerContextId?: string;
+  parentRequestId?: string;
+  /** Exact non-authorizing provenance edge for a tool-caused call. */
+  causalParent?: RpcCausalParent;
   /**
    * Explicit opt-in (set ONLY by `callDeferred`) that this call may complete
    * out-of-band: a human-gated server method (approval, credential use) may
@@ -73,6 +72,15 @@ export type RpcErrorKind =
   | "internal";
 
 /**
+ * Schema-owned application failure payload carried unchanged through RPC.
+ *
+ * The transport deliberately does not interpret this value. Services own its
+ * schema (for example, `vcsErrorSchema`), while every relay preserves it as a
+ * single error channel alongside the human-readable diagnostic.
+ */
+export type RpcErrorData = unknown;
+
+/**
  * RPC response message (error case).
  */
 export interface RpcResponseError {
@@ -82,6 +90,8 @@ export interface RpcResponseError {
   errorKind: RpcErrorKind;
   /** Original error code (e.g. "ENOENT", "EACCES") preserved across the RPC boundary */
   errorCode?: string;
+  /** Structured service-domain failure data; callers must not parse `error`. */
+  errorData?: RpcErrorData;
   /** Original stack, when available. Intended for diagnostics, not control flow. */
   errorStack?: string;
 }
@@ -114,8 +124,10 @@ export interface RpcStreamRequest {
   fromId: string;
   method: string;
   args: unknown[];
-  /** See `RpcRequest.parentInvocationToken`. */
-  parentInvocationToken?: string;
+  /** See `RpcRequest.parentRequestId`. */
+  parentRequestId?: string;
+  /** Exact upstream tool invocation; provenance only, never authorization. */
+  causalParent?: RpcCausalParent;
 }
 
 /**
@@ -273,6 +285,7 @@ export type StreamingMethodFrame =
       message: string;
       code?: string;
       errorKind: RpcErrorKind;
+      errorData?: RpcErrorData;
     };
 
 export type StreamingMethodHandler = (
@@ -288,6 +301,11 @@ export interface RpcCallOptions {
   /** Request read-only containment: the server dispatcher refuses any non-`read`
    *  method for this call. Propagated to `ServiceContext.readOnly`. */
   readOnly?: boolean;
+  /**
+   * Exact upstream tool invocation. The host verifies its trajectory against
+   * the authenticated presenter's binding. It grants no permissions.
+   */
+  causalParent?: RpcCausalParent;
 }
 
 export interface RpcStreamOptions {
@@ -295,8 +313,15 @@ export interface RpcStreamOptions {
   idempotencyKey?: string;
   /** Override the transport's deadline for receiving response headers. */
   headTimeoutMs?: number;
+  /**
+   * Maximum silence between response-body frames. `null` explicitly disables
+   * the body deadline for intentionally long-lived streams.
+   */
+  bodyIdleTimeoutMs?: number | null;
   /** Request read-only containment for streaming calls. */
   readOnly?: boolean;
+  /** Exact upstream tool invocation; provenance only, never authorization. */
+  causalParent?: RpcCausalParent;
   /**
    * Streaming REQUEST body (plan §1.6 — uploads ride the bulk channel). Only
    * body-capable transports accept it: the WebRTC session pumps it as DATA
@@ -472,6 +497,7 @@ export type RpcContract = Record<
 export interface RpcClientConfig {
   selfId: string;
   transport: EnvelopeRpcTransport;
+  /** Default deadline for the response HEAD and subsequent body-frame silence. */
   streamIdleTimeoutMs?: number;
   callerKind?: CallerKind | "unknown";
   provenance?: AuthenticatedCaller[];

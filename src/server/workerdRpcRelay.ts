@@ -1,9 +1,11 @@
-import type { DORefParam } from "@vibestudio/shared/userlandServiceRpc";
+import type { DORefParam } from "@vibestudio/shared/workspaceServiceRpc";
 import {
   envelopeFromMessage,
+  RemoteRpcError,
   type AuthenticatedCaller,
   type CallerKind,
   type RpcEnvelope,
+  type RpcCausalParent,
   type RpcResponse,
 } from "@vibestudio/rpc";
 import { Agent } from "undici";
@@ -54,18 +56,12 @@ export interface DurableObjectRelayDeps {
   userId?: string;
   /** Correlation id for this call; lets the DO match a later deferred reply. */
   requestId?: string;
-  /** Host-minted on-behalf-of correlation nonce for vcs-DO dispatches
-   *  (narrow-host-vcs §4). Opaque; never identity-bearing. */
-  invocationToken?: string;
-  /** Host-resolved context registration id of the originating caller, threaded
-   *  alongside {@link invocationToken} on vcs-DO dispatches so the writer DO can
-   *  structurally confine a sandboxed push's `ctx:` source head (register row
-   *  11). HOST-VERIFIED, never client-asserted. */
-  callerContextId?: string;
   /** Optional dedup key, propagated so reissued calls collapse server-side. */
   idempotencyKey?: string;
   /** Read-only containment flag propagated through the request envelope. */
   readOnly?: boolean;
+  /** Exact upstream invocation coordinate; provenance only, never authorization. */
+  causalParent?: RpcCausalParent;
   /**
    * Held-connection call (the EvalDO's `executeRun`): use a no-`headersTimeout` undici dispatcher so
    * the fetch isn't reaped at undici's ~300s default while the DO holds the response for a long run.
@@ -121,11 +117,12 @@ function describeFetchFailure(error: unknown): string {
  * envelope to its `createRpcClient` core (`respond`/`deliver` → `handleEnvelope`
  * → `exposeAll`'d method) and returns a response envelope.
  */
-async function postEnvelopeToDO(
+async function fetchEnvelopeFromDO(
   ref: DORef,
   envelope: RpcEnvelope,
-  deps: DurableObjectRelayDeps
-): Promise<unknown> {
+  deps: DurableObjectRelayDeps,
+  signal?: AbortSignal
+): Promise<Response> {
   const url = `${deps.workerdUrl}${doRefUrl(ref, "__rpc")}`;
   let res: Response;
   try {
@@ -139,6 +136,7 @@ async function postEnvelopeToDO(
           : {}),
       },
       body: JSON.stringify(envelope),
+      ...(signal ? { signal } : {}),
       ...(deps.heldConnection ? { dispatcher: HELD_CONNECTION_DISPATCHER } : {}),
     } as RequestInit);
   } catch (error) {
@@ -149,6 +147,15 @@ async function postEnvelopeToDO(
     throw wrapped;
   }
 
+  return res;
+}
+
+async function postEnvelopeToDO(
+  ref: DORef,
+  envelope: RpcEnvelope,
+  deps: DurableObjectRelayDeps
+): Promise<unknown> {
+  const res = await fetchEnvelopeFromDO(ref, envelope, deps);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`DO RPC relay failed (${res.status}): ${text}`);
@@ -162,8 +169,12 @@ function unwrapResponseEnvelope(raw: unknown): unknown {
   const message = responseEnvelope?.message as RpcResponse | undefined;
   if (message && message.type === "response") {
     if ("error" in message) {
-      const err = new Error(message.error) as Error & { code?: string; stack?: string };
-      if (message.errorCode) err.code = message.errorCode;
+      const err = new RemoteRpcError(
+        message.error,
+        message.errorKind,
+        message.errorCode,
+        message.errorData
+      );
       if (message.errorStack) err.stack = message.errorStack;
       throw err;
     }
@@ -193,11 +204,39 @@ export async function postToDurableObject(
       fromId: caller.callerId,
       method,
       args,
-      ...(deps.invocationToken ? { invocationToken: deps.invocationToken } : {}),
-      ...(deps.callerContextId ? { callerContextId: deps.callerContextId } : {}),
+      ...(deps.causalParent ? { causalParent: deps.causalParent } : {}),
     },
   });
   return unwrapResponseEnvelope(await postEnvelopeToDO(ref, envelope, deps));
+}
+
+/** Relay a streaming call to a DO. The returned body remains physically tied
+ * to `signal`; cancelling it is the exact resource terminal observed by the DO. */
+export async function streamFromDurableObject(
+  ref: DORef,
+  method: string,
+  args: unknown[],
+  deps: DurableObjectRelayDeps,
+  signal: AbortSignal
+): Promise<Response> {
+  const caller = callerFromDeps(deps);
+  const envelope = envelopeFromMessage({
+    selfId: caller.callerId,
+    from: caller.callerId,
+    target: doTargetString(ref),
+    caller,
+    ...(deps.idempotencyKey ? { idempotencyKey: deps.idempotencyKey } : {}),
+    ...(deps.readOnly ? { readOnly: true } : {}),
+    message: {
+      type: "stream-request",
+      requestId: deps.requestId ?? generateRequestId(),
+      fromId: caller.callerId,
+      method,
+      args,
+      ...(deps.causalParent ? { causalParent: deps.causalParent } : {}),
+    },
+  });
+  return fetchEnvelopeFromDO(ref, envelope, deps, signal);
 }
 
 /** Relay an event to a DO as an event envelope (fire-and-forget). */

@@ -153,6 +153,15 @@ export class SessionRegistry {
     return origin;
   }
 
+  /** Permanently discard a caller's reconnectable session state. */
+  retire(callerId: string): CallerKind | undefined {
+    const session = this.sessions.get(callerId);
+    if (!session) return undefined;
+    if (session.expireTimer) clearTimeout(session.expireTimer);
+    this.sessions.delete(callerId);
+    return session.callerKind;
+  }
+
   clear(): void {
     for (const session of this.sessions.values()) {
       if (session.expireTimer) clearTimeout(session.expireTimer);

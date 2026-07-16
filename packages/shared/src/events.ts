@@ -14,7 +14,7 @@ import type {
 import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
 import type { CallerKind } from "./principalKinds.js";
-import type { VcsHeadAdvance, VcsWorkingAdvance } from "./vcsEvents.js";
+import type { ProtectedPublicationEvent } from "./protectedPublicationEvents.js";
 import type { WorkspacePresenceEntry } from "./workspacePresence.js";
 import type { PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
 
@@ -22,13 +22,12 @@ import type { PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
  * Known event names that can be subscribed to.
  */
 export type EventName =
+  | "build:complete"
   | `extensions:${string}`
   | `apps:${string}`
-  | `vcs:head:${string}`
-  | `vcs:working:${string}`
+  | "vcs:publication"
   | "workspace:unit-log"
   | "workspace:revision-bumped"
-  | "workspace:relaunch-requested"
   | "credential:capture-request"
   | "server-log:append"
   | "presence:panel-active"
@@ -151,6 +150,7 @@ export interface HostTargetChangedPayload {
  * Event payloads for type safety.
  */
 export interface EventPayloads {
+  "build:complete": { source: string; error?: string };
   "system-theme-changed": "light" | "dark";
   "panel-tree-updated": PanelTreeSnapshot;
   /**
@@ -257,8 +257,6 @@ export interface EventPayloads {
   "host-target-launch:session-changed": HostTargetLaunchSessionSnapshot;
   "shell-approval:pending-changed": { pending: PendingApproval[] };
   "workspace:revision-bumped": { workspaceId: string; revision: number };
-  /** The server asks the attached desktop shell to relaunch into a workspace. */
-  "workspace:relaunch-requested": { name: string };
   /**
    * The server asks the attached desktop shell to run an interactive session
    * credential capture (browser sign-in). The shell answers with
@@ -294,8 +292,7 @@ export interface EventPayloads {
   "presence:panel-active": { panelId: string; ownerCallerId: string; updatedAt: number };
   [key: `extensions:${string}`]: unknown;
   [key: `apps:${string}`]: unknown;
-  [key: `vcs:head:${string}`]: VcsHeadAdvance;
-  [key: `vcs:working:${string}`]: VcsWorkingAdvance;
+  "vcs:publication": ProtectedPublicationEvent;
   "workspace:unit-log": {
     workspaceId: string;
     unitName: string;
@@ -312,6 +309,7 @@ export interface EventPayloads {
  * List of valid event names for runtime validation.
  */
 export const VALID_EVENT_NAMES: EventName[] = [
+  "build:complete",
   "system-theme-changed",
   "panel-tree-updated",
   "workspace-presence-changed",
@@ -344,7 +342,6 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "host-target-launch:session-changed",
   "shell-approval:pending-changed",
   "workspace:revision-bumped",
-  "workspace:relaunch-requested",
   "credential:capture-request",
   "server-log:append",
   "presence:panel-active",
@@ -356,8 +353,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
 export function isValidEventName(name: string): name is EventName {
   if (name.startsWith("extensions:")) return true;
   if (name.startsWith("apps:")) return true;
-  if (name.startsWith("vcs:head:")) return true;
-  if (name.startsWith("vcs:working:")) return true;
+  if (name === "vcs:publication") return true;
   if (name === "workspace:unit-log") return true;
   if (name === "workspace:revision-bumped") return true;
   if (name === "presence:panel-active") return true;
@@ -365,4 +361,50 @@ export function isValidEventName(name: string): name is EventName {
   if (name === "panel-title-updated") return true;
   if (name === "panel:snapshot") return true;
   return VALID_EVENT_NAMES.includes(name as EventName);
+}
+
+/** Records carried by the destructive `events.watch` response. */
+export type EventWatchRecord =
+  | { kind: "watching"; events: EventName[]; epoch: string }
+  | { kind: "snapshot"; event: EventName; payload: unknown; sequence: number }
+  | { kind: "event"; event: EventName; payload: unknown; sequence: number };
+
+const eventWatchEncoder = new TextEncoder();
+
+export function encodeEventWatchRecord(record: EventWatchRecord): Uint8Array {
+  return eventWatchEncoder.encode(`${JSON.stringify(record)}\n`);
+}
+
+export async function* readEventWatchRecords(
+  response: Response
+): AsyncGenerator<EventWatchRecord, void, void> {
+  if (!response.ok) throw new Error(`Event watch failed with HTTP ${response.status}`);
+  if (!response.body) throw new Error("Event watch returned no response body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  let terminal = false;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        terminal = true;
+        pending += decoder.decode();
+        break;
+      }
+      pending += decoder.decode(chunk.value, { stream: true });
+      for (;;) {
+        const newline = pending.indexOf("\n");
+        if (newline < 0) break;
+        const line = pending.slice(0, newline).trim();
+        pending = pending.slice(newline + 1);
+        if (line) yield JSON.parse(line) as EventWatchRecord;
+      }
+    }
+    const finalLine = pending.trim();
+    if (finalLine) yield JSON.parse(finalLine) as EventWatchRecord;
+  } finally {
+    if (!terminal) await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }

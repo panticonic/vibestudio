@@ -3,20 +3,17 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import type { BrowserDataClient, StoredCookie } from "@vibestudio/browser-data";
 import type { ManagedService } from "@vibestudio/shared/managedService";
 import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
-import type { EventService, Subscriber } from "@vibestudio/shared/eventsService";
+import type { EventName } from "@vibestudio/shared/events";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { workspaceProviderExtensionPackageName } from "@vibestudio/workspace/configParser";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { ServerClient } from "../serverClient.js";
 
 const log = createDevLogger("BrowserSessionSync");
-const SUBSCRIBER_ID = "browser-session-sync";
-
 export function createBrowserSessionSyncService(deps: {
-  eventService: EventService;
   serverClient: ServerClient;
   browserDataClient: BrowserDataClient;
 }): ManagedService {
-  let destroyed = false;
   /** Set at start() from the manifest-declared broker; null ⇒ sync disabled. */
   let importEventName: string | null = null;
 
@@ -33,19 +30,18 @@ export function createBrowserSessionSyncService(deps: {
     }
   };
 
-  const subscriber: Subscriber = {
-    callerKind: "server",
-    get isAlive() {
-      return !destroyed;
+  const events = new EventsClient({
+    stream(targetId, method, args, options) {
+      if (targetId !== "main") throw new Error(`Unexpected browser sync target: ${targetId}`);
+      const dot = method.indexOf(".");
+      return deps.serverClient.stream(method.slice(0, dot), method.slice(dot + 1), args, options);
     },
-    send(channel, payload) {
-      if (!importEventName || channel !== `event:${importEventName}`) return;
-      const results = Array.isArray(payload) ? payload : [];
-      if (!results.some((r) => isCookieImportSuccess(r))) return;
-      void syncCookies();
-    },
-    isBoundTo: () => false,
-    onDestroyed: () => {},
+  });
+  let stopListening: (() => void) | null = null;
+  const handleImportComplete = (payload: unknown) => {
+    const results = Array.isArray(payload) ? payload : [];
+    if (!results.some((r) => isCookieImportSuccess(r))) return;
+    void syncCookies();
   };
 
   return {
@@ -77,21 +73,19 @@ export function createBrowserSessionSyncService(deps: {
         );
         return { syncCookies };
       }
-      deps.eventService.subscribe(importEventName as never, SUBSCRIBER_ID, subscriber);
-      await deps.serverClient
-        .call("events", "subscribe", [importEventName])
-        .catch((err: unknown) => {
-          log.warn(
-            `Server event subscribe failed: ${err instanceof Error ? err.message : String(err)}`
-          );
-        });
+      const eventName = importEventName as EventName;
+      stopListening = events.on(eventName, handleImportComplete);
+      await events.subscribe(eventName).catch((err: unknown) => {
+        log.warn(
+          `Server event subscribe failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
       return { syncCookies };
     },
     async stop() {
-      destroyed = true;
-      if (!importEventName) return;
-      deps.eventService.unsubscribe(importEventName as never, SUBSCRIBER_ID);
-      await deps.serverClient.call("events", "unsubscribe", [importEventName]).catch(() => {});
+      stopListening?.();
+      stopListening = null;
+      await events.unsubscribeAll().catch(() => {});
     },
   };
 }

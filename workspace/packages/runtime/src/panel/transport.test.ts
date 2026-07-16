@@ -77,7 +77,7 @@ describe("createPanelTransport", () => {
     expect(handler).toHaveBeenCalledWith(inboundEnvelope);
   });
 
-  it("sends panel event subscriptions over the shell bridge", async () => {
+  it("sends panel event watches over the shell bridge", async () => {
     const serviceCall = vi.fn(async () => {});
     const shell = makeShell({ serviceCall });
     g.__vibestudioShell = shell;
@@ -86,8 +86,8 @@ describe("createPanelTransport", () => {
       type: "request",
       fromId: "panel:panel-1",
       requestId: "req-1",
-      method: "events.subscribe",
-      args: ["notification:action"],
+      method: "events.watch",
+      args: [["notification:action"]],
     };
 
     const sentEnvelope = envelope("main", message);

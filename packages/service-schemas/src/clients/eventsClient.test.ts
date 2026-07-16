@@ -1,65 +1,251 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RpcCaller } from "@vibestudio/rpc";
+import {
+  encodeEventWatchRecord,
+  type EventName,
+  type EventWatchRecord,
+} from "@vibestudio/shared/events";
 import { EventsClient } from "./eventsClient.js";
-import type { RpcClient } from "@vibestudio/rpc";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeRpc(): Pick<RpcClient, "call"> & { call: ReturnType<typeof vi.fn> } {
+function makeRpc() {
+  let epoch = "server-epoch-1";
+  const controllers: ReadableStreamDefaultController<Uint8Array>[] = [];
+  const signals: AbortSignal[] = [];
+  const watchControllers = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
+  const stream = vi.fn(
+    async (
+      _target: string,
+      _method: string,
+      args: unknown[],
+      options?: { signal?: AbortSignal }
+    ) => {
+      const requested = (args[0] ?? []) as EventName[];
+      const watchId = String(args[1]);
+      const signal = options?.signal ?? new AbortController().signal;
+      signals.push(signal);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controllers.push(controller);
+            const previous = watchControllers.get(watchId);
+            watchControllers.set(watchId, controller);
+            if (previous) {
+              try {
+                previous.close();
+              } catch {
+                // The previous response already terminated.
+              }
+            }
+            controller.enqueue(
+              encodeEventWatchRecord({ kind: "watching", events: requested, epoch })
+            );
+            signal.addEventListener("abort", () => {
+              try {
+                controller.close();
+              } catch {
+                // The reader already cancelled the response.
+              }
+            });
+          },
+        })
+      );
+    }
+  );
   return {
-    call: vi.fn(),
-  } as Pick<RpcClient, "call"> & { call: ReturnType<typeof vi.fn> };
+    rpc: { stream } as Pick<RpcCaller, "stream">,
+    stream,
+    controllers,
+    signals,
+    restartServer() {
+      epoch = `server-epoch-${Number(epoch.split("-").at(-1)) + 1}`;
+    },
+    emit(index: number, record: EventWatchRecord) {
+      controllers[index]!.enqueue(encodeEventWatchRecord(record));
+    },
+    close(index: number) {
+      controllers[index]!.close();
+    },
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 describe("EventsClient", () => {
-  let rpc: ReturnType<typeof makeRpc>;
+  let fixture: ReturnType<typeof makeRpc>;
   let client: EventsClient;
 
   beforeEach(() => {
-    rpc = makeRpc();
-    client = new EventsClient(rpc);
+    fixture = makeRpc();
+    client = new EventsClient(fixture.rpc);
   });
 
-  describe("subscribe()", () => {
-    it("calls events.subscribe RPC with event name", async () => {
-      rpc.call.mockResolvedValueOnce(undefined);
+  it("opens one response-owned watch and dispatches its records", async () => {
+    const listener = vi.fn();
+    client.on("panel-tree-updated", listener);
 
-      await client.subscribe("panel-tree-updated");
+    await client.subscribe("panel-tree-updated");
+    expect(fixture.stream).toHaveBeenCalledWith(
+      "main",
+      "events.watch",
+      [["panel-tree-updated"], expect.any(String)],
+      expect.objectContaining({ signal: expect.any(AbortSignal), bodyIdleTimeoutMs: null })
+    );
 
-      expect(rpc.call).toHaveBeenCalledWith("main", "events.subscribe", ["panel-tree-updated"]);
+    fixture.emit(0, {
+      kind: "event",
+      event: "panel-tree-updated",
+      payload: { revision: 1, forest: [] },
+      sequence: 1,
     });
-
-    it("calls events.subscribe with different event names", async () => {
-      rpc.call.mockResolvedValueOnce(undefined);
-
-      await client.subscribe("system-theme-changed");
-
-      expect(rpc.call).toHaveBeenCalledWith("main", "events.subscribe", ["system-theme-changed"]);
-    });
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledWith({ revision: 1, forest: [] }));
+    await client.unsubscribeAll();
   });
 
-  describe("unsubscribe()", () => {
-    it("calls events.unsubscribe RPC with event name", async () => {
-      rpc.call.mockResolvedValueOnce(undefined);
+  it("replaces the exact response with the complete sorted topic set", async () => {
+    await client.subscribe("system-theme-changed");
+    await client.subscribe("panel-tree-updated");
 
-      await client.unsubscribe("panel-tree-updated");
+    expect(fixture.signals[0]!.aborted).toBe(false);
+    expect(fixture.stream).toHaveBeenNthCalledWith(
+      2,
+      "main",
+      "events.watch",
+      [["panel-tree-updated", "system-theme-changed"], expect.any(String)],
+      expect.anything()
+    );
 
-      expect(rpc.call).toHaveBeenCalledWith("main", "events.unsubscribe", ["panel-tree-updated"]);
-    });
+    await client.unsubscribe("system-theme-changed");
+    expect(fixture.signals[1]!.aborted).toBe(false);
+    expect(fixture.stream).toHaveBeenNthCalledWith(
+      3,
+      "main",
+      "events.watch",
+      [["panel-tree-updated"], expect.any(String)],
+      expect.anything()
+    );
+    await client.unsubscribeAll();
   });
 
-  describe("unsubscribeAll()", () => {
-    it("calls events.unsubscribeAll RPC with no arguments", async () => {
-      rpc.call.mockResolvedValueOnce(undefined);
+  it("unsubscribes only by aborting the owned response", async () => {
+    await client.subscribe("panel-tree-updated");
+    await client.unsubscribeAll();
 
-      await client.unsubscribeAll();
+    expect(fixture.signals[0]!.aborted).toBe(true);
+    expect(fixture.stream).toHaveBeenCalledTimes(1);
+  });
 
-      expect(rpc.call).toHaveBeenCalledWith("main", "events.unsubscribeAll", []);
+  it("reopens the desired topic set on transport recovery", async () => {
+    await client.subscribeAll(["system-theme-changed", "panel-tree-updated"]);
+    await client.recover();
+
+    expect(fixture.signals[0]!.aborted).toBe(false);
+    expect(fixture.stream).toHaveBeenCalledTimes(2);
+    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
+      ["panel-tree-updated", "system-theme-changed"],
+      expect.any(String),
+    ]);
+    await client.unsubscribeAll();
+  });
+
+  it("keeps desired topics discoverable after an opening failure", async () => {
+    fixture.stream.mockRejectedValueOnce(new Error("transport unavailable"));
+    await expect(client.subscribe("panel-tree-updated")).rejects.toThrow("transport unavailable");
+
+    await client.recover();
+    expect(fixture.stream).toHaveBeenCalledTimes(2);
+    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([["panel-tree-updated"], expect.any(String)]);
+    await client.unsubscribeAll();
+  });
+
+  it("reopens desired topics after an unexpected terminal close", async () => {
+    await client.subscribe("panel-tree-updated");
+    fixture.close(0);
+
+    await vi.waitFor(() => expect(fixture.stream).toHaveBeenCalledTimes(2));
+    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([["panel-tree-updated"], expect.any(String)]);
+    await client.unsubscribeAll();
+  });
+
+  it("isolates listener failures without terminating the watch", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const healthy = vi.fn();
+    client.on("panel-tree-updated", () => {
+      throw new Error("broken listener");
     });
+    client.on("panel-tree-updated", healthy);
+    await client.subscribe("panel-tree-updated");
+
+    fixture.emit(0, {
+      kind: "event",
+      event: "panel-tree-updated",
+      payload: { revision: 1 },
+      sequence: 1,
+    });
+    fixture.emit(0, {
+      kind: "event",
+      event: "panel-tree-updated",
+      payload: { revision: 2 },
+      sequence: 2,
+    });
+    await vi.waitFor(() => expect(healthy).toHaveBeenCalledTimes(2));
+    expect(error).toHaveBeenCalledTimes(2);
+
+    error.mockRestore();
+    await client.unsubscribeAll();
+  });
+
+  it("deduplicates sequenced broadcast records while draining a replacement", async () => {
+    const listener = vi.fn();
+    client.on("panel-tree-updated", listener);
+    await client.subscribe("panel-tree-updated");
+
+    const record = {
+      kind: "event" as const,
+      event: "panel-tree-updated" as const,
+      payload: { revision: 1, forest: [] },
+      sequence: 7,
+    };
+    fixture.emit(0, record);
+    fixture.emit(0, record);
+    fixture.emit(0, {
+      kind: "snapshot",
+      event: "panel-tree-updated",
+      payload: { revision: 0, forest: [] },
+      sequence: 6,
+    });
+
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+    await client.unsubscribeAll();
+  });
+
+  it("accepts a fresh sequence namespace after the event server restarts", async () => {
+    const listener = vi.fn();
+    client.on("panel-tree-updated", listener);
+    await client.subscribe("panel-tree-updated");
+
+    fixture.emit(0, {
+      kind: "event",
+      event: "panel-tree-updated",
+      payload: { revision: 10, forest: [] },
+      sequence: 10,
+    });
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+
+    fixture.restartServer();
+    await client.recover();
+    fixture.emit(1, {
+      kind: "snapshot",
+      event: "panel-tree-updated",
+      payload: { revision: 0, forest: [] },
+      sequence: 0,
+    });
+    fixture.emit(1, {
+      kind: "event",
+      event: "panel-tree-updated",
+      payload: { revision: 1, forest: [] },
+      sequence: 1,
+    });
+
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(3));
+    expect(listener.mock.calls.map(([payload]) => payload.revision)).toEqual([10, 0, 1]);
+    await client.unsubscribeAll();
   });
 });

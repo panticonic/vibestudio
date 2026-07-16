@@ -1,7 +1,8 @@
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import { isValidEventName } from "@vibestudio/shared/events";
-import type { EventService } from "@vibestudio/shared/eventsService";
+import { EventService } from "@vibestudio/shared/eventsService";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { eventsMethods } from "../events.js";
 
@@ -12,7 +13,13 @@ export type EventSnapshotProviders = {
 /** Bind the events wire contract to an existing in-process event service. */
 export function createEventsServiceDefinition(
   eventService: EventService,
-  opts: { snapshots?: EventSnapshotProviders } = {}
+  opts: {
+    snapshots?: EventSnapshotProviders;
+    onWatchOpened?: (
+      events: readonly EventName[],
+      context: ServiceContext
+    ) => (() => void) | undefined;
+  } = {}
 ): ServiceDefinition {
   return {
     name: "events",
@@ -21,22 +28,27 @@ export function createEventsServiceDefinition(
     policy: { allowed: ["shell", "app", "panel", "server", "worker", "do", "extension"] },
     methods: eventsMethods,
     handler: defineServiceHandler("events", eventsMethods, {
-      subscribe: async (ctx, [eventName]) => {
-        if (!isValidEventName(eventName)) throw new Error(`Unknown event: ${eventName}`);
-        const subscriber = eventService.getOrCreateSubscriber(ctx);
-        eventService.subscribe(eventName, ctx.caller.runtime.id, subscriber, ctx.connectionId);
-        const snapshot = opts.snapshots?.[eventName]?.();
-        if (snapshot !== undefined) subscriber.send(`event:${eventName}`, snapshot);
-        return;
-      },
-      unsubscribe: (ctx, [eventName]) => {
-        if (!isValidEventName(eventName)) throw new Error(`Unknown event: ${eventName}`);
-        eventService.unsubscribe(eventName, ctx.caller.runtime.id, ctx.connectionId);
-        return;
-      },
-      unsubscribeAll: (ctx) => {
-        eventService.unsubscribeAll(ctx.caller.runtime.id, ctx.connectionId);
-        return;
+      watch: (ctx, [requestedEvents, watchId]) => {
+        const events = requestedEvents.map((eventName) => {
+          if (!isValidEventName(eventName)) throw new Error(`Unknown event: ${eventName}`);
+          return eventName;
+        });
+        const snapshots: Partial<Record<EventName, () => unknown>> = {};
+        for (const event of events) {
+          const snapshot = opts.snapshots?.[event];
+          if (snapshot) snapshots[event] = snapshot;
+        }
+        const release = opts.onWatchOpened?.(events, ctx);
+        return eventService.openWatch({
+          callerId: ctx.caller.runtime.id,
+          callerKind: ctx.caller.runtime.kind,
+          connectionId: ctx.connectionId ?? EventService.DEFAULT_CONNECTION_ID,
+          watchId,
+          ...(ctx.caller.subject?.userId ? { userId: ctx.caller.subject.userId } : {}),
+          events,
+          snapshots,
+          ...(release ? { onClosed: release } : {}),
+        });
       },
     }),
   };

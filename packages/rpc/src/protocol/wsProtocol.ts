@@ -2,6 +2,17 @@ import type { CallerKind, RpcEnvelope, RpcErrorKind } from "../types.js";
 
 export type ClientPlatform = "desktop" | "headless" | "mobile";
 
+/** Durable credential issued exactly once when a device pairing code is redeemed. */
+export interface DeviceCredential {
+  deviceId: string;
+  refreshToken: string;
+}
+
+/** Target selected by the pairing invite that admitted the newly paired device. */
+export interface PairingContext {
+  workspaceId: string;
+}
+
 export interface ToolExecutionResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
@@ -50,7 +61,9 @@ interface WsAuthResultBase {
    * code: the freshly issued device credential the client must persist to
    * reconnect (the server keeps only its hash, so this is the one delivery).
    */
-  deviceCredential?: { deviceId: string; refreshToken: string };
+  deviceCredential?: DeviceCredential;
+  /** Present with a freshly issued credential; never repeated on refresh auth. */
+  pairingContext?: PairingContext;
   error?: string;
 }
 
@@ -71,12 +84,6 @@ export type WsAuthResultMessage = WsAuthSuccessResultMessage | WsAuthFailureResu
 export interface WsRpcResponseMessage {
   type: "ws:rpc";
   envelope: RpcEnvelope;
-}
-
-export interface WsEventMessage {
-  type: "ws:event";
-  event: string;
-  payload: unknown;
 }
 
 export interface WsRoutedMessage {
@@ -105,7 +112,6 @@ export interface WsRoutedResponseErrorMessage {
 export type WsServerMessage =
   | WsAuthResultMessage
   | WsRpcResponseMessage
-  | WsEventMessage
   | WsRoutedMessage
   | WsRoutedEventErrorMessage
   | WsRoutedResponseErrorMessage;

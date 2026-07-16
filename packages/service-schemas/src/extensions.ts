@@ -109,14 +109,6 @@ export const extensionsMethods = defineServiceMethods({
     returns: z.array(extensionRegistryEntrySchema),
     access: READ_ACCESS,
   },
-  on: {
-    description:
-      "Subscribe the calling connection to a named event emitted by the given extension; events arrive over the caller's event channel.",
-    args: z.tuple([z.string(), z.string()]),
-    returns: z.null(),
-    access: EXTENSION_REPORT_ACCESS,
-    examples: [{ args: ["shell", "portDetected"] }],
-  },
   ready: {
     description:
       "Extension-only: signal that the child process has finished startup and is ready to serve, declaring its public methods, provider-namespaced methods, and whether it handles fetch.",

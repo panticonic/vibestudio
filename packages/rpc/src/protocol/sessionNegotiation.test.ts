@@ -40,6 +40,17 @@ describe("session control frame codec", () => {
     expect(isSessionOpen(decoded)).toBe(true);
   });
 
+  it("round-trips the fresh credential and its pairing target", () => {
+    const frame: SessionControlFrame = {
+      t: SESSION_OPEN_RESULT,
+      sid: "s1",
+      success: true,
+      deviceCredential: { deviceId: "device-1", refreshToken: "secret-1" },
+      pairingContext: { workspaceId: "workspace-1" },
+    };
+    expect(decodeControlFrame(encodeControlFrame(frame))).toEqual(frame);
+  });
+
   it("round-trips an rpc frame carrying an immutable-identity envelope", () => {
     const frame: SessionControlFrame = { t: SESSION_RPC, sid: "s2", envelope: ENVELOPE };
     const decoded = decodeControlFrame(encodeControlFrame(frame));
@@ -91,7 +102,7 @@ describe("session control frame codec", () => {
 
   it("decodes a minimal hello with transport and RPC contract versions", () => {
     const decoded = decodeControlFrame(
-      JSON.stringify({ t: "hello", proto: 2, contractVersion: 1, maxMsg: 16_384 })
+      JSON.stringify({ t: "hello", proto: 2, contractVersion: 2, maxMsg: 16_384 })
     );
     expect(isSessionHello(decoded)).toBe(true);
   });

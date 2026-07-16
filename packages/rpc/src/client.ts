@@ -5,6 +5,7 @@ import type {
   EventMap,
   MethodMap,
   RpcCallOptions,
+  RpcCausalParent,
   RpcClient,
   RpcClientConfig,
   RpcConnectionStatus,
@@ -29,7 +30,7 @@ import { originOfEnvelope, responseEnvelopeFor } from "./envelope.js";
 import { bytesToBase64, base64ToBytes } from "./base64.js";
 import { SESSION_CONNECTION_LOST_CODE } from "./protocol/sessionNegotiation.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
-import { RemoteRpcError, rpcErrorKindOf } from "./errors.js";
+import { RemoteRpcError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
 
 const FRAME_HEAD = 0x01;
 const FRAME_DATA = 0x02;
@@ -149,7 +150,9 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
       rejectHead: (err: unknown) => void;
       headEmitted: boolean;
       bodyClosed: boolean;
+      bodyIdleTimeoutMs: number | null;
       idleTimer: ReturnType<typeof setTimeout> | null;
+      cancel: () => void;
       cleanup: () => void;
     }
   >();
@@ -237,22 +240,31 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
     pendingStreams.delete(requestId);
   }
 
-  function rearmStreamIdleTimer(requestId: string): void {
+  function armStreamHeadTimer(requestId: string, timeoutMs = streamIdleTimeoutMs): void {
     const entry = pendingStreams.get(requestId);
     if (!entry) return;
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
     entry.idleTimer = setTimeout(() => {
       const current = pendingStreams.get(requestId);
       if (!current || current.bodyClosed) return;
-      const err = new Error("Streaming RPC timed out - no frames received");
-      if (current.headEmitted) {
-        current.bodyClosed = true;
-        current.controller.error(err);
-      } else {
-        current.rejectHead(err);
-      }
-      pendingStreams.delete(requestId);
-    }, streamIdleTimeoutMs);
+      const err = new Error("Streaming RPC timed out before response headers");
+      current.rejectHead(err);
+      clearPendingStream(requestId);
+    }, timeoutMs);
+  }
+
+  function armStreamBodyIdleTimer(requestId: string): void {
+    const entry = pendingStreams.get(requestId);
+    if (!entry || entry.bodyClosed || entry.bodyIdleTimeoutMs === null) return;
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    entry.idleTimer = setTimeout(() => {
+      const current = pendingStreams.get(requestId);
+      if (!current || current.bodyClosed) return;
+      current.bodyClosed = true;
+      current.controller.error(new Error("Streaming RPC response body timed out while idle"));
+      current.cancel();
+      clearPendingStream(requestId);
+    }, entry.bodyIdleTimeoutMs);
   }
 
   function makeConnectionLostError(): NodeJS.ErrnoException {
@@ -282,7 +294,12 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
     if (pending.timeout) clearTimeout(pending.timeout);
     pending.abortCleanup?.();
     if ("error" in response) {
-      const err = new RemoteRpcError(response.error, response.errorKind, response.errorCode);
+      const err = new RemoteRpcError(
+        response.error,
+        response.errorKind,
+        response.errorCode,
+        response.errorData
+      );
       if (response.errorStack) err.stack = response.errorStack;
       pending.reject(err);
       return;
@@ -305,11 +322,15 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
   function handleStreamFrame(frame: RpcStreamFrameMessage): void {
     const entry = pendingStreams.get(frame.requestId);
     if (!entry || entry.bodyClosed) return;
-    rearmStreamIdleTimer(frame.requestId);
     if (frame.frameType === FRAME_HEAD) {
       try {
+        if (entry.idleTimer) {
+          clearTimeout(entry.idleTimer);
+          entry.idleTimer = null;
+        }
         entry.headEmitted = true;
         entry.resolveHead(JSON.parse(frame.payload));
+        armStreamBodyIdleTimer(frame.requestId);
       } catch (err) {
         entry.rejectHead(err);
         clearPendingStream(frame.requestId);
@@ -318,6 +339,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
     }
     if (frame.frameType === FRAME_DATA) {
       entry.controller.enqueue(base64ToBytes(frame.payload));
+      armStreamBodyIdleTimer(frame.requestId);
       return;
     }
     if (frame.frameType === FRAME_END) {
@@ -327,13 +349,23 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
       return;
     }
     if (frame.frameType === FRAME_ERROR) {
-      let parsed: { message: string; code?: string; errorKind: import("./types.js").RpcErrorKind };
+      let parsed: {
+        message: string;
+        code?: string;
+        errorKind: import("./types.js").RpcErrorKind;
+        errorData?: import("./types.js").RpcErrorData;
+      };
       try {
         parsed = JSON.parse(frame.payload);
       } catch {
         parsed = { message: "Streaming RPC error", errorKind: "protocol" };
       }
-      const err = new RemoteRpcError(parsed.message, parsed.errorKind, parsed.code);
+      const err = new RemoteRpcError(
+        parsed.message,
+        parsed.errorKind,
+        parsed.code,
+        parsed.errorData
+      );
       if (entry.headEmitted) {
         entry.bodyClosed = true;
         entry.controller.error(err);
@@ -394,6 +426,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
             ...(error instanceof Error && typeof (error as NodeJS.ErrnoException).code === "string"
               ? { errorCode: (error as NodeJS.ErrnoException).code }
               : {}),
+            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
           })
         ).catch(logResponseSendFailure)
       );
@@ -444,6 +477,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
           message: frame.message,
           code: frame.code,
           errorKind: frame.errorKind,
+          ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
         })
       );
     };
@@ -456,6 +490,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
             status: 502,
             message: error instanceof Error ? error.message : String(error),
             errorKind: rpcErrorKindOf(error),
+            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
           })
         ).catch(() => {})
       )
@@ -501,6 +536,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
       fromId: config.selfId,
       method,
       args,
+      ...(options?.causalParent ? { causalParent: options.causalParent } : {}),
     };
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -574,6 +610,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
           fromId: config.selfId,
           method,
           args,
+          ...(options?.causalParent ? { causalParent: options.causalParent } : {}),
         },
         options,
         provenance
@@ -603,6 +640,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
             fromId: config.selfId,
             method,
             args,
+            ...(options?.causalParent ? { causalParent: options.causalParent } : {}),
           },
           options,
           provenance
@@ -637,6 +675,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
         fromId: config.selfId,
         method,
         args,
+        ...(options?.causalParent ? { causalParent: options.causalParent } : {}),
       },
       options,
       provenance
@@ -743,10 +782,15 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
       rejectHead,
       headEmitted: false,
       bodyClosed: false,
+      bodyIdleTimeoutMs:
+        options?.bodyIdleTimeoutMs === null
+          ? null
+          : (options?.bodyIdleTimeoutMs ?? streamIdleTimeoutMs),
       idleTimer: null,
+      cancel: sendCancel,
       cleanup: () => signal?.removeEventListener("abort", onAbort),
     });
-    rearmStreamIdleTimer(requestId);
+    armStreamHeadTimer(requestId, options?.headTimeoutMs ?? streamIdleTimeoutMs);
     try {
       await send(
         targetId,
@@ -756,6 +800,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
           fromId: config.selfId,
           method,
           args,
+          ...(options?.causalParent ? { causalParent: options.causalParent } : {}),
         },
         options,
         provenance
@@ -882,4 +927,38 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
   });
 
   return client;
+}
+
+/**
+ * Bind one exact upstream tool invocation to every ordinary call made through
+ * a client. The coordinate is carried as provenance only; authorization still
+ * comes entirely from the authenticated RPC caller and service policy.
+ */
+export function withCausalParent(base: RpcClient, causalParent: RpcCausalParent): RpcClient {
+  return Object.freeze({
+    selfId: base.selfId,
+    expose: base.expose.bind(base),
+    exposeAll: base.exposeAll.bind(base),
+    exposeStreaming: base.exposeStreaming.bind(base),
+    call: <T = unknown>(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: RpcCallOptions
+    ) => base.call<T>(targetId, method, args, { ...(options ?? {}), causalParent }),
+    stream: (targetId: string, method: string, args: unknown[], options?: RpcStreamOptions) =>
+      base.stream(targetId, method, args, { ...(options ?? {}), causalParent }),
+    streamReadable: (
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: RpcStreamOptions
+    ) => base.streamReadable(targetId, method, args, { ...(options ?? {}), causalParent }),
+    emit: base.emit.bind(base),
+    on: base.on.bind(base),
+    peer: base.peer.bind(base),
+    status: base.status.bind(base),
+    ready: base.ready.bind(base),
+    onStatusChange: base.onStatusChange.bind(base),
+  });
 }

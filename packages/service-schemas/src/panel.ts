@@ -12,41 +12,36 @@ import {
   ThemeConfigSchema,
 } from "@vibestudio/shared/panelContracts";
 
-const PanelRepoStateSchema = z.object({
-  unitPath: z.string().optional(),
-  head: z.string().nullable().optional(),
-  stateHash: z.string().nullable().optional(),
-  dirty: z.boolean().optional(),
-});
+const PanelChromeStateSchema = z
+  .object({
+    panelId: z.string(),
+    title: z.string(),
+    kind: z.enum(["panel", "browser"]),
+    source: z.string(),
+    contextId: z.string(),
+    displayAddress: z.string(),
+    editableAddress: z.string(),
+    browserUrl: z.string().optional(),
+    resolvedUrl: z.string().optional(),
+    ref: z.string().optional(),
+    isLoading: z.boolean(),
+    canGoBack: z.boolean(),
+    canGoForward: z.boolean(),
+  })
+  .strict();
 
-const PanelChromeStateSchema = z.object({
-  panelId: z.string(),
-  title: z.string(),
-  kind: z.enum(["panel", "browser"]),
-  source: z.string(),
-  contextId: z.string(),
-  displayAddress: z.string(),
-  editableAddress: z.string(),
-  browserUrl: z.string().optional(),
-  resolvedUrl: z.string().optional(),
-  ref: z.string().optional(),
-  repo: PanelRepoStateSchema.optional(),
-  isLoading: z.boolean(),
-  canGoBack: z.boolean(),
-  canGoForward: z.boolean(),
-});
-
-const PanelAddressOptionsSchema = z.object({
-  source: z.string(),
-  suggestions: z.array(
-    z.object({
-      source: z.string(),
-      title: z.string().optional(),
-      kind: z.enum(["launchable", "package", "skill", "unit", "folder"]),
-    })
-  ),
-  repo: PanelRepoStateSchema.optional(),
-});
+const PanelAddressOptionsSchema = z
+  .object({
+    source: z.string(),
+    suggestions: z.array(
+      z.object({
+        source: z.string(),
+        title: z.string().optional(),
+        kind: z.enum(["launchable", "package", "skill", "unit", "folder"]),
+      })
+    ),
+  })
+  .strict();
 
 const BrowserAddressOptionsSchema = z.object({
   query: z.string(),
@@ -123,8 +118,8 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getAddressOptions: {
-    description: "Address-bar options/suggestions for a panel (optionally given current input).",
-    args: z.tuple([z.string(), z.string().optional()]),
+    description: "Address-bar options and suggestions for the current panel input.",
+    args: z.tuple([z.string()]),
     returns: PanelAddressOptionsSchema,
     access: READ_ACCESS,
   },
