@@ -19,6 +19,7 @@ import {
   CONTENT_SECTIONS,
   FLAT_SECTIONS,
 } from "@vibestudio/shared/runtime/entitySpec";
+import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 
 type RepoKind = "build-unit" | "content" | "meta";
 
@@ -42,7 +43,13 @@ export function discoverRepos(filePaths: string[]): DiscoveredRepo[] {
       repos.set(section, { repoPath: section, kind: "meta" });
       continue;
     }
-    if (CONTAINER_SECTIONS.has(section) && segments.length >= 2) {
+    if (CONTAINER_SECTIONS.has(section) && segments.length === 2) {
+      throw new Error(
+        `Workspace source file ${filePath} sits at the root of container section ${section}; ` +
+          `move it into ${section}/<repo>/ so every source file has one repository owner`
+      );
+    }
+    if (CONTAINER_SECTIONS.has(section) && segments.length >= 3) {
       const name = segments[1];
       if (!name) continue;
       const repoPath = `${section}/${name}`;
@@ -50,5 +57,5 @@ export function discoverRepos(filePaths: string[]): DiscoveredRepo[] {
       repos.set(repoPath, { repoPath, kind });
     }
   }
-  return [...repos.values()].sort((a, b) => a.repoPath.localeCompare(b.repoPath));
+  return [...repos.values()].sort((a, b) => compareUtf16CodeUnits(a.repoPath, b.repoPath));
 }

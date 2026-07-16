@@ -1,166 +1,159 @@
 import type {
-  ToolVcs,
-  ToolVcsCommitResult,
-  ToolVcsDiffResult,
-  ToolVcsEditOp,
-  ToolVcsEditResult,
-  ToolVcsMergeResult,
-  ToolVcsPick,
-  ToolVcsPushResult,
-  ToolVcsSource,
-} from "../tool-vcs.js";
+  VcsCommitInput,
+  VcsEditChange,
+  VcsEditInput,
+  VcsStateNodeRef,
+} from "@vibestudio/service-schemas/vcs";
+import type { ToolEditingVcs } from "../tool-vcs.js";
 
 export interface StubVcsInit {
   files?: Record<string, string>;
-  /** Per-repo commit result overrides (editCount / changedPaths / status),
-   *  applied to every repo the commit returns — lets tests drive the T4 nudge
-   *  (≥3 files or the edit-op proxy) and the claim-anchor path. */
-  commitResult?: Partial<Pick<ToolVcsCommitResult, "editCount" | "changedPaths" | "status">>;
 }
 
 function normalize(path: string): string {
   return path.replace(/^\/+/, "");
 }
 
-function editResult(edits: ToolVcsEditOp[], stateHash: string, editSeq: number): ToolVcsEditResult {
-  return {
-    head: "ctx:test",
-    stateHash,
-    committed: false,
-    status: "uncommitted",
-    editSeq,
-    changedPaths: edits.map((edit) => normalize(edit.path)),
-  };
-}
-
-export class StubVcs implements ToolVcs {
+export class StubVcs implements ToolEditingVcs {
   readonly files = new Map<string, string>();
-  /** The most recent `edit` call's input — lets tests assert provenance
-   *  threading (e.g. that the edit/write tools pass their toolCallId as
-   *  `invocationId`, the edge into the agentic trajectory). */
-  lastEditInput?: { edits: ToolVcsEditOp[]; repoPath?: string; invocationId?: string };
-  /** The most recent `commit` call's input — lets tests assert the commit tool
-   *  stamps its toolCallId as `invocationId` (T1/T2) through the shared seam. */
-  lastCommitInput?: {
-    message: string;
-    repoPaths?: string[];
-    exclude?: string[];
-    invocationId?: string;
-  };
-  private readonly commitOverrides: StubVcsInit["commitResult"];
+  lastEditInput?: VcsEditInput;
+  lastCommitInput?: VcsCommitInput;
   private version = 0;
 
   constructor(init?: StubVcsInit) {
     for (const [path, text] of Object.entries(init?.files ?? {})) {
       this.files.set(normalize(path), text);
     }
-    this.commitOverrides = init?.commitResult;
+  }
+
+  private workingHead(): VcsStateNodeRef {
+    return this.version === 0
+      ? { kind: "event", eventId: "event:genesis" }
+      : { kind: "application", applicationId: `application:${this.version}` };
+  }
+
+  private repoPaths(): string[] {
+    const paths = new Set([
+      "meta",
+      "packages/demo",
+      "projects/file-tools-smoke",
+      "projects/tmp_dir_test_root",
+      "projects/note",
+    ]);
+    for (const file of this.files.keys()) {
+      const parts = file.split("/");
+      paths.add(parts[0] === "meta" ? "meta" : `${parts[0]}/${parts[1]}`);
+    }
+    return [...paths];
   }
 
   read(path: string): string | undefined {
     return this.files.get(normalize(path));
   }
 
-  async readFile(
-    path: string
-  ): Promise<{ content: { kind: "text"; text: string }; stateHash: string } | null> {
-    const text = this.read(path);
-    if (text == null) return null;
-    return { content: { kind: "text", text }, stateHash: `state-${this.version}` };
+  async status(input: Parameters<ToolEditingVcs["status"]>[0]) {
+    return {
+      contextId: input.contextId,
+      committed: { kind: "event" as const, eventId: "event:committed" },
+      workingHead: this.workingHead(),
+      clean: this.version === 0,
+      mainEventId: "event:main",
+      mainRelation: "at" as const,
+      workingCounts: { applications: this.version, workUnits: this.version, changes: this.version },
+    };
   }
 
-  async edit(input: {
-    edits: ToolVcsEditOp[];
-    baseStateHash?: string;
-    repoPath?: string;
-    invocationId?: string;
-  }): Promise<ToolVcsEditResult> {
-    this.lastEditInput = input;
-    for (const edit of input.edits) {
-      const path = normalize(edit.path);
-      if (edit.kind === "write" || edit.kind === "create") {
-        if (edit.content.kind !== "text") {
-          throw new Error("StubVcs only supports text content");
-        }
-        this.files.set(path, edit.content.text);
-        continue;
-      }
-      if (edit.kind === "delete") {
-        this.files.delete(path);
-        continue;
-      }
-      if (edit.kind === "chmod") continue;
+  async resolveRepository(input: Parameters<ToolEditingVcs["resolveRepository"]>[0]) {
+    if (!this.repoPaths().includes(input.repoPath)) return null;
+    return {
+      state: input.state,
+      repositoryId: `repository:${input.repoPath}`,
+      repoPath: input.repoPath,
+    };
+  }
 
-      // replace: apply hunks against the current working content. A working edit
-      // is append-only — a stale offset is the caller's bug, surfaced as a throw
-      // (there is no merge/conflict at the edit layer anymore).
-      const existing = this.files.get(path);
-      if (existing == null) throw new Error(`StubVcs: replace target not found: ${path}`);
-      let next = existing;
-      const hunks = [...edit.hunks].sort((a, b) => b.start - a.start);
-      for (const hunk of hunks) {
-        if (hunk.oldText != null && next.slice(hunk.start, hunk.end) !== hunk.oldText) {
-          throw new Error(`StubVcs: replace hunk did not match at ${path}`);
-        }
-        next = next.slice(0, hunk.start) + hunk.newText + next.slice(hunk.end);
-      }
-      this.files.set(path, next);
+  async readFile(input: Parameters<ToolEditingVcs["readFile"]>[0]) {
+    const repoPath = input.repositoryId.slice("repository:".length);
+    let requestedPath: string | undefined;
+    if (input.file.kind === "path") {
+      requestedPath = input.file.path;
+    } else {
+      const fileId = input.file.fileId;
+      requestedPath = [...this.files.keys()]
+        .find((path) => `file:${path}` === fileId)
+        ?.slice(repoPath.length + 1);
     }
-    this.version++;
-    return editResult(input.edits, `state-${this.version}`, this.version);
+    if (!requestedPath) return null;
+    const fullPath = `${repoPath}/${requestedPath}`;
+    const text = this.files.get(fullPath);
+    if (text === undefined) return null;
+    return {
+      repositoryId: `repository:${repoPath}`,
+      fileId: `file:${fullPath}`,
+      repoPath,
+      path: requestedPath,
+      contentHash: `blob:${this.version}:${fullPath}`,
+      mode: 0o644,
+      content: { kind: "text" as const, text },
+    };
   }
 
-  async commit(input: {
-    message: string;
-    repoPaths?: string[];
-    exclude?: string[];
-    invocationId?: string;
-  }): Promise<ToolVcsCommitResult[]> {
+  async edit(input: VcsEditInput) {
+    this.lastEditInput = input;
+    for (const change of input.changes) this.applyChange(change);
+    this.version += 1;
+    return {
+      contextId: input.contextId,
+      workUnitId: `work:${this.version}`,
+      applicationId: `application:${this.version}`,
+      changeCount: input.changes.length,
+      changeIds: input.changes.map((_, index) => `change:${this.version}:${index}`),
+      incorporatedChangeCount: 0,
+      incorporatedChangeIds: [],
+      workingHead: this.workingHead(),
+    };
+  }
+
+  private applyChange(change: VcsEditChange): void {
+    if (change.kind === "repository-create") {
+      for (const file of change.files) {
+        if (file.content.kind !== "text") throw new Error("stub only supports text");
+        this.files.set(`${change.repoPath}/${file.path}`, file.content.text);
+      }
+      return;
+    }
+    const repoPath = change.repositoryId.slice("repository:".length);
+    if (change.kind === "file-create") {
+      if (change.content.kind !== "text") throw new Error("stub only supports text");
+      this.files.set(`${repoPath}/${change.path}`, change.content.text);
+      return;
+    }
+    const fullPath = [...this.files.keys()].find((path) => `file:${path}` === change.fileId);
+    if (!fullPath) throw new Error(`file not found: ${change.fileId}`);
+    if (change.kind === "file-delete") {
+      this.files.delete(fullPath);
+      return;
+    }
+    if (change.kind === "file-mode") return;
+    if (change.kind === "binary-replace") {
+      this.files.set(fullPath, Buffer.from(change.base64, "base64").toString("utf8"));
+      return;
+    }
+    let next = this.files.get(fullPath)!;
+    for (const edit of [...change.edits].sort((a, b) => b.start - a.start)) {
+      next = next.slice(0, edit.start) + edit.text + next.slice(edit.end);
+    }
+    this.files.set(fullPath, next);
+  }
+
+  async commit(input: VcsCommitInput) {
     this.lastCommitInput = input;
-    this.version++;
-    const repoPaths = input.repoPaths ?? ["meta"];
-    return repoPaths.map((repoPath, i) => ({
-      repoPath,
-      head: "ctx:test",
-      stateHash: `state-${this.version}`,
-      eventId: repoPaths.length === 1 ? `event-${this.version}` : `event-${this.version}-${i + 1}`,
-      headHash: `head-${this.version}`,
-      editCount: this.commitOverrides?.editCount ?? 0,
-      status: this.commitOverrides?.status ?? ("committed" as const),
-      changedPaths: this.commitOverrides?.changedPaths ?? [],
-    }));
-  }
-
-  async push(input: { repoPaths: string[] }): Promise<ToolVcsPushResult> {
-    return { status: "pushed", repoPaths: input.repoPaths, reports: [] };
-  }
-
-  async merge(input: {
-    source: ToolVcsSource;
-    repoPaths?: string[];
-  }): Promise<ToolVcsMergeResult[]> {
-    return (input.repoPaths ?? ["stub-repo"]).map((repoPath) => ({
-      repoPath,
-      status: "up-to-date",
-      stateHash: `state-${this.version}`,
-      conflicts: [],
-      mergeable: "clean",
-      upstreamCommits: [],
-    }));
-  }
-
-  async pick(input: { source: ToolVcsSource; picks: ToolVcsPick[] }): Promise<ToolVcsEditResult[]> {
-    return input.picks.map((_pick, i) => editResult([], `state-${this.version}`, i));
-  }
-
-  async contextDiff(_input: {
-    contextId: string;
-    against?: "fork-base" | "main";
-  }): Promise<ToolVcsDiffResult> {
-    return { added: [], removed: [], changed: [] };
-  }
-
-  async discardEdits(_repoPath: string): Promise<{ discarded: number; stateHash: string }> {
-    return { discarded: 0, stateHash: `state-${this.version}` };
+    const applications = this.version === 0 ? [] : [`application:${this.version}`];
+    return {
+      contextId: input.contextId,
+      event: { kind: "event" as const, eventId: `event:${this.version + 1}` },
+      committedApplicationIds: applications,
+      integrationSourceEventId: input.integratesEventId ?? null,
+    };
   }
 }

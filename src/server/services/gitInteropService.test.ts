@@ -7,21 +7,42 @@ import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/se
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 import { createGitInteropService } from "./gitInteropService.js";
+
+const BASE_WORKSPACE_CONFIG = { id: "test", systemEpoch: WORKSPACE_SYSTEM_EPOCH } as const;
 
 type GitProviderInvoker = NonNullable<
   Parameters<typeof createGitInteropService>[0]["invokeGitProvider"]
 >;
 
 function cloneProvider(
-  cloneRepo: (ctx: ServiceContext, repoPath: string) => Promise<unknown>
+  cloneRepo: (ctx: ServiceContext, repoPath: string) => Promise<unknown>,
+  materialization: "not-materialized" | "integration-required" = "not-materialized"
 ): GitProviderInvoker {
   return (async (ctx: ServiceContext, method: string, args: unknown[]) => {
+    if (method === "upstreamStatus") {
+      const paths = args[0] as string[];
+      return paths.map((repoPath) => ({
+        repoPath,
+        autoPush: false,
+        state: materialization,
+        aheadBy: 0,
+        behindBy: 0,
+        ...(materialization === "integration-required"
+          ? { candidate: { contextId: "git-bridge:candidate", eventId: "event:candidate" } }
+          : {}),
+      }));
+    }
     if (method !== "cloneRepo") throw new Error(`Unexpected provider method: ${method}`);
     const input = args[0] as { repoPath: string };
     await cloneRepo(ctx, input.repoPath);
-    return { stateHash: `state:${input.repoPath}`, changed: true };
+    return {
+      contextId: `git-bridge:${input.repoPath}`,
+      eventId: `event:${input.repoPath}`,
+      changed: true,
+    };
   }) as GitProviderInvoker;
 }
 
@@ -69,9 +90,9 @@ function diskConfigPersistence(workspacePath: string) {
   const currentConfig = (): WorkspaceConfig =>
     fs.existsSync(configPath)
       ? ((YAML.parse(fs.readFileSync(configPath, "utf-8")) as WorkspaceConfig | null) ?? {
-          id: "test",
+          ...BASE_WORKSPACE_CONFIG,
         })
-      : { id: "test" };
+      : BASE_WORKSPACE_CONFIG;
   return {
     workspaceConfigMutationWouldChange: vi.fn(
       async (mutate: (current: WorkspaceConfig) => WorkspaceConfig) => {
@@ -97,24 +118,21 @@ function diskConfigPersistence(workspacePath: string) {
 describe("gitInteropService", () => {
   it("imports a requested branch and persists it as a shared remote", async () => {
     const workspacePath = tempWorkspace();
-    const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
     const cloneRepo = vi.fn(async () => undefined);
-    const onWorkspaceSourceChanged = vi.fn(async () => undefined);
     fs.writeFileSync(
       path.join(workspacePath, "meta", "vibestudio.yml"),
-      YAML.stringify({ id: "test" }),
+      YAML.stringify(BASE_WORKSPACE_CONFIG),
       "utf-8"
     );
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider: cloneProvider(cloneRepo),
-      onWorkspaceSourceChanged,
       ...diskConfigPersistence(workspacePath),
     });
 
-    await service.handler(serviceContext(), "importProject", [
+    const imported = await service.handler(serviceContext(), "importProject", [
       {
         path: "projects/bgkit",
         remote: {
@@ -125,12 +143,15 @@ describe("gitInteropService", () => {
       },
     ]);
 
+    expect(imported).toMatchObject({
+      candidate: {
+        contextId: "git-bridge:projects/bgkit",
+        eventId: "event:projects/bgkit",
+        changed: true,
+      },
+    });
+
     expect(cloneRepo).toHaveBeenCalledWith(expect.anything(), "projects/bgkit");
-    expect(onWorkspaceSourceChanged).toHaveBeenCalledWith(
-      expect.anything(),
-      "Import workspace project projects/bgkit",
-      "projects/bgkit"
-    );
     const config = YAML.parse(
       fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
     ) as WorkspaceConfig;
@@ -147,11 +168,11 @@ describe("gitInteropService", () => {
 
   it("uses one config-write approval before importing a project that edits vibestudio.yml", async () => {
     const workspacePath = tempWorkspace();
-    const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
     const cloneRepo = vi.fn(async () => undefined);
     fs.writeFileSync(
       path.join(workspacePath, "meta", "vibestudio.yml"),
-      YAML.stringify({ id: "test" }),
+      YAML.stringify(BASE_WORKSPACE_CONFIG),
       "utf-8"
     );
     const approvalQueue = {
@@ -160,7 +181,6 @@ describe("gitInteropService", () => {
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue,
       grantStore: grantStore(),
@@ -196,11 +216,11 @@ describe("gitInteropService", () => {
 
   it("does not clone when config-write approval is denied", async () => {
     const workspacePath = tempWorkspace();
-    const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
     const cloneRepo = vi.fn(async () => undefined);
     fs.writeFileSync(
       path.join(workspacePath, "meta", "vibestudio.yml"),
-      YAML.stringify({ id: "test" }),
+      YAML.stringify(BASE_WORKSPACE_CONFIG),
       "utf-8"
     );
     const approvalQueue = {
@@ -209,7 +229,6 @@ describe("gitInteropService", () => {
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue,
       grantStore: grantStore(),
@@ -235,24 +254,21 @@ describe("gitInteropService", () => {
 
   it("rolls the approved config declaration back when extension clone fails", async () => {
     const workspacePath = tempWorkspace();
-    const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
     const cloneRepo = vi.fn().mockRejectedValueOnce(new Error("network unavailable"));
-    const sourceChanged = vi.fn(async () => undefined);
     fs.writeFileSync(
       path.join(workspacePath, "meta", "vibestudio.yml"),
-      YAML.stringify({ id: "test" }),
+      YAML.stringify(BASE_WORKSPACE_CONFIG),
       "utf-8"
     );
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue: {
         request: vi.fn(async () => "once" as const),
       } as unknown as ApprovalQueue,
       grantStore: grantStore(),
-      onWorkspaceSourceChanged: sourceChanged,
       ...diskConfigPersistence(workspacePath),
     });
 
@@ -277,18 +293,13 @@ describe("gitInteropService", () => {
     expect(config.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]).toBeUndefined();
     expect(config.git?.upstreams?.["projects"]?.["bgkit"]).toBeUndefined();
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
-    expect(sourceChanged).toHaveBeenCalledWith(
-      panelServiceContext(),
-      "Roll back failed Git import of projects/bgkit",
-      undefined
-    );
   });
 
   it("imports configured workspace dependencies without prompting for another approval", async () => {
     const workspacePath = tempWorkspace();
     const cloneRepo = vi.fn(async () => undefined);
     const workspaceConfig: WorkspaceConfig = {
-      id: "test",
+      ...BASE_WORKSPACE_CONFIG,
       git: {
         remotes: {
           projects: {
@@ -311,7 +322,6 @@ describe("gitInteropService", () => {
         },
       },
     };
-    const sourceChanged = vi.fn(async () => undefined);
     fs.writeFileSync(
       path.join(workspacePath, "meta", "vibestudio.yml"),
       YAML.stringify(workspaceConfig),
@@ -323,14 +333,9 @@ describe("gitInteropService", () => {
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
-      treeScanner: {
-        invalidate: vi.fn(),
-        getSourceTree: vi.fn(async () => ({ children: [] })),
-      } as never,
       invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue,
       grantStore: grantStore(),
-      onWorkspaceSourceChanged: sourceChanged,
       ...diskConfigPersistence(workspacePath),
     });
 
@@ -356,18 +361,53 @@ describe("gitInteropService", () => {
     });
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(cloneRepo).toHaveBeenCalledWith(expect.anything(), "projects/bgkit");
-    expect(sourceChanged).toHaveBeenCalledWith(
-      panelServiceContext(),
-      "Import workspace project projects/bgkit",
-      "projects/bgkit"
-    );
+  });
+
+  it("skips configured dependencies whose provider checkout already holds a candidate", async () => {
+    const workspacePath = tempWorkspace();
+    const cloneRepo = vi.fn(async () => undefined);
+    const workspaceConfig: WorkspaceConfig = {
+      ...BASE_WORKSPACE_CONFIG,
+      git: {
+        remotes: {
+          projects: {
+            bgkit: {
+              origin: {
+                url: "https://github.com/werg/bgkit.git",
+                branch: "main",
+              },
+            },
+          },
+        },
+        upstreams: {
+          projects: {
+            bgkit: { remote: "origin", branch: "main", autoPush: false },
+          },
+        },
+      },
+    };
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      invokeGitProvider: cloneProvider(cloneRepo, "integration-required"),
+      ...diskConfigPersistence(workspacePath),
+    });
+
+    await expect(
+      service.handler(serviceContext(), "completeWorkspaceDependencies", [])
+    ).resolves.toEqual({
+      imported: [],
+      skipped: [{ path: "projects/bgkit", reason: "already-materialized" }],
+      failed: [],
+    });
+    expect(cloneRepo).not.toHaveBeenCalled();
   });
 
   it("uses the injected config writer instead of reading the projected meta file", async () => {
     const workspacePath = tempWorkspace();
     const projectedConfigPath = path.join(workspacePath, "meta", "vibestudio.yml");
     fs.rmSync(projectedConfigPath, { force: true });
-    const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
     const persistWorkspaceConfigMutation = vi.fn(
       async ({ mutate }: { mutate: (current: WorkspaceConfig) => WorkspaceConfig }) => ({
         changed: true,
@@ -377,7 +417,6 @@ describe("gitInteropService", () => {
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       workspaceConfigMutationWouldChange: vi.fn(async () => true),
       persistWorkspaceConfigMutation,
     });
@@ -404,7 +443,7 @@ describe("gitInteropService", () => {
   it("toggles auto-push as a host-owned manifest mutation", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = {
-      id: "test",
+      ...BASE_WORKSPACE_CONFIG,
       git: {
         remotes: {
           projects: {
@@ -433,7 +472,6 @@ describe("gitInteropService", () => {
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider,
       ...diskConfigPersistence(workspacePath),
     });
@@ -490,18 +528,12 @@ describe("gitInteropService", () => {
         },
       },
       {
-        method: "resetExportMarker",
-        args: ["projects/bgkit"],
-        result: { repoPath: "projects/bgkit", cleared: true },
-      },
-      {
         method: "commitMapping",
         args: ["projects/bgkit", { limit: 5 }],
         result: [
           {
             gitSha: "abc123",
-            gadState: `state:${"a".repeat(64)}`,
-            gadEvent: "evt-1",
+            eventId: "event:1",
             summary: "change",
           },
         ],
@@ -529,7 +561,6 @@ describe("gitInteropService", () => {
         Parameters<typeof createGitInteropService>[0]["invokeGitProvider"]
       >;
       const service = createGitInteropService({
-        treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
         invokeGitProvider,
       });
 
@@ -566,7 +597,6 @@ describe("gitInteropService", () => {
       headCommit: "abc123",
     }));
     const service = createGitInteropService({
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       disposableRemotes: disposableRemotes as never,
       invokeGitProvider: invokeGitProviderMock as never,
     });
@@ -622,7 +652,6 @@ describe("gitInteropService", () => {
       headCommit: "abc123",
     }));
     const service = createGitInteropService({
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       disposableRemotes: disposableRemotes as never,
       invokeGitProvider: invokeGitProviderMock as never,
     });
@@ -644,9 +673,7 @@ describe("gitInteropService", () => {
   });
 
   it("fails provider operations when no gitInterop provider is available", async () => {
-    const service = createGitInteropService({
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-    });
+    const service = createGitInteropService({});
     for (const [method, args] of [
       ["upstreamStatus", [[]]],
       ["pushUpstream", ["projects/bgkit"]],
@@ -671,7 +698,6 @@ describe("gitInteropService", () => {
       pushed: true,
     })) as unknown as GitProviderInvoker;
     const service = createGitInteropService({
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider,
     });
 
@@ -682,11 +708,10 @@ describe("gitInteropService", () => {
 
   it("rejects malformed clone results before completing an import", async () => {
     const workspacePath = tempWorkspace();
-    const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider: vi.fn(async () => undefined) as unknown as GitProviderInvoker,
       ...diskConfigPersistence(workspacePath),
     });
@@ -704,7 +729,7 @@ describe("gitInteropService", () => {
   it("removing a declared remote also removes upstream tracking that points at it", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = {
-      id: "test",
+      ...BASE_WORKSPACE_CONFIG,
       git: {
         remotes: {
           panels: {
@@ -735,7 +760,6 @@ describe("gitInteropService", () => {
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
-      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       ...diskConfigPersistence(workspacePath),
     });
 

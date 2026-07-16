@@ -1,4 +1,3 @@
-import * as fs from "fs";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
@@ -11,7 +10,7 @@ import type {
 import {
   getDeclaredUpstreamForRepo,
   getDeclaredRemoteForRepo,
-  getDeclaredRemotesForRepo,
+  getDeclaredUpstreams,
   normalizeRemoteUrl,
   normalizeWorkspaceRepoPath,
   removeDeclaredRemoteFromConfig,
@@ -25,7 +24,6 @@ import {
 } from "@vibestudio/workspace/remotes";
 import {
   WORKSPACE_IMPORT_PARENT_DIRS,
-  assertWorkspaceCreateTargetSafe,
   isSupportedImportRepoPath,
   resolveWorkspaceRepoPath,
 } from "@vibestudio/workspace/pathPolicy";
@@ -37,6 +35,7 @@ import {
   type GitDetachUpstreamOptions,
   type GitDetachUpstreamResult,
   type GitImportedWorkspaceRepo,
+  type GitImportResult,
   type GitImportProjectRequest,
   type GitInteropProviderArgs,
   type GitInteropProviderMethod,
@@ -53,35 +52,17 @@ import { isAuthorizedChrome } from "./chromeTrust.js";
 const SHARED_GIT_REMOTE_CAPABILITY = "workspace-shared-git-remote";
 const GIT_UPSTREAM_CAPABILITY = "workspace-git-upstream";
 
-/**
- * Structural slice of the host's workspace source-tree scanner. Declared
- * locally so this service — a pure host policy/dispatch boundary (approvals,
- * egress clone, config writes) — carries NO dependency on the gad layer's
- * module layout.
- */
-type WorkspaceTreeScannerLike = {
-  getSourceTree(): Promise<{ children: WorkspaceTreeNode[] }>;
-  invalidate(): void;
-};
-
 type GitInteropServiceDeps = {
-  treeScanner: WorkspaceTreeScannerLike;
   workspacePath?: string;
   workspaceConfig?: WorkspaceConfig;
   approvalQueue?: ApprovalQueue;
   grantStore?: CapabilityGrantStore;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-  onWorkspaceSourceChanged?: (
-    ctx: ServiceContext,
-    summary: string,
-    importedRepoPath?: string
-  ) => Promise<void>;
   workspaceConfigMutationWouldChange?: (mutate: WorkspaceConfigMutation) => Promise<boolean>;
   persistWorkspaceConfigMutation?: (input: {
     ctx: ServiceContext;
     mutate: WorkspaceConfigMutation;
     summary: string;
-    operation: "push" | "import";
   }) => Promise<WorkspaceConfigMutationResult>;
   /** Provider-owned Git transport operations. Host owns policy and config writes. */
   invokeGitProvider?: <M extends GitInteropProviderMethod>(
@@ -94,12 +75,6 @@ type GitInteropServiceDeps = {
 
 type WorkspaceConfigMutation = (currentConfig: WorkspaceConfig) => WorkspaceConfig;
 type WorkspaceConfigMutationResult = { changed: boolean; nextConfig: WorkspaceConfig };
-
-type WorkspaceTreeNode = {
-  path: string;
-  isUnit: boolean;
-  children: WorkspaceTreeNode[];
-};
 
 export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDefinition {
   return {
@@ -120,7 +95,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           mutate: (currentConfig) =>
             setDeclaredRemoteInConfig(currentConfig, validRepoPath, normalizedRemote),
           summary: workspaceConfigRemoteSummary(validRepoPath, normalizedRemote, "set"),
-          operation: "push",
         });
         await propagateSharedRemote(deps, validRepoPath);
         return persisted.nextConfig.git?.remotes ?? {};
@@ -152,7 +126,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
               : withoutRemote;
           },
           summary: workspaceConfigRemoteSummary(validRepoPath, existing, "remove"),
-          operation: "push",
         });
         await propagateSharedRemote(deps, validRepoPath);
         return persisted.nextConfig.git?.remotes ?? {};
@@ -188,7 +161,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
             return setDeclaredUpstreamInConfig(currentConfig, validRepoPath, normalizedUpstream);
           },
           summary: workspaceConfigUpstreamSummary(validRepoPath, normalizedUpstream, "set"),
-          operation: "push",
         });
         await propagateSharedRemote(deps, validRepoPath);
         return persisted.nextConfig.git?.upstreams ?? {};
@@ -211,7 +183,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
         const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
           mutate: (currentConfig) => removeDeclaredUpstreamFromConfig(currentConfig, validRepoPath),
           summary: workspaceConfigUpstreamSummary(validRepoPath, existing, "remove"),
-          operation: "push",
         });
         await propagateSharedRemote(deps, validRepoPath);
         return persisted.nextConfig.git?.upstreams ?? {};
@@ -252,7 +223,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
             });
           },
           summary: workspaceConfigUpstreamSummary(validRepoPath, nextUpstream, "set"),
-          operation: "push",
         });
         await propagateSharedRemote(deps, validRepoPath);
         return persisted.nextConfig.git?.upstreams ?? {};
@@ -335,8 +305,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
         return deps.disposableRemotes.remove(url);
       },
 
-      resetExportMarker: (ctx, args) =>
-        invokeGitProviderOperation(deps, ctx, "resetExportMarker", args),
       commitMapping: (ctx, args) => invokeGitProviderOperation(deps, ctx, "commitMapping", args),
       detachUpstream: (ctx, [repoPath, options]) => detachUpstream(ctx, deps, repoPath, options),
       importProject: (ctx, [request]) => importWorkspaceRepo(ctx, deps, request),
@@ -432,7 +400,6 @@ async function detachUpstream(
     summary:
       workspaceConfigUpstreamSummary(validRepoPath, existing, "remove") +
       (forgetRemote && remoteName ? ` and removes remote ${remoteName}` : ""),
-    operation: "push",
   });
   await propagateSharedRemote(deps, validRepoPath);
   return {
@@ -450,8 +417,6 @@ async function completeWorkspaceDependencies(
   if (!deps.workspacePath) throw new Error("No workspace path configured");
   if (!deps.workspaceConfig) throw new Error("Workspace config is unavailable");
 
-  const tree = await deps.treeScanner.getSourceTree();
-  const existingUnits = collectWorkspaceUnitPaths(tree.children as WorkspaceTreeNode[]);
   const configuredRemotes = listConfiguredWorkspaceRemotes(deps.workspaceConfig);
   const result: GitCompleteWorkspaceDependenciesResult = {
     imported: [],
@@ -459,13 +424,32 @@ async function completeWorkspaceDependencies(
     failed: [],
   };
 
+  const supported = configuredRemotes.filter((dependency) =>
+    isSupportedImportRepoPath(dependency.path)
+  );
+  const statusRows =
+    deps.invokeGitProvider && supported.length > 0
+      ? await invokeConfiguredGitProvider(deps, ctx, "upstreamStatus", [
+          supported.map((dependency) => dependency.path),
+        ])
+      : [];
+  const statusByRepo = new Map(statusRows.map((row) => [row.repoPath, row]));
+
   for (const dependency of configuredRemotes) {
     if (!isSupportedImportRepoPath(dependency.path)) {
       result.skipped.push({ path: dependency.path, reason: "unsupported-path" });
       continue;
     }
-    if (existingUnits.has(dependency.path)) {
-      result.skipped.push({ path: dependency.path, reason: "already-present" });
+    const status = statusByRepo.get(dependency.path);
+    if (!status) {
+      result.failed.push({
+        path: dependency.path,
+        error: "Git provider did not report checkout materialization state",
+      });
+      continue;
+    }
+    if (status.state !== "not-materialized") {
+      result.skipped.push({ path: dependency.path, reason: "already-materialized" });
       continue;
     }
     try {
@@ -475,7 +459,6 @@ async function completeWorkspaceDependencies(
         credentialId: options?.credentialId,
       });
       result.imported.push(imported);
-      existingUnits.add(imported.path);
     } catch (err) {
       result.failed.push({
         path: dependency.path,
@@ -491,40 +474,20 @@ function listConfiguredWorkspaceRemotes(config: WorkspaceConfig): Array<{
   path: string;
   remote: WorkspaceGitRemoteConfig;
 }> {
-  const entries: Array<{ path: string; remote: WorkspaceGitRemoteConfig }> = [];
-  for (const [section, units] of Object.entries(config.git?.remotes ?? {})) {
-    for (const unitKey of Object.keys(units ?? {})) {
-      const unitPath = normalizeWorkspaceRepoPath(unitKey ? `${section}/${unitKey}` : section);
-      const remotes = getDeclaredRemotesForRepo(config, unitPath).sort((a, b) => {
-        if (a.name === "origin") return -1;
-        if (b.name === "origin") return 1;
-        return a.name.localeCompare(b.name);
-      });
-      const cloneRemote = remotes[0];
-      if (cloneRemote) {
-        entries.push({
-          path: unitPath,
-          remote: {
-            name: cloneRemote.name,
-            url: cloneRemote.url,
-            ...(cloneRemote.branch ? { branch: cloneRemote.branch } : {}),
-          },
-        });
-      }
+  return getDeclaredUpstreams(config).map((upstream) => {
+    const remote = getDeclaredRemoteForRepo(config, upstream.repoPath, upstream.remote);
+    if (!remote) {
+      throw new Error(`Upstream remote "${upstream.remote}" disappeared for ${upstream.repoPath}`);
     }
-  }
-  return entries.sort((a, b) => a.path.localeCompare(b.path));
-}
-
-function collectWorkspaceUnitPaths(nodes: WorkspaceTreeNode[]): Set<string> {
-  const units = new Set<string>();
-  for (const node of nodes) {
-    if (node.isUnit) units.add(node.path);
-    for (const childPath of collectWorkspaceUnitPaths(node.children)) {
-      units.add(childPath);
-    }
-  }
-  return units;
+    return {
+      path: upstream.repoPath,
+      remote: {
+        name: remote.name,
+        url: remote.url,
+        ...(remote.branch ? { branch: remote.branch } : {}),
+      },
+    };
+  });
 }
 
 async function importWorkspaceRepo(
@@ -536,16 +499,11 @@ async function importWorkspaceRepo(
   if (!deps.workspaceConfig) throw new Error("Workspace config is unavailable");
   if (!deps.invokeGitProvider) throw new Error("Project import is unavailable");
 
-  const { absolutePath, normalizedRepoPath } = resolveWorkspaceRepoPath(
-    deps.workspacePath,
-    request.path
-  );
+  const { normalizedRepoPath } = resolveWorkspaceRepoPath(deps.workspacePath, request.path);
   const validRepoPath = normalizeWorkspaceRepoPath(normalizedRepoPath);
   if (!isSupportedImportRepoPath(validRepoPath)) {
     throw new Error(`Imports must target one of: ${WORKSPACE_IMPORT_PARENT_DIRS.join(", ")}`);
   }
-  if (fs.existsSync(absolutePath)) throw new Error(`Path already exists: ${request.path}`);
-  assertWorkspaceCreateTargetSafe(deps.workspacePath, absolutePath, "importProject");
   let normalizedRemote = validateWorkspaceGitRemote(request.remote);
   if (!normalizedRemote.branch) {
     // No branch declared: resolve the remote's ACTUAL default (ls-remote
@@ -581,10 +539,12 @@ async function importWorkspaceRepo(
   const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
     mutate: mutateConfig,
     summary: workspaceConfigImportSummary(validRepoPath, normalizedRemote),
-    operation: "import",
   });
+  let candidate: GitImportResult;
   try {
-    await invokeConfiguredGitProvider(deps, ctx, "cloneRepo", [{ repoPath: validRepoPath }]);
+    candidate = await invokeConfiguredGitProvider(deps, ctx, "cloneRepo", [
+      { repoPath: validRepoPath },
+    ]);
   } catch (err) {
     // Never leave a phantom declaration behind a failed clone: roll the
     // remote/upstream config back (when this call wrote it) and say exactly
@@ -600,16 +560,12 @@ async function importWorkspaceRepo(
               normalizedRemote.name
             ),
           summary: `meta/vibestudio.yml rolls back failed import of ${validRepoPath}`,
-          operation: "import",
         });
         rolledBack = true;
-        await notifyWorkspaceSourceChanged(
-          ctx,
-          deps,
-          `Roll back failed Git import of ${validRepoPath}`
-        );
       } catch {
-        await notifyWorkspaceSourceChanged(ctx, deps, `Record Git remote for ${validRepoPath}`);
+        // The error below reports that the declaration survived. There is no
+        // source-tree notification: config persistence already publishes its
+        // own semantic mutation, while Git checkout bytes live in host state.
       }
     }
     const detail = err instanceof Error ? err.message : String(err);
@@ -623,14 +579,7 @@ async function importWorkspaceRepo(
             `--forget-remote\` to remove it.`)
     );
   }
-  deps.treeScanner.invalidate();
-  await notifyWorkspaceSourceChanged(
-    ctx,
-    deps,
-    `Import workspace project ${validRepoPath}`,
-    validRepoPath
-  );
-  return { path: validRepoPath, remote: normalizedRemote };
+  return { path: validRepoPath, remote: normalizedRemote, candidate };
 }
 
 async function ensureWorkspaceConfigWritePermission(
@@ -808,7 +757,6 @@ async function persistWorkspaceConfigMutation(
   input: {
     mutate: WorkspaceConfigMutation;
     summary: string;
-    operation: "push" | "import";
   }
 ): Promise<WorkspaceConfigMutationResult> {
   if (!deps.workspaceConfig) throw new Error("Workspace config is unavailable");
@@ -819,7 +767,6 @@ async function persistWorkspaceConfigMutation(
     ctx,
     mutate: input.mutate,
     summary: input.summary,
-    operation: input.operation,
   });
   mutateWorkspaceConfig(deps.workspaceConfig, result.nextConfig);
   return result;
@@ -835,15 +782,6 @@ async function configMutationWouldChange(
   if (!deps.workspaceConfig) return true;
   const nextConfig = mutate(deps.workspaceConfig);
   return JSON.stringify(deps.workspaceConfig) !== JSON.stringify(nextConfig);
-}
-
-async function notifyWorkspaceSourceChanged(
-  ctx: ServiceContext,
-  deps: Pick<GitInteropServiceDeps, "onWorkspaceSourceChanged">,
-  summary: string,
-  importedRepoPath?: string
-): Promise<void> {
-  await deps.onWorkspaceSourceChanged?.(ctx, summary, importedRepoPath);
 }
 
 async function propagateSharedRemote(

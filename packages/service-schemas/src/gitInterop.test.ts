@@ -23,7 +23,6 @@ describe("gitInterop canonical contract", () => {
       "pushDisposableRemote",
       "inspectDisposableRemote",
       "removeDisposableRemote",
-      "resetExportMarker",
       "commitMapping",
       "importProject",
       "completeWorkspaceDependencies",
@@ -136,6 +135,25 @@ describe("gitInterop canonical contract", () => {
     ).toBe(false);
   });
 
+  it("returns the exact semantic candidate created by a project import", () => {
+    const result = {
+      path: "projects/demo",
+      remote: { name: "origin", url: "https://example.test/demo.git", branch: "main" },
+      candidate: {
+        contextId: "git-bridge-demo",
+        eventId: "event:imported",
+        changed: true,
+      },
+    };
+    expect(gitInteropMethods.importProject.returns.safeParse(result).success).toBe(true);
+    expect(
+      gitInteropMethods.importProject.returns.safeParse({
+        path: result.path,
+        remote: result.remote,
+      }).success
+    ).toBe(false);
+  });
+
   it("exposes only canonical object declarations in config mutation results", () => {
     const canonical = {
       projects: {
@@ -217,13 +235,29 @@ describe("gitInterop canonical contract", () => {
     ).toBe(false);
   });
 
+  it("makes an unresolved semantic candidate discoverable in upstream status", () => {
+    expect(
+      gitInteropMethods.upstreamStatus.returns.safeParse([
+        {
+          repoPath: "projects/demo",
+          remote: "origin",
+          branch: "main",
+          autoPush: true,
+          state: "integration-required",
+          aheadBy: 0,
+          behindBy: 0,
+          candidate: { contextId: "git-bridge-demo", eventId: "event:candidate" },
+        },
+      ]).success
+    ).toBe(true);
+  });
+
   it("defines the complete strict host-only provider contract", () => {
     expect(Object.keys(gitInteropProviderMethods)).toEqual([
       "upstreamStatus",
       "pushUpstream",
       "pullUpstream",
       "publishRepo",
-      "resetExportMarker",
       "commitMapping",
       "pushDisposableRemote",
       "cloneRepo",
@@ -239,12 +273,37 @@ describe("gitInterop canonical contract", () => {
     ).toBe(false);
     expect(
       gitInteropProviderMethods.cloneRepo.returns.safeParse({
-        stateHash: "state:123",
+        contextId: "git-bridge-demo",
+        eventId: "event:123",
         changed: true,
       }).success
     ).toBe(true);
     expect(
-      gitInteropProviderMethods.cloneRepo.returns.safeParse({ stateHash: "state:123" }).success
+      gitInteropProviderMethods.cloneRepo.returns.safeParse({
+        contextId: "git-bridge-demo",
+        eventId: "event:123",
+      }).success
+    ).toBe(false);
+    expect(
+      gitInteropProviderMethods.cloneRepo.returns.safeParse({
+        workspaceStateHash: "state:123",
+        changed: true,
+      }).success
+    ).toBe(false);
+    expect(
+      gitInteropProviderMethods.commitMapping.returns.safeParse([
+        { gitSha: "abc", eventId: "event:123", summary: "Imported snapshot" },
+      ]).success
+    ).toBe(true);
+    expect(
+      gitInteropProviderMethods.commitMapping.returns.safeParse([
+        {
+          gitSha: "abc",
+          gadState: "state:legacy",
+          gadEvent: "event:legacy",
+          summary: "legacy",
+        },
+      ]).success
     ).toBe(false);
     expect(
       gitInteropProviderMethods.onMainAdvanced.args.safeParse([["projects/demo"]]).success

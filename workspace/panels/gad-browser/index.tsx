@@ -29,7 +29,17 @@ import {
   TrashIcon,
   UploadIcon,
 } from "@radix-ui/react-icons";
-import { blobstore, gad, git, rpc, workspace } from "@workspace/runtime";
+import {
+  blobstore,
+  contextId,
+  gad,
+  git,
+  rpc,
+  vcs,
+  workspace,
+  type VcsSemanticNodeRef,
+  type VcsStateNodeRef,
+} from "@workspace/runtime";
 import type {
   GitPullUpstreamResult,
   GitUpstreamState,
@@ -49,11 +59,9 @@ import {
   buildCompareEntry,
   describeDiffTarget,
   parseDiffTarget,
-  resolveStateLocation,
   rowMatchesDiffTarget,
   shortHash,
   type DiffTarget,
-  type StateLocation,
 } from "./diffTarget";
 
 interface StateArgs {
@@ -64,6 +72,53 @@ interface StateArgs {
 }
 
 type Row = Record<string, unknown>;
+
+async function listSemanticFiles(state: VcsStateNodeRef): Promise<Row[]> {
+  const repositoryRefs = new Map<string, Extract<VcsSemanticNodeRef, { kind: "repository" }>>();
+  let cursor: string | undefined;
+  do {
+    const page = await vcs.neighbors({ root: state, limit: 500, ...(cursor ? { cursor } : {}) });
+    for (const edge of page.edges) {
+      if (edge.kind !== "contains-repository") continue;
+      for (const node of [edge.from, edge.to]) {
+        if (node.kind === "repository") repositoryRefs.set(node.repositoryId, node);
+      }
+    }
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+
+  const repositories = await Promise.all(
+    [...repositoryRefs.values()].map(async (node) => {
+      const inspected = await vcs.inspect({ node, edgeLimit: 1 });
+      return inspected.node.kind === "repository" && inspected.node.value.kind === "present"
+        ? inspected.node.value
+        : null;
+    })
+  );
+
+  const rows: Row[] = [];
+  for (const repository of repositories) {
+    if (!repository) continue;
+    cursor = undefined;
+    do {
+      const page = await vcs.listFiles({
+        state,
+        repositoryId: repository.repositoryId,
+        limit: 500,
+        ...(cursor ? { cursor } : {}),
+      });
+      rows.push(
+        ...page.files.map((file) => ({
+          repositoryId: repository.repositoryId,
+          repoPath: repository.repoPath,
+          ...file,
+        }))
+      );
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+  }
+  return rows;
+}
 type GitStatusRow = GitUpstreamStatusRow;
 type GitPullPreview = GitPullUpstreamResult;
 
@@ -285,7 +340,7 @@ function DataTable({ rows, columns }: { rows: Row[]; columns: string[] }) {
 function gitStateColor(state: GitUpstreamState): ComponentProps<typeof Badge>["color"] {
   if (state === "in-sync") return "green";
   if (state === "ahead" || state === "exporting" || state === "pushing") return "blue";
-  if (state === "behind") return "amber";
+  if (state === "behind" || state === "integration-required") return "amber";
   if (state === "diverged" || state === "auth-failed" || state === "error") return "red";
   return "gray";
 }
@@ -294,6 +349,7 @@ function formatGitState(row: GitStatusRow): string {
   if (row.state === "ahead") return `ahead ${row.aheadBy}`;
   if (row.state === "behind") return `behind ${row.behindBy}`;
   if (row.state === "diverged") return `diverged +${row.aheadBy}/+${row.behindBy}`;
+  if (row.state === "integration-required") return "integration required";
   return row.state;
 }
 
@@ -400,6 +456,7 @@ function GitTab({
                 row.state === "exporting" ||
                 row.state === "pushing";
               const hasUpstream = row.state !== "local-only" && row.remote;
+              const requiresIntegration = row.state === "integration-required";
               return (
                 <Table.Row key={row.repoPath}>
                   <Table.Cell>
@@ -409,6 +466,11 @@ function GitTab({
                     {row.lastError ? (
                       <Text size="1" color="red" truncate as="div">
                         {row.lastError}
+                      </Text>
+                    ) : null}
+                    {row.candidate ? (
+                      <Text size="1" color="amber" truncate as="div">
+                        Candidate {row.candidate.eventId} in {row.candidate.contextId}
                       </Text>
                     ) : null}
                   </Table.Cell>
@@ -437,7 +499,7 @@ function GitTab({
                         <IconButton
                           size="1"
                           variant={row.state === "ahead" ? "solid" : "soft"}
-                          disabled={!hasUpstream || busy}
+                          disabled={!hasUpstream || busy || requiresIntegration}
                           onClick={() => onPush(row.repoPath)}
                         >
                           <UploadIcon />
@@ -450,7 +512,7 @@ function GitTab({
                             row.state === "behind" || row.state === "diverged" ? "solid" : "soft"
                           }
                           color={row.state === "diverged" ? "amber" : undefined}
-                          disabled={!hasUpstream || busy}
+                          disabled={!hasUpstream || busy || requiresIntegration}
                           onClick={() => onPullPreview(row.repoPath)}
                         >
                           <DownloadIcon />
@@ -550,61 +612,6 @@ function DiffTargetBanner({
   );
 }
 
-/** Per-side "where this state lives" links: jump to the head's Files/Events. */
-function StateLocationLinks({
-  label,
-  location,
-  onGoToBranch,
-}: {
-  label: string;
-  location: StateLocation | null;
-  onGoToBranch: (branchId: string, tab: "files" | "events") => void;
-}) {
-  if (!location) {
-    return (
-      <Text size="1" color="gray">
-        {label}: removed (no state)
-      </Text>
-    );
-  }
-  return (
-    <Flex align="center" gap="2" wrap="wrap">
-      <Text size="1" color="gray">
-        {label} {shortHash(location.stateHash)}
-      </Text>
-      {location.branchIds.length > 0 ? (
-        location.branchIds.map((branchId) => (
-          <Flex key={branchId} align="center" gap="1">
-            <Button
-              size="1"
-              variant="soft"
-              color="gray"
-              onClick={() => onGoToBranch(branchId, "files")}
-            >
-              {branchId} · Files
-            </Button>
-            <Button
-              size="1"
-              variant="ghost"
-              color="gray"
-              onClick={() => onGoToBranch(branchId, "events")}
-            >
-              Events
-            </Button>
-          </Flex>
-        ))
-      ) : (
-        <Text size="1" color="gray">
-          not a current head
-          {location.commitEventId
-            ? ` · produced by event ${shortHash(location.commitEventId)}`
-            : ""}
-        </Text>
-      )}
-    </Flex>
-  );
-}
-
 /**
  * Two-state compare view for a diff-review target. Reuses the shared
  * `@workspace/ui` `DiffViewer` — the exact renderer the approval card uses — so
@@ -619,33 +626,14 @@ function CompareView({
   entry,
   fetchContent,
   appearance,
-  oldLocation,
-  newLocation,
-  onGoToBranch,
 }: {
   target: DiffTarget;
   entry: DiffReviewEntry;
   fetchContent: DiffContentFetcher;
   appearance: "light" | "dark";
-  oldLocation: StateLocation | null;
-  newLocation: StateLocation | null;
-  onGoToBranch: (branchId: string, tab: "files" | "events") => void;
 }) {
   return (
     <Flex direction="column" gap="3" style={{ minWidth: 0 }}>
-      <Box
-        style={{
-          border: "1px solid var(--gray-a5)",
-          borderRadius: 6,
-          background: "var(--gray-a2)",
-          padding: "8px 10px",
-        }}
-      >
-        <Flex direction="column" gap="1">
-          <StateLocationLinks label="old" location={oldLocation} onGoToBranch={onGoToBranch} />
-          <StateLocationLinks label="new" location={newLocation} onGoToBranch={onGoToBranch} />
-        </Flex>
-      </Box>
       <DiffViewer
         entry={entry}
         fetchContent={fetchContent}
@@ -918,15 +906,6 @@ function App() {
   const highlightAppearance = appearance === "dark" ? "dark" : "light";
   const [focusActive, setFocusActive] = useState(true);
   const [activeTab, setActiveTab] = useState("files");
-  const [worktreeHeads, setWorktreeHeads] = useState<Row[]>([]);
-  const oldLocation = useMemo<StateLocation | null>(
-    () => resolveStateLocation(worktreeHeads, diffTarget?.oldState),
-    [worktreeHeads, diffTarget]
-  );
-  const newLocation = useMemo<StateLocation | null>(
-    () => resolveStateLocation(worktreeHeads, diffTarget?.newState ?? undefined),
-    [worktreeHeads, diffTarget]
-  );
   const [branches, setBranches] = useState<Row[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(
     stateArgs.branchId ?? null
@@ -969,14 +948,16 @@ function App() {
         gad.status(),
         gad.query("SELECT * FROM trajectory_branches ORDER BY updated_at DESC"),
       ]);
+      const semanticStatus = await vcs.status({ contextId });
+      const nextFiles = await listSemanticFiles(semanticStatus.workingHead);
       setStatus(nextStatus as unknown as Row[]);
       setBranches(nextBranches.rows);
+      setFiles(nextFiles);
       const branchId = (selectedBranchId ?? asText(nextBranches.rows[0]?.["branch_id"])) || null;
       setSelectedBranchId(branchId);
       if (branchId) {
-        const [nextEvents, nextFiles, nextInvocations, nextEnvelopes] = await Promise.all([
+        const [nextEvents, nextInvocations, nextEnvelopes] = await Promise.all([
           gad.listTrajectoryEvents({ branchId, limit: 200 }),
-          gad.listGadBranchFiles({ branchId }),
           gad.query(
             "SELECT * FROM trajectory_invocations WHERE branch_id = ? ORDER BY updated_at DESC",
             [branchId]
@@ -984,12 +965,10 @@ function App() {
           gad.query("SELECT * FROM channel_envelopes ORDER BY channel_id, seq LIMIT 200"),
         ]);
         setEvents(nextEvents as unknown as Row[]);
-        setFiles(nextFiles);
         setInvocations(nextInvocations.rows);
         setEnvelopes(nextEnvelopes.rows);
       } else {
         setEvents([]);
-        setFiles([]);
         setInvocations([]);
         setEnvelopes([]);
       }
@@ -1268,24 +1247,13 @@ function App() {
     };
   }, [stateArgs.gitRepo]);
 
-  // A newly-arrived diff-review target opens the Compare tab (the two-state
-  // diff) and re-arms the Files-tab focus filter for the fallback path (also
-  // handles live state-arg updates on a reused panel). The worktree-head
-  // projection is (re)loaded so both states can be resolved to their branches.
+  // A newly-arrived diff-review target opens the Compare tab and re-arms the
+  // semantic Files-tab focus filter. Trajectory branches do not own file trees,
+  // so this never joins them to a private worktree projection.
   useEffect(() => {
     if (!diffTarget) return;
     setFocusActive(true);
     setActiveTab("compare");
-    void gad
-      .query("SELECT log_id, head, state_hash, commit_event_id FROM gad_worktree_heads")
-      .then((result) => setWorktreeHeads(result.rows))
-      .catch((err) => {
-        setWorktreeHeads([]);
-        setOperationFailed(true);
-        setOperationStatus(
-          `Couldn't load comparison states: ${err instanceof Error ? err.message : String(err)}`
-        );
-      });
   }, [diffTarget]);
 
   useEffect(() => {
@@ -1293,20 +1261,12 @@ function App() {
     setActiveTab("git");
   }, [stateArgs.gitRepo]);
 
-  // Jump to a resolved branch: select its head and switch to Files or Events.
-  function goToBranch(branchId: string, tab: "files" | "events") {
-    setSelectedBranchId(branchId);
-    setFocusActive(false);
-    setActiveTab(tab);
-  }
-
   useEffect(() => {
     if (!selectedBranchId) return;
     void Promise.all([
       gad
         .listTrajectoryEvents({ branchId: selectedBranchId, limit: 200 })
         .then((rows) => setEvents(rows as unknown as Row[])),
-      gad.listGadBranchFiles({ branchId: selectedBranchId }).then(setFiles),
       gad
         .query(
           "SELECT * FROM trajectory_invocations WHERE branch_id = ? ORDER BY updated_at DESC",
@@ -1451,7 +1411,7 @@ function App() {
                   <Tabs.Trigger value="envelopes">
                     {isMobile ? "Envelopes" : "Channel Envelopes"}
                   </Tabs.Trigger>
-                  <Tabs.Trigger value="files">Files</Tabs.Trigger>
+                  <Tabs.Trigger value="files">Workspace Files</Tabs.Trigger>
                   <Tabs.Trigger value="git">Git</Tabs.Trigger>
                   <Tabs.Trigger value="invocations">Invocations</Tabs.Trigger>
                   <Tabs.Trigger value="governance">Governance</Tabs.Trigger>
@@ -1467,9 +1427,6 @@ function App() {
                           entry={compareEntry}
                           fetchContent={fetchContent}
                           appearance={highlightAppearance}
-                          oldLocation={oldLocation}
-                          newLocation={newLocation}
-                          onGoToBranch={goToBranch}
                         />
                       </Tabs.Content>
                     ) : null}
@@ -1481,7 +1438,6 @@ function App() {
                           "branch_id",
                           "head_event_id",
                           "head_event_hash",
-                          "head_state_hash",
                           "updated_at",
                         ]}
                       />
@@ -1515,13 +1471,22 @@ function App() {
                     <Tabs.Content value="files">
                       {diffTarget && focusActive && visibleFiles.length === 0 ? (
                         <Text color="gray" size="2">
-                          No file matching “{diffTarget.path}” on this branch. It may live on a
-                          different branch — clear the filter above to browse all files.
+                          No file matching “{diffTarget.path}” in the current semantic workspace.
+                          Clear the filter above to browse every current file.
                         </Text>
                       ) : (
                         <DataTable
                           rows={visibleFiles}
-                          columns={["path", "content_hash", "mode", "file_version_id"]}
+                          columns={[
+                            "repositoryId",
+                            "repoPath",
+                            "path",
+                            "fileId",
+                            "contentHash",
+                            "mode",
+                            "size",
+                            "binary",
+                          ]}
                         />
                       )}
                     </Tabs.Content>

@@ -1,9 +1,8 @@
 /**
  * DiskProjector — the P5c host disk-projection FOLLOWER. Verifies the narrow
- * entry points project content-addressed states onto working trees without
- * any VCS semantics of their own: `project` (editable checkout at a given
- * state, incremental + clean modes, main vs ctx layout), `removeRepo`, and
- * `writeConflictSummary` (pending-merge data in, worktree file out).
+ * entry points project content-addressed states onto disk without VCS
+ * semantics of their own: an explicit context/repository/state projection,
+ * the one-way source export, and source-repository removal.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fsp from "node:fs/promises";
@@ -11,10 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { mirrorWorktreeTree, putBytes } from "../services/blobstoreService.js";
-import { MERGE_CONFLICTS_FILE, VCS_MAIN_HEAD, vcsContextHead } from "./paths.js";
-
-const CTX_HEAD = vcsContextHead("work");
-import { WorktreeStore } from "./worktreeStore.js";
+import { ContentProjectionStore } from "./contentProjectionStore.js";
 import { DiskProjector } from "./diskProjector.js";
 
 const REPO = "packages/demo";
@@ -28,21 +24,13 @@ describe("DiskProjector (P5c disk-projection follower)", () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "disk-projector-"));
     blobsDir = path.join(root, "blobs");
     await fsp.mkdir(path.join(root, "workspace"), { recursive: true });
-    // The projector is a pure content-store→disk follower: the WorktreeStore it uses
-    // must never need the gad DO for states that are mirrored (all handed-out
-    // states are, by invariant) — a throwing caller enforces that here.
-    const vcs = new WorktreeStore({
-      blobsDir,
-      gad: {
-        call: () => {
-          throw new Error("the projection follower must not consult the gad store");
-        },
-      },
-    });
+    // The projector is a pure content-store→disk follower. ContentProjectionStore has no
+    // semantic-authority dependency to consult.
+    const contentProjection = new ContentProjectionStore({ blobsDir });
     projector = new DiskProjector({
-      worktrees: vcs,
+      contentProjection,
       workspaceRoot: path.join(root, "workspace"),
-      contextsRoot: path.join(root, ".contexts"),
+      contextProjectionsRoot: path.join(root, ".context-projections", "v5"),
     });
   });
 
@@ -62,7 +50,7 @@ describe("DiskProjector (P5c disk-projection follower)", () => {
   it("exportMainToSource writes a repo's main state OUT to the source dir (write-only, clean)", async () => {
     // §3: `main` has no checkout; the only main→disk effect is the write-only
     // export to the source dir (`workspaceRoot/{repoPath}`), a dedicated path
-    // NOT reachable via dirForRepoHead(main).
+    // structurally separate from semantic context projection.
     const s1 = await mintState([
       { path: "a.txt", text: "A\n" },
       { path: "sub/b.txt", text: "B\n" },
@@ -82,14 +70,25 @@ describe("DiskProjector (P5c disk-projection follower)", () => {
     await expect(fsp.access(path.join(repoDir, "scratch.txt"))).rejects.toThrow(); // untracked, removed
   });
 
-  it("projects context heads under .contexts/<id>/<repo>; main has no checkout; removeRepo drops the source subtree", async () => {
+  it("projects an explicit context repository and removes source exports separately", async () => {
     const s = await mintState([{ path: "x.txt", text: "X\n" }]);
-    await projector.project({ repoPath: REPO, head: CTX_HEAD, stateHash: s });
-    const ctxFile = path.join(root, ".contexts", "work", ...REPO.split("/"), "x.txt");
+    await projector.projectContextRepository({
+      contextId: "work",
+      repoPath: REPO,
+      stateHash: s,
+    });
+    const ctxFile = path.join(
+      root,
+      ".context-projections",
+      "v5",
+      "work",
+      ...REPO.split("/"),
+      "x.txt"
+    );
     expect(await fsp.readFile(ctxFile, "utf8")).toBe("X\n");
-    expect(() => projector.dirForRepoHead(REPO, "state:abc")).toThrow(/No working tree/);
-    // `main` is a pure ref (D1): it has no checkout, so asking for its dir throws.
-    expect(() => projector.dirForRepoHead(REPO, VCS_MAIN_HEAD)).toThrow(/main is a pure ref/);
+    expect(projector.contextRepositoryDir("work", REPO)).toBe(
+      path.join(root, ".context-projections", "v5", "work", ...REPO.split("/"))
+    );
 
     // removeRepo drops the repo's subtree from the source dir (the export
     // counterpart), regardless of any context checkout.
@@ -98,55 +97,19 @@ describe("DiskProjector (P5c disk-projection follower)", () => {
     await expect(fsp.access(path.join(root, "workspace", ...REPO.split("/")))).rejects.toThrow();
   });
 
-  it("rejects context heads that would escape the contexts root", () => {
-    expect(() => projector.dirForRepoHead(REPO, "ctx:../../outside")).toThrow(
+  it("rejects context ids that would escape the contexts root", () => {
+    expect(() => projector.contextRepositoryDir("../../outside", REPO)).toThrow(
       /Invalid VCS context id/
     );
-    expect(() => projector.dirForRepoHead(REPO, "ctx:/tmp/outside")).toThrow(
+    expect(() => projector.contextRepositoryDir("/tmp/outside", REPO)).toThrow(
       /Invalid VCS context id/
     );
   });
 
-  it("bestEffort swallows projection failures; strict mode throws", async () => {
+  it("surfaces projection failures for semantic effect replay", async () => {
     const missing = `state:${"0".repeat(64)}`;
     await expect(
-      projector.project({ repoPath: REPO, head: CTX_HEAD, stateHash: missing })
+      projector.projectContextRepository({ contextId: "work", repoPath: REPO, stateHash: missing })
     ).rejects.toThrow();
-    await expect(
-      projector.project({
-        repoPath: REPO,
-        head: CTX_HEAD,
-        stateHash: missing,
-        bestEffort: true,
-      })
-    ).resolves.toBeUndefined();
-  });
-
-  it("writes and removes the worktree conflict summary from pending data", async () => {
-    const s = await mintState([{ path: "a.txt", text: "A\n" }]);
-    await projector.project({ repoPath: REPO, head: CTX_HEAD, stateHash: s });
-    await projector.writeConflictSummary({
-      repoPath: REPO,
-      head: CTX_HEAD,
-      pending: {
-        theirsHead: "ctx:other",
-        conflicts: [
-          { path: "a.txt", kind: "content" },
-          { path: "img.png", kind: "binary" },
-        ],
-      },
-    });
-    const file = path.join(root, ".contexts", "work", ...REPO.split("/"), MERGE_CONFLICTS_FILE);
-    const text = await fsp.readFile(file, "utf8");
-    expect(text).toContain("Merging `ctx:other`");
-    expect(text).toContain("**content** `a.txt`");
-    expect(text).toContain("**binary** `img.png`");
-
-    await projector.writeConflictSummary({
-      repoPath: REPO,
-      head: CTX_HEAD,
-      pending: null,
-    });
-    await expect(fsp.access(file)).rejects.toThrow();
   });
 });

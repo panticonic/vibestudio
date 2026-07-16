@@ -125,50 +125,16 @@ export function buildCompareEntry(target: DiffTarget): DiffReviewEntry {
   };
 }
 
-/** Where a tree state currently lives: the worktree heads pointing at it. */
-export interface StateLocation {
-  stateHash: string;
-  /** Head names (gad-browser branch ids) whose current state is `stateHash`. */
-  branchIds: string[];
-  /** The commit event id recorded for the first matching head, if any. */
-  commitEventId: string | null;
-}
-
 /**
- * Resolve a tree state to the worktree heads currently pointing at it, from the
- * rows of `gad_worktree_heads` (a read-only projection the panel queries). A
- * state that is no longer any head's current state resolves to an empty
- * `branchIds` (e.g. the OLD side of a change, superseded by the new head).
- */
-export function resolveStateLocation(
-  headRows: ReadonlyArray<Record<string, unknown>>,
-  stateHash: string | null | undefined
-): StateLocation | null {
-  if (!stateHash) return null;
-  const branchIds: string[] = [];
-  let commitEventId: string | null = null;
-  for (const row of headRows) {
-    if (row["state_hash"] !== stateHash) continue;
-    const head = typeof row["head"] === "string" ? row["head"] : null;
-    if (head && !branchIds.includes(head)) branchIds.push(head);
-    if (!commitEventId && typeof row["commit_event_id"] === "string") {
-      commitEventId = row["commit_event_id"] as string;
-    }
-  }
-  return { stateHash, branchIds, commitEventId };
-}
-
-/**
- * Whether a Files-tab row is the deep-link target. Matches on the exact path,
- * or on the row's content hash equalling the target's new-state hash (the file
- * at the new state is what the reviewer is being sent to).
+ * Whether a canonical VCS file-list entry is the deep-link target. Matches on
+ * the exact path, or on the entry's semantic content identity.
  */
 export function rowMatchesDiffTarget(row: Record<string, unknown>, target: DiffTarget): boolean {
   if (typeof row["path"] === "string" && row["path"] === target.path) return true;
   if (
     target.newHash &&
-    typeof row["content_hash"] === "string" &&
-    row["content_hash"] === target.newHash
+    typeof row["contentHash"] === "string" &&
+    row["contentHash"] === target.newHash
   ) {
     return true;
   }

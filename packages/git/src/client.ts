@@ -21,9 +21,6 @@ import type {
   RemoteStatus,
   BlameLine,
   FileHistoryEntry,
-  ConflictInfo,
-  ConflictMarker,
-  ConflictResolution,
 } from "./types.js";
 
 export class GitAuthError extends Error {
@@ -65,6 +62,43 @@ export interface GitAuthorIdentity {
   handle: string;
   /** Real commit email from the user's profile, when they've set one (WP9 §10.3). */
   email?: string;
+}
+
+/** A commit fact returned by Git history inspection. */
+export interface GitLogEntry {
+  oid: string;
+  message: string;
+  author: { name: string; email: string; timestamp: number };
+  parentOids: string[];
+}
+
+/** One non-directory entry from an exact, immutable commit tree. */
+export type GitCommitTreeEntry =
+  | {
+      path: string;
+      type: "blob";
+      mode: number;
+      oid: string;
+      bytes: Uint8Array;
+    }
+  | {
+      path: string;
+      type: "commit" | "special";
+      mode: number;
+      oid: string;
+    };
+
+function toGitLogEntry(commit: Awaited<ReturnType<typeof git.log>>[number]): GitLogEntry {
+  return {
+    oid: commit.oid,
+    message: commit.commit.message,
+    author: {
+      name: commit.commit.author.name,
+      email: commit.commit.author.email,
+      timestamp: commit.commit.author.timestamp,
+    },
+    parentOids: [...commit.commit.parent],
+  };
 }
 
 /**
@@ -805,91 +839,6 @@ function applyBlameDiff(
   return output;
 }
 
-function parseConflictMarkers(content: string): {
-  base: string;
-  ours: string;
-  theirs: string;
-  markers: ConflictMarker[];
-} {
-  const lines = content.split("\n");
-  const baseLines: string[] = [];
-  const ourLines: string[] = [];
-  const theirLines: string[] = [];
-  const markers: ConflictMarker[] = [];
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-    if (!line.startsWith("<<<<<<<")) {
-      baseLines.push(line);
-      ourLines.push(line);
-      theirLines.push(line);
-      i++;
-      continue;
-    }
-
-    const startLine = i + 1;
-    i++;
-    const oursStart = i + 1;
-    const ours: string[] = [];
-    while (
-      i < lines.length &&
-      !lines[i]!.startsWith("|||||||") &&
-      !lines[i]!.startsWith("=======")
-    ) {
-      ours.push(lines[i]!);
-      i++;
-    }
-    const oursEnd = i;
-
-    let base: string[] = [];
-    if (i < lines.length && lines[i]!.startsWith("|||||||")) {
-      i++;
-      while (i < lines.length && !lines[i]!.startsWith("=======")) {
-        base.push(lines[i]!);
-        i++;
-      }
-    }
-
-    if (i < lines.length && lines[i]!.startsWith("=======")) {
-      i++;
-    }
-
-    const theirsStart = i + 1;
-    const theirs: string[] = [];
-    while (i < lines.length && !lines[i]!.startsWith(">>>>>>>")) {
-      theirs.push(lines[i]!);
-      i++;
-    }
-    const theirsEnd = i;
-    const endLine = i + 1;
-
-    if (i < lines.length && lines[i]!.startsWith(">>>>>>>")) {
-      i++;
-    }
-
-    markers.push({
-      startLine,
-      endLine,
-      oursStart,
-      oursEnd,
-      theirsStart,
-      theirsEnd,
-    });
-
-    baseLines.push(...(base.length > 0 ? base : ours));
-    ourLines.push(...ours);
-    theirLines.push(...theirs);
-  }
-
-  return {
-    base: baseLines.join("\n"),
-    ours: ourLines.join("\n"),
-    theirs: theirLines.join("\n"),
-    markers,
-  };
-}
-
 /**
  * Git client for external repository operations.
  *
@@ -985,9 +934,9 @@ export class GitClient {
         force: true,
       });
     } else {
-      // For branch refs, shallow is the interactive default. Import/export
-      // bridges request complete history explicitly because a shallow pack can
-      // legitimately reference objects the destination remote does not have.
+      // Branch checkouts are snapshot projections. Callers that explicitly
+      // need older Git objects may opt into a full clone; semantic import does
+      // not require the repository's reachable history.
       await git.clone({
         fs: this.fs,
         http: this.http,
@@ -1443,6 +1392,42 @@ export class GitClient {
   }
 
   /**
+   * Read every leaf in one already-resolved commit tree.
+   *
+   * This deliberately accepts only a full object id: callers resolve a moving
+   * ref once, then all paths and bytes come from that immutable object rather
+   * than from the checkout, index, or a ref that can advance during the walk.
+   * Irregular leaves are returned without interpretation so the importing
+   * semantic boundary can reject entry kinds it cannot represent.
+   */
+  async readCommitTree(dir: string, commitOid: string): Promise<GitCommitTreeEntry[]> {
+    if (!isFullOid(commitOid)) {
+      throw new Error(`readCommitTree requires a full commit object id, got "${commitOid}"`);
+    }
+    const entries = await git.walk({
+      fs: this.fs,
+      dir,
+      trees: [git.TREE({ ref: commitOid })],
+      map: async (filepath, [entry]): Promise<GitCommitTreeEntry | undefined> => {
+        if (filepath === "." || !entry) return undefined;
+        const type = await entry.type();
+        if (type === "tree") return undefined;
+        const mode = await entry.mode();
+        const oid = await entry.oid();
+        if (type !== "blob") return { path: filepath, type, mode, oid };
+        const content = await entry.content();
+        if (!content) {
+          throw new Error(`Git tree blob ${filepath} (${oid}) has no readable content`);
+        }
+        return { path: filepath, type, mode, oid, bytes: content };
+      },
+    });
+    return (entries as Array<GitCommitTreeEntry | undefined>)
+      .filter((entry): entry is GitCommitTreeEntry => entry !== undefined)
+      .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+  }
+
+  /**
    * Get the current branch name
    */
   async getCurrentBranch(dir: string): Promise<string | null> {
@@ -1769,16 +1754,7 @@ export class GitClient {
   /**
    * Get log of commits
    */
-  async log(
-    dir: string,
-    options?: { depth?: number; ref?: string }
-  ): Promise<
-    Array<{
-      oid: string;
-      message: string;
-      author: { name: string; email: string; timestamp: number };
-    }>
-  > {
+  async log(dir: string, options?: { depth?: number; ref?: string }): Promise<GitLogEntry[]> {
     const commits = await git.log({
       fs: this.fs,
       dir,
@@ -1786,15 +1762,7 @@ export class GitClient {
       ref: options?.ref ?? "HEAD",
     });
 
-    return commits.map((c) => ({
-      oid: c.oid,
-      message: c.commit.message,
-      author: {
-        name: c.commit.author.name,
-        email: c.commit.author.email,
-        timestamp: c.commit.author.timestamp,
-      },
-    }));
+    return commits.map(toGitLogEntry);
   }
 
   /**
@@ -1854,12 +1822,13 @@ export class GitClient {
   async getFileHistory(
     dir: string,
     filepath: string,
-    options?: { depth?: number }
+    options?: { depth?: number; ref?: string }
   ): Promise<FileHistoryEntry[]> {
     const commits = await git.log({
       fs: this.fs,
       dir,
       filepath,
+      ref: options?.ref ?? "HEAD",
       follow: true,
       depth: options?.depth ?? 30,
     });
@@ -2280,51 +2249,6 @@ export class GitClient {
         }
       }
     }
-  }
-
-  /**
-   * List conflicted files with parsed markers
-   */
-  async getConflicts(dir: string): Promise<ConflictInfo[]> {
-    const matrix = await git.statusMatrix({ fs: this.fs, dir });
-    const candidates = new Set<string>();
-
-    for (const [filepath, head, workdir, stage] of matrix) {
-      if (head === 1 && workdir === 1 && stage === 1) continue;
-      candidates.add(filepath);
-    }
-
-    const conflicts: ConflictInfo[] = [];
-    for (const filepath of candidates) {
-      const result = await this.readFromWorkingTree(dir, filepath);
-      if (!result.exists) continue;
-      if (!result.content.includes("<<<<<<<")) continue;
-
-      const parsed = parseConflictMarkers(result.content);
-      if (parsed.markers.length === 0) continue;
-      conflicts.push({
-        path: filepath,
-        original: result.content,
-        base: parsed.base,
-        ours: parsed.ours,
-        theirs: parsed.theirs,
-        markers: parsed.markers,
-      });
-    }
-
-    return conflicts;
-  }
-
-  /**
-   * Resolve a conflict by writing the resolved content and staging it
-   */
-  async resolveConflict(dir: string, resolution: ConflictResolution): Promise<void> {
-    await this.fsPromises.writeFile(`${dir}/${resolution.path}`, resolution.content);
-    await git.add({
-      fs: this.fs,
-      dir,
-      filepath: resolution.path,
-    });
   }
 
   /**

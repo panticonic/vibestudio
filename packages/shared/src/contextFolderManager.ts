@@ -1,12 +1,13 @@
 /**
  * ContextFolderManager — Manages per-context directories on disk.
  *
- * Each context gets a folder at `{contextsRoot}/{contextId}/` materialized as
- * a GAD branch fork: the workspace `vcs:workspace` main head is forked to
- * `ctx:{contextId}` and the fork state is written out from the blobstore CAS.
- * Panel/agent fs calls are routed to these folders via RPC, making files
- * visible on disk and accessible to server-side tools and agents. Commits
- * from inside a context land on the context head (see WorkspaceVcs).
+ * Each semantic context may have a disposable folder at
+ * `{currentEpochRoot}/{contextId}/`. State topology supplies the exact current
+ * epoch root; this manager never discovers or migrates older namespaces. The
+ * semantic workspace state machine owns the exact working head; the host
+ * materializes its content-addressed repository states when disk access is
+ * needed. Panel/agent fs calls are routed to these folders via RPC, while
+ * tracked mutations still flow through the semantic workspace.
  *
  * The actual fork/materialize lives server-side (vcsHost); this class owns the
  * id validation, in-flight dedupe, and readiness state, and is the surface
@@ -41,28 +42,27 @@ function validateContextId(contextId: string): void {
 
 export class ContextFolderManager {
   private readonly materializing = new Set<string>();
-  private readonly contextsRoot: string;
+  private readonly contextProjectionsRoot: string;
   private readonly materialize: (contextId: string) => Promise<{ dir: string }>;
 
   /** Concurrency guard: in-flight ensureContextFolder promises. */
   private readonly inflight = new Map<string, Promise<string>>();
 
   constructor(opts: {
-    /** Path to the contexts root directory (where context worktrees live). */
-    contextsRoot: string;
+    /** Exact current-epoch root of disposable context projections. */
+    contextProjectionsRoot: string;
     /**
-     * Fork + materialize a context worktree (WorkspaceVcs.ensureContextFolder
-     * server-side). Must be idempotent.
+     * Ensure the semantic context and its projection directory exist
+     * (WorkspaceVcs.ensureContextFolder server-side). Must be idempotent.
      */
     materialize: (contextId: string) => Promise<{ dir: string }>;
   }) {
-    this.contextsRoot = opts.contextsRoot;
+    this.contextProjectionsRoot = opts.contextProjectionsRoot;
     this.materialize = opts.materialize;
   }
 
   /**
-   * Returns absolute path to the context folder, creating it if needed
-   * (fork of the workspace main head, materialized from the CAS).
+   * Return the context projection directory, creating it if needed.
    */
   async ensureContextFolder(contextId: string): Promise<string> {
     validateContextId(contextId);
@@ -70,7 +70,7 @@ export class ContextFolderManager {
     const existing = this.inflight.get(contextId);
     if (existing) return existing;
 
-    const contextPath = path.join(this.contextsRoot, contextId);
+    const contextPath = path.join(this.contextProjectionsRoot, contextId);
 
     const promise = (async () => {
       try {
@@ -78,7 +78,7 @@ export class ContextFolderManager {
           await fs.access(contextPath);
           return contextPath; // already materialized
         } catch {
-          // missing — fork + materialize below
+          // Missing — ask the semantic context host to establish it below.
         }
         this.materializing.add(contextId);
         try {
@@ -103,7 +103,7 @@ export class ContextFolderManager {
    */
   getContextRoot(contextId: string): string | null {
     validateContextId(contextId);
-    const contextPath = path.join(this.contextsRoot, contextId);
+    const contextPath = path.join(this.contextProjectionsRoot, contextId);
     try {
       accessSync(contextPath);
       return contextPath;
@@ -117,7 +117,7 @@ export class ContextFolderManager {
    */
   getContextFolderState(contextId: string): ContextFolderState {
     validateContextId(contextId);
-    const contextPath = path.join(this.contextsRoot, contextId);
+    const contextPath = path.join(this.contextProjectionsRoot, contextId);
     if (this.materializing.has(contextId)) {
       return { status: "materializing", path: contextPath };
     }
@@ -135,8 +135,7 @@ export class ContextFolderManager {
    */
   async removeContext(contextId: string): Promise<void> {
     validateContextId(contextId);
-    const contextPath = path.join(this.contextsRoot, contextId);
+    const contextPath = path.join(this.contextProjectionsRoot, contextId);
     await fs.rm(contextPath, { recursive: true, force: true });
   }
-
 }

@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "baseUrl": "../../..",
+    "paths": {
+      "@vibestudio/rpc": ["packages/rpc/src/index.ts"],
+      "@vibestudio/rpc/*": ["packages/rpc/src/*"],
+      "@vibestudio/service-schemas/*": ["packages/service-schemas/src/*"],
+      "@vibestudio/shared/*": ["packages/shared/src/*"],
+      "@vibestudio/trajectory-identity": ["packages/trajectory-identity/src/index.ts"],
+      "@workspace/agentic-protocol": [
+        "workspace/packages/agentic-protocol/src/index.ts"
+      ],
+      "@workspace/runtime/gad-schema": [
+        "workspace/packages/runtime/src/shared/gad-schema.ts"
+      ],
+      "@workspace/runtime/worker/durable-base": [
+        "workspace/packages/runtime/src/worker/durable-base.ts"
+      ],
+      "@workspace/runtime/worker/test-utils": [
+        "workspace/packages/runtime/src/worker/durable-test-utils.ts"
+      ],
+      "@workspace/vcs-engine": ["workspace/packages/vcs-engine/src/index.ts"]
+    },
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*"]
+}

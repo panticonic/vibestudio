@@ -2,10 +2,13 @@
   "name": "@workspace/vcs-engine",
   "version": "0.1.0",
   "private": true,
-  "description": "Userland VCS engine: three-way merge over content-addressed worktree states (pure, workerd-safe)",
+  "description": "Provenance-native semantic VCS kernel (pure, deterministic, workerd-safe)",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@vibestudio/content-addressing": "workspace:*",
+    "@vibestudio/shared": "workspace:*"
+  }
 }

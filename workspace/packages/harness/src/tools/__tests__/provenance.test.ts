@@ -1,145 +1,597 @@
-import { describe, it, expect } from "vitest";
-import type {
-  VcsProvItem,
-  VcsProvenanceForFileResult,
-  VcsProvenanceForSessionResult,
-} from "@vibestudio/service-schemas/vcs";
+import { describe, expect, it, vi } from "vitest";
 import { createProvenanceTool, type ProvenanceToolDeps } from "../provenance.js";
 
-const CWD = "/";
+const working = { kind: "event" as const, eventId: "event:working" };
 
-function item(line: string, handle: string, exception = false): VcsProvItem {
-  return { line, handle, kind: "claim", exception, score: exception ? 0 : 1 };
-}
-
-interface DepCalls {
-  file: Array<Record<string, unknown>>;
-  claim: Array<Record<string, unknown>>;
-  session: Array<Record<string, unknown>>;
-}
-
-function makeDeps(overrides: Partial<ProvenanceToolDeps> = {}): {
-  deps: ProvenanceToolDeps;
-  calls: DepCalls;
-} {
-  const calls: DepCalls = {
-    file: [],
-    claim: [],
-    session: [],
+function fixture() {
+  const status = vi.fn(async () => ({
+    contextId: "context:1",
+    committed: working,
+    workingHead: working,
+    clean: true,
+    mainEventId: "event:main",
+    mainRelation: "at" as const,
+    workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+  }));
+  const neighbors = vi.fn(async (input: Parameters<ProvenanceToolDeps["vcs"]["neighbors"]>[0]) => {
+    if (input.root.kind === "event") {
+      return {
+        root: input.root,
+        edges: [
+          {
+            kind: "contains-repository" as const,
+            from: input.root,
+            to: {
+              kind: "repository" as const,
+              state: input.root,
+              repositoryId: "repository:packages/foo",
+            },
+          },
+        ],
+        nextCursor: null,
+      };
+    }
+    if (input.root.kind === "work-unit") {
+      return {
+        root: input.root,
+        edges: [
+          {
+            kind: "authored-change" as const,
+            from: input.root,
+            to: { kind: "change" as const, changeId: "change:1" },
+          },
+        ],
+        nextCursor: "cursor:next",
+      };
+    }
+    if (input.root.kind === "applied-change") {
+      return {
+        root: input.root,
+        edges: [
+          {
+            kind: "realizes-change" as const,
+            from: input.root,
+            to: { kind: "change" as const, changeId: "change:1" },
+          },
+        ],
+        nextCursor: null,
+      };
+    }
+    if (input.root.kind === "command") {
+      if (input.root.commandId === "command:direct") {
+        return { root: input.root, edges: [], nextCursor: null };
+      }
+      return {
+        root: input.root,
+        edges: [
+          {
+            kind: "caused-by" as const,
+            from: input.root,
+            to: {
+              kind: "trajectory-invocation" as const,
+              logId: "log:1",
+              head: "head:1",
+              invocationId: "invocation:1",
+            },
+          },
+        ],
+        nextCursor: null,
+      };
+    }
+    if (input.root.kind === "trajectory-invocation") {
+      return {
+        root: input.root,
+        edges: [
+          {
+            kind: "part-of-turn" as const,
+            from: input.root,
+            to: {
+              kind: "trajectory-turn" as const,
+              logId: input.root.logId,
+              head: input.root.head,
+              turnId: "turn:1",
+            },
+          },
+          {
+            kind: "part-of-trajectory" as const,
+            from: input.root,
+            to: { kind: "trajectory" as const, logId: input.root.logId, head: input.root.head },
+          },
+        ],
+        nextCursor: null,
+      };
+    }
+    if (input.root.kind === "trajectory-turn") {
+      return {
+        root: input.root,
+        edges: [
+          {
+            kind: "triggered-by" as const,
+            from: input.root,
+            to: {
+              kind: "trajectory-message" as const,
+              logId: input.root.logId,
+              head: input.root.head,
+              messageId: "message:prompt",
+            },
+          },
+        ],
+        nextCursor: null,
+      };
+    }
+    if (input.root.kind === "trajectory-message") {
+      return {
+        root: input.root,
+        edges: [
+          {
+            kind: "triggered-by" as const,
+            from: {
+              kind: "trajectory-turn" as const,
+              logId: input.root.logId,
+              head: input.root.head,
+              turnId: "turn:1",
+            },
+            to: input.root,
+          },
+        ],
+        nextCursor: null,
+      };
+    }
+    return {
+      root: input.root,
+      edges: [
+        {
+          kind: "caused-by" as const,
+          from: input.root,
+          to: { kind: "command" as const, commandId: "command:1" },
+        },
+      ],
+      nextCursor: "cursor:next",
+    };
+  });
+  const inspect = vi.fn(
+    async (
+      input: Parameters<ProvenanceToolDeps["vcs"]["inspect"]>[0]
+    ): ReturnType<ProvenanceToolDeps["vcs"]["inspect"]> => {
+      const common = { root: input.node, edges: [], hasMoreEdges: false };
+      switch (input.node.kind) {
+        case "repository":
+          return {
+            ...common,
+            node: {
+              kind: "repository" as const,
+              state: input.node.state,
+              value: {
+                kind: "present" as const,
+                repositoryId: input.node.repositoryId,
+                repoPath: "packages/foo",
+                manifestId: "manifest:1",
+              },
+            },
+          };
+        case "file":
+          return {
+            ...common,
+            node: {
+              kind: "file" as const,
+              state: input.node.state,
+              value: {
+                kind: "placed" as const,
+                fileId: input.node.fileId,
+                repositoryId: input.node.repositoryId,
+                path: "bar.ts",
+                contentHash: "blob:1",
+                mode: 0o644,
+                contentKind: "text" as const,
+                byteLength: 7,
+                coordinateExtent: 7,
+              },
+            },
+          };
+        case "trajectory":
+          return { ...common, node: { kind: "trajectory" as const, value: input.node } };
+        case "work-unit":
+          return {
+            ...common,
+            node: {
+              kind: "work-unit" as const,
+              value: {
+                workUnitId: input.node.workUnitId,
+                commandId: "command:1",
+                kind: "edit" as const,
+                authoredChangeCount: 1,
+                authoredChangeIds: ["change:1"],
+                incorporatedChangeCount: 0,
+                incorporatedChangeIds: [],
+                decisionCount: 0,
+                decisionIds: [],
+                intentSummary: "Rename the public entry point",
+                externalSnapshot: null,
+                normalizationProtocol: "normalization:1",
+                createdAt: "2026-07-15T10:00:00.000Z",
+              },
+            },
+          };
+        case "command":
+          return {
+            ...common,
+            node: {
+              kind: "command" as const,
+              value: {
+                commandId: input.node.commandId,
+                workspaceId: "workspace:1",
+                contextId: "context:1",
+                method: "vcs.edit",
+                status: "complete" as const,
+                result: { kind: "work-unit" as const, workUnitId: "work-unit:1" },
+                createdAt: "2026-07-15T10:00:00.000Z",
+                completedAt: "2026-07-15T10:00:01.000Z",
+              },
+            },
+          };
+        case "trajectory-invocation":
+          return {
+            ...common,
+            node: {
+              kind: "trajectory-invocation" as const,
+              value: {
+                logId: input.node.logId,
+                head: input.node.head,
+                invocationId: input.node.invocationId,
+                turnId: "turn:1",
+                name: "provenance",
+                status: "complete",
+                terminalOutcome: "success",
+                requestRef: {
+                  protocol: "vibestudio.blob-ref.v1",
+                  digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  size: 48,
+                  encoding: "json",
+                  originalBytes: 48,
+                },
+                startedEventId: "trajectory-event:start",
+                completedEventId: "trajectory-event:complete",
+              },
+            },
+          };
+        case "trajectory-turn":
+          return {
+            ...common,
+            node: {
+              kind: "trajectory-turn" as const,
+              value: {
+                logId: input.node.logId,
+                head: input.node.head,
+                turnId: input.node.turnId,
+                triggerMessageId: "message:prompt",
+                openedAt: "2026-07-15T10:00:00.000Z",
+                closedAt: "2026-07-15T10:00:01.000Z",
+                summary: "Move the parser without losing its identity",
+                ordinal: 1,
+              },
+            },
+          };
+        case "trajectory-message":
+          return {
+            ...common,
+            node: {
+              kind: "trajectory-message" as const,
+              value: {
+                logId: input.node.logId,
+                head: input.node.head,
+                messageId: input.node.messageId,
+                turnId: "turn:1",
+                role: "user",
+                status: "completed",
+                startedEventId: null,
+                completedEventId: "trajectory-event:prompt",
+                sourceMessageId: "channel-message:prompt",
+                senderRef: { kind: "user", id: "user:alice", participantId: "user:alice" },
+                textBlocks: [{ blockId: "block:prompt", content: "Move the parser" }],
+              },
+            },
+          };
+        case "change":
+          return {
+            ...common,
+            node: {
+              kind: "change" as const,
+              value: {
+                changeId: input.node.changeId,
+                authoredByWorkUnitId: "work-unit:1",
+                operation: 0,
+                kind: "text-edit" as const,
+                effects: [
+                  {
+                    kind: "content" as const,
+                    fileId: "file:bar",
+                    beforeContentHash: "blob:before",
+                    afterContentHash: "blob:after",
+                  },
+                ],
+                counteractsChangeIds: [],
+                effectDigest: "digest:1",
+                normalizationProtocol: "normalization:1",
+              },
+            },
+          };
+        case "applied-change":
+          return {
+            ...common,
+            node: {
+              kind: "applied-change" as const,
+              value: {
+                appliedChangeId: input.node.appliedChangeId,
+                applicationId: "application:1",
+                changeId: "change:1",
+                ordinal: 0,
+                appliedEffects: [
+                  {
+                    kind: "content" as const,
+                    fileId: "file:bar",
+                    beforeContentHash: "blob:before",
+                    afterContentHash: "blob:after",
+                  },
+                ],
+                resultPredicate: null,
+              },
+            },
+          };
+        case "decision":
+          return {
+            ...common,
+            node: {
+              kind: "decision" as const,
+              value: {
+                kind: "declined" as const,
+                decisionId: input.node.decisionId,
+                sourceState: working,
+                targetBasis: working,
+                sourceChangeIds: ["change:source"],
+                rationale: "Not relevant to this context",
+              },
+            },
+          };
+        case "event":
+        case "application":
+          throw new Error(`unused ${input.node.kind} inspection fixture`);
+      }
+    }
+  );
+  const readFile = vi.fn(async () => ({
+    repositoryId: "repository:packages/foo",
+    fileId: "file:bar",
+    repoPath: "packages/foo",
+    path: "bar.ts",
+    contentHash: "blob:1",
+    mode: 0o644,
+    content: { kind: "text" as const, text: "content" },
+  }));
+  const resolveRepository = vi.fn(
+    async (input: Parameters<ProvenanceToolDeps["vcs"]["resolveRepository"]>[0]) => ({
+      state: input.state,
+      repositoryId: "repository:packages/foo",
+      repoPath: "packages/foo",
+    })
+  );
+  const history = vi.fn(async (input: Parameters<ProvenanceToolDeps["vcs"]["history"]>[0]) => ({
+    root: input.root,
+    entries: [
+      {
+        node: { kind: "change" as const, changeId: "change:file-edit" },
+        createdAt: "2026-07-15T10:00:00.000Z",
+        summary: "Explain the public entry point",
+      },
+    ],
+    nextCursor: "cursor:history",
+  }));
+  const value: ProvenanceToolDeps = {
+    vcs: { status, resolveRepository, neighbors, inspect, readFile, history },
+    contextId: "context:1",
+    session: { logId: "log:1", head: "head:1" },
   };
-  const fileResult: VcsProvenanceForFileResult = {
-    items: [item("claim#42 owns retry budget", "claim#42")],
-    shown: 1,
-    total: 3,
-    nextCursor: "1",
-    suppressed: false,
-  };
-  const sessionResult: VcsProvenanceForSessionResult = {
-    items: [item("⚠ unreconciled contradiction claim#7", "claim#7", true)],
-    shown: 1,
-    total: 1,
-  };
-  const deps: ProvenanceToolDeps = {
-    provenanceForFile: async (input) => {
-      calls.file.push(input);
-      return fileResult;
-    },
-    provenanceForClaim: async (input) => {
-      calls.claim.push(input);
-      return { ...fileResult, items: [item("claim#42 ·supports· claim#7", "claim#7")] };
-    },
-    provenanceForSession: async (input) => {
-      calls.session.push(input);
-      return sessionResult;
-    },
-    head: "ctx:c1",
-    sessionLogId: "branch:channel:ch",
-    sessionHead: "branch:channel:ch",
-    ...overrides,
-  };
-  return { deps, calls };
+  return { value, status, resolveRepository, neighbors, inspect, readFile, history };
 }
 
 describe("createProvenanceTool", () => {
-  it("drills a file path with deep tier + skipSuppression and pages the tail", async () => {
-    const { deps, calls } = makeDeps();
-    const tool = createProvenanceTool(CWD, deps);
-    const result = await tool.execute("inv-1", { target: "packages/foo/bar.ts" });
-    expect(calls.file[0]).toMatchObject({
-      repoPath: "packages/foo",
-      path: "packages/foo/bar.ts",
-      head: "ctx:c1",
-      tier: "deep",
-      skipSuppression: true,
-      invocationId: "inv-1",
+  it("resolves a friendly file path to a typed file node and pages neighbors", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    const result = await tool.execute("call:1", { target: "packages/foo/bar.ts" });
+
+    expect(f.neighbors).toHaveBeenLastCalledWith({
+      root: {
+        kind: "file",
+        state: working,
+        repositoryId: "repository:packages/foo",
+        fileId: "file:bar",
+      },
+      limit: 20,
     });
-    const text = (result.content[0] as { text: string }).text;
-    expect(text).toContain("prov · packages/foo/bar.ts · 1 of 3 items");
-    // Pageable footer threads the cursor for the next page.
-    expect(text).toContain('+2 more → provenance("packages/foo/bar.ts", after "1")');
-    expect(result.details).toMatchObject({ shown: 1, total: 3, nextCursor: "1" });
-  });
-
-  it("accepts a file: handle prefix", async () => {
-    const { deps, calls } = makeDeps();
-    const tool = createProvenanceTool(CWD, deps);
-    await tool.execute("inv-1", { target: "file:workers/x/index.ts" });
-    expect(calls.file[0]).toMatchObject({ repoPath: "workers/x", path: "workers/x/index.ts" });
-  });
-
-  it("drills a claim handle (cited touch is DO-side)", async () => {
-    const { deps, calls } = makeDeps();
-    const tool = createProvenanceTool(CWD, deps);
-    const result = await tool.execute("inv-9", { target: "claim#42", after: "0" });
-    expect(calls.claim[0]).toMatchObject({
-      claimId: "42",
-      sessionLogId: "branch:channel:ch",
-      invocationId: "inv-9",
-      after: "0",
+    expect(result.details).toMatchObject({ target: "packages/foo/bar.ts", edges: 1 });
+    expect(f.inspect).toHaveBeenCalledWith({
+      node: {
+        kind: "file",
+        state: working,
+        repositoryId: "repository:packages/foo",
+        fileId: "file:bar",
+      },
+      edgeLimit: 1,
     });
-    expect((result.content[0] as { text: string }).text).toContain("prov · claim#42 ·");
-  });
-
-  it("orients on the whole session", async () => {
-    const { deps, calls } = makeDeps();
-    const tool = createProvenanceTool(CWD, deps);
-    const result = await tool.execute("inv-1", { target: "session" });
-    expect(calls.session[0]).toMatchObject({
-      sessionLogId: "branch:channel:ch",
-      sessionHead: "branch:channel:ch",
+    expect(f.history).toHaveBeenCalledWith({
+      root: {
+        kind: "file",
+        state: working,
+        repositoryId: "repository:packages/foo",
+        fileId: "file:bar",
+      },
+      direction: "past",
+      limit: 5,
     });
-    expect((result.content[0] as { text: string }).text).toContain("prov · session · 1 of 1 items");
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain('past · change:file-edit · "Explain the public entry point"');
+    expect(text).toContain(
+      'more file history → vcs.history({"root":{"kind":"file","state":{"kind":"event","eventId":"event:working"},"repositoryId":"repository:packages/foo","fileId":"file:bar"},"direction":"past","cursor":"cursor:history","limit":5})'
+    );
+    expect(result.details).toMatchObject({
+      history: [
+        {
+          node: { kind: "change", changeId: "change:file-edit" },
+          summary: "Explain the public entry point",
+        },
+      ],
+      historyNextCursor: "cursor:history",
+    });
   });
 
-  it("defaults an omitted target to whole-session orientation", async () => {
-    const { deps, calls } = makeDeps();
-    const tool = createProvenanceTool(CWD, deps);
-    const result = await tool.execute("inv-1", {});
-    expect(calls.session).toHaveLength(1);
-    expect(result.details.target).toBe("session");
+  it("walks the exact session trajectory node", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    await tool.execute("call:2", { target: "session" });
+    expect(f.neighbors).toHaveBeenCalledWith({
+      root: { kind: "trajectory", logId: "log:1", head: "head:1" },
+      limit: 20,
+    });
   });
 
-  it("treats a session:<head> handle as session orientation", async () => {
-    const { deps, calls } = makeDeps();
-    const tool = createProvenanceTool(CWD, deps);
-    await tool.execute("inv-1", { target: "session:other" });
-    expect(calls.session).toHaveLength(1);
+  it("converts a supported semantic shorthand", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    await tool.execute("call:3", { target: "change:42" });
+    expect(f.neighbors).toHaveBeenCalledWith({
+      root: { kind: "change", changeId: "change:42" },
+      limit: 20,
+    });
+    await tool.execute("call:applied", { target: "applied-change:42" });
+    expect(f.neighbors).toHaveBeenCalledWith({
+      root: { kind: "applied-change", appliedChangeId: "applied-change:42" },
+      limit: 20,
+    });
   });
 
-  it("returns guidance (never a dead end) for a commit handle", async () => {
-    const { deps, calls } = makeDeps();
-    const tool = createProvenanceTool(CWD, deps);
-    const result = await tool.execute("inv-1", { target: "commit:9f2e" });
-    expect((result.content[0] as { text: string }).text).toContain("not independently drillable");
-    expect(calls.file).toHaveLength(0);
-    expect(calls.claim).toHaveLength(0);
+  it("passes an exact typed node through unchanged with its cursor", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    const root = { kind: "decision" as const, decisionId: "decision:1" };
+    await tool.execute("call:4", { root, after: "cursor:1" });
+    expect(f.neighbors).toHaveBeenCalledWith({ root, limit: 20, cursor: "cursor:1" });
   });
 
-  it("reports non-repo file targets without calling the DO", async () => {
-    const { deps, calls } = makeDeps();
-    const tool = createProvenanceTool(CWD, deps);
-    const result = await tool.execute("inv-1", { target: "loose.txt" });
-    expect((result.content[0] as { text: string }).text).toContain("not inside any repo");
-    expect(calls.file).toHaveLength(0);
+  it("renders work-unit intent before exact adjacency and retains its endpoints", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    const result = await tool.execute("call:work", { target: "work-unit:1" });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(text).toContain(
+      'node · work-unit · edit · command command:1 · intent "Rename the public entry point"'
+    );
+    expect(text).toContain(
+      '{"kind":"work-unit","workUnitId":"work-unit:1"} —authored-change→ {"kind":"change","changeId":"change:1"}'
+    );
+    expect(text.indexOf("node ·")).toBeLessThan(text.indexOf("—authored-change→"));
+    expect(result.details.adjacency).toEqual([
+      {
+        kind: "authored-change",
+        from: { kind: "work-unit", workUnitId: "work-unit:1" },
+        to: { kind: "change", changeId: "change:1" },
+      },
+    ]);
+  });
+
+  it("renders command state and trajectory-invocation metadata", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    const command = await tool.execute("call:command", { target: "command:1" });
+    const invocation = await tool.execute("call:invocation", {
+      root: {
+        kind: "trajectory-invocation",
+        logId: "log:1",
+        head: "head:1",
+        invocationId: "invocation:1",
+      },
+    });
+    const commandText = command.content[0]?.type === "text" ? command.content[0].text : "";
+    const invocationText = invocation.content[0]?.type === "text" ? invocation.content[0].text : "";
+
+    expect(commandText).toContain("node · command · vcs.edit · complete · context context:1");
+    expect(invocationText).toContain(
+      'node · trajectory-invocation · name "provenance" · status complete · turn turn:1 · outcome success'
+    );
+    expect(invocationText).toContain(
+      'request aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa · json · 48 bytes · read services.blobstore.getText("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")'
+    );
+    expect(invocationText).toContain(
+      '{"kind":"trajectory-invocation","logId":"log:1","head":"head:1","invocationId":"invocation:1"} —part-of-trajectory→ {"kind":"trajectory","logId":"log:1","head":"head:1"}'
+    );
+    expect(invocationText.indexOf("node ·")).toBeLessThan(
+      invocationText.indexOf("—part-of-trajectory→")
+    );
+  });
+
+  it("renders a direct command as an honest causal endpoint", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    const result = await tool.execute("call:direct", { target: "command:direct" });
+    const rendered = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(rendered).toContain("node · command · vcs.edit · complete · context context:1");
+    expect(result.details.root).toEqual({ kind: "command", commandId: "command:direct" });
+    expect(result.details.adjacency).toEqual([]);
+    expect(rendered).not.toContain("trajectory-invocation");
+  });
+
+  it("renders the exact intent-bearing turn and triggering message", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    const turn = await tool.execute("call:turn", {
+      root: {
+        kind: "trajectory-turn",
+        logId: "log:1",
+        head: "head:1",
+        turnId: "turn:1",
+      },
+    });
+    const message = await tool.execute("call:message", {
+      root: {
+        kind: "trajectory-message",
+        logId: "log:1",
+        head: "head:1",
+        messageId: "message:prompt",
+      },
+    });
+    const turnText = turn.content[0]?.type === "text" ? turn.content[0].text : "";
+    const messageText = message.content[0]?.type === "text" ? message.content[0].text : "";
+
+    expect(turnText).toContain(
+      "node · trajectory-turn · ordinal 1 · trigger message:prompt · summary"
+    );
+    expect(messageText).toContain(
+      'node · trajectory-message · role user · status completed · turn turn:1 · source channel-message:prompt · sender user:user:alice participant user:alice · text "Move the parser"'
+    );
+    expect(turn.details.root).toEqual({
+      kind: "trajectory-turn",
+      logId: "log:1",
+      head: "head:1",
+      turnId: "turn:1",
+    });
+    expect(turn.details.adjacency).toContainEqual({
+      kind: "triggered-by",
+      from: turn.details.root,
+      to: {
+        kind: "trajectory-message",
+        logId: "log:1",
+        head: "head:1",
+        messageId: "message:prompt",
+      },
+    });
+  });
+
+  it("rejects removed semantic vocabularies", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    await expect(tool.execute("call:5", { target: "outcome:42" })).rejects.toThrow(
+      "event/application/applied-change/work-unit/change/decision/command"
+    );
   });
 });

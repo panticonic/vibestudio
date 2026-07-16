@@ -93,9 +93,7 @@ describe("GitClient", () => {
         depth: undefined,
       })
     );
-    expect(checkout).toHaveBeenCalledWith(
-      expect.objectContaining({ dir: "/repo", ref: "main" })
-    );
+    expect(checkout).toHaveBeenCalledWith(expect.objectContaining({ dir: "/repo", ref: "main" }));
   });
 
   it("exposes the raw isomorphic-git status matrix", async () => {
@@ -108,6 +106,98 @@ describe("GitClient", () => {
       fs: expect.any(Object),
       dir: "/repo",
     });
+  });
+
+  it("reads paths, bytes, and executable modes from one immutable commit tree", async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "git-client-tree-"));
+    try {
+      const client = new GitClient();
+      await client.init(dir, "main");
+      await fsp.mkdir(path.join(dir, "src"), { recursive: true });
+      await fsp.writeFile(path.join(dir, "src/app.ts"), "committed\n");
+      await fsp.writeFile(path.join(dir, "run.sh"), "#!/bin/sh\nexit 0\n");
+      await fsp.chmod(path.join(dir, "run.sh"), 0o755);
+      await client.add(dir, "src/app.ts");
+      await client.add(dir, "run.sh");
+      const commitOid = await client.commit({
+        dir,
+        message: "Exact tree",
+        author: { name: "Test", email: "test@example.com" },
+      });
+
+      await fsp.writeFile(path.join(dir, "src/app.ts"), "mutable checkout\n");
+      await fsp.chmod(path.join(dir, "run.sh"), 0o644);
+
+      const tree = await client.readCommitTree(dir, commitOid);
+      expect(
+        tree.map((entry) => ({
+          path: entry.path,
+          type: entry.type,
+          mode: entry.mode,
+          content: entry.type === "blob" ? Buffer.from(entry.bytes).toString("utf8") : null,
+        }))
+      ).toEqual([
+        { path: "run.sh", type: "blob", mode: 0o100755, content: "#!/bin/sh\nexit 0\n" },
+        { path: "src/app.ts", type: "blob", mode: 0o100644, content: "committed\n" },
+      ]);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires callers to resolve a moving ref before reading a commit tree", async () => {
+    const client = new GitClient(fs, { http });
+    await expect(client.readCommitTree("/repo", "HEAD")).rejects.toThrow(
+      /requires a full commit object id/
+    );
+  });
+
+  it("resolves bounded per-path history against an exact revision", async () => {
+    const log = vi.spyOn(git, "log").mockResolvedValueOnce([
+      {
+        oid: "commit:old-author",
+        commit: {
+          message: "Original authorship",
+          parent: [],
+          tree: "tree:one",
+          author: {
+            name: "Ada",
+            email: "ada@example.com",
+            timestamp: 1,
+            timezoneOffset: 0,
+          },
+          committer: {
+            name: "Ada",
+            email: "ada@example.com",
+            timestamp: 1,
+            timezoneOffset: 0,
+          },
+        },
+        payload: "",
+      },
+    ]);
+    const client = new GitClient(fs, { http });
+
+    await expect(
+      client.getFileHistory("/repo", "src/untouched.ts", {
+        ref: "commit:head",
+        depth: 1,
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        commit: "commit:old-author",
+        author: expect.objectContaining({ name: "Ada" }),
+      }),
+    ]);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dir: "/repo",
+        filepath: "src/untouched.ts",
+        ref: "commit:head",
+        follow: true,
+        depth: 1,
+      })
+    );
   });
 
   it("exposes a discoverable method list", () => {

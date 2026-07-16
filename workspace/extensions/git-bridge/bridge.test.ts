@@ -1,769 +1,709 @@
-/**
- * git-bridge extension tests (P5c part 2) — the git interchange coverage now
- * lives with the extension that owns the bridge.
- *
- * Exercises the bridge core against the REAL gad-store DO (workerd
- * test-utils) with in-memory host bridges, mirroring the pattern of
- * `workspace/workers/gad-store/gadStoreVcs.test.ts`:
- *
- *  - `blobstore` — in-memory blob + tree store over the SHARED canonical
- *    hashing, so the import's mirror tripwire (`putTree(root).stateHash ===
- *    locally staged hash`) genuinely exercises hash agreement;
- *  - `refs` — in-memory protected-ref map;
- *  - `importPublish` — a test double of the DO's `vcsImportPublish`: reads the
- *    ingested staging head and adopts it into the ref map. The REAL gated
- *    single-writer publish (write-ahead intent → refs.updateMains(import) →
- *    provenance) is exercised end-to-end in
- *    `tests/workspace-integration/doImport.test.ts`;
- *  - `state` — in-memory marker/checkout-map store (extension storage in
- *    production).
- */
-
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import * as fsp from "node:fs/promises";
-import * as os from "node:os";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { sha256Hex, sha256HexSyncText } from "@vibestudio/content-addressing";
+import type { GitCommitTreeEntry } from "@vibestudio/git";
+import { GitBridge, provenanceGitUri, type BridgeHost } from "./bridge.js";
 
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { manifestHashForEntries, stateHashForRoot } from "@workspace/agentic-protocol";
-import { GadWorkspaceDO } from "../../workers/gad-store/index.js";
-import { GitBridge, type BridgeHost } from "./bridge.js";
-import { withRepoLock } from "./repoLocks.js";
-
-type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
-
-type TreeEntry =
-  | { name: string; kind: "file"; contentHash: string; mode: number }
-  | { name: string; kind: "dir"; childHash: string };
-
-// The bridge exports/imports a single repo; its checkout is fixed to
-// `workspace/<repoPath>`, so we operate on one repo per test.
-const REPO = "packages/bridge";
-const LOG = `vcs:repo:${REPO}`;
-
-function sha256Hex(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" });
-}
-
-/** In-memory host content store over the shared canonical tree hashing. */
-function createMemoryBlobstore() {
-  const blobs = new Map<string, Buffer>();
-  const trees = new Map<string, TreeEntry[]>();
-  const states = new Map<string, string>(); // state:… → manifest:…
-
-  const resolveRoot = (ref: string): string | null =>
-    ref.startsWith("state:") ? (states.get(ref) ?? null) : ref;
-
-  const walk = (
-    manifestHash: string,
-    prefix: string,
-    out: Array<{ path: string; kind: string; contentHash?: string; mode?: number }>
-  ): void => {
-    const entries = trees.get(manifestHash);
-    if (!entries) throw new Error(`memory store: missing interior tree ${manifestHash}`);
-    for (const entry of entries) {
-      const p = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.kind === "file") {
-        out.push({ path: p, kind: "file", contentHash: entry.contentHash, mode: entry.mode });
-      } else {
-        out.push({ path: p, kind: "dir" });
-        walk(entry.childHash, p, out);
-      }
-    }
+function commitBlob(
+  filePath: string,
+  content: string | Buffer,
+  mode: 0o100644 | 0o100755 = 0o100644
+): GitCommitTreeEntry {
+  const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content);
+  return {
+    path: filePath,
+    type: "blob",
+    mode,
+    oid: "f".repeat(40),
+    bytes,
   };
-
-  const store = {
-    async has(digest: string) {
-      return blobs.has(digest);
-    },
-    async putBase64(bytesBase64: string) {
-      const bytes = Buffer.from(bytesBase64, "base64");
-      const digest = sha256Hex(bytes);
-      blobs.set(digest, bytes);
-      return { digest, size: bytes.length };
-    },
-    async getBase64(digest: string) {
-      const bytes = blobs.get(digest);
-      return bytes ? bytes.toString("base64") : null;
-    },
-    async putTree(entries: TreeEntry[], opts?: { root?: boolean }) {
-      const treeHash = manifestHashForEntries(entries);
-      trees.set(treeHash, entries);
-      if (!opts?.root) return { treeHash };
-      const stateHash = stateHashForRoot(treeHash);
-      states.set(stateHash, treeHash);
-      return { treeHash, stateHash };
-    },
-    async getTree(ref: string) {
-      const root = resolveRoot(ref);
-      return root !== null && trees.has(root) ? trees.get(root)! : null;
-    },
-    async listTree(ref: string) {
-      const root = resolveRoot(ref);
-      if (root === null || !trees.has(root)) return null;
-      const out: Array<{ path: string; kind: string; contentHash?: string; mode?: number }> = [];
-      walk(root, "", out);
-      return out;
-    },
-  };
-  return { store, blobs, trees, states };
 }
 
-describe("git-bridge extension (real DO, memory host bridges)", () => {
-  let root: string;
-  let workspaceRoot: string;
-  let repoDir: string;
-  let gad: TestGad;
-  let doi: GadWorkspaceDO;
-  let mem: ReturnType<typeof createMemoryBlobstore>;
-  let refs: Map<string, string>;
-  let published: string[];
-  let state: Map<string, string>;
-  let bridge: GitBridge;
-
-  beforeEach(async () => {
-    root = await fsp.mkdtemp(path.join(os.tmpdir(), "git-bridge-ext-"));
-    workspaceRoot = path.join(root, "workspace");
-    await fsp.mkdir(workspaceRoot);
-    repoDir = path.join(workspaceRoot, ...REPO.split("/"));
-    gad = await createTestDO(GadWorkspaceDO, { __objectKey: "git-bridge" });
-    doi = gad.instance;
-    mem = createMemoryBlobstore();
-    refs = new Map();
-    published = [];
-    state = new Map<string, string>();
-    const host: BridgeHost = {
-      workspaceRoot: async () => workspaceRoot,
-      store: {
-        vcsLog: async (repoPath, limit, head) => doi.vcsLog(repoPath, limit, head),
-        ingestWorktreeState: (input) =>
-          doi.ingestWorktreeState(input as Parameters<GadWorkspaceDO["ingestWorktreeState"]>[0]),
-        // Test double of the DO's `vcsImportPublish`: adopt the ingested
-        // staging head into the ref map and mirror the publish on the main log.
-        // The gated single-writer publish is exercised in doImport.test.ts.
-        importPublish: async ({ repoPath, sourceHead }) => {
-          const head = doi.resolveWorktreeHead({ logId: `vcs:repo:${repoPath}`, head: sourceHead });
-          const stateHash = head?.stateHash ? String(head.stateHash) : "";
-          if (stateHash && refs.get(`${repoPath} main`) !== stateHash) {
-            const listing = await mem.store.listTree(stateHash);
-            if (!listing) throw new Error(`missing mirrored tree for ${stateHash}`);
-            const files = listing
-              .filter(
-                (
-                  entry
-                ): entry is {
-                  path: string;
-                  kind: string;
-                  contentHash: string;
-                  mode: number;
-                } => entry.kind === "file" && !!entry.contentHash
-              )
-              .map((entry) => ({
-                path: entry.path,
-                contentHash: entry.contentHash,
-                size: mem.blobs.get(entry.contentHash)?.byteLength ?? 0,
-                mode: entry.mode ?? 33188,
-              }));
-            const published = await doi.ingestWorktreeState({
-              logId: `vcs:repo:${repoPath}`,
-              head: "main",
-              logKind: "vcs",
-              actor: { id: "git-bridge", kind: "system" },
-              files,
-              summary: "import publish",
-            });
-            if (published.stateHash !== stateHash) {
-              throw new Error(
-                `publish mirror returned ${published.stateHash}, expected ${stateHash}`
-              );
-            }
-          }
-          refs.set(`${repoPath} main`, stateHash);
-          published.push(repoPath);
-          return { status: "published" as const, repoPath, stateHash };
-        },
+function eventInspection(eventId: string) {
+  return {
+    root: { kind: "event" as const, eventId },
+    node: {
+      kind: "event" as const,
+      value: {
+        eventId,
+        workspaceId: "workspace:test",
+        commandId: `command:${eventId}`,
+        kind: "commit" as const,
+        workspaceFactRootId: `facts:${eventId}`,
+        parentEventIds: ["event:parent"],
+        applicationIds: ["application:1"],
+        decisionIds: [],
+        message: "Semantic snapshot",
+        semanticProtocol: "semantic-v1",
+        createdAt: new Date(0).toISOString(),
       },
-      blobstore: mem.store,
-      refs: {
-        readMain: async (repoPath) => {
-          const value = refs.get(`${repoPath} main`);
-          return value ? { stateHash: value } : null;
-        },
+    },
+    edges: [],
+    hasMoreEdges: false,
+  };
+}
+
+function repositoryInspection(state: { kind: "event"; eventId: string }, repoPath: string) {
+  return {
+    root: {
+      kind: "repository" as const,
+      state,
+      repositoryId: `repository:${repoPath}`,
+    },
+    node: {
+      kind: "repository" as const,
+      state,
+      value: {
+        kind: "present" as const,
+        repositoryId: `repository:${repoPath}`,
+        repoPath,
+        manifestId: `manifest:${repoPath}`,
       },
-      state: {
-        get: async (key) => state.get(key) ?? null,
-        set: async (key, value) => {
-          state.set(key, value);
-        },
-        delete: async (key) => {
-          state.delete(key);
-        },
+    },
+    edges: [],
+    hasMoreEdges: false,
+  };
+}
+
+function applicationInspection(applicationId = "application:1") {
+  return {
+    root: { kind: "application" as const, applicationId },
+    node: {
+      kind: "application" as const,
+      value: {
+        applicationId,
+        workUnitId: "work:import",
+        basis: { kind: "event" as const, eventId: "event:parent" },
+        appliedChangeCount: 1,
+        appliedChanges: [],
+        resultWorkspaceFactRootId: "facts:import",
+        semanticProtocol: "semantic-v1",
       },
-    };
-    bridge = new GitBridge(host);
-  });
+    },
+    edges: [],
+    hasMoreEdges: false,
+  };
+}
 
-  afterEach(async () => {
-    await fsp.rm(root, { recursive: true, force: true });
-  });
+function importWorkUnitInspection(revision: string, sourceUri: string) {
+  return {
+    root: { kind: "work-unit" as const, workUnitId: "work:import" },
+    node: {
+      kind: "work-unit" as const,
+      value: {
+        workUnitId: "work:import",
+        commandId: "command:import",
+        kind: "import" as const,
+        authoredChangeCount: 1,
+        authoredChangeIds: ["change:import"],
+        incorporatedChangeCount: 0,
+        incorporatedChangeIds: [],
+        decisionCount: 0,
+        decisionIds: [],
+        intentSummary: "Import snapshot",
+        externalSnapshot: {
+          sourceKind: "git" as const,
+          sourceUri,
+          snapshotRevision: revision,
+          snapshotDigest: "a".repeat(64),
+          targetRepositoryIds: ["repository:projects/demo"],
+        },
+        normalizationProtocol: "semantic-v1",
+        createdAt: new Date(0).toISOString(),
+      },
+    },
+    edges: [],
+    hasMoreEdges: false,
+  };
+}
 
-  /** Mirror a file map into the memory content store (blobs + bottom-up trees). */
-  async function mirrorTree(files: Array<{ path: string; contentHash: string; mode: number }>) {
-    interface DirNode {
-      dirs: Map<string, DirNode>;
-      files: Map<string, { contentHash: string; mode: number }>;
-    }
-    const rootNode: DirNode = { dirs: new Map(), files: new Map() };
-    for (const file of files) {
-      const segments = file.path.split("/");
-      let node = rootNode;
-      for (const segment of segments.slice(0, -1)) {
-        let child = node.dirs.get(segment);
-        if (!child) {
-          child = { dirs: new Map(), files: new Map() };
-          node.dirs.set(segment, child);
-        }
-        node = child;
-      }
-      node.files.set(segments.at(-1) as string, {
-        contentHash: file.contentHash,
-        mode: file.mode,
-      });
-    }
-    const put = async (node: DirNode, isRoot: boolean): Promise<string> => {
-      const entries: TreeEntry[] = [];
-      for (const [name, child] of node.dirs) {
-        entries.push({ name, kind: "dir", childHash: await put(child, false) });
-      }
-      for (const [name, file] of node.files) {
-        entries.push({ name, kind: "file", contentHash: file.contentHash, mode: file.mode });
-      }
-      const result = await mem.store.putTree(entries, isRoot ? { root: true } : undefined);
-      return isRoot ? (result.stateHash as string) : result.treeHash;
-    };
-    return put(rootNode, true);
-  }
+function status(contextId: string, eventId: string) {
+  return {
+    contextId,
+    committed: { kind: "event" as const, eventId },
+    workingHead: { kind: "event" as const, eventId },
+    clean: true,
+    mainEventId: eventId,
+    mainRelation: "at" as const,
+    workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+  };
+}
 
-  /**
-   * Advance the repo's `main` by one transition: blobs + mirrored tree into
-   * the content store, snapshot ingest onto the DO's repo log, protected ref
-   * updated (the userland commit/push flow's net effect, seeded directly).
-   */
-  async function commitRepo(treeFiles: Record<string, string>): Promise<string> {
-    const files: Array<{ path: string; contentHash: string; size: number; mode: number }> = [];
-    for (const [rel, text] of Object.entries(treeFiles)) {
-      const bytes = Buffer.from(text, "utf8");
-      const { digest } = await mem.store.putBase64(bytes.toString("base64"));
-      files.push({ path: rel, contentHash: digest, size: bytes.length, mode: 33188 });
-    }
-    files.sort((a, b) => (a.path < b.path ? -1 : 1));
-    const stateHash = await mirrorTree(files);
-    const result = await doi.ingestWorktreeState({
-      logId: LOG,
-      head: "main",
-      logKind: "vcs",
-      actor: { id: "user", kind: "user" },
-      files,
-      summary: "seed",
+function baseHost(root: string) {
+  const unreachable = () =>
+    vi.fn(async (): Promise<never> => {
+      throw new Error("unexpected VCS call");
     });
-    expect(result.stateHash).toBe(stateHash);
-    refs.set(`${REPO} main`, result.stateHash);
-    return result.stateHash;
-  }
+  const host: BridgeHost = {
+    checkoutRoot: async () => root,
+    ensureContext: vi.fn(async () => undefined),
+    blobstore: {
+      putBase64: vi.fn(async (bytesBase64: string) => {
+        const bytes = Buffer.from(bytesBase64, "base64");
+        return { digest: sha256Hex(bytes), size: bytes.byteLength };
+      }),
+    },
+    vcs: {
+      status: unreachable(),
+      neighbors: unreachable(),
+      inspect: unreachable(),
+      resolveRepository: vi.fn(async () => null),
+      listFiles: unreachable(),
+      readFile: unreachable(),
+      importSnapshot: unreachable(),
+    },
+  };
+  return { host };
+}
 
-  it("exports a repo's vcs history as git commits with GAD trailers, incrementally", async () => {
-    await commitRepo({ "a.txt": "one\n" });
-    await commitRepo({ "a.txt": "two\n", "b.txt": "bee\n" });
-
-    const result = await bridge.exportRepoHead(REPO);
-    expect(result.exported).toBe(2);
-    expect(result.headCommit).toMatch(/^[0-9a-f]{40}$/);
-
-    const log = git(repoDir, ["log", "--format=%s%n%b---"]);
-    expect(log.match(/GAD-State: state:[0-9a-f]{64}/g)).toHaveLength(2);
-    expect(log.match(/GAD-Event: /g)).toHaveLength(2);
-    expect(log).toContain(`GAD-Repo: ${REPO}`);
-    expect(await fsp.readFile(path.join(repoDir, "a.txt"), "utf8")).toBe("two\n");
-    expect(await fsp.readFile(path.join(repoDir, "b.txt"), "utf8")).toBe("bee\n");
-
-    // Incremental: nothing new → no commits.
-    const again = await bridge.exportRepoHead(REPO);
-    expect(again.exported).toBe(0);
-
-    // One more transition exports exactly one more commit.
-    await commitRepo({ "a.txt": "two\n", "b.txt": "bee\n", "c.txt": "sea\n" });
-    const incremental = await bridge.exportRepoHead(REPO);
-    expect(incremental.exported).toBe(1);
+describe("GitBridge semantic snapshot boundary", () => {
+  it.each([
+    String.raw`C:\Users\alice\demo.git`,
+    "C:/Users/alice/demo.git",
+    String.raw`C:relative\demo.git`,
+  ])("keeps the Windows-local remote %s private", (remote) => {
+    expect(provenanceGitUri(remote)).toBe(`git-local://sha256/${sha256HexSyncText(remote)}`);
   });
 
-  it("rejects a state without its canonical content-store tree", async () => {
-    const content = Buffer.from("unmirrored\n", "utf8");
-    const result = await doi.ingestWorktreeState({
-      logId: LOG,
-      head: "main",
-      logKind: "vcs",
-      actor: { id: "user", kind: "user" },
+  it("preserves SCP-style remote identity", () => {
+    expect(provenanceGitUri("git@example.test:owner/demo.git")).toBe(
+      "ssh://example.test/owner/demo.git"
+    );
+  });
+
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "git-bridge-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("roots operational checkouts below host state rather than semantic source", async () => {
+    const checkoutRoot = path.join(root, "state", "git-checkouts");
+    const sourceRoot = path.join(root, "source");
+    const { host } = baseHost(checkoutRoot);
+    const bridge = new GitBridge(host);
+
+    expect(await bridge.repoGitDir("projects/demo")).toBe(
+      path.join(checkoutRoot, "projects", "demo")
+    );
+    expect(await bridge.repoGitDir("projects/demo")).not.toBe(
+      path.join(sourceRoot, "projects", "demo")
+    );
+  });
+
+  it("imports one exact checkout snapshot as a semantic candidate", async () => {
+    const repoPath = "projects/demo";
+    const dir = path.join(root, repoPath);
+    mkdirSync(path.join(dir, ".git"), { recursive: true });
+    writeFileSync(path.join(dir, "index.ts"), "export const value = 1;\n");
+    writeFileSync(path.join(dir, "binary.dat"), Buffer.from([0xff, 0xfe]));
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, "event:main"));
+    host.vcs.inspect = vi.fn(async () => {
+      const inspected = eventInspection("event:main");
+      inspected.node.value.applicationIds = [];
+      return inspected;
+    });
+    host.vcs.importSnapshot = vi.fn(async () => ({
+      contextId: "ctx:import",
+      eventId: "event:imported",
+      workUnitId: "work:imported",
+      importedRepositoryIds: ["repository:projects/demo"],
+    }));
+    const bridge = new GitBridge(host);
+    vi.spyOn(bridge.git, "getCurrentCommit").mockResolvedValue("a".repeat(40));
+    vi.spyOn(bridge.git, "readCommitTree").mockResolvedValue([
+      commitBlob("binary.dat", Buffer.from([0xff, 0xfe])),
+      commitBlob("index.ts", "export const value = 1;\n"),
+    ]);
+    vi.spyOn(bridge.git, "statusMatrix").mockResolvedValue([
+      ["binary.dat", 1, 1, 1],
+      ["index.ts", 1, 1, 1],
+    ]);
+
+    await expect(
+      bridge.importLockedInner(repoPath, {
+        sourceUri: "https://token@example.test/owner/demo.git?signature=secret",
+      })
+    ).resolves.toEqual({
+      contextId: expect.stringMatching(/^git-bridge-/),
+      eventId: "event:imported",
+      changed: true,
+    });
+    expect(host.ensureContext).toHaveBeenCalledWith(expect.stringMatching(/^git-bridge-/));
+    expect(host.vcs.importSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextId: expect.stringMatching(/^git-bridge-/),
+        expectedWorkingHead: { kind: "event", eventId: "event:main" },
+        source: expect.objectContaining({
+          kind: "git",
+          uri: "https://example.test/owner/demo.git",
+          snapshotRevision: "a".repeat(40),
+        }),
+        repositories: [
+          expect.objectContaining({
+            repoPath,
+            files: expect.arrayContaining([
+              expect.objectContaining({
+                path: "binary.dat",
+                contentHash: sha256Hex(Buffer.from([0xff, 0xfe])),
+                mode: 0o644,
+              }),
+              expect.objectContaining({
+                path: "index.ts",
+                contentHash: sha256Hex(Buffer.from("export const value = 1;\n")),
+                mode: 0o644,
+              }),
+            ]),
+          }),
+        ],
+      })
+    );
+    expect(host.vcs.resolveRepository).toHaveBeenCalledOnce();
+    expect(host.vcs.resolveRepository).toHaveBeenCalledWith({
+      state: { kind: "event", eventId: "event:main" },
+      repoPath,
+    });
+    expect(host.vcs.neighbors).not.toHaveBeenCalled();
+    expect(host.blobstore.putBase64).toHaveBeenCalledTimes(2);
+    expect(host.blobstore.putBase64).toHaveBeenCalledWith(
+      Buffer.from([0xff, 0xfe]).toString("base64")
+    );
+    expect(host.blobstore.putBase64).toHaveBeenCalledWith(
+      Buffer.from("export const value = 1;\n").toString("base64")
+    );
+  });
+
+  it("imports an actual resolved commit tree and stores duplicate content once", async () => {
+    const repoPath = "projects/real-tree";
+    const dir = path.join(root, repoPath);
+    mkdirSync(dir, { recursive: true });
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, "event:main"));
+    host.vcs.importSnapshot = vi.fn(async () => ({
+      contextId: "ctx:import",
+      eventId: "event:real-import",
+      workUnitId: "work:real-import",
+      importedRepositoryIds: ["repository:projects/real-tree"],
+    }));
+    host.vcs.inspect = vi.fn(async () => eventInspection("event:real-import"));
+    const bridge = new GitBridge(host);
+    await bridge.git.init(dir, "main");
+    writeFileSync(path.join(dir, "one.txt"), "shared bytes\n");
+    writeFileSync(path.join(dir, "two.txt"), "shared bytes\n");
+    writeFileSync(path.join(dir, "run.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await bridge.git.add(dir, "one.txt");
+    await bridge.git.add(dir, "two.txt");
+    await bridge.git.add(dir, "run.sh");
+    const commitOid = await bridge.git.commit({
+      dir,
+      message: "Committed snapshot",
+      author: { name: "Test", email: "test@example.com" },
+    });
+
+    await expect(
+      bridge.importLockedInner(repoPath, { sourceUri: "https://example.test/real-tree.git" })
+    ).resolves.toEqual({
+      contextId: expect.stringMatching(/^git-bridge-/),
+      eventId: "event:real-import",
+      changed: true,
+    });
+
+    expect(host.vcs.importSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({ snapshotRevision: commitOid }),
+        repositories: [
+          expect.objectContaining({
+            files: [
+              expect.objectContaining({ path: "one.txt", mode: 0o644 }),
+              expect.objectContaining({ path: "run.sh", mode: 0o755 }),
+              expect.objectContaining({ path: "two.txt", mode: 0o644 }),
+            ],
+          }),
+        ],
+      })
+    );
+    expect(host.blobstore.putBase64).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips import when the exact Git revision and snapshot already match", async () => {
+    const repoPath = "projects/demo";
+    const dir = path.join(root, repoPath);
+    mkdirSync(path.join(dir, ".git"), { recursive: true });
+    writeFileSync(path.join(dir, "index.ts"), "same\n");
+    const main = { kind: "event" as const, eventId: "event:main" };
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, main.eventId));
+    host.vcs.resolveRepository = vi.fn(async ({ state, repoPath: resolvedPath }) => ({
+      state,
+      repositoryId: `repository:${resolvedPath}`,
+      repoPath: resolvedPath,
+    }));
+    host.vcs.inspect = vi.fn(async ({ node }) => {
+      if (node.kind === "repository") return repositoryInspection(main, repoPath);
+      if (node.kind === "application") return applicationInspection(node.applicationId);
+      if (node.kind === "work-unit") {
+        return importWorkUnitInspection("a".repeat(40), "https://example.test/demo.git");
+      }
+      return eventInspection(main.eventId);
+    });
+    host.vcs.listFiles = vi.fn(async () => ({
+      state: main,
+      repositoryId: "repository:projects/demo",
       files: [
         {
-          path: "orphan.txt",
-          contentHash: sha256Hex(content),
-          size: content.byteLength,
-          mode: 33188,
+          fileId: "file:index",
+          path: "index.ts",
+          contentHash: sha256Hex(Buffer.from("same\n")),
+          mode: 0o644,
+          contentKind: "text" as const,
+          byteLength: 5,
+          coordinateExtent: 5,
         },
       ],
-      summary: "unmirrored state",
-    });
-    expect(await mem.store.listTree(result.stateHash)).toBeNull();
+      nextCursor: null,
+    }));
+    const bridge = new GitBridge(host);
+    const getCurrentCommit = vi
+      .spyOn(bridge.git, "getCurrentCommit")
+      .mockResolvedValue("a".repeat(40));
+    vi.spyOn(bridge.git, "readCommitTree").mockResolvedValue([commitBlob("index.ts", "same\n")]);
+    const statusMatrix = vi
+      .spyOn(bridge.git, "statusMatrix")
+      .mockResolvedValue([["index.ts", 1, 1, 1]]);
 
-    await expect(bridge.exportRepoHead(REPO)).rejects.toThrow(
-      `state ${result.stateHash} has no canonical content tree`
-    );
-  });
-
-  it("persists exact versioned marker and checkout-map envelopes", async () => {
-    const stateHash = await commitRepo({ "a.txt": "one\n" });
-    const result = await bridge.exportRepoHead(REPO);
-
-    const [newest] = (await doi.vcsLog(REPO, 1, "main")) as Array<{ envelopeId: string }>;
-    expect(JSON.parse(state.get(`marker:${REPO}`)!)).toEqual({
-      version: 1,
-      kind: "export-marker",
-      envelopeId: newest!.envelopeId,
-      stateHash,
-      commitSha: result.headCommit,
-    });
-    expect(JSON.parse(state.get(`checkout:${REPO}`)!)).toEqual({
-      version: 1,
-      kind: "checkout-map",
-      files: {
-        "a.txt": {
-          contentHash: sha256Hex(Buffer.from("one\n", "utf8")),
-          mode: 33188,
-        },
-      },
-    });
-  });
-
-  it("discards unversioned and malformed marker state without migration", async () => {
-    const stateHash = `state:${"a".repeat(64)}`;
-    const commitSha = "b".repeat(40);
-    const envelopeId = "evt-1";
-    const readMarker = () =>
-      (
-        bridge as unknown as {
-          getMarker(
-            repoPath: string
-          ): Promise<{ envelopeId: string; stateHash: string; commitSha: string } | null>;
-        }
-      ).getMarker(REPO);
-    const malformed = [
-      { envelopeId, stateHash, commitSha },
-      { version: 2, kind: "export-marker", envelopeId, stateHash, commitSha },
-      { version: 1, kind: "checkout-map", envelopeId, stateHash, commitSha },
-      { version: 1, kind: "export-marker", envelopeId, stateHash: "state:bad", commitSha },
-      { version: 1, kind: "export-marker", envelopeId, stateHash, commitSha: "not-a-commit" },
-      { version: 1, kind: "export-marker", envelopeId, stateHash, commitSha, extra: true },
-      // Pre-envelopeId (stateHash-keyed) markers are rejected, not migrated.
-      { version: 1, kind: "export-marker", stateHash, commitSha },
-      { version: 1, kind: "export-marker", envelopeId: "", stateHash, commitSha },
-    ];
-
-    for (const candidate of malformed) {
-      state.set(`marker:${REPO}`, JSON.stringify(candidate));
-      expect(await readMarker()).toBeNull();
-    }
-    state.set(`marker:${REPO}`, "not-json");
-    expect(await readMarker()).toBeNull();
-
-    state.set(
-      `marker:${REPO}`,
-      JSON.stringify({ version: 1, kind: "export-marker", envelopeId, stateHash, commitSha })
-    );
-    expect(await readMarker()).toEqual({ envelopeId, stateHash, commitSha });
-  });
-
-  it("discards unversioned and malformed checkout-map state without migration", async () => {
-    const contentHash = "c".repeat(64);
-    const files = { "a.txt": { contentHash, mode: 33188 } };
-    const readCheckoutMap = () =>
-      (
-        bridge as unknown as {
-          getCheckoutMap(
-            repoPath: string
-          ): Promise<Record<string, { contentHash: string; mode: number }>>;
-        }
-      ).getCheckoutMap(REPO);
-    const malformed = [
-      files,
-      { version: 2, kind: "checkout-map", files },
-      { version: 1, kind: "export-marker", files },
-      { version: 1, kind: "checkout-map", files, extra: true },
-      {
-        version: 1,
-        kind: "checkout-map",
-        files: { "../escape": { contentHash, mode: 33188 } },
-      },
-      {
-        version: 1,
-        kind: "checkout-map",
-        files: { "a.txt": { contentHash: "not-a-digest", mode: 33188 } },
-      },
-      {
-        version: 1,
-        kind: "checkout-map",
-        files: { "a.txt": { contentHash, mode: 0 } },
-      },
-      {
-        version: 1,
-        kind: "checkout-map",
-        files: { "a.txt": { contentHash, mode: 33188, extra: true } },
-      },
-    ];
-
-    for (const candidate of malformed) {
-      state.set(`checkout:${REPO}`, JSON.stringify(candidate));
-      expect(await readCheckoutMap()).toEqual({});
-    }
-    state.set(`checkout:${REPO}`, "not-json");
-    expect(await readCheckoutMap()).toEqual({});
-
-    state.set(`checkout:${REPO}`, JSON.stringify({ version: 1, kind: "checkout-map", files }));
-    expect(await readCheckoutMap()).toEqual(files);
-  });
-
-  it("requires every exported state to have a canonical content tree", async () => {
-    const stateHash = await commitRepo({ "a.txt": "one\n" });
-    mem.states.delete(stateHash);
-
-    await expect(bridge.exportRepoHead(REPO)).rejects.toThrow(
-      `git export: state ${stateHash} has no canonical content tree`
-    );
-  });
-
-  it("propagates cross-transition deletions to the exported git tree", async () => {
-    await commitRepo({ "a.txt": "one\n", "b.txt": "bee\n" });
-    // Next transition deletes b.txt.
-    await commitRepo({ "a.txt": "two\n" });
-
-    const result = await bridge.exportRepoHead(REPO);
-    expect(result.exported).toBe(2);
-
-    // The deletion must reach the exported git HEAD tree.
-    const tree = git(repoDir, ["ls-tree", "-r", "--name-only", "HEAD"])
-      .trim()
-      .split("\n")
-      .filter(Boolean);
-    expect(tree).toContain("a.txt");
-    expect(tree).not.toContain("b.txt");
-    // Bridge bookkeeping lives in extension storage — nothing extra on disk.
-    const entries = await fsp.readdir(path.dirname(repoDir));
-    expect(entries).toEqual(["bridge"]);
-  });
-
-  it("does not persist checkout tracking before deletion staging succeeds", async () => {
-    await commitRepo({ "a.txt": "one\n", "b.txt": "bee\n" });
-    await bridge.exportRepoHead(REPO);
-
-    await commitRepo({ "a.txt": "two\n" });
-    const originalStage = (
-      bridge as unknown as {
-        stageMaterializedChanges(
-          gitDir: string,
-          materialized: { tracked: unknown; stagePaths: string[]; removePaths: string[] }
-        ): Promise<void>;
-      }
-    ).stageMaterializedChanges.bind(bridge);
-    let fail = true;
-    (
-      bridge as unknown as {
-        stageMaterializedChanges(
-          gitDir: string,
-          materialized: { tracked: unknown; stagePaths: string[]; removePaths: string[] }
-        ): Promise<void>;
-      }
-    ).stageMaterializedChanges = async () => {
-      if (fail) {
-        fail = false;
-        throw new Error("staging failed");
-      }
-    };
-
-    await expect(bridge.exportRepoHead(REPO)).rejects.toThrow("staging failed");
-    (
-      bridge as unknown as {
-        stageMaterializedChanges(
-          gitDir: string,
-          materialized: { tracked: unknown; stagePaths: string[]; removePaths: string[] }
-        ): Promise<void>;
-      }
-    ).stageMaterializedChanges = originalStage;
-    await bridge.exportRepoHead(REPO);
-
-    const tree = git(repoDir, ["ls-tree", "-r", "--name-only", "HEAD"])
-      .trim()
-      .split("\n")
-      .filter(Boolean);
-    expect(tree).toEqual(["a.txt"]);
-  });
-
-  it("exports tracked directory-to-file path swaps", async () => {
-    await commitRepo({ "foo/bar.txt": "nested\n" });
-    await commitRepo({ foo: "file\n" });
-
-    await bridge.exportRepoHead(REPO);
-
-    const tree = git(repoDir, ["ls-tree", "-r", "--name-only", "HEAD"])
-      .trim()
-      .split("\n")
-      .filter(Boolean);
-    expect(tree).toEqual(["foo"]);
-    expect(await fsp.readFile(path.join(repoDir, "foo"), "utf8")).toBe("file\n");
-  });
-
-  it("does not stage untracked checkout files during export", async () => {
-    await commitRepo({ "a.txt": "one\n" });
-    await bridge.exportRepoHead(REPO);
-
-    await fsp.writeFile(path.join(repoDir, "local-only.txt"), "do not export\n");
-    await commitRepo({ "a.txt": "two\n" });
-    await bridge.exportRepoHead(REPO);
-
-    const tree = git(repoDir, ["ls-tree", "-r", "--name-only", "HEAD"])
-      .trim()
-      .split("\n")
-      .filter(Boolean);
-    expect(tree).toEqual(["a.txt"]);
-    expect(await fsp.readFile(path.join(repoDir, "local-only.txt"), "utf8")).toBe(
-      "do not export\n"
-    );
-    expect(git(repoDir, ["status", "--porcelain"])).toContain("?? local-only.txt");
-  });
-
-  it("refreshes unchanged tracked files from the content store before export", async () => {
-    await commitRepo({ "a.txt": "one\n" });
-    await bridge.exportRepoHead(REPO);
-
-    await fsp.writeFile(path.join(repoDir, "a.txt"), "tampered locally\n");
-    await commitRepo({ "a.txt": "one\n", "b.txt": "bee\n" });
-    await bridge.exportRepoHead(REPO);
-
-    expect(await fsp.readFile(path.join(repoDir, "a.txt"), "utf8")).toBe("one\n");
-    expect(git(repoDir, ["show", "HEAD:a.txt"])).toBe("one\n");
-    expect(git(repoDir, ["show", "HEAD:b.txt"])).toBe("bee\n");
-  });
-
-  it("imports an edited git tree as a snapshot transition and adopts main", async () => {
-    await commitRepo({ "a.txt": "one\n" });
-    await bridge.exportRepoHead(REPO);
-
-    // Outside-world edit in the repo's git checkout.
-    git(repoDir, ["config", "user.email", "ext@example.com"]);
-    git(repoDir, ["config", "user.name", "External"]);
-    await fsp.writeFile(path.join(repoDir, "external.txt"), "from github\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, ["commit", "-m", "external change"]);
-
-    const imported = await bridge.importRepoTree(REPO);
-    expect(imported.changed).toBe(true);
-    const importedGitSha = git(repoDir, ["rev-parse", "HEAD"]).trim();
-
-    // The vcs (gad-store DO) sees the imported history on the NON-MAIN staging
-    // head — extensions never write the protected main lineage directly…
-    const staging = doi.resolveWorktreeHead({ logId: LOG, head: "import:main" });
-    expect(staging?.stateHash).toBe(imported.stateHash);
-    // …the protected ref was published through the DO's import path (doubled)…
-    expect(published).toEqual([REPO]);
-    expect(refs.get(`${REPO} main`)).toBe(imported.stateHash);
-    // …the imported tree is fully mirrored in the content store…
-    const listing = await mem.store.listTree(imported.stateHash);
-    const external = listing?.find((e) => e.path === "external.txt" && e.kind === "file");
-    expect(external?.contentHash).toBeTruthy();
-    const blob = await mem.store.getBase64(external!.contentHash!);
-    expect(Buffer.from(blob!, "base64").toString("utf8")).toBe("from github\n");
-    // …and the transition is on the staging lineage with the import summary.
-    const log = doi.vcsLog(REPO, 1, "import:main");
-    expect(log[0]).toMatchObject({
-      outputStateHash: imported.stateHash,
-      summary: expect.stringContaining(`Import ${REPO} from git @ `),
-    });
-    await expect(bridge.commitMapping(REPO)).resolves.toContainEqual({
-      gitSha: importedGitSha,
-      gadState: imported.stateHash,
-      gadEvent: expect.any(String),
-      summary: "external change",
-    });
-
-    // Unchanged re-import no-ops against the adopted protected ref.
-    const again = await bridge.importRepoTree(REPO);
-    expect(again).toEqual({ stateHash: imported.stateHash, changed: false });
-  });
-
-  it("round-trips an external git edit through import and a later export", async () => {
-    await commitRepo({ "foo/bar.txt": "nested\n", "keep.txt": "keep\n" });
-    await bridge.exportRepoHead(REPO);
-
-    git(repoDir, ["config", "user.email", "ext@example.com"]);
-    git(repoDir, ["config", "user.name", "External"]);
-    await fsp.rm(path.join(repoDir, "foo"), { recursive: true, force: true });
-    await fsp.writeFile(path.join(repoDir, "foo"), "file now\n");
-    await fsp.writeFile(path.join(repoDir, "external.txt"), "from git\n");
-    git(repoDir, ["add", "-A"]);
-    git(repoDir, ["commit", "-m", "external directory-to-file swap"]);
-
-    const imported = await bridge.importRepoTree(REPO, { summary: "external sync" });
-    expect(imported.changed).toBe(true);
-    expect(refs.get(`${REPO} main`)).toBe(imported.stateHash);
-
-    const immediate = await bridge.exportRepoHead(REPO);
-    expect(immediate.exported).toBe(0);
-
-    await commitRepo({
-      foo: "file now\n",
-      "keep.txt": "keep\n",
-      "external.txt": "from git\n",
-      "after.txt": "after import\n",
-    });
-    const exported = await bridge.exportRepoHead(REPO);
-    expect(exported.exported).toBe(1);
-
-    const tree = git(repoDir, ["ls-tree", "-r", "--name-only", "HEAD"])
-      .trim()
-      .split("\n")
-      .filter(Boolean);
-    expect(tree).toEqual(["after.txt", "external.txt", "foo", "keep.txt"]);
-    expect(await fsp.readFile(path.join(repoDir, "foo"), "utf8")).toBe("file now\n");
-    expect(await fsp.readFile(path.join(repoDir, "after.txt"), "utf8")).toBe("after import\n");
-    expect(git(repoDir, ["status", "--porcelain"]).trim()).toBe("");
-  });
-
-  it("rejects an extension ingesting directly onto a repo main lineage (finding 2)", async () => {
-    await commitRepo({ "a.txt": "one\n" });
-    const contentHash = sha256Hex(Buffer.from("one\n", "utf8"));
-    // A generic (or the git-bridge) extension caller may ONLY ingest to a
-    // non-main staging head — a direct main ingest is the finding-2 vector.
     await expect(
-      gad.callAs("extension", "ingestWorktreeState", {
-        logId: LOG,
-        head: "main",
-        logKind: "vcs",
-        actor: { id: "evil-ext", kind: "system" },
-        files: [{ path: "a.txt", contentHash, size: 4, mode: 33188 }],
+      bridge.importLockedInner(repoPath, { sourceUri: "https://example.test/demo.git" })
+    ).resolves.toEqual({
+      contextId: expect.stringMatching(/^git-bridge-/),
+      eventId: main.eventId,
+      changed: false,
+    });
+    expect(getCurrentCommit).toHaveBeenCalledTimes(2);
+    expect(statusMatrix).toHaveBeenCalledOnce();
+    expect(host.vcs.resolveRepository).toHaveBeenCalledOnce();
+    expect(host.vcs.resolveRepository).toHaveBeenCalledWith({ state: main, repoPath });
+    expect(host.vcs.neighbors).not.toHaveBeenCalled();
+    expect(host.vcs.inspect).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        node: expect.objectContaining({ kind: "repository" }),
       })
-    ).rejects.toThrow(/may not ingest onto a protected main lineage/);
-    // …but the same caller MAY ingest onto a non-main staging head.
-    const ok = await gad.callAs<{ stateHash: string }>("extension", "ingestWorktreeState", {
-      logId: LOG,
-      head: "import:main",
-      logKind: "vcs",
-      actor: { id: "git-bridge", kind: "system" },
-      files: [{ path: "a.txt", contentHash, size: 4, mode: 33188 }],
+    );
+    expect(host.vcs.importSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("records a new import boundary when Git revision changes without a tree change", async () => {
+    const repoPath = "projects/demo";
+    const dir = path.join(root, repoPath);
+    mkdirSync(path.join(dir, ".git"), { recursive: true });
+    writeFileSync(path.join(dir, "index.ts"), "same\n");
+    const main = { kind: "event" as const, eventId: "event:main" };
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, main.eventId));
+    host.vcs.resolveRepository = vi.fn(async ({ state, repoPath: resolvedPath }) => ({
+      state,
+      repositoryId: `repository:${resolvedPath}`,
+      repoPath: resolvedPath,
+    }));
+    host.vcs.inspect = vi.fn(async ({ node }) => {
+      if (node.kind === "repository") return repositoryInspection(main, repoPath);
+      if (node.kind === "application") return applicationInspection(node.applicationId);
+      if (node.kind === "work-unit") {
+        return importWorkUnitInspection("a".repeat(40), "https://example.test/owner/demo.git");
+      }
+      return eventInspection(main.eventId);
     });
-    expect(ok.stateHash).toBeTruthy();
+    host.vcs.listFiles = vi.fn(async () => ({
+      state: main,
+      repositoryId: "repository:projects/demo",
+      files: [
+        {
+          fileId: "file:index",
+          path: "index.ts",
+          contentHash: sha256Hex(Buffer.from("same\n")),
+          mode: 0o644,
+          contentKind: "text" as const,
+          byteLength: 5,
+          coordinateExtent: 5,
+        },
+      ],
+      nextCursor: null,
+    }));
+    host.vcs.importSnapshot = vi.fn(async () => ({
+      contextId: "ctx:import",
+      eventId: "event:imported",
+      workUnitId: "work:imported",
+      importedRepositoryIds: ["repository:projects/demo"],
+    }));
+    const bridge = new GitBridge(host);
+    vi.spyOn(bridge.git, "getCurrentCommit").mockResolvedValue("b".repeat(40));
+    vi.spyOn(bridge.git, "readCommitTree").mockResolvedValue([commitBlob("index.ts", "same\n")]);
+    vi.spyOn(bridge.git, "statusMatrix").mockResolvedValue([["index.ts", 1, 1, 1]]);
+
+    await expect(
+      bridge.importLockedInner(repoPath, { sourceUri: "https://example.test/owner/demo.git" })
+    ).resolves.toEqual({
+      contextId: expect.stringMatching(/^git-bridge-/),
+      eventId: "event:imported",
+      changed: true,
+    });
+    expect(host.vcs.importSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({ snapshotRevision: "b".repeat(40) }),
+      })
+    );
   });
 
-  it("never ingests platform-ignored paths (.git, .env, node_modules)", async () => {
-    await commitRepo({ "a.txt": "one\n" });
-    await bridge.exportRepoHead(REPO);
+  it("refuses an inconsistent content-store receipt before semantic import", async () => {
+    const repoPath = "projects/demo";
+    const dir = path.join(root, repoPath);
+    mkdirSync(path.join(dir, ".git"), { recursive: true });
+    writeFileSync(path.join(dir, "index.ts"), "captured\n");
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, "event:main"));
+    host.vcs.inspect = vi.fn(async () => {
+      const inspected = eventInspection("event:main");
+      inspected.node.value.applicationIds = [];
+      return inspected;
+    });
+    host.blobstore.putBase64 = vi.fn(async () => ({
+      digest: "0".repeat(64),
+      size: 999,
+    }));
+    const bridge = new GitBridge(host);
+    vi.spyOn(bridge.git, "getCurrentCommit").mockResolvedValue("a".repeat(40));
+    vi.spyOn(bridge.git, "readCommitTree").mockResolvedValue([
+      commitBlob("index.ts", "captured\n"),
+    ]);
+    vi.spyOn(bridge.git, "statusMatrix").mockResolvedValue([["index.ts", 1, 1, 1]]);
 
-    await fsp.writeFile(path.join(repoDir, ".env"), "SECRET=1\n");
-    await fsp.mkdir(path.join(repoDir, "node_modules", "x"), { recursive: true });
-    await fsp.writeFile(path.join(repoDir, "node_modules", "x", "i.js"), "x\n");
-    await fsp.writeFile(path.join(repoDir, "kept.txt"), "kept\n");
-
-    const imported = await bridge.importRepoTree(REPO);
-    expect(imported.changed).toBe(true);
-    const paths = (await mem.store.listTree(imported.stateHash))
-      ?.filter((e) => e.kind === "file")
-      .map((e) => e.path);
-    expect(paths).toEqual(["a.txt", "kept.txt"]);
+    await expect(
+      bridge.importLockedInner(repoPath, { sourceUri: "https://example.test/owner/demo.git" })
+    ).rejects.toThrow(/content store integrity mismatch for index\.ts/);
+    expect(host.blobstore.putBase64).toHaveBeenCalledWith(
+      Buffer.from("captured\n").toString("base64")
+    );
+    expect(host.vcs.importSnapshot).not.toHaveBeenCalled();
   });
 
-  it("keeps per-actor author names when only authorEmail is overridden", async () => {
-    // Two transitions authored by the `user` actor (see commitRepo).
-    await commitRepo({ "a.txt": "one\n" });
-    await commitRepo({ "a.txt": "two\n" });
+  it("rejects a tracked path excluded from semantic snapshots before the no-op shortcut", async () => {
+    const repoPath = "projects/demo";
+    const dir = path.join(root, repoPath);
+    mkdirSync(path.join(dir, ".git"), { recursive: true });
+    writeFileSync(path.join(dir, "index.ts"), "same\n");
+    writeFileSync(path.join(dir, ".env"), "SECRET=not-imported\n");
+    const main = { kind: "event" as const, eventId: "event:main" };
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, main.eventId));
+    host.vcs.resolveRepository = vi.fn(async ({ state, repoPath: resolvedPath }) => ({
+      state,
+      repositoryId: `repository:${resolvedPath}`,
+      repoPath: resolvedPath,
+    }));
+    host.vcs.inspect = vi.fn(async () => repositoryInspection(main, repoPath));
+    host.vcs.listFiles = vi.fn(async () => ({
+      state: main,
+      repositoryId: "repository:projects/demo",
+      files: [
+        {
+          fileId: "file:index",
+          path: "index.ts",
+          contentHash: sha256Hex(Buffer.from("same\n")),
+          mode: 0o644,
+          contentKind: "text" as const,
+          byteLength: 5,
+          coordinateExtent: 5,
+        },
+      ],
+      nextCursor: null,
+    }));
+    const bridge = new GitBridge(host);
+    vi.spyOn(bridge.git, "getCurrentCommit").mockResolvedValue("a".repeat(40));
+    vi.spyOn(bridge.git, "readCommitTree").mockResolvedValue([
+      commitBlob(".env", "SECRET=not-imported\n"),
+      commitBlob("index.ts", "same\n"),
+    ]);
+    vi.spyOn(bridge.git, "statusMatrix").mockResolvedValue([
+      [".env", 1, 1, 1],
+      ["index.ts", 1, 1, 1],
+    ]);
 
-    // Only the email is supplied: the author NAME must fall back to the
-    // transition's actor id (`user`), not to a fixed override.
-    const result = await bridge.exportRepoHead(REPO, { authorEmail: "person@example.com" });
-    expect(result.exported).toBe(2);
-
-    const authors = git(repoDir, ["log", "--format=%an <%ae>"]).trim().split("\n").filter(Boolean);
-    expect(authors).toEqual(["user <person@example.com>", "user <person@example.com>"]);
+    await expect(bridge.importLockedInner(repoPath, {})).rejects.toThrow(
+      /Git commit tracks paths excluded from the semantic snapshot \(\.env\)/
+    );
+    expect(host.vcs.importSnapshot).not.toHaveBeenCalled();
   });
 
-  it("serializes concurrent operations on the SAME repo via withRepoLock (start order = completion order)", async () => {
-    const order: string[] = [];
-    const gateA = deferred();
-    const gateB = deferred();
-    const flush = async () => {
-      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  it("rejects symlinks and other tracked entry kinds the semantic snapshot cannot represent", async () => {
+    const repoPath = "projects/demo";
+    const dir = path.join(root, repoPath);
+    mkdirSync(path.join(dir, ".git"), { recursive: true });
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, "event:main"));
+    const bridge = new GitBridge(host);
+    const statusMatrix = vi.spyOn(bridge.git, "statusMatrix");
+    vi.spyOn(bridge.git, "getCurrentCommit").mockResolvedValue("a".repeat(40));
+    vi.spyOn(bridge.git, "readCommitTree").mockResolvedValue([
+      {
+        path: "link",
+        type: "blob",
+        mode: 0o120000,
+        oid: "f".repeat(40),
+        bytes: Buffer.from("target"),
+      },
+    ]);
+
+    await expect(bridge.importLockedInner(repoPath, {})).rejects.toThrow(
+      /link \(blob, mode 120000\).*only regular files and executable files are importable/
+    );
+    expect(statusMatrix).not.toHaveBeenCalled();
+    expect(host.vcs.importSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rejects a dirty checkout instead of importing timing-derived content", async () => {
+    const repoPath = "projects/demo";
+    const dir = path.join(root, repoPath);
+    mkdirSync(path.join(dir, ".git"), { recursive: true });
+    writeFileSync(path.join(dir, "index.ts"), "dirty\n");
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, "event:main"));
+    const bridge = new GitBridge(host);
+    vi.spyOn(bridge.git, "getCurrentCommit").mockResolvedValue("b".repeat(40));
+    vi.spyOn(bridge.git, "readCommitTree").mockResolvedValue([
+      commitBlob("index.ts", "committed\n"),
+    ]);
+    vi.spyOn(bridge.git, "statusMatrix").mockResolvedValue([["index.ts", 1, 2, 2]]);
+
+    await expect(bridge.importLockedInner(repoPath, {})).rejects.toThrow(
+      /not the exact Git HEAD tree/
+    );
+    expect(host.vcs.importSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rejects when HEAD advances after the immutable revision was resolved", async () => {
+    const repoPath = "projects/demo";
+    const dir = path.join(root, repoPath);
+    mkdirSync(path.join(dir, ".git"), { recursive: true });
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, "event:main"));
+    const bridge = new GitBridge(host);
+    vi.spyOn(bridge.git, "getCurrentCommit")
+      .mockResolvedValueOnce("a".repeat(40))
+      .mockResolvedValueOnce("b".repeat(40));
+    vi.spyOn(bridge.git, "readCommitTree").mockResolvedValue([
+      commitBlob("index.ts", "committed\n"),
+    ]);
+    vi.spyOn(bridge.git, "statusMatrix").mockResolvedValue([["index.ts", 1, 1, 1]]);
+
+    await expect(bridge.importLockedInner(repoPath, {})).rejects.toThrow(
+      /Git HEAD advanced while resolving the snapshot/
+    );
+    expect(host.vcs.importSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("exports one protected-main event snapshot and then observes it as up to date", async () => {
+    const repoPath = "projects/demo";
+    const dir = path.join(root, repoPath);
+    mkdirSync(path.join(dir, ".git"), { recursive: true });
+    const main = { kind: "event" as const, eventId: "event:main" };
+    const repositoryRef = {
+      kind: "repository" as const,
+      state: main,
+      repositoryId: "repository:projects/demo",
     };
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, main.eventId));
+    host.vcs.resolveRepository = vi.fn(async ({ state, repoPath: resolvedPath }) => ({
+      state,
+      repositoryId: repositoryRef.repositoryId,
+      repoPath: resolvedPath,
+    }));
+    host.vcs.inspect = vi.fn(async ({ node }) =>
+      node.kind === "repository"
+        ? repositoryInspection(main, repoPath)
+        : eventInspection(main.eventId)
+    );
+    host.vcs.listFiles = vi.fn(async () => ({
+      state: main,
+      repositoryId: repositoryRef.repositoryId,
+      files: [
+        {
+          fileId: "file:index",
+          path: "index.ts",
+          contentHash: sha256Hex(Buffer.from("exported\n")),
+          mode: 0o755,
+          contentKind: "text" as const,
+          byteLength: 9,
+          coordinateExtent: 9,
+        },
+      ],
+      nextCursor: null,
+    }));
+    host.vcs.readFile = vi.fn(async () => ({
+      repositoryId: repositoryRef.repositoryId,
+      fileId: "file:index",
+      repoPath,
+      path: "index.ts",
+      contentHash: sha256Hex(Buffer.from("exported\n")),
+      mode: 0o755,
+      content: { kind: "text" as const, text: "exported\n" },
+    }));
+    const bridge = new GitBridge(host);
+    vi.spyOn(bridge.git, "getCurrentCommit")
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue("git:main");
+    vi.spyOn(bridge.git, "readCommitTree").mockResolvedValue([
+      commitBlob("index.ts", "exported\n", 0o100755),
+    ]);
+    vi.spyOn(bridge.git, "log").mockResolvedValue([
+      {
+        oid: "git:main",
+        message: `Semantic snapshot\n\nVibestudio-Event: ${main.eventId}`,
+        parentOids: [],
+        author: { name: "Vibestudio", email: "vibestudio@local", timestamp: 0 },
+      },
+    ]);
+    vi.spyOn(bridge.git, "add").mockResolvedValue(undefined);
+    vi.spyOn(bridge.git, "commit").mockResolvedValue("git:main");
 
-    const first = withRepoLock("packages/serial", async () => {
-      order.push("start-a");
-      await gateA.promise;
-      order.push("end-a");
+    await expect(bridge.exportProtectedRepository(repoPath)).resolves.toEqual({
+      exported: 1,
+      headCommit: "git:main",
+      clobberedLocalEdits: [],
     });
-    const second = withRepoLock("packages/serial", async () => {
-      order.push("start-b");
-      await gateB.promise;
-      order.push("end-b");
+    expect(readFileSync(path.join(dir, "index.ts"), "utf8")).toBe("exported\n");
+    await expect(bridge.exportProtectedRepository(repoPath)).resolves.toEqual({
+      exported: 0,
+      headCommit: "git:main",
+      clobberedLocalEdits: [],
     });
-
-    // The second op cannot start until the first releases the per-repo lock.
-    await flush();
-    expect(order).toEqual(["start-a"]);
-
-    gateA.resolve();
-    await first;
-    await flush();
-    expect(order).toEqual(["start-a", "end-a", "start-b"]);
-
-    gateB.resolve();
-    await second;
-    expect(order).toEqual(["start-a", "end-a", "start-b", "end-b"]);
+    expect(host.vcs.resolveRepository).toHaveBeenCalledTimes(2);
+    expect(host.vcs.resolveRepository).toHaveBeenNthCalledWith(1, { state: main, repoPath });
+    expect(host.vcs.resolveRepository).toHaveBeenNthCalledWith(2, { state: main, repoPath });
+    expect(host.vcs.neighbors).not.toHaveBeenCalled();
+    expect(bridge.git.commit).toHaveBeenCalledTimes(1);
   });
 
-  it("runs operations on DIFFERENT repos concurrently under withRepoLock", async () => {
-    const order: string[] = [];
-    const gate = deferred();
-    const flush = async () => {
-      for (let i = 0; i < 5; i += 1) await Promise.resolve();
-    };
+  it("refuses to export over an unresolved external candidate", async () => {
+    const repoPath = "projects/demo";
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => ({
+      ...status(contextId, "event:main"),
+      committed: { kind: "event" as const, eventId: "event:external-candidate" },
+      workingHead: { kind: "event" as const, eventId: "event:external-candidate" },
+      mainRelation: "ahead" as const,
+    }));
+    const bridge = new GitBridge(host);
 
-    const a = withRepoLock("packages/repo-x", async () => {
-      order.push("start-x");
-      await gate.promise;
-      order.push("end-x");
-    });
-    const b = withRepoLock("packages/repo-y", async () => {
-      order.push("start-y");
-      order.push("end-y");
-    });
-
-    // Different repos don't share a lock: both start before the first releases.
-    await flush();
-    expect(order).toContain("start-x");
-    expect(order).toContain("start-y");
-    expect(order).toContain("end-y");
-
-    gate.resolve();
-    await Promise.all([a, b]);
-    expect(order[order.length - 1]).toBe("end-x");
+    await expect(bridge.exportProtectedRepository(repoPath)).rejects.toThrow(
+      /candidate event:external-candidate.*git-bridge-.*incrementally integrated/
+    );
+    expect(host.vcs.inspect).not.toHaveBeenCalled();
   });
 });
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((res) => {
-    resolve = () => res();
-  });
-  return { promise, resolve };
-}

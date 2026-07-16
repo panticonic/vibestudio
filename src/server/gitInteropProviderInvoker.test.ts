@@ -24,7 +24,7 @@ describe("Git interop provider dispatch", () => {
   });
 
   it("rejects malformed provider results", async () => {
-    const host = { invokeProvider: vi.fn(async () => ({ stateHash: "state:123" })) };
+    const host = { invokeProvider: vi.fn(async () => ({ workspaceStateHash: "state:123" })) };
     const invoke = createGitInteropProviderInvoker(() => host);
 
     await expect(invoke(ctx, "cloneRepo", [{ repoPath: "projects/demo" }])).rejects.toThrow(

@@ -8,23 +8,26 @@
  * `manifest:<sha256 of the canonical node JSON>`, so the hex suffix of a tree
  * hash IS the blob digest of the node's bytes. Likewise a state root pointer
  * `{manifestRootHash}` is stored at the hex suffix of its `state:` hash.
- * This keeps tree hashes byte-compatible with existing gad state/manifest
- * hashes (see ./worktreeHash.ts and its golden-vector test).
+ * The hash protocol is owned by the runtime-neutral
+ * `@vibestudio/content-addressing` package.
  *
  * Decoding is strict by design: blob writes are unauthenticated content, so
  * ANY bytes can exist at a digest. `decodeTreeNode` therefore refuses
  * anything that is not the exact canonical serialization of a valid,
- * codepoint-sorted, safely-named entry list — a crafted "tree node" with
+ * UTF-16-code-unit-sorted, safely-named entry list — a crafted "tree node" with
  * `../` names or junk shape can never flow into list/read/materialize.
  */
 
-import { canonicalJson } from "./canonicalJson.js";
 import {
+  assertValidTreeEntryName,
+  canonicalJson,
+  compareUtf16CodeUnits,
   manifestHashForEntries,
+  splitTreePath,
   stateHashForRoot,
   type ManifestHashEntry,
   type WorktreeHashFile,
-} from "./worktreeHash.js";
+} from "@vibestudio/content-addressing";
 
 export const TREE_HASH_RE = /^manifest:[0-9a-f]{64}$/;
 export const STATE_HASH_RE = /^state:[0-9a-f]{64}$/;
@@ -40,42 +43,6 @@ export function treeHashDigest(hash: string): string {
   if (TREE_HASH_RE.test(hash)) return hash.slice("manifest:".length);
   if (STATE_HASH_RE.test(hash)) return hash.slice("state:".length);
   throw new Error(`Not a tree/state hash: ${JSON.stringify(hash)}`);
-}
-
-/**
- * Whether `name` is a valid single tree-entry name: exactly one non-empty
- * path segment with no separator, traversal, or NUL tricks. Rejects `.` and
- * `..` so a tree can never address outside itself when joined onto a
- * directory during materialization.
- */
-export function isValidTreeEntryName(name: string): boolean {
-  return (
-    typeof name === "string" &&
-    name.length > 0 &&
-    name !== "." &&
-    name !== ".." &&
-    !name.includes("/") &&
-    !name.includes("\\") &&
-    !name.includes("\0")
-  );
-}
-
-export function assertValidTreeEntryName(name: string): void {
-  if (!isValidTreeEntryName(name)) {
-    throw new Error(`Invalid tree entry name: ${JSON.stringify(name)}`);
-  }
-}
-
-/**
- * Split a tree-relative posix path into validated segments. Empty path means
- * the tree root (returns []). Every segment must be a valid entry name, so
- * `a//b`, `a/../b`, absolute paths etc. are rejected.
- */
-export function splitTreePath(path: string): string[] {
-  if (path === "") return [];
-  const segments = path.split("/");
-  for (const segment of segments) assertValidTreeEntryName(segment);
-  return segments;
 }
 
 function assertValidEntry(entry: ManifestHashEntry): void {
@@ -105,7 +72,7 @@ function assertValidEntry(entry: ManifestHashEntry): void {
 }
 
 /**
- * Validate a caller-supplied entry list and return it codepoint-sorted (the
+ * Validate a caller-supplied entry list and return it UTF-16-code-unit-sorted (the
  * canonical node order). Throws on invalid names/hashes/modes/kinds and on
  * duplicate names.
  */
@@ -118,8 +85,7 @@ export function normalizeTreeEntries(entries: ManifestHashEntry[]): ManifestHash
     }
     seen.add(entry.name);
   }
-  // Codepoint compare — identical to manifestHashForEntries' internal sort.
-  return [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return [...entries].sort((a, b) => compareUtf16CodeUnits(a.name, b.name));
 }
 
 export interface EncodedTreeNode {
@@ -127,7 +93,7 @@ export interface EncodedTreeNode {
   treeHash: string;
   /** Canonical JSON bytes to store in the CAS. */
   canonicalText: string;
-  /** Validated, codepoint-sorted entries. */
+  /** Validated, UTF-16-code-unit-sorted entries. */
   entries: ManifestHashEntry[];
 }
 
@@ -142,7 +108,7 @@ export function encodeTreeNode(entries: ManifestHashEntry[]): EncodedTreeNode {
 /**
  * Strictly decode a stored tree-node blob. Rejects anything that is not the
  * exact canonical serialization of a valid sorted entry list — shape, entry
- * validity, codepoint sort order, and byte-for-byte canonical form are all
+ * validity, UTF-16 code-unit sort order, and byte-for-byte canonical form are all
  * enforced, so `manifest:<digest of these bytes>` is guaranteed to equal
  * `manifestHashForEntries(entries)`.
  */
@@ -172,9 +138,9 @@ export function decodeTreeNode(text: string): ManifestHashEntry[] {
   for (let i = 1; i < entries.length; i += 1) {
     const prev = entries[i - 1]!.name;
     const next = entries[i]!.name;
-    if (!(prev < next)) {
+    if (compareUtf16CodeUnits(prev, next) >= 0) {
       throw new Error(
-        `Corrupt tree node: entries not in codepoint order (${JSON.stringify(prev)} !< ${JSON.stringify(next)})`
+        `Corrupt tree node: entries not in UTF-16 code-unit order (${JSON.stringify(prev)} !< ${JSON.stringify(next)})`
       );
     }
   }

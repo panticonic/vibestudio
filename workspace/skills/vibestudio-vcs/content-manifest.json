@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 2,
+  "generatedBy": "scripts/generate-vcs-skill-release.mjs",
+  "files": [
+    {
+      "path": "SKILL.md",
+      "sha256": "a38d70a82f7fb699684e0fff1e8b23ab0717521ae337a14470e692042082edc4"
+    },
+    {
+      "path": "agents/openai.yaml",
+      "sha256": "4e10c68a376b127905e589b3ab509c91031213daf4c9f64616eff264ceef1cd4"
+    },
+    {
+      "path": "evaluations/schema-fixtures.json",
+      "sha256": "983f9634034b02eef37a814c87d11ed057a8f9ffeeedf176381fd6aba88a5dd2"
+    },
+    {
+      "path": "package.json",
+      "sha256": "bf8b90f00a21da2310903dc38dcd832721c470794044bd97e85a0558b835aa03"
+    },
+    {
+      "path": "references/authoring-basics.md",
+      "sha256": "9fec9c921d0f1b4f58a6a6cb0aa86d97f76ee5a3281b3f3c40865d7df9daaf61"
+    },
+    {
+      "path": "references/checks-and-publication.md",
+      "sha256": "e8055a34887db894a72f881b8bbe6a36993b0792c76dcc66cc84d5dab26ee9dd"
+    },
+    {
+      "path": "references/compare-and-integrate.md",
+      "sha256": "ecab414f100fe9119cd0da60f6a619ca29c025560e7d978dfa926f8a37b9d539"
+    },
+    {
+      "path": "references/contexts-and-state.md",
+      "sha256": "62a159c10bf070f3c250861b6db03d5f54f0bbf6849dbdda05ccc00a9fcb9433"
+    },
+    {
+      "path": "references/external-snapshot-import.md",
+      "sha256": "c48a58ab370895f816327ce28e7a3c287aa2e543802ecb85192cf43601a7ccc8"
+    },
+    {
+      "path": "references/file-move-copy.md",
+      "sha256": "391c4c7e66b362a8ef2cbd7f00fb0895c7b575451c0e8b799108edbeb88db0f2"
+    },
+    {
+      "path": "references/provenance-and-blame.md",
+      "sha256": "cdf3ec54ff7469f3d293d1bd9c7a9f37f0ec191f4a665bc717eda4d4fd71257d"
+    },
+    {
+      "path": "references/public-contract.json",
+      "sha256": "3693a032ddb0a5189d6f4bc027c75dc889140ac46ac3d15047f87303a94c466b"
+    },
+    {
+      "path": "references/public-contract.md",
+      "sha256": "1a6a0d7113529fd3ddd91c0e351b38268b6c83b30ea190256afc9caa1627713e"
+    },
+    {
+      "path": "references/revert-counteractions.md",
+      "sha256": "a8749fa32eb590af1f9f74b365a0dac5958587c70f22ea0517f8774e3f1f8f10"
+    },
+    {
+      "path": "references/scenarios.md",
+      "sha256": "3f1a8dea6de7f85dfc4a3425d4aaaf5de8dd626d48791d91c9d5ecd443ded2bc"
+    },
+    {
+      "path": "references/semantic-commit.md",
+      "sha256": "d8da5f74a8aa207046ec4f05861bd7f6c9a814d817672ba3e6e99345a9d9d389"
+    },
+    {
+      "path": "references/typed-recovery.md",
+      "sha256": "d6488e08f359f811916e2ca1f11f7cacd16e341b95a7e3cc3ffd8b46b964be57"
+    }
+  ],
+  "packageDigest": "7288b69cf49f7922182378bb53f57df62e09b988c8f9b43f68f92e8fd701a9aa"
+}

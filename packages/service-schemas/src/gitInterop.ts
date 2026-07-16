@@ -67,7 +67,9 @@ export const gitUpstreamConfigSchema = z
     autoPush: z
       .boolean()
       .optional()
-      .describe("Whether protected-main advances auto-push upstream."),
+      .describe(
+        "Whether future exports of already-published protected main may push upstream automatically; never publishes import candidates."
+      ),
     credentialId: z.string().optional().describe("Credential id used for credentialed git HTTP."),
     authorEmail: z.string().optional().describe("Exported git commit author email override."),
     authorName: z.string().optional().describe("Exported git commit author name override."),
@@ -104,6 +106,21 @@ export const gitImportProjectSchema = z
   .strict();
 export type GitImportProjectRequest = z.infer<typeof gitImportProjectSchema>;
 
+export const gitSemanticCandidateSchema = z
+  .object({
+    contextId: z.string().describe("Semantic context containing the external snapshot candidate."),
+    eventId: z.string().describe("Committed candidate event created from the external snapshot."),
+  })
+  .strict();
+export type GitSemanticCandidate = z.infer<typeof gitSemanticCandidateSchema>;
+
+export const gitImportResultSchema = gitSemanticCandidateSchema
+  .extend({
+    changed: z.boolean(),
+  })
+  .strict();
+export type GitImportResult = z.infer<typeof gitImportResultSchema>;
+
 export const gitCompleteWorkspaceDependenciesSchema = z
   .object({
     credentialId: z
@@ -120,6 +137,9 @@ export const gitImportedWorkspaceRepoSchema = z
   .object({
     path: z.string(),
     remote: gitRemoteSchema,
+    candidate: gitImportResultSchema.describe(
+      "Semantic candidate to compare and integrate before explicitly publishing protected main."
+    ),
   })
   .strict();
 export type GitImportedWorkspaceRepo = z.infer<typeof gitImportedWorkspaceRepoSchema>;
@@ -131,7 +151,7 @@ export const gitCompleteWorkspaceDependenciesResultSchema = z
       z
         .object({
           path: z.string(),
-          reason: z.enum(["already-present", "unsupported-path"]),
+          reason: z.enum(["already-materialized", "unsupported-path"]),
         })
         .strict()
     ),
@@ -154,6 +174,7 @@ export const gitUpstreamStateSchema = z.enum([
   "ahead",
   "behind",
   "diverged",
+  "integration-required",
   "auth-failed",
   "error",
   "exporting",
@@ -201,8 +222,11 @@ export const gitUpstreamStatusRowSchema = z
     lastPushedSha: z.string().optional(),
     lastPushedAt: nonNegativeIntegerSchema.optional(),
     lastError: z.string().optional(),
-    /** True when auto-push is on and unpushed commits are queued behind it. */
-    pendingAutoPush: z.boolean().optional(),
+    candidate: gitSemanticCandidateSchema
+      .optional()
+      .describe("Unpublished external snapshot awaiting ordinary semantic VCS integration."),
+    /** True when auto-push is on and the exported Git projection is ahead. */
+    autoPushRequired: z.boolean().optional(),
     /** When the most recent background push/pull failure was recorded. */
     lastFailureAt: nonNegativeIntegerSchema.optional(),
     /** When the auto-push backoff will retry next, if a retry is scheduled. */
@@ -247,14 +271,6 @@ export const gitPullUpstreamOptionsSchema = z
   .strict();
 export type GitPullUpstreamOptions = z.infer<typeof gitPullUpstreamOptionsSchema>;
 
-export const gitImportResultSchema = z
-  .object({
-    stateHash: z.string(),
-    changed: z.boolean(),
-  })
-  .strict();
-export type GitImportResult = z.infer<typeof gitImportResultSchema>;
-
 export const gitPullUpstreamResultSchema = z
   .object({
     behindBy: nonNegativeIntegerSchema,
@@ -270,20 +286,10 @@ export const gitPullUpstreamResultSchema = z
   .strict();
 export type GitPullUpstreamResult = z.infer<typeof gitPullUpstreamResultSchema>;
 
-export const gitResetExportMarkerResultSchema = z
-  .object({
-    repoPath: z.string(),
-    /** True when a marker existed and was cleared. */
-    cleared: z.boolean(),
-  })
-  .strict();
-export type GitResetExportMarkerResult = z.infer<typeof gitResetExportMarkerResultSchema>;
-
 export const gitCommitMappingRowSchema = z
   .object({
     gitSha: z.string(),
-    gadState: z.string(),
-    gadEvent: z.string(),
+    eventId: z.string().describe("Semantic event represented by this Git commit."),
     summary: z.string(),
   })
   .strict();
@@ -491,7 +497,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   setAutoPush: {
     description:
-      "Toggle auto-push on an already declared upstream, persisting the change to meta/vibestudio.yml; may prompt for capability approval.",
+      "Toggle optional outgoing Git push for future exports of already-published protected main, persisting the change to meta/vibestudio.yml; this never publishes import candidates and may prompt for capability approval.",
     args: z.tuple([
       z.string().describe("Workspace-relative repo/unit path the upstream belongs to."),
       z.boolean().describe("Whether auto-push should be enabled."),
@@ -502,7 +508,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   upstreamStatus: {
     description:
-      "Return external Git upstream status for tracked repos. The configured gitInterop provider performs any Git/network work.",
+      "Return external Git upstream status for tracked repos, including integration-required candidate coordinates. The configured gitInterop provider performs any Git/network work.",
     args: z.union([
       z.tuple([
         z
@@ -522,7 +528,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   pushUpstream: {
     description:
-      "Export protected main and push it to the repo's declared upstream through the configured gitInterop provider.",
+      "Export protected main and push it to the repo's declared upstream through the configured gitInterop provider; refuse while an external snapshot candidate requires semantic integration.",
     args: z.union([
       z.tuple([z.string().describe("Workspace-relative repo/unit path to push.")]),
       z.tuple([
@@ -536,7 +542,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   pullUpstream: {
     description:
-      "Fetch/pull a declared upstream and import upstream changes into protected main through the configured gitInterop provider.",
+      "Fetch a declared upstream and import its exact snapshot as a semantic candidate. Reconcile and publish it only through vcs.compare, incremental vcs.integrate, vcs.commit, and vcs.push.",
     args: z.union([
       z.tuple([z.string().describe("Workspace-relative repo/unit path to pull.")]),
       z.tuple([
@@ -613,17 +619,9 @@ export const gitInteropMethods = defineServiceMethods({
     access: DISPOSABLE_REMOTE_WRITE_ACCESS,
     examples: [{ args: ["http://vibestudio.local/_disposable-git/<id>/publish-check.git"] }],
   },
-  resetExportMarker: {
-    description:
-      "Clear a repo's git-bridge export marker so the next export rebuilds from an empty checkout. Recovery command for a marker that no longer matches the repo log.",
-    args: z.tuple([z.string().describe("Workspace-relative repo/unit path to reset.")]),
-    returns: gitResetExportMarkerResultSchema,
-    access: UPSTREAM_OPERATION_ACCESS,
-    examples: [{ args: ["projects/bgkit"] }],
-  },
   commitMapping: {
     description:
-      "Return the gad↔git commit mapping for a repo's checkout, read from the GAD-State/GAD-Event trailers of exported commits (newest first).",
+      "Return the semantic-event↔Git commit mapping for a repo's checkout, read from Vibestudio-Event trailers (newest first).",
     args: z.union([
       z.tuple([z.string().describe("Workspace-relative repo/unit path to inspect.")]),
       z.tuple([
@@ -637,7 +635,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   importProject: {
     description:
-      "Clone an external Git project into the workspace at the requested path and record its remote and upstream in meta/vibestudio.yml; clones over the network and may prompt for config-write approval.",
+      "Clone an external Git project, record its remote/upstream config, and return the semantic candidate context and event. The import does not publish protected main; use the ordinary VCS integration path.",
     args: z.tuple([gitImportProjectSchema]),
     returns: gitImportedWorkspaceRepoSchema,
     access: IMPORT_PROJECT_ACCESS,
@@ -658,7 +656,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   completeWorkspaceDependencies: {
     description:
-      "Clone every remote declared in meta/vibestudio.yml whose unit is not yet present in the workspace, skipping already-present or unsupported paths; returns per-unit imported/skipped/failed results.",
+      "Ask the configured provider for upstream status, clone each supported declaration reported as not-materialized, and return one unpublished semantic candidate per successful import. Other reported states are skipped as already-materialized; candidates require ordinary VCS integration and explicit publication.",
     args: z.union([z.tuple([]), z.tuple([gitCompleteWorkspaceDependenciesSchema])]),
     returns: gitCompleteWorkspaceDependenciesResultSchema,
     access: COMPLETE_DEPENDENCIES_ACCESS,
@@ -678,7 +676,6 @@ export const gitInteropProviderMethods = defineServiceMethods({
   pushUpstream: gitInteropMethods.pushUpstream,
   pullUpstream: gitInteropMethods.pullUpstream,
   publishRepo: gitInteropMethods.publishRepo,
-  resetExportMarker: gitInteropMethods.resetExportMarker,
   commitMapping: gitInteropMethods.commitMapping,
   pushDisposableRemote: {
     description: "Export and push one repo to an explicit host-managed disposable remote URL.",
@@ -694,7 +691,7 @@ export const gitInteropProviderMethods = defineServiceMethods({
       .strict(),
   },
   cloneRepo: {
-    description: "Clone one declared workspace dependency and import it into protected main.",
+    description: "Clone one declared workspace dependency and return its semantic candidate.",
     args: z.tuple([z.object({ repoPath: z.string() }).strict()]),
     returns: gitImportResultSchema,
   },
@@ -729,7 +726,6 @@ export const GIT_INTEROP_PROVIDER_OPERATIONS = [
   "pushUpstream",
   "pullUpstream",
   "publishRepo",
-  "resetExportMarker",
   "commitMapping",
   "pushDisposableRemote",
 ] as const satisfies readonly GitInteropProviderMethod[];

@@ -283,31 +283,3 @@ export interface ImageDiff {
   oldDimensions?: { width: number; height: number };
   newDimensions?: { width: number; height: number };
 }
-
-// ============================================================================
-// Conflict resolution
-// ============================================================================
-
-export interface ConflictInfo {
-  path: string;
-  /** Original file content including conflict markers */
-  original?: string;
-  base: string;
-  ours: string;
-  theirs: string;
-  markers: ConflictMarker[];
-}
-
-export interface ConflictMarker {
-  startLine: number;
-  endLine: number;
-  oursStart: number;
-  oursEnd: number;
-  theirsStart: number;
-  theirsEnd: number;
-}
-
-export interface ConflictResolution {
-  path: string;
-  content: string;
-}

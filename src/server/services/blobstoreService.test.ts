@@ -4,19 +4,21 @@ import { promises as fsp } from "fs";
 import * as path from "path";
 import * as os from "os";
 import { Readable } from "stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { TreeListCursorSchema } from "@vibestudio/service-schemas/blobstore";
 import {
   buildWorktreeManifest,
   manifestHashForEntries,
   EMPTY_STATE_HASH,
   type ManifestHashEntry,
   type WorktreeHashFile,
-} from "@vibestudio/shared/contentTree/worktreeHash";
+} from "@vibestudio/content-addressing";
 import { treeHashDigest } from "@vibestudio/shared/contentTree/treeObjects";
 import { dedupeBlobNamespaceSync } from "../storage/blobCas.js";
 import {
   blobPath,
+  collectExactTreeListing,
   createBlobstoreService,
   diffTrees,
   ensureLayout,
@@ -25,11 +27,13 @@ import {
   hasTreeObject,
   listTree,
   materializeTree,
+  MerkleTreeComposer,
   mirrorWorktreeTree,
   putBytes,
   putTree,
   readFileAtTree,
   resolveTreePath,
+  type TreeListEntry,
 } from "./blobstoreService.js";
 
 interface TestServer {
@@ -41,6 +45,28 @@ interface HttpResult {
   status: number;
   headers: Record<string, string | string[] | undefined>;
   body: Buffer;
+}
+
+async function collectTreeEntries(
+  blobsDir: string,
+  ref: string,
+  options: { prefix?: string; limit?: number } = {}
+): Promise<TreeListEntry[] | null> {
+  const entries: TreeListEntry[] = [];
+  let cursor: string | undefined;
+  const seen = new Set<string>();
+  for (;;) {
+    const page = await listTree(blobsDir, ref, {
+      ...options,
+      ...(cursor ? { cursor } : {}),
+    });
+    if (page === null) return null;
+    entries.push(...page.entries);
+    if (page.completeness === "complete") return entries;
+    if (seen.has(page.nextCursor)) throw new Error("test collector observed repeated cursor");
+    seen.add(page.nextCursor);
+    cursor = page.nextCursor;
+  }
 }
 
 async function startBlobstoreServer(blobsDir: string): Promise<TestServer> {
@@ -529,6 +555,178 @@ describe("blobstoreService", () => {
       expect(await getTree(blobsDir, `state:${"0".repeat(64)}`)).toBeNull();
     });
 
+    it("composes repository roots by Merkle graft while preserving neutral worktree identity", async () => {
+      const appPackage = await seed('{"name":"app"}\n');
+      const appSource = await seed("export const app = true;\n");
+      const metaConfig = await seed("id: workspace\n");
+      const app = await mirrorWorktreeTree(blobsDir, [
+        { path: "package.json", contentHash: appPackage, mode: 33188 },
+        { path: "src/index.ts", contentHash: appSource, mode: 33188 },
+      ]);
+      const meta = await mirrorWorktreeTree(blobsDir, [
+        { path: "vibestudio.yml", contentHash: metaConfig, mode: 33188 },
+      ]);
+
+      const composed = await new MerkleTreeComposer(blobsDir).composeStateGrafts([
+        { path: "packages/app", stateHash: app.stateHash },
+        { path: "meta", stateHash: meta.stateHash },
+      ]);
+      const expected = buildWorktreeManifest([
+        { path: "meta/vibestudio.yml", contentHash: metaConfig, mode: 33188 },
+        { path: "packages/app/package.json", contentHash: appPackage, mode: 33188 },
+        { path: "packages/app/src/index.ts", contentHash: appSource, mode: 33188 },
+      ]);
+
+      expect(composed).toEqual({ stateHash: expected.stateHash, treeHash: expected.rootHash });
+      await expect(resolveTreePath(blobsDir, composed.stateHash, "packages/app")).resolves.toEqual({
+        kind: "dir",
+        treeHash: app.treeHash,
+      });
+      await expect(
+        readFileAtTree(blobsDir, composed.stateHash, "packages/app/src/index.ts")
+      ).resolves.toEqual({ contentHash: appSource, mode: 33188 });
+    });
+
+    it("single-flights concurrent inspection of one immutable repository state", async () => {
+      const digest = await seed("shared repository body\n");
+      const repository = await mirrorWorktreeTree(blobsDir, [
+        { path: "file.txt", contentHash: digest, mode: 33188 },
+      ]);
+      const stateObjectPath = blobPath(blobsDir, treeHashDigest(repository.stateHash));
+      const readSpy = vi.spyOn(fsp, "readFile");
+
+      try {
+        await new MerkleTreeComposer(blobsDir).composeStateGrafts([
+          { path: "packages/left", stateHash: repository.stateHash },
+          { path: "packages/right", stateHash: repository.stateHash },
+        ]);
+
+        const readsOf = (filePath: string): number =>
+          readSpy.mock.calls.filter(([candidate]) => String(candidate) === filePath).length;
+        expect(readsOf(stateObjectPath)).toBe(1);
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+
+    it("bounds state-root facts with LRU recency and recomputes evicted states", async () => {
+      const digest = await seed("one body, distinct repository coordinates\n");
+      const stateA = await mirrorWorktreeTree(blobsDir, [
+        { path: "a.txt", contentHash: digest, mode: 33188 },
+      ]);
+      const stateB = await mirrorWorktreeTree(blobsDir, [
+        { path: "b.txt", contentHash: digest, mode: 33188 },
+      ]);
+      const stateC = await mirrorWorktreeTree(blobsDir, [
+        { path: "c.txt", contentHash: digest, mode: 33188 },
+      ]);
+      const composer = new MerkleTreeComposer(blobsDir, {
+        stateRootCacheEntries: 2,
+        treeExtentCacheEntries: 0,
+      });
+      const compose = async (stateHash: string): Promise<void> => {
+        await composer.composeStateGrafts([{ path: "packages/repository", stateHash }]);
+      };
+
+      await compose(stateA.stateHash);
+      await compose(stateB.stateHash);
+      await compose(stateA.stateHash); // Promote A, making B the LRU entry.
+      await compose(stateC.stateHash); // Evict B from the two-entry cache.
+      await fsp.rm(blobPath(blobsDir, treeHashDigest(stateB.stateHash)));
+
+      await expect(compose(stateA.stateHash)).resolves.toBeUndefined();
+      await expect(compose(stateB.stateHash)).rejects.toThrow(/state root is missing from the CAS/);
+    });
+
+    it("bounds tree-extent facts and retries cleanly after an evicted inspection fails", async () => {
+      const digest = await seed("one body, two trees\n");
+      const stateA = await mirrorWorktreeTree(blobsDir, [
+        { path: "a.txt", contentHash: digest, mode: 33188 },
+      ]);
+      const stateB = await mirrorWorktreeTree(blobsDir, [
+        { path: "b.txt", contentHash: digest, mode: 33188 },
+      ]);
+      const composer = new MerkleTreeComposer(blobsDir, {
+        stateRootCacheEntries: 0,
+        treeExtentCacheEntries: 1,
+      });
+      const compose = async (stateHash: string): Promise<void> => {
+        await composer.composeStateGrafts([{ path: "packages/repository", stateHash }]);
+      };
+
+      await compose(stateA.stateHash);
+      await compose(stateB.stateHash); // Evict A's root extent.
+      const stateATreePath = blobPath(blobsDir, treeHashDigest(stateA.treeHash));
+      const stateATreeBytes = await fsp.readFile(stateATreePath);
+      await fsp.rm(stateATreePath);
+
+      await expect(compose(stateA.stateHash)).rejects.toThrow(/Tree object missing from store/);
+      const restored = await putBytes(blobsDir, stateATreeBytes);
+      expect(restored.digest).toBe(treeHashDigest(stateA.treeHash));
+      await expect(compose(stateA.stateHash)).resolves.toBeUndefined();
+    });
+
+    it("treats empty repository states as content-neutral and rejects ambiguous graft sets", async () => {
+      const digest = await seed("content\n");
+      const present = await mirrorWorktreeTree(blobsDir, [
+        { path: "file.txt", contentHash: digest, mode: 33188 },
+      ]);
+      await mirrorWorktreeTree(blobsDir, []);
+      const composer = new MerkleTreeComposer(blobsDir);
+
+      const composed = await composer.composeStateGrafts([
+        { path: "packages/present", stateHash: present.stateHash },
+        { path: "packages/empty", stateHash: EMPTY_STATE_HASH },
+      ]);
+      expect(composed.stateHash).toBe(
+        buildWorktreeManifest([
+          { path: "packages/present/file.txt", contentHash: digest, mode: 33188 },
+        ]).stateHash
+      );
+      await expect(
+        composer.composeStateGrafts([
+          { path: "packages/present", stateHash: present.stateHash },
+          { path: "packages/present", stateHash: present.stateHash },
+        ])
+      ).rejects.toThrow(/duplicate graft path/);
+      await expect(
+        composer.composeStateGrafts([
+          { path: "packages", stateHash: present.stateHash },
+          { path: "packages/present", stateHash: present.stateHash },
+        ])
+      ).rejects.toThrow(/graft paths overlap/);
+    });
+
+    it("refuses incomplete repository roots and prefix-induced projection overflow", async () => {
+      const digest = await seed("content\n");
+      const nested = await mirrorWorktreeTree(blobsDir, [
+        { path: "nested/file.txt", contentHash: digest, mode: 33188 },
+      ]);
+      const nestedTree = await resolveTreePath(blobsDir, nested.stateHash, "nested");
+      expect(nestedTree?.kind).toBe("dir");
+      await fsp.rm(
+        blobPath(blobsDir, treeHashDigest((nestedTree as { treeHash: string }).treeHash)),
+        { force: true }
+      );
+      await expect(
+        new MerkleTreeComposer(blobsDir).composeStateGrafts([
+          { path: "packages/broken", stateHash: nested.stateHash },
+        ])
+      ).rejects.toThrow(/Tree object missing from store/);
+
+      const segment = "x".repeat(255);
+      const maximumRelativePath = Array.from({ length: 16 }, () => segment).join("/");
+      expect(Buffer.byteLength(maximumRelativePath, "utf8")).toBe(4095);
+      const maximum = await mirrorWorktreeTree(blobsDir, [
+        { path: maximumRelativePath, contentHash: digest, mode: 33188 },
+      ]);
+      await expect(
+        new MerkleTreeComposer(blobsDir).composeStateGrafts([
+          { path: "meta", stateHash: maximum.stateHash },
+        ])
+      ).rejects.toThrow(/graft .* exceeds canonical projection bounds/);
+    });
+
     it("deduplicates structurally: identical entry lists collapse to one node blob (idempotent putTree)", async () => {
       const digest = await seed("shared body");
       const first = await putTree(blobsDir, [file("x.txt", digest)]);
@@ -601,10 +799,10 @@ describe("blobstoreService", () => {
       );
     });
 
-    it("listTree walks recursively, honours prefix and limit", async () => {
+    it("listTree walks recursively with exact basis-bound keyset pages", async () => {
       const { rootTree, stateHash, digests, subtrees } = await seedFixtureTree();
 
-      const all = await listTree(blobsDir, rootTree);
+      const all = await collectTreeEntries(blobsDir, rootTree);
       expect(all?.map((e) => e.path)).toEqual([
         "README.md",
         "bin",
@@ -615,27 +813,174 @@ describe("blobstoreService", () => {
         "src/lib/util.ts",
       ]);
       // state: ref resolves to the same listing.
-      expect(await listTree(blobsDir, stateHash)).toEqual(all);
+      expect(await collectTreeEntries(blobsDir, stateHash)).toEqual(all);
 
       // Prefix narrows to a subtree; paths stay tree-relative from the root.
-      const src = await listTree(blobsDir, rootTree, { prefix: "src" });
+      const src = await collectTreeEntries(blobsDir, rootTree, { prefix: "src" });
       expect(src).toEqual([
         { path: "src/a.ts", kind: "file", contentHash: digests.a, mode: 33188 },
         { path: "src/lib", kind: "dir", treeHash: subtrees.lib },
         { path: "src/lib/util.ts", kind: "file", contentHash: digests.util, mode: 33188 },
       ]);
       // A prefix naming a file lists exactly that file.
-      expect(await listTree(blobsDir, rootTree, { prefix: "bin/run.sh" })).toEqual([
+      expect(await collectTreeEntries(blobsDir, rootTree, { prefix: "bin/run.sh" })).toEqual([
         { path: "bin/run.sh", kind: "file", contentHash: digests.run, mode: 33261 },
       ]);
-      // Absent prefix → empty; unknown root → null; limit caps output.
-      expect(await listTree(blobsDir, rootTree, { prefix: "nope" })).toEqual([]);
-      expect(await listTree(blobsDir, `manifest:${"0".repeat(64)}`)).toBeNull();
-      expect(await listTree(blobsDir, rootTree, { limit: 2 })).toHaveLength(2);
+      // Absent prefix → exact empty; unknown root → null.
+      expect(await collectTreeEntries(blobsDir, rootTree, { prefix: "nope" })).toEqual([]);
+      expect(await listTree(blobsDir, `manifest:${"0".repeat(64)}`, {})).toBeNull();
+
+      const first = await listTree(blobsDir, rootTree, { limit: 2 });
+      expect(first).toMatchObject({
+        basis: {
+          ref: rootTree,
+          rootTreeHash: rootTree,
+          prefix: "",
+          order: "tree-preorder-v1",
+        },
+        completeness: "continuation",
+      });
+      expect(first?.entries).toHaveLength(2);
+      if (!first || first.completeness !== "continuation") throw new Error("expected page");
+      const second = await listTree(blobsDir, rootTree, {
+        limit: 2,
+        cursor: first.nextCursor,
+      });
+      expect(second?.entries.map((entry) => entry.path)).toEqual(["bin/run.sh", "src"]);
+
+      // The cursor is tied to both the immutable root and normalized prefix.
+      await expect(
+        listTree(blobsDir, stateHash, { limit: 2, cursor: first.nextCursor })
+      ).rejects.toThrow(/basis mismatch/);
+      await expect(
+        listTree(blobsDir, rootTree, {
+          prefix: "src",
+          limit: 2,
+          cursor: first.nextCursor,
+        })
+      ).rejects.toThrow(/basis mismatch/);
+      const cursorParts = first.nextCursor.split(".");
+      cursorParts[1] = `${cursorParts[1]![0] === "a" ? "b" : "a"}${cursorParts[1]!.slice(1)}`;
+      const corruptCursor = cursorParts.join(".");
+      await expect(
+        listTree(blobsDir, rootTree, { limit: 2, cursor: corruptCursor })
+      ).rejects.toThrow(/cursor/);
       // Traversal prefixes are rejected outright.
       await expect(listTree(blobsDir, rootTree, { prefix: "../x" })).rejects.toThrow(
         /Invalid tree entry name/
       );
+    });
+
+    it("resumes a late page by its ancestor path instead of rescanning earlier subtrees", async () => {
+      const digest = await seed("shared body");
+      const leaf = (await putTree(blobsDir, [file("value.txt", digest)])).treeHash;
+      const rootTree = (
+        await putTree(
+          blobsDir,
+          Array.from({ length: 40 }, (_, index) => dir(`d${String(index).padStart(3, "0")}`, leaf))
+        )
+      ).treeHash;
+      const first = await listTree(blobsDir, rootTree, { limit: 60 });
+      if (!first || first.completeness !== "continuation") throw new Error("expected page");
+      expect(first.entries.at(-1)?.path).toBe("d029/value.txt");
+
+      const readSpy = vi.spyOn(fsp, "readFile");
+      readSpy.mockClear();
+      const next = await listTree(blobsDir, rootTree, {
+        limit: 1,
+        cursor: first.nextCursor,
+      });
+      expect(next?.entries.map((entry) => entry.path)).toEqual(["d030"]);
+      // Root + exact last-key ancestor + the newly emitted directory. A
+      // rescan implementation would reread all thirty earlier child nodes.
+      expect(readSpy).toHaveBeenCalledTimes(3);
+      readSpy.mockRestore();
+    });
+
+    it("returns an exact continuation beyond the maximum page boundary", async () => {
+      const digest = await seed("one shared body");
+      const rootTree = (
+        await putTree(
+          blobsDir,
+          Array.from({ length: 10_001 }, (_, index) =>
+            file(`f${String(index).padStart(5, "0")}.txt`, digest)
+          )
+        )
+      ).treeHash;
+      const first = await listTree(blobsDir, rootTree, { limit: 10_000 });
+      expect(first?.entries).toHaveLength(10_000);
+      if (!first || first.completeness !== "continuation") throw new Error("expected page");
+      const final = await listTree(blobsDir, rootTree, {
+        limit: 10_000,
+        cursor: first.nextCursor,
+      });
+      expect(final).toMatchObject({
+        entries: [{ path: "f10000.txt" }],
+        completeness: "complete",
+      });
+      await expect(
+        collectExactTreeListing(blobsDir, rootTree, { maxEntries: 10_000 })
+      ).rejects.toMatchObject({
+        name: "ExactTreeListingLimitExceeded",
+        limit: 10_000,
+        observed: 10_001,
+      });
+    });
+
+    it("emits a compact schema-valid cursor at the canonical projection path bound", async () => {
+      const digest = await seed("body");
+      const segment = "a".repeat(255);
+      let child = (await putTree(blobsDir, [file("b".repeat(255), digest)])).treeHash;
+      for (let depth = 0; depth < 14; depth += 1) {
+        child = (await putTree(blobsDir, [dir(segment, child)])).treeHash;
+      }
+      const rootTree = (
+        await putTree(blobsDir, [dir(segment, child), file("z", digest)], { root: true })
+      ).treeHash;
+      const first = await listTree(blobsDir, rootTree, { limit: 16 });
+      if (!first || first.completeness !== "continuation") throw new Error("expected page");
+      expect(TreeListCursorSchema.safeParse(first.nextCursor).success).toBe(true);
+      expect(first.nextCursor.length).toBeGreaterThan(5_000);
+      await expect(
+        listTree(blobsDir, rootTree, { limit: 1, cursor: first.nextCursor })
+      ).resolves.toMatchObject({
+        entries: [{ path: "z" }],
+        completeness: "complete",
+      });
+
+      await expect(putTree(blobsDir, [dir(segment, rootTree)], { root: true })).rejects.toThrow(
+        /4095-byte projection bound/
+      );
+
+      // The bound is UTF-8 bytes, not JavaScript code units.
+      await expect(putTree(blobsDir, [file("é".repeat(128), digest)])).rejects.toThrow(
+        /Invalid tree entry name/
+      );
+    });
+
+    it("fails loudly when an interior object is missing or corrupt", async () => {
+      const digest = await seed("body");
+      const child = (await putTree(blobsDir, [file("value.txt", digest)])).treeHash;
+      const rootTree = (await putTree(blobsDir, [dir("nested", child)])).treeHash;
+      const childPath = blobPath(blobsDir, treeHashDigest(child));
+
+      await fsp.unlink(childPath);
+      await expect(listTree(blobsDir, rootTree, { limit: 1 })).rejects.toThrow(
+        /Tree object missing/
+      );
+
+      await fsp.writeFile(childPath, "not canonical tree JSON", "utf8");
+      await expect(listTree(blobsDir, rootTree, { limit: 1 })).rejects.toThrow(/not valid JSON/);
+    });
+
+    it("distinguishes an absent requested root from a present state pointer with a missing root", async () => {
+      const digest = await seed("body");
+      const put = await putTree(blobsDir, [file("value.txt", digest)], { root: true });
+      await fsp.unlink(blobPath(blobsDir, treeHashDigest(put.treeHash)));
+      await expect(listTree(blobsDir, put.stateHash!, {})).rejects.toThrow(
+        new RegExp(`Tree object missing.*${put.treeHash}`)
+      );
+      await expect(listTree(blobsDir, put.treeHash, {})).resolves.toBeNull();
     });
 
     it("readFileAtTree resolves nested paths to digests and rejects traversal", async () => {
@@ -908,7 +1253,7 @@ describe("blobstoreService", () => {
       const evilDigest = await seed(evilNode);
       const evilRef = `manifest:${evilDigest}`;
       await expect(getTree(blobsDir, evilRef)).rejects.toThrow(/Invalid tree entry name/);
-      await expect(listTree(blobsDir, evilRef)).rejects.toThrow(/Invalid tree entry name/);
+      await expect(listTree(blobsDir, evilRef, {})).rejects.toThrow(/Invalid tree entry name/);
       await expect(
         materializeTree(blobsDir, evilRef, path.join(rootDir, "evil-out"))
       ).rejects.toThrow(/Invalid tree entry name/);
@@ -943,8 +1288,11 @@ describe("blobstoreService", () => {
         dispatcher.dispatch(panel, "blobstore", "getTree", [put.treeHash])
       ).resolves.toEqual([{ name: "hello.txt", kind: "file", contentHash: digest, mode: 33188 }]);
       await expect(
-        dispatcher.dispatch(panel, "blobstore", "listTree", [put.stateHash])
-      ).resolves.toEqual([{ path: "hello.txt", kind: "file", contentHash: digest, mode: 33188 }]);
+        dispatcher.dispatch(panel, "blobstore", "listTree", [put.stateHash, {}])
+      ).resolves.toMatchObject({
+        entries: [{ path: "hello.txt", kind: "file", contentHash: digest, mode: 33188 }],
+        completeness: "complete",
+      });
       await expect(
         dispatcher.dispatch(panel, "blobstore", "readFileAtTree", [put.treeHash, "hello.txt"])
       ).resolves.toEqual({ contentHash: digest, mode: 33188 });
@@ -998,7 +1346,7 @@ describe("blobstoreService", () => {
       expect(await hasTreeObject(blobsDir, mirrored.treeHash)).toBe(true);
 
       // The mirrored state is fully readable through the tree APIs.
-      const listing = await listTree(blobsDir, mirrored.stateHash);
+      const listing = await collectTreeEntries(blobsDir, mirrored.stateHash);
       expect(listing!.filter((e) => e.kind === "file")).toMatchObject([
         { path: "README.md", contentHash: a, mode: 33188 },
         { path: "src/lib/util.ts", contentHash: b, mode: 33188 },
@@ -1051,7 +1399,7 @@ describe("blobstoreService", () => {
       });
       expect(mirrored.stateHash).toBe(EMPTY_STATE_HASH);
       expect(await hasTreeObject(blobsDir, EMPTY_STATE_HASH)).toBe(true);
-      expect(await listTree(blobsDir, EMPTY_STATE_HASH)).toEqual([]);
+      expect(await collectTreeEntries(blobsDir, EMPTY_STATE_HASH)).toEqual([]);
     });
 
     it("does not require file blobs to be present (server-internal writer, unlike putTree)", async () => {

@@ -1,24 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { canonicalJson } from "./canonicalJson.js";
 import {
+  canonicalJson,
   buildWorktreeManifest,
+  isValidTreeEntryName,
   manifestHashForEntries,
   sha256HexSyncText,
+  splitTreePath,
   stateHashForRoot,
   EMPTY_MANIFEST_HASH,
   EMPTY_STATE_HASH,
   type ManifestHashEntry,
   type WorktreeHashFile,
-} from "./worktreeHash.js";
+} from "@vibestudio/content-addressing";
 import {
   decodeStateNode,
   decodeTreeNode,
   encodeStateNode,
   encodeTreeNode,
   encodeWorktreeTree,
-  isValidTreeEntryName,
   normalizeTreeEntries,
-  splitTreePath,
   treeHashDigest,
   STATE_HASH_RE,
   TREE_HASH_RE,
@@ -104,7 +104,7 @@ describe("contentTree/treeObjects", () => {
         { contentHash: H2, kind: "file", mode: 33188, name: "a" },
       ],
     });
-    expect(() => decodeTreeNode(unsorted)).toThrow(/codepoint order/);
+    expect(() => decodeTreeNode(unsorted)).toThrow(/UTF-16 code-unit order/);
     // Duplicate names sort "equal" — also not strictly increasing.
     const dup = canonicalJson({
       kind: "dir",
@@ -113,7 +113,7 @@ describe("contentTree/treeObjects", () => {
         { contentHash: H2, kind: "file", mode: 33188, name: "a" },
       ],
     });
-    expect(() => decodeTreeNode(dup)).toThrow(/codepoint order/);
+    expect(() => decodeTreeNode(dup)).toThrow(/UTF-16 code-unit order/);
     // Non-canonical byte form (extra whitespace) of a valid node.
     const canonical = encodeTreeNode([FILE("a")]).canonicalText;
     expect(() => decodeTreeNode(canonical.replace('"kind"', ' "kind"'))).toThrow(/canonical/);

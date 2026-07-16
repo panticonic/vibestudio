@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import YAML from "yaml";
 
+import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { CONTAINER_SECTIONS, FLAT_SECTIONS } from "@vibestudio/shared/runtime/entitySpec";
 
 export interface SkillFrontmatter {
@@ -27,7 +28,7 @@ export async function listWorkspaceSkillEntries(workspaceRoot: string): Promise<
   );
   return entries
     .filter((entry): entry is SkillEntry => Boolean(entry))
-    .sort((a, b) => a.dirPath.localeCompare(b.dirPath));
+    .sort((a, b) => compareUtf16CodeUnits(a.dirPath, b.dirPath));
 }
 
 export async function readWorkspaceSkillEntry(
@@ -90,5 +91,5 @@ async function candidateRepoPaths(workspaceRoot: string): Promise<string[]> {
       repoPaths.push(`${section}/${entry.name}`);
     }
   }
-  return repoPaths.sort((a, b) => a.localeCompare(b));
+  return repoPaths.sort(compareUtf16CodeUnits);
 }

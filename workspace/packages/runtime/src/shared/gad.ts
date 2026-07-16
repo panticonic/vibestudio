@@ -4,7 +4,7 @@ import type {
   UserNotificationAcknowledgementResult,
   UserNotificationListResult,
 } from "@vibestudio/shared/userNotifications";
-import { createGadServiceClient } from "@vibestudio/shared/userlandServiceRpc";
+import { createGadServiceClient } from "@vibestudio/shared/workspaceServiceRpc";
 import {
   callTypedServiceMethod,
   createTypedServiceClient,
@@ -28,7 +28,7 @@ import {
   type TrajectoryEvent,
 } from "@workspace/agentic-protocol";
 
-export { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibestudio/shared/userlandServiceRpc";
+export { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibestudio/shared/workspaceServiceRpc";
 export type * from "./gad-schema.js";
 
 /** Typed entirely from the shared GAD runtime method schemas. */
@@ -36,8 +36,7 @@ export type GadClient = TypedServiceClient<typeof gadMethods>;
 
 export function createGadClient(rpc: RpcCaller): GadClient {
   const service = createGadServiceClient(rpc);
-  const wireTransport: ServiceCallFn = (_service, method, args) =>
-    service.call(method, ...args);
+  const wireTransport: ServiceCallFn = (_service, method, args) => service.call(method, ...args);
   const call = <T>(method: keyof typeof gadWireMethods & string, ...args: unknown[]) =>
     callTypedServiceMethod("gad-wire", gadWireMethods, wireTransport, method, args) as Promise<T>;
   const normalizeSqlArgs = (
@@ -155,16 +154,9 @@ export function createGadClient(rpc: RpcCaller): GadClient {
     inspectInvocationState: (input) => call("inspectInvocationState", input ?? {}),
     inspectChannelRoster: (input) => call("inspectChannelRoster", input),
     inspectAgentHealth: (input) => call("inspectAgentHealth", input),
-    listGadBranchFiles: (input) => call("listGadBranchFiles", input),
-    diffGadStates: (input) => call("diffGadStates", input),
-    readGadFileAtState: (input) => call("readGadFileAtState", input),
-    getGadStateProducer: (input) => call("getGadStateProducer", input),
     validateGadHashes: (input) => call("validateGadHashes", input),
     clearDirtyAfterValidation: (input) => call("clearDirtyAfterValidation", input),
     checkGadIntegrity: (input) => call("checkGadIntegrity", input),
-    provenanceForFile: (input) => call("provenanceForFile", input),
-    provenanceForSession: (input) => call("provenanceForSession", input),
-    provenanceForClaim: (input) => call("provenanceForClaim", input),
     rebuildTrajectoryProjections: (input) => call("rebuildTrajectoryProjections", input),
   };
 

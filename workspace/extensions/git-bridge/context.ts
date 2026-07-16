@@ -9,7 +9,7 @@ import type { CredentialClient } from "@vibestudio/credential-client";
 export interface ExtensionContextLike {
   readonly name: string;
   workspace: {
-    getInfo(): Promise<{ path: string; id?: string }>;
+    getInfo(): Promise<{ path: string; statePath: string; id?: string }>;
   };
   workers: {
     resolveService(query: string, objectKey?: string | null): Promise<unknown>;

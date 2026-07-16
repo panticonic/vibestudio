@@ -43,6 +43,7 @@ const githubCredential: StoredCredentialSummary = {
     valueTemplate: "Bearer {token}",
   },
   scopes: ["metadata:read", "contents:read"],
+  lifecycle: { state: "active", canRefresh: false },
   metadata: { providerId: "github" },
 };
 
