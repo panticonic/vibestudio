@@ -111,6 +111,7 @@ function workerCaller(
     callerKind: "worker",
     repoPath: source.repoPath ?? "/repo",
     executionDigest: source.executionDigest ?? "a".repeat(64),
+    delegations: [],
     requested: [
       { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
       { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -173,6 +174,7 @@ function createApprovalQueueMock(
 ): ApprovalQueue {
   return {
     request: vi.fn(async () => decision),
+    requestCapability: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
@@ -513,6 +515,99 @@ describe("EgressProxy", () => {
         callerId: "worker:test",
         method: "GET",
         status: 101,
+      });
+    } finally {
+      await proxy.stop();
+      wss.close();
+      await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+    }
+  });
+
+  it("refreshes an expired OAuth credential before committing a WebSocket 401", async () => {
+    const auditLog = new MemoryAuditLog();
+    const upstreamServer = createServer();
+    const wss = new WebSocketServer({ noServer: true });
+    const upstreamPort = await new Promise<number>((resolve) => {
+      upstreamServer.listen(0, "127.0.0.1", () => {
+        resolve((upstreamServer.address() as AddressInfo).port);
+      });
+    });
+    const credential = createCredential({
+      accessToken: "stale-token",
+      refreshToken: "refresh-token",
+      expiresAt: Date.now() + 3_600_000,
+      bindings: [
+        {
+          id: "api",
+          use: "fetch",
+          audience: [{ url: `http://127.0.0.1:${upstreamPort}/v1`, match: "path-prefix" }],
+          injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+        },
+      ],
+      grants: [
+        {
+          bindingId: "api",
+          use: "fetch",
+          resource: `http://127.0.0.1:${upstreamPort}/v1`,
+          action: "use",
+          scope: "version",
+          repoPath: "/repo",
+          executionDigest: "a".repeat(64),
+          grantedAt: 1,
+          grantedBy: "self",
+        },
+      ],
+    });
+    const refreshCredential = vi.fn(async (current: Credential & { id: string }) => ({
+      ...current,
+      accessToken: "fresh-token",
+      expiresAt: Date.now() + 3_600_000,
+    }));
+    const proxy = createProxy(credential, auditLog, {
+      credentialLifecycle: {
+        refreshIfNeeded: vi.fn(async (current) => current),
+        refreshCredential,
+      },
+    });
+    proxy.setCallerResolver((callerId) =>
+      callerId === "worker:test" ? workerCaller(callerId) : null
+    );
+    const proxyPort = await proxy.startShared("secret");
+    const observedAuthorization: string[] = [];
+
+    upstreamServer.on("upgrade", (req, socket, head) => {
+      const authorization = req.headers.authorization ?? "";
+      observedAuthorization.push(authorization);
+      if (authorization === "Bearer stale-token") {
+        const body = JSON.stringify({ detail: { code: "token_expired" } });
+        socket.end(
+          `HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+        );
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.close(1000, "done");
+      });
+    });
+
+    try {
+      const response = await requestWebSocketUpgradeThroughProxy({
+        proxyPort,
+        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket`,
+        headers: {
+          "X-Vibestudio-Egress-Caller": "worker:test",
+          "X-Vibestudio-Egress-Secret": "secret",
+        },
+      });
+
+      expect(response.status).toBe(101);
+      expect(response.body).toBeUndefined();
+      expect(observedAuthorization).toEqual(["Bearer stale-token", "Bearer fresh-token"]);
+      expect(refreshCredential).toHaveBeenCalledOnce();
+      expect(auditLog.entries[auditLog.entries.length - 1]).toMatchObject({
+        callerId: "worker:test",
+        status: 101,
+        retries: 1,
       });
     } finally {
       await proxy.stop();
@@ -869,7 +964,7 @@ describe("EgressProxy", () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toBe("raw-ok");
-      expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
         expect.objectContaining({
           kind: "capability",
           capability: "external-network-fetch",
@@ -921,7 +1016,7 @@ describe("EgressProxy", () => {
         });
         expect(res.status).toBe(200);
       }
-      expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+      expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
     } finally {
       await proxy.stop();
       await new Promise<void>((resolve) => target.close(() => resolve()));
@@ -1611,6 +1706,7 @@ describe("EgressProxy", () => {
     });
     const approvalQueue = {
       request: vi.fn(async () => "once" as const),
+      requestCapability: vi.fn(async () => "once" as const),
       resolve: vi.fn(),
       listPending: vi.fn(() => []),
     };
@@ -1752,6 +1848,7 @@ describe("EgressProxy", () => {
     });
     const approvalQueue = {
       request: vi.fn(async () => "once" as const),
+      requestCapability: vi.fn(async () => "once" as const),
       resolve: vi.fn(),
       listPending: vi.fn(() => []),
     };
@@ -1779,6 +1876,7 @@ describe("EgressProxy", () => {
     const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
     const approvalQueue = {
       request: vi.fn(async () => "session" as const),
+      requestCapability: vi.fn(async () => "session" as const),
       resolve: vi.fn(),
       listPending: vi.fn(() => []),
     };
@@ -1816,6 +1914,7 @@ describe("EgressProxy", () => {
     const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
     const approvalQueue = {
       request: vi.fn(async () => decision),
+      requestCapability: vi.fn(async () => decision),
       resolve: vi.fn(),
       listPending: vi.fn(() => []),
     };

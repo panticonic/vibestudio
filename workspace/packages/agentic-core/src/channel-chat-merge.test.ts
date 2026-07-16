@@ -1397,6 +1397,46 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("clears a deferred credential wait when the host reports the approval resolved", () => {
+    const turnId = brandId<TurnId>("turn-deferred-approval");
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const waiting: AgenticEvent<"turn.waiting"> = {
+      kind: "turn.waiting",
+      actor: agent,
+      turnId,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "model_credential_required",
+        summary: "Waiting for model credential approval",
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const resolved: AgenticEvent<"system.event"> = {
+      kind: "system.event",
+      actor: agent,
+      turnId,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        kind: "model.deferred_resolved",
+        details: { kind: "model.deferred_resolved" },
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const state = [opened, waiting, resolved]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(state.turns[turnId]?.status).toBe("open");
+    expect(chatMessagesFromChannelView(state).some((message) => message.lifecycle?.status === "waiting"))
+      .toBe(false);
+  });
+
   it("shows typing when a credential wait resumes with a new model call", () => {
     const turnId = brandId<TurnId>("turn-resumed-credential-model-call");
     const credKey = "cred:channel-1:openai-codex";

@@ -17,6 +17,7 @@ import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDis
 import type { ResolvedVia } from "@vibestudio/shared/governance/types";
 import type { ApprovalQueue, ApprovalResolver } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { capabilityGrantSubjectFromApproval } from "./capabilityPermission.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 
 /**
@@ -119,12 +120,8 @@ export function createShellApprovalService(deps: {
         deps.capabilityGrantStore.grant(
           pending.capability,
           resourceKey,
-          {
-            callerId: pending.callerId,
-            repoPath: pending.repoPath,
-            executionDigest: pending.executionDigest,
-          },
-          "version",
+          capabilityGrantSubjectFromApproval(pending),
+          pending.repoPath && pending.executionDigest ? "version" : "session",
           pending.resourceScope,
           Date.now(),
           "deny",

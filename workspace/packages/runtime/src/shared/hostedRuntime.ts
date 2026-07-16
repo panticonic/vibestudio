@@ -155,8 +155,15 @@ export { createRuntimeParentHandle } from "./handles.js";
  * cross-target parity gate is untouched. Panel/worker can build the identical
  * `services` from the same helper for parity.
  */
-export function createServicesProxy(rt: WorkspaceRuntime): Record<string, unknown> {
+export function createServicesProxy(
+  rt: WorkspaceRuntime,
+  knownServiceNames: readonly string[] = []
+): Record<string, unknown> {
   const rtRecord = rt as unknown as Record<string, unknown>;
+  // Read the caller-owned array at reflection time. Eval intentionally starts
+  // with an empty catalog so constructing `services` performs no authored RPC;
+  // `help()` can populate the array lazily without replacing this stable proxy.
+  const enumerableServiceNames = () => [...new Set(knownServiceNames)].sort();
   // Cache per-service fallback clients so repeated `services.foo` access is stable
   // (=== across reads) and a method proxy isn't rebuilt on every property get.
   const fallbackClients = new Map<string, Record<string, unknown>>();
@@ -200,6 +207,17 @@ export function createServicesProxy(rt: WorkspaceRuntime): Record<string, unknow
       // (the fallback is open-ended, so membership there is always "yes").
       has(_t, prop) {
         return typeof prop === "string" ? true : prop in rtRecord;
+      },
+      // A dynamic namespace must still be discoverable. Eval supplies the
+      // canonical docs catalog here, allowing ordinary reflection without
+      // weakening the open-ended fallback or teaching this shared runtime a
+      // hand-maintained service list.
+      ownKeys() {
+        return enumerableServiceNames();
+      },
+      getOwnPropertyDescriptor(_t, prop) {
+        if (typeof prop !== "string" || !knownServiceNames.includes(prop)) return undefined;
+        return { configurable: true, enumerable: true };
       },
     }
   );

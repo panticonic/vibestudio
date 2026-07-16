@@ -1,14 +1,7 @@
 import type { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import {
-  ServiceError,
-  type ServiceContext,
-  type DeferredResult,
-} from "@vibestudio/shared/serviceDispatcher";
-import type { ApprovalQueue } from "./approvalQueue.js";
-import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import { withCapability } from "./capabilityPermission.js";
+import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import {
   authorizeCorsSchema,
   corsApprovalMethods,
@@ -20,14 +13,11 @@ export type { CorsApprovalResult } from "@vibestudio/service-schemas/corsApprova
 const SERVICE_NAME = "corsApproval";
 const CAPABILITY = "cors-response-read";
 
-export function createCorsApprovalService(deps: {
-  approvalQueue: ApprovalQueue;
-  grantStore: CapabilityGrantStore;
-}): ServiceDefinition {
+export function createCorsApprovalService(): ServiceDefinition {
   async function authorize(
     ctx: ServiceContext,
     rawRequest: z.infer<typeof authorizeCorsSchema>
-  ): Promise<CorsApprovalResult | DeferredResult> {
+  ): Promise<CorsApprovalResult> {
     if (
       ctx.caller.runtime.kind !== "panel" &&
       ctx.caller.runtime.kind !== "app" &&
@@ -48,45 +38,8 @@ export function createCorsApprovalService(deps: {
       return { allowed: false, reason: "CORS target must be an http(s) URL" };
     }
 
-    return withCapability(
-      {
-        approvalQueue: deps.approvalQueue,
-        grantStore: deps.grantStore,
-      },
-      ctx,
-      {
-        capability: CAPABILITY,
-        dedupKey: `cors:${ctx.caller.runtime.id}:${target.origin}`,
-        resource: {
-          type: "url-origin",
-          label: "Target origin",
-          value: target.origin,
-          key: target.origin,
-          scope: { kind: "origin", origin: target.origin },
-        },
-        operation: {
-          kind: "network",
-          verb: "Read cross-origin response",
-          object: {
-            type: "url-origin",
-            label: "Target origin",
-            value: target.origin,
-          },
-          groupKey: `cors:${ctx.caller.runtime.id}:${target.origin}`,
-        },
-        title: `Read responses from ${target.origin}`,
-        description: "Allow this requester to read CORS-protected responses from this origin.",
-        details: [
-          { label: "Request origin", value: request.requestOrigin ?? "unknown" },
-          { label: "Target origin", value: target.origin },
-        ],
-        deniedReason: "Cross-origin response access denied",
-      },
-      async (authorization): Promise<CorsApprovalResult> =>
-        authorization.allowed
-          ? { allowed: true, decision: authorization.decision }
-          : { allowed: false, reason: authorization.reason }
-    );
+    const decision = ctx.authorityDecisions?.get(CAPABILITY);
+    return Promise.resolve({ allowed: true, ...(decision ? { decision } : {}) });
   }
 
   return {

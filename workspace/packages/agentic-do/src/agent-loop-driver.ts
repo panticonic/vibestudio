@@ -1230,6 +1230,10 @@ export class AgentLoopDriver {
     if (this.aborts.get(this.rowKey(row))?.controller !== controller) return;
     releaseAbort();
     if ((outcome as { deferred?: boolean }).deferred) {
+      const waiting = (outcome as { waiting?: EffectOutcome }).waiting;
+      if (waiting?.kind === "model-suspended" && row.kind === "model_call") {
+        await this.publishDeferredWait(loop, row, waiting);
+      }
       // Result arrives out-of-band. Keep an earlier wake if the result raced
       // this deferred ack; otherwise redrive later as a backstop.
       this.deferRedrive(row, 60_000);
@@ -1282,6 +1286,73 @@ export class AgentLoopDriver {
       row.effectId
     );
     this.scheduleEarliest();
+  }
+
+  /**
+   * A server-deferred credential-use approval must not look like an endlessly
+   * streaming model call. Journal the same first-class waiting lifecycle used
+   * by credential connection flows, while retaining the original model row
+   * and continuation id for the deferred callback.
+   */
+  private async publishDeferredWait(
+    loop: LoopInstance,
+    row: OutboxRow,
+    outcome: Extract<EffectOutcome, { kind: "model-suspended" }>
+  ): Promise<void> {
+    const turn = loop.state.openTurn;
+    if (!turn || turn.waitingCount > 0) return;
+    const waitReason = outcome.waitReason ?? "model_credential_required";
+    const waitSummary =
+      waitReason === "model_credential_reconnect_required"
+        ? "Waiting for model credential reconnect"
+        : "Waiting for model credential approval";
+    const envelopes = await this.append(loop, [
+      {
+        envelopeId: ids.turnWaiting(turn.turnId, turn.waitingCount),
+        payloadKind: "turn.waiting",
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          reason: waitReason,
+          summary: waitSummary,
+        },
+        causality: {
+          turnId: turn.turnId,
+          ...(row.descriptor.kind === "model_call"
+            ? { messageId: row.descriptor.messageId as never }
+            : {}),
+        },
+        publish: true,
+      },
+    ]);
+    for (const envelope of envelopes) loop.state = applyEvent(loop.state, envelope);
+    this.foldCache.write(loop.state);
+  }
+
+  /** Clear a projected waiting card before the deferred model redrives. */
+  private async publishDeferredResume(row: OutboxRow): Promise<void> {
+    const loop = await this.loopForBranch(row.branchId, row.channelId);
+    const turn = loop?.state.openTurn;
+    if (!loop || !turn || turn.waitingCount === 0) return;
+    const envelopes = await this.append(loop, [
+      {
+        envelopeId: ids.systemEvent(row.effectId, "deferred-resolved", loop.state.lastSeq + 1),
+        payloadKind: "system.event",
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          kind: "model.deferred_resolved",
+          details: { kind: "model.deferred_resolved", effectId: row.effectId },
+        },
+        causality: {
+          turnId: turn.turnId,
+          ...(row.descriptor.kind === "model_call"
+            ? { messageId: row.descriptor.messageId as never }
+            : {}),
+        },
+        publish: true,
+      },
+    ]);
+    for (const envelope of envelopes) loop.state = applyEvent(loop.state, envelope);
+    this.foldCache.write(loop.state);
   }
 
   private nudgeRedrive(row: OutboxRow): void {
@@ -1610,6 +1681,7 @@ export class AgentLoopDriver {
         await this.failEffect(row, { message: deferredErrorMessage(result) });
         return;
       }
+      await this.publishDeferredResume(row);
       this.nudgeRedrive(row);
       return;
     }

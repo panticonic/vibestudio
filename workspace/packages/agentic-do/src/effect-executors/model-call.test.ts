@@ -139,7 +139,18 @@ describe("modelCallExecutor", () => {
         deps: inputDeps,
         onEphemeral: () => {},
       })
-    ).resolves.toEqual({ deferred: true });
+    ).resolves.toEqual({
+      deferred: true,
+      waiting: {
+        kind: "model-suspended",
+        reason: "credential",
+        providerId: "test",
+        modelBaseUrl: "https://model.test",
+        waitReason: "model_credential_required",
+        diagnosticReason:
+          "The model credential exists, but this agent version is waiting for credential-use approval.",
+      },
+    });
 
     expect(getApiKey).toHaveBeenCalledWith({
       providerId: "test",

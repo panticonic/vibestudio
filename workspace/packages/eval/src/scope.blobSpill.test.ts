@@ -4,6 +4,7 @@ import { ScopePersistenceAdapter } from "./scopePersistenceAdapter.js";
 import { SCOPE_BLOB_REF } from "./scopeSerialize.js";
 import type { ScopeEntry } from "./scopePersistence.js";
 import type { ScopeBlobBackend, ScopeRowBackend } from "./scopePersistenceAdapter.js";
+import type { ScopeExecutableCodec, SerializedScopeExecutable } from "./scopeSerialize.js";
 
 function memPersistence() {
   const rows = new Map<string, ScopeEntry>();
@@ -137,8 +138,54 @@ describe("ScopeManager — blob-spilled large values", () => {
     await m.api.save();
 
     expect(p.storedBlobs.size).toBe(1); // same content -> one blob
-    expect(new Set([...p.storedRows.values()][0]!.blobRefs)).toEqual(
-      new Set(p.storedBlobs.keys())
-    );
+    expect(new Set([...p.storedRows.values()][0]!.blobRefs)).toEqual(new Set(p.storedBlobs.keys()));
+  });
+
+  it("neutralizes executable closures after save and restores the same durable wrapper cold", async () => {
+    const p = memPersistence();
+    let currentAuthority = "run-1";
+    const metadata = new WeakMap<Function, SerializedScopeExecutable>();
+    const codec: ScopeExecutableCodec = {
+      serialize(value) {
+        const existing = metadata.get(value);
+        if (existing) return existing;
+        const record = {
+          source: "() => 'durable'",
+          definitionSourceDigest: "source-1",
+          definitionRunDigest: "run-1",
+        };
+        metadata.set(value, record);
+        return record;
+      },
+      deserialize(record) {
+        const wrapper = () => `${currentAuthority}:${record.definitionRunDigest}`;
+        metadata.set(wrapper, record);
+        return wrapper;
+      },
+    };
+    const capturedAuthority = currentAuthority;
+    const original = () => capturedAuthority;
+    const warm = new ScopeManager({
+      channelId: "c",
+      panelId: "pn",
+      persistence: p,
+      executableCodec: codec,
+    });
+    set(warm, "operation", original);
+    await warm.api.save();
+
+    currentAuthority = "run-2";
+    const warmOperation = get(warm, "operation") as () => string;
+    expect(warmOperation).not.toBe(original);
+    expect(warmOperation()).toBe("run-2:run-1");
+
+    const cold = new ScopeManager({
+      channelId: "c",
+      panelId: "pn",
+      persistence: p,
+      executableCodec: codec,
+    });
+    await cold.hydrate();
+    expect((get(cold, "operation") as () => string)()).toBe("run-2:run-1");
   });
 });

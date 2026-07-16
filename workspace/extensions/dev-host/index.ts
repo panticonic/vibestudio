@@ -17,8 +17,19 @@ import {
   devHostProviderPreparationInputSchema,
   devLaunchStatusSchema,
 } from "@vibestudio/service-schemas/devHost";
+import type {
+  EvalCancelInput,
+  EvalEventsInput,
+  EvalGetInput,
+  EvalRunHandle,
+  EvalRunSnapshot,
+  EvalStartInput,
+  EvalParentAuthorityEnvelope,
+  EvalParentApprovalRouteProof,
+} from "@vibestudio/service-schemas/eval";
 import { domainHash, sha256 } from "@vibestudio/shared/execution/identity";
 import { createNativeChildEnvironment } from "@vibestudio/shared/nativeProcessEnvironment";
+import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
 import { RpcClient } from "@vibestudio/direct-client";
 import { WebRtcRpcClient } from "@vibestudio/direct-client/webrtc";
 import {
@@ -85,14 +96,21 @@ function safeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function isEvalRunChallenge(
+  entry: PendingApproval,
+  runId: string
+): entry is Extract<PendingApproval, { kind: "capability" }> {
+  return entry.kind === "capability" && entry.operation?.groupKey?.startsWith(`${runId}:`) === true;
+}
+
 function storage(ctx: ExtensionContext): DevLifecycleStore {
   return {
     async load() {
       try {
         const bytes = await ctx.storage.readFile(RECORDS_FILE, "utf8");
-        return devLaunchStatusSchema.array().parse(
-          JSON.parse(typeof bytes === "string" ? bytes : bytes.toString("utf8"))
-        );
+        return devLaunchStatusSchema
+          .array()
+          .parse(JSON.parse(typeof bytes === "string" ? bytes : bytes.toString("utf8")));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
         throw new Error(
@@ -107,9 +125,9 @@ function storage(ctx: ExtensionContext): DevLifecycleStore {
     async loadPreparations() {
       try {
         const bytes = await ctx.storage.readFile(PREPARATIONS_FILE, "utf8");
-        return devHostProviderPreparationInputSchema.array().parse(
-          JSON.parse(typeof bytes === "string" ? bytes : bytes.toString("utf8"))
-        );
+        return devHostProviderPreparationInputSchema
+          .array()
+          .parse(JSON.parse(typeof bytes === "string" ? bytes : bytes.toString("utf8")));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
         throw new Error(
@@ -134,12 +152,19 @@ export class NativeDevHostExecutor implements DevHostExecutor {
   >();
   private readonly retainedHandoffs = new Map<string, RetainedHandoffState>();
   private readonly restoredGenerations = new Map<string, ManagedGeneration>();
+  private readonly childApprovalBridges = new Map<string, Promise<void>>();
+  private readonly activeChildChallenges = new Map<
+    string,
+    {
+      generation: DevGeneration;
+      runId: string;
+      challengeId: string;
+      authority: EvalParentAuthorityEnvelope;
+    }
+  >();
   private readonly unexpectedExitListeners = new Set<(exit: DevGenerationExit) => void>();
   private readonly logListeners = new Set<
-    (
-      launchId: string,
-      entry: { seq: number; at: number; level: string; message: string }
-    ) => void
+    (launchId: string, entry: { seq: number; at: number; level: string; message: string }) => void
   >();
 
   constructor(private readonly ctx: ExtensionContext) {}
@@ -289,6 +314,7 @@ export class NativeDevHostExecutor implements DevHostExecutor {
           hostBuildId,
           serverId: managed.ready.serverId,
           endpoint: `webrtc://${input.currentHostPairing.invite.room}`,
+          evalAuthorityRecipientKey: null,
         },
         childWorkspaceId: managed.ready.workspaceId,
         childContextId: input.owner.contextId,
@@ -322,6 +348,8 @@ export class NativeDevHostExecutor implements DevHostExecutor {
         VIBESTUDIO_APP_ROOT: build.root,
         VIBESTUDIO_MANAGED_DEV_LAUNCH_ID: input.launchId,
         VIBESTUDIO_MANAGED_DEV_BUILD_ID: hostBuildId,
+        VIBESTUDIO_MANAGED_DEV_PARENT_HOST_ID: input.evalAuthorityBridge.parentHostId,
+        VIBESTUDIO_MANAGED_DEV_PARENT_AUTHORITY_KEY: input.evalAuthorityBridge.publicKeySpki,
         ...(process.env["VIBESTUDIO_TOOLCHAIN_RUNTIME_NODE_MODE"] === "1"
           ? { ELECTRON_RUN_AS_NODE: "1" }
           : {}),
@@ -399,6 +427,7 @@ export class NativeDevHostExecutor implements DevHostExecutor {
         hostBuildId,
         serverId: ready.serverId,
         endpoint: ready.gatewayUrl,
+        evalAuthorityRecipientKey: ready.evalAuthorityRecipientKey ?? null,
       },
       childWorkspaceId: ready.workspaces[0]?.workspaceId ?? null,
       childContextId: null,
@@ -456,8 +485,31 @@ export class NativeDevHostExecutor implements DevHostExecutor {
   }
 
   private async stopManagedChildren(managed: ManagedGeneration): Promise<void> {
+    await this.cancelParentChallenges(managed);
     await managed.client?.close().catch(() => undefined);
     for (const child of [...managed.children].reverse()) await stopChild(child);
+  }
+
+  private async cancelParentChallenges(managed: ManagedGeneration): Promise<void> {
+    const challenges = [...this.activeChildChallenges.entries()].filter(
+      ([, challenge]) => challenge.generation.processIdentity === managed.processIdentity
+    );
+    await Promise.allSettled(
+      challenges.map(async ([key, challenge]) => {
+        try {
+          await this.ctx.rpc.call("main", "devHost.eval.cancelChildChallenge", {
+            launchId: challenge.generation.readinessIdentity.launchId,
+            hostBuildId: challenge.generation.hostBuildId,
+            processIdentity: challenge.generation.processIdentity,
+            runId: challenge.runId,
+            challengeId: challenge.challengeId,
+            authority: challenge.authority,
+          });
+        } finally {
+          this.activeChildChallenges.delete(key);
+        }
+      })
+    );
   }
 
   private superviseGeneration(managed: ManagedGeneration): void {
@@ -679,14 +731,164 @@ export class NativeDevHostExecutor implements DevHostExecutor {
     await releaseOwnedSnapshot(input);
   }
 
-  async eval(generation: DevGeneration, code: string): Promise<unknown> {
+  private activeEvalClient(generation: DevGeneration): RpcClient {
     const managed = this.generations.get(generation.processIdentity);
     if (!managed?.client) {
       throw Object.assign(new Error("Verified child connection is not active"), {
         code: "ENOTREADY",
       });
     }
-    return managed.client.call("eval.run", [{ code }]);
+    return managed.client;
+  }
+
+  async evalStart(
+    generation: DevGeneration,
+    input: EvalStartInput,
+    authority: EvalParentAuthorityEnvelope
+  ): Promise<EvalRunHandle> {
+    const client = this.activeEvalClient(generation);
+    const approvalRoute =
+      input.authority?.approvals === "pregranted-only"
+        ? undefined
+        : (
+            await this.ctx.rpc.call<{ proof: EvalParentApprovalRouteProof }>(
+              "main",
+              "devHost.eval.confirmChildRoute",
+              {
+                launchId: generation.readinessIdentity.launchId,
+                hostBuildId: generation.hostBuildId,
+                processIdentity: generation.processIdentity,
+                authority,
+              }
+            )
+          ).proof;
+    return client
+      .call<EvalRunHandle>("eval.delegatedStart", [
+        { input, authority, ...(approvalRoute ? { approvalRoute } : {}) },
+      ])
+      .then((handle) => {
+        const key = `${generation.processIdentity}\0${handle.runId}`;
+        const bridge = this.bridgeChildApprovals(generation, input, authority, handle)
+          .catch(async (error) => {
+            this.appendLog(
+              generation.readinessIdentity.launchId,
+              "error",
+              `Child eval approval bridge stopped: ${safeError(error)}`
+            );
+            await this.evalCancel(generation, { runId: handle.runId }).catch(() => undefined);
+          })
+          .finally(async () => {
+            await this.ctx.rpc
+              .call("main", "devHost.eval.completeChildRun", {
+                launchId: generation.readinessIdentity.launchId,
+                hostBuildId: generation.hostBuildId,
+                processIdentity: generation.processIdentity,
+                runId: handle.runId,
+                authority,
+              })
+              .catch(() => undefined);
+            this.childApprovalBridges.delete(key);
+          });
+        this.childApprovalBridges.set(key, bridge);
+        return handle;
+      });
+  }
+
+  private async bridgeChildApprovals(
+    generation: DevGeneration,
+    start: EvalStartInput,
+    authority: EvalParentAuthorityEnvelope,
+    handle: EvalRunHandle
+  ): Promise<void> {
+    const client = this.activeEvalClient(generation);
+    const resolved = new Set<string>();
+    const route = {
+      target: start.target,
+      scope: start.scope ? { key: start.scope.key } : undefined,
+    };
+    while (true) {
+      const managed = this.generations.get(generation.processIdentity);
+      if (!managed?.running || managed.client !== client) return;
+      const pending = await client.call<PendingApproval[]>("shellApproval.listPending", []);
+      const challenges = pending.filter(
+        (entry): entry is Extract<PendingApproval, { kind: "capability" }> =>
+          isEvalRunChallenge(entry, handle.runId) && !resolved.has(entry.approvalId)
+      );
+      for (const challenge of challenges) {
+        if (!challenge.resource) {
+          await client.call("shellApproval.resolve", [challenge.approvalId, "dismiss"]);
+          throw new Error("Child supplied a capability challenge without a canonical resource");
+        }
+        const allowed = challenge.allowedDecisions ?? ["once", "run", "deny", "dismiss"];
+        const challengeKey = `${generation.processIdentity}\0${handle.runId}\0${challenge.approvalId}`;
+        this.activeChildChallenges.set(challengeKey, {
+          generation,
+          runId: handle.runId,
+          challengeId: challenge.approvalId,
+          authority,
+        });
+        let result: { decision: ApprovalDecision };
+        try {
+          result = await this.ctx.rpc.call<{ decision: ApprovalDecision }>(
+            "main",
+            "devHost.eval.resolveChildChallenge",
+            {
+              launchId: generation.readinessIdentity.launchId,
+              hostBuildId: generation.hostBuildId,
+              processIdentity: generation.processIdentity,
+              runId: handle.runId,
+              challengeId: challenge.approvalId,
+              capability: challenge.capability,
+              resource: {
+                ...challenge.resource,
+                key: challenge.grantResourceKey ?? challenge.resource.value,
+              },
+              allowedDecisions: allowed,
+              authority,
+            }
+          );
+        } finally {
+          this.activeChildChallenges.delete(challengeKey);
+        }
+        if (!allowed.includes(result.decision)) {
+          await client.call("shellApproval.resolve", [challenge.approvalId, "dismiss"]);
+          throw new Error("Parent returned a decision the child challenge did not offer");
+        }
+        await client.call("shellApproval.resolve", [challenge.approvalId, result.decision]);
+        resolved.add(challenge.approvalId);
+      }
+      const snapshot = await client.call<EvalRunSnapshot>("eval.get", [
+        { runId: handle.runId, ...route },
+      ]);
+      if (
+        snapshot.status === "succeeded" ||
+        snapshot.status === "failed" ||
+        snapshot.status === "cancelled" ||
+        snapshot.status === "expired" ||
+        snapshot.status === "interrupted"
+      ) {
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    }
+  }
+
+  evalGet(generation: DevGeneration, input: EvalGetInput): Promise<EvalRunSnapshot> {
+    return this.activeEvalClient(generation).call("eval.get", [input]);
+  }
+
+  evalEvents(
+    generation: DevGeneration,
+    input: EvalEventsInput
+  ): Promise<{ events: unknown[]; next: number }> {
+    return this.activeEvalClient(generation).call("eval.events", [input]);
+  }
+
+  evalCancel(
+    generation: DevGeneration,
+    input: EvalCancelInput
+  ): Promise<{ status: "requested" | "cancelled" | "terminal" }> {
+    return this.activeEvalClient(generation).call("eval.cancel", [input]);
   }
 
   logs(
@@ -778,9 +980,12 @@ export class NativeDevHostExecutor implements DevHostExecutor {
           retained.input.target.kind !== "isolated-host" ||
           retained.input.target.persistence !== "retained"
         ) {
-          throw Object.assign(new Error("Retained generation identity does not match launch record"), {
-            code: "RETAINED_IDENTITY_MISMATCH",
-          });
+          throw Object.assign(
+            new Error("Retained generation identity does not match launch record"),
+            {
+              code: "RETAINED_IDENTITY_MISMATCH",
+            }
+          );
         }
         this.builds.set(record.launchId, {
           root: retained.buildRoot,
@@ -817,9 +1022,7 @@ export class NativeDevHostExecutor implements DevHostExecutor {
   private async recoverInterruptedHandoff(
     record: DevLaunchStatus
   ): Promise<
-    | { status: "recovered"; generation: DevGeneration }
-    | { status: "unverifiable" }
-    | null
+    { status: "recovered"; generation: DevGeneration } | { status: "unverifiable" } | null
   > {
     const file = path.join(this.retainedHandoffRoot(record.launchId), "journal.json");
     let journal: RetainedHandoffJournal;
@@ -852,9 +1055,10 @@ export class NativeDevHostExecutor implements DevHostExecutor {
     for (const identity of [journal.candidateProcessIdentity, journal.oldProcessIdentity]) {
       const pid = Number.parseInt(identity?.split(":", 1)[0] ?? "", 10);
       if (!Number.isInteger(pid) || pid <= 0 || !processIsAlive(pid)) continue;
-      const buildId = identity === journal.candidateProcessIdentity
-        ? journal.candidateHostBuildId
-        : journal.oldHostBuildId;
+      const buildId =
+        identity === journal.candidateProcessIdentity
+          ? journal.candidateHostBuildId
+          : journal.oldHostBuildId;
       if (!(await isVerifiedManagedProcess(pid, journal.launchId, buildId))) {
         return { status: "unverifiable" };
       }
@@ -1035,7 +1239,11 @@ export class NativeDevHostExecutor implements DevHostExecutor {
     stream?.on("data", (chunk) => {
       const message = redactDevHostLog(String(chunk));
       if (message) {
-        this.appendLog(launchId, source.includes("stderr") ? "error" : "info", `${source}: ${message}`);
+        this.appendLog(
+          launchId,
+          source.includes("stderr") ? "error" : "info",
+          `${source}: ${message}`
+        );
         this.ctx.log.info(`[dev-host:${launchId}:${source}] ${message}`);
       }
     });
@@ -1120,7 +1328,11 @@ async function directoryDigest(root: string): Promise<string> {
         });
       }
       const stat = await fs.stat(absolute);
-      files.push({ path: relative, mode: stat.mode & 0o777, digest: sha256(await fs.readFile(absolute)) });
+      files.push({
+        path: relative,
+        mode: stat.mode & 0o777,
+        digest: sha256(await fs.readFile(absolute)),
+      });
     }
   };
   await visit(root, "");
@@ -1314,9 +1526,12 @@ async function releaseOwnedSnapshot(input: CustodyInput): Promise<void> {
     manifest["recipeDigest"] !== input.snapshot.recipeDigest ||
     typeof manifest["ownershipNonce"] !== "string"
   ) {
-    throw Object.assign(new Error("Refusing to release an execution snapshot with mismatched ownership"), {
-      code: "SNAPSHOT_OWNERSHIP_MISMATCH",
-    });
+    throw Object.assign(
+      new Error("Refusing to release an execution snapshot with mismatched ownership"),
+      {
+        code: "SNAPSHOT_OWNERSHIP_MISMATCH",
+      }
+    );
   }
   await makeWritable(input.snapshot.sourceRoot).catch((error) => {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -1351,7 +1566,16 @@ export async function activate(ctx: ExtensionContext) {
         status: async () => lifecycle.status(),
         rebuild: (input: DevHostProviderRebuildInput) => lifecycle.rebuild(input),
         stop: (launchId: string) => lifecycle.stop(launchId),
-        eval: (launchId: string, code: string) => lifecycle.eval(launchId, code),
+        evalStart: (
+          launchId: string,
+          input: EvalStartInput,
+          authority: EvalParentAuthorityEnvelope
+        ) => lifecycle.evalStart(launchId, input, authority),
+        evalGet: (launchId: string, input: EvalGetInput) => lifecycle.evalGet(launchId, input),
+        evalEvents: (launchId: string, input: EvalEventsInput) =>
+          lifecycle.evalEvents(launchId, input),
+        evalCancel: (launchId: string, input: EvalCancelInput) =>
+          lifecycle.evalCancel(launchId, input),
         logs: (launchId: string, after?: number) => lifecycle.logs(launchId, after),
         watch: (launchId: string, after?: number) => lifecycle.watch(launchId, after),
       },

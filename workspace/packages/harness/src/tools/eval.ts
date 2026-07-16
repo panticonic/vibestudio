@@ -7,8 +7,27 @@
  */
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
+import {
+  executeEval as executeEvalLifecycle,
+  type EvalClientTransport,
+} from "@vibestudio/service-schemas/clients/evalClient";
+import {
+  evalStartInputSchema,
+  type EvalRunResult,
+  type EvalStartInput,
+} from "@vibestudio/service-schemas/eval";
+
+export type { EvalRunResult } from "@vibestudio/service-schemas/eval";
 
 const evalCommonSchema = {
+  idempotencyKey: Type.Optional(
+    Type.String({
+      description: "Stable key for safe lost-response retry of the same normalized run.",
+    })
+  ),
+  deadlineMs: Type.Optional(
+    Type.Integer({ minimum: 1, description: "Optional cooperative host deadline in milliseconds." })
+  ),
   reset: Type.Optional(
     Type.Boolean({
       description:
@@ -31,6 +50,66 @@ const evalCommonSchema = {
       description:
         'On-demand packages, e.g. { "lodash": "npm:^4.17.21" }. Workspace packages auto-resolve from the current context; omit them or use "workspace:*". Explicit workspace pins are "main", "ctx:<contextId>", or "state:<stateHash>".',
     })
+  ),
+  authority: Type.Optional(
+    Type.Object(
+      {
+        mode: Type.Optional(Type.Union([Type.Literal("adaptive"), Type.Literal("strict")])),
+        effects: Type.Optional(Type.Union([Type.Literal("read-only"), Type.Literal("mutable")])),
+        approvals: Type.Optional(
+          Type.Union([Type.Literal("prompt"), Type.Literal("pregranted-only")])
+        ),
+        requests: Type.Optional(
+          Type.Array(
+            Type.Object({
+              capability: Type.String(),
+              resource: Type.Union([
+                Type.Object({ kind: Type.Literal("exact"), key: Type.String() }),
+                Type.Object({ kind: Type.Literal("prefix"), prefix: Type.String() }),
+                Type.Object({ kind: Type.Literal("origin"), origin: Type.String() }),
+                Type.Object({ kind: Type.Literal("domain"), domain: Type.String() }),
+                Type.Object({ kind: Type.Literal("network"), value: Type.Literal("*") }),
+              ]),
+            })
+          )
+        ),
+        preauthorize: Type.Optional(
+          Type.Array(
+            Type.Union([
+              Type.Object(
+                {
+                  plane: Type.Literal("host-service"),
+                  method: Type.String(),
+                  args: Type.Array(Type.Unknown()),
+                },
+                { additionalProperties: false }
+              ),
+              Type.Object(
+                {
+                  plane: Type.Literal("workspace-do"),
+                  target: Type.Object(
+                    {
+                      source: Type.String(),
+                      className: Type.String(),
+                      objectKey: Type.String(),
+                    },
+                    { additionalProperties: false }
+                  ),
+                  method: Type.String(),
+                  args: Type.Array(Type.Unknown()),
+                },
+                { additionalProperties: false }
+              ),
+            ])
+          )
+        ),
+      },
+      {
+        additionalProperties: false,
+        description:
+          "Optional containment. Omit for adaptive mutable eval with dynamic approval; use strict/read-only/pregranted-only for deliberate confinement.",
+      }
+    )
   ),
 };
 
@@ -77,12 +156,48 @@ const evalSchema = Type.Union(
 
 export type EvalToolInput = Static<typeof evalSchema>;
 
-export interface EvalRunResult {
-  success: boolean;
-  console: string;
-  returnValue?: unknown;
-  error?: string;
-  scopeKeys?: string[];
+export function evalStartInput(
+  source: NormalizedEvalToolSource,
+  params: {
+    reset?: boolean;
+    syntax?: "javascript" | "typescript" | "jsx" | "tsx";
+    imports?: Record<string, string>;
+    authority?: unknown;
+    idempotencyKey?: string;
+    deadlineMs?: number;
+  },
+  subKey: string | undefined
+): EvalStartInput {
+  return evalStartInputSchema.parse({
+    source:
+      source.code !== undefined
+        ? {
+            kind: "inline",
+            code: source.code,
+            pathHint: source.sourcePath,
+            syntax: params.syntax,
+          }
+        : { kind: "context-file", path: source.path, syntax: params.syntax },
+    scope: { key: subKey ?? "default", ...(params.reset ? { reset: true } : {}) },
+    ...(subKey ? { channelId: subKey } : {}),
+    imports: params.imports,
+    authority: params.authority,
+    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.deadlineMs ? { deadlineMs: params.deadlineMs } : {}),
+  });
+}
+
+async function executeEval(
+  callMain: <T>(method: string, args: unknown[]) => Promise<T>,
+  input: EvalStartInput
+): Promise<EvalRunResult> {
+  const client: EvalClientTransport = {
+    start: (request) => callMain("eval.start", [request]),
+    get: (request) => callMain("eval.get", [request]),
+    events: (request) => callMain("eval.events", [request]),
+    cancel: (request) => callMain("eval.cancel", [request]),
+  };
+  return executeEvalLifecycle(client, input);
 }
 
 export interface NormalizedEvalToolSource {
@@ -91,8 +206,6 @@ export interface NormalizedEvalToolSource {
   sourcePath?: string;
 }
 
-const EXECUTABLE_EVAL_PATH = /\.(?:[cm]js|[cm]ts|jsx|tsx)$/i;
-
 /** Shared by the immediate tool and AgentVessel's deferred eval gate. */
 export function normalizeEvalToolSource(params: {
   code?: unknown;
@@ -100,7 +213,8 @@ export function normalizeEvalToolSource(params: {
   sourcePath?: unknown;
   syntax?: "javascript" | "typescript" | "jsx" | "tsx";
 }): NormalizedEvalToolSource {
-  const path = typeof params.path === "string" && params.path.trim() ? params.path.trim() : undefined;
+  const path =
+    typeof params.path === "string" && params.path.trim() ? params.path.trim() : undefined;
   const explicitSourcePath =
     typeof params.sourcePath === "string" && params.sourcePath.trim()
       ? params.sourcePath.trim()
@@ -112,20 +226,12 @@ export function normalizeEvalToolSource(params: {
   if (code === undefined && path === undefined) {
     throw new Error("eval requires code or path");
   }
-  // File-backed eval is also a useful loader for documents/data. Parsing a
-  // Markdown/JSON/YAML/text path as TS produces a noisy syntax failure and is
-  // never useful; load it through the same context-scoped runtime fs instead.
-  if (code === undefined && path !== undefined && !EXECUTABLE_EVAL_PATH.test(path)) {
-    return {
-      code: `return await fs.readFile(${JSON.stringify(path)}, "utf8");`,
-    };
-  }
   return {
     code,
     path: code === undefined ? path : undefined,
     sourcePath:
       code !== undefined
-        ? explicitSourcePath ?? (path ? inlineSourcePathFromHint(path, params.syntax) : undefined)
+        ? (explicitSourcePath ?? (path ? inlineSourcePathFromHint(path, params.syntax) : undefined))
         : undefined,
   };
 }
@@ -137,7 +243,11 @@ export function normalizeEvalToolSource(params: {
  */
 export function formatEvalResult(result: EvalRunResult): AgentToolResult<EvalRunResult> {
   const parts: string[] = [];
-  if (!result.success) parts.push(`[eval] Error: ${result.error ?? "unknown error"}`);
+  if (!result.success) {
+    parts.push(
+      `[eval] Error${result.errorCode ? ` (${result.errorCode})` : ""}: ${result.error ?? "unknown error"}`
+    );
+  }
   if (result.console) {
     parts.push(`[eval] Console:\n${clampText(result.console, MAX_CONSOLE_CHARS, "$lastConsole")}`);
   }
@@ -172,18 +282,7 @@ export function createEvalTool(
       // context-relative file and should not turn an otherwise valid eval into
       // a mutually-exclusive-arguments error.
       const source = normalizeEvalToolSource(params);
-      const result = await callMain<EvalRunResult>("eval.run", [
-        {
-          subKey: opts.subKey,
-          // The agent's eval subKey IS its channelId — thread it through so the
-          // service can give the sandbox a `chat` binding proxied to this agent.
-          channelId: opts.subKey,
-          reset: params.reset,
-          ...source,
-          syntax: params.syntax,
-          imports: params.imports,
-        },
-      ]);
+      const result = await executeEval(callMain, evalStartInput(source, params, opts.subKey));
       // Formatting (with large-output windowing) is shared with the agent's deferred resume.
       return formatEvalResult(result);
     },

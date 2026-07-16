@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   PendingCapabilityApproval,
   PendingClientConfigApproval,
+  PendingCredentialApproval,
   PendingUnitBatchApproval,
   PendingUserlandApproval,
 } from "@vibestudio/shared/approvals";
@@ -23,10 +24,13 @@ function userlandApproval(
     repoPath: partial.repoPath ?? "panels/test",
     executionDigest: partial.executionDigest ?? "ev",
     requestedAt: partial.requestedAt ?? Date.now(),
+    decisionDeadlineAt: partial.decisionDeadlineAt ?? Date.now() + 60_000,
     callerTitle: partial.callerTitle,
     subject: partial.subject ?? { id: "sub-1", label: "Subject" },
     title: partial.title,
     summary: partial.summary,
+    severity: partial.severity,
+    defaultAction: partial.defaultAction,
     promptOptions: partial.promptOptions ?? "choices",
     options: partial.options ?? [{ value: "ok", label: "OK", tone: "primary" }],
     approvalId: partial.approvalId,
@@ -43,12 +47,14 @@ function capabilityApproval(
     repoPath: partial.repoPath ?? "panels/test",
     executionDigest: partial.executionDigest ?? "ev",
     requestedAt: partial.requestedAt ?? Date.now(),
+    decisionDeadlineAt: partial.decisionDeadlineAt ?? Date.now() + 60_000,
     capability: partial.capability ?? "context.boundary",
     severity: partial.severity,
     title: partial.title,
     description: partial.description,
     resource: partial.resource ?? { type: "panel", label: "Panel", value: "Shell" },
     grantResourceKey: partial.grantResourceKey,
+    allowedDecisions: partial.allowedDecisions,
     details: partial.details,
     approvalId: partial.approvalId,
   };
@@ -65,6 +71,7 @@ function unitBatchApproval(
     repoPath: partial.repoPath ?? "meta",
     executionDigest: partial.executionDigest ?? "ev",
     requestedAt: partial.requestedAt ?? Date.now(),
+    decisionDeadlineAt: partial.decisionDeadlineAt ?? Date.now() + 60_000,
     title: partial.title ?? "Approve workspace extensions",
     description: partial.description ?? "This workspace declares extensions.",
     approvalId: partial.approvalId,
@@ -96,6 +103,7 @@ function clientConfigApproval(
     repoPath: partial.repoPath ?? "panels/test",
     executionDigest: partial.executionDigest ?? "ev",
     requestedAt: partial.requestedAt ?? Date.now(),
+    decisionDeadlineAt: partial.decisionDeadlineAt ?? Date.now() + 60_000,
     approvalId: partial.approvalId,
     configId: partial.configId,
     authorizeUrl: partial.authorizeUrl ?? "https://accounts.example.test/oauth/authorize",
@@ -151,6 +159,114 @@ describe("ApprovalCard", () => {
       type: "decide",
       decision: "version",
       approvalId: "cap-severe",
+    });
+  });
+
+  it("uses durable version trust as the normal primary decision", () => {
+    const { emit } = renderCard(
+      capabilityApproval({
+        approvalId: "preauthorize",
+        title: "Preauthorize eval access",
+        allowedDecisions: ["run", "session", "version", "deny", "dismiss"],
+      })
+    );
+    const card = screen.getByText("Preauthorize eval access").closest(".approval-card");
+    expect(
+      screen.getByText("Trust version").closest("button")?.getAttribute("data-accent-color")
+    ).toBe("sky");
+    expect(
+      screen.getByText("Allow for run").closest("button")?.getAttribute("data-accent-color")
+    ).toBe("");
+
+    fireEvent.keyDown(card as HTMLElement, { key: "Enter" });
+
+    expect(emit).toHaveBeenCalledWith({
+      type: "decide",
+      decision: "version",
+      approvalId: "preauthorize",
+    });
+  });
+
+  it("keeps intrinsically one-shot operations one-shot", () => {
+    const approval: PendingCredentialApproval = {
+      kind: "credential",
+      approvalId: "force-push",
+      callerId: "worker:git",
+      callerKind: "worker",
+      repoPath: "workers/git",
+      executionDigest: "ev",
+      requestedAt: Date.now(),
+      decisionDeadlineAt: Date.now() + 60_000,
+      credentialId: "github-pat",
+      credentialLabel: "GitHub PAT",
+      audience: [{ match: "origin", url: "https://github.com/" }],
+      injection: {
+        type: "basic-auth",
+        usernameTemplate: "x-access-token",
+        passwordTemplate: "{{token}}",
+      },
+      accountIdentity: { username: "octo", providerUserId: "octo" },
+      scopes: ["repo"],
+      credentialUse: "git-http",
+      gitOperation: {
+        action: "write",
+        label: "force push",
+        remote: "https://github.com/acme/project.git",
+        service: "github",
+        force: true,
+      },
+    };
+    const { emit } = renderCard(approval);
+    const card = screen.getByText("Allow once").closest(".approval-card");
+    expect(screen.queryByText("Trust version")).toBeNull();
+
+    fireEvent.keyDown(card as HTMLElement, { key: "Enter" });
+
+    expect(emit).toHaveBeenCalledWith({
+      type: "decide",
+      decision: "once",
+      approvalId: "force-push",
+    });
+  });
+
+  it("does not emit a denied capability decision from D when deny is not allowed", () => {
+    const { emit } = renderCard(
+      capabilityApproval({
+        approvalId: "dismiss-only",
+        title: "Dismiss only",
+        allowedDecisions: ["dismiss"],
+      })
+    );
+    const card = screen.getByText("Dismiss only").closest(".approval-card");
+
+    fireEvent.keyDown(card as HTMLElement, { key: "d" });
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("makes deny primary when a userland request defaults to denial", () => {
+    const { emit } = renderCard(
+      userlandApproval({
+        approvalId: "dangerous-write",
+        title: "Delete workspace",
+        defaultAction: "deny",
+        promptOptions: "scoped",
+        options: [
+          { value: "once", label: "Allow once" },
+          { value: "version", label: "Trust version", tone: "primary" },
+          { value: "deny", label: "Deny", tone: "danger" },
+        ],
+      })
+    );
+    const card = screen.getByText("Delete workspace").closest(".approval-card");
+    expect(screen.getByText("Deny").closest("button")?.className).toContain("rt-variant-solid");
+
+    fireEvent.keyDown(card as HTMLElement, { key: "Enter" });
+
+    expect(emit).toHaveBeenCalledWith({
+      type: "resolve-userland",
+      choice: "deny",
+      approvalId: "dangerous-write",
     });
   });
 

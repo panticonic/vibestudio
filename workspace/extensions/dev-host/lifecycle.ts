@@ -6,6 +6,15 @@ import type {
   DevHostProviderRebuildInput,
   DevLaunchStatus,
 } from "@vibestudio/service-schemas/devHost";
+import type {
+  EvalCancelInput,
+  EvalEventsInput,
+  EvalGetInput,
+  EvalRunHandle,
+  EvalRunSnapshot,
+  EvalStartInput,
+  EvalParentAuthorityEnvelope,
+} from "@vibestudio/service-schemas/eval";
 
 type ApprovedInput = DevHostProviderLaunchInput | DevHostProviderRebuildInput;
 type CustodyInput = DevHostProviderPreparationInput["request"] | ApprovedInput;
@@ -52,7 +61,20 @@ export interface DevHostExecutor {
     input: CustodyInput,
     hostBuildId?: string
   ): Promise<void>;
-  eval(generation: DevGeneration, code: string): Promise<unknown>;
+  evalStart(
+    generation: DevGeneration,
+    input: EvalStartInput,
+    authority: EvalParentAuthorityEnvelope
+  ): Promise<EvalRunHandle>;
+  evalGet(generation: DevGeneration, input: EvalGetInput): Promise<EvalRunSnapshot>;
+  evalEvents(
+    generation: DevGeneration,
+    input: EvalEventsInput
+  ): Promise<{ events: unknown[]; next: number }>;
+  evalCancel(
+    generation: DevGeneration,
+    input: EvalCancelInput
+  ): Promise<{ status: "requested" | "cancelled" | "terminal" }>;
   logs(
     launchId: string,
     after: number
@@ -387,7 +409,7 @@ export class DevHostLifecycle {
     });
   }
 
-  async eval(launchId: string, code: string): Promise<unknown> {
+  private activeGeneration(launchId: string): DevGeneration {
     const record = this.require(launchId);
     const generation = this.generations.get(launchId);
     if (
@@ -397,7 +419,33 @@ export class DevHostLifecycle {
     ) {
       throw Object.assign(new Error("No verified active generation"), { code: "ENOTREADY" });
     }
-    return this.executor.eval(generation, code);
+    return generation;
+  }
+
+  evalStart(
+    launchId: string,
+    input: EvalStartInput,
+    authority: EvalParentAuthorityEnvelope
+  ): Promise<EvalRunHandle> {
+    return this.executor.evalStart(this.activeGeneration(launchId), input, authority);
+  }
+
+  evalGet(launchId: string, input: EvalGetInput): Promise<EvalRunSnapshot> {
+    return this.executor.evalGet(this.activeGeneration(launchId), input);
+  }
+
+  evalEvents(
+    launchId: string,
+    input: EvalEventsInput
+  ): Promise<{ events: unknown[]; next: number }> {
+    return this.executor.evalEvents(this.activeGeneration(launchId), input);
+  }
+
+  evalCancel(
+    launchId: string,
+    input: EvalCancelInput
+  ): Promise<{ status: "requested" | "cancelled" | "terminal" }> {
+    return this.executor.evalCancel(this.activeGeneration(launchId), input);
   }
 
   logs(launchId: string, after = 0): Response {

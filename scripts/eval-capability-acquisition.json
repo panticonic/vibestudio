@@ -1,0 +1,2736 @@
+{
+  "version": 2,
+  "kernelCapabilities": [
+    "service:blobstore.getText",
+    "service:blobstore.putText",
+    "service:eval.beginCleanup",
+    "service:eval.renew",
+    "service:events.unsubscribeAll",
+    "service:runtime.cleanupEvalOwnedContext",
+    "service:workspace-state.alarmClear",
+    "service:workspace-state.alarmSet"
+  ],
+  "additionalLeaves": [],
+  "directSurfaceReachability": [
+    {
+      "runtimeSources": [
+        "workers/agent-worker",
+        "workers/explorer-agent",
+        "workers/gmail-agent",
+        "workers/linked-agent",
+        "workers/news-agent",
+        "workers/silent-agent-worker",
+        "workers/test-agent"
+      ],
+      "definitionSource": "packages/agentic-do",
+      "methods": [
+        "canFork",
+        "chatOp",
+        "deliverEffectOutcome",
+        "getModelExecutionEvidence",
+        "initFromTrajectoryFork",
+        "onChannelEnvelope",
+        "onDeferredResult",
+        "onEvalComplete",
+        "onEvalProgress",
+        "onMethodCall",
+        "onSubagentComplete",
+        "postClone",
+        "subscribeChannel",
+        "unsubscribeChannel"
+      ]
+    }
+  ],
+  "rows": {
+    "direct:src/server/internalDOs/browserDataDO.ts:addAutofillBatch": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:addBookmark": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:addBookmarksBatch": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:addCookiesBatch": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:addFaviconsBatch": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:addHistoryBatch": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:addNeverSave": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:addPassword": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:addPasswordsBatch": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:addPermissionsBatch": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:addSearchEnginesBatch": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:classifyAgainstStore": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:clearAllHistory": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:clearCookies": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:deleteBookmark": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:deleteCookie": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:deleteHistoryEntry": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:deleteHistoryRange": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:deletePassword": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getAllBookmarks": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getAutofillFieldNames": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getAutofillSuggestions": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getBookmarks": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getCookieDomains": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getCookies": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getDomainReadiness": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getHistory": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getHistoryDomains": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getImportHistory": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getNeverSaveOrigins": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getPasswordForSite": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getPasswordOrigins": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getPasswords": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getPermissions": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getProfileImportState": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:getSearchEngines": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:isNeverSave": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:moveBookmark": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:recordHistoryVisit": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:recordImportRun": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:removeNeverSave": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:searchBookmarks": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:searchHistory": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:searchHistoryForAutocomplete": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:setDefaultEngine": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:setPermission": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:updateBookmark": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:updateHistoryTitle": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:updateLastUsed": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/browserDataDO.ts:updatePassword": {
+      "kind": "baseline"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:accept": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:activate": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:attachAuthoritySummary": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:awaitPreauthorization": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:authorityChallenge": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:begin": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:cancel": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:deleteScopeValue": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:events": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:execute": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:forceReset": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:get": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:terminate": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:prepare": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:readScopeTextPage": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/evalDO.ts:reset": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/webhookStoreDO.ts:create": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/webhookStoreDO.ts:get": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/webhookStoreDO.ts:list": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/webhookStoreDO.ts:replace": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:alarmClear": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:alarmNextWakeAt": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:alarmSet": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:alarmTakeDue": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:contextEdgeDeleteByChild": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:contextEdgeListByChild": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:contextEdgeListByOwner": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:contextEdgeUpsert": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:contextCleanupAddDurableObject": {
+      "kind": "closed",
+      "reason": "host-owned cleanup ledger is not an eval surface"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:contextCleanupBegin": {
+      "kind": "closed",
+      "reason": "host-owned cleanup ledger is not an eval surface"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:contextCleanupComplete": {
+      "kind": "closed",
+      "reason": "host-owned cleanup ledger is not an eval surface"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:contextCleanupCompleteMany": {
+      "kind": "closed",
+      "reason": "host-owned cleanup ledger is not an eval surface"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:contextCleanupFailed": {
+      "kind": "closed",
+      "reason": "host-owned cleanup ledger is not an eval surface"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:contextCleanupListPending": {
+      "kind": "closed",
+      "reason": "host-owned cleanup ledger is not an eval surface"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityActivate": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityCleanupComplete": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityFindIncompleteCleanups": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityGc": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityListActive": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityListActiveByKind": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityListByContext": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityListDisplayTitles": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityResolve": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityResolveActive": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityResolveContext": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityRetire": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entitySetDisplayTitle": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:heartbeatList": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:heartbeatRegister": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:heartbeatRemove": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:lifecycleCompleteEpoch": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:lifecycleLeaseClear": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:lifecycleLeaseUpsert": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:lifecycleListLeases": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:lifecycleListOps": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:lifecycleListResumeTargets": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:lifecycleOpenEpoch": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:lifecycleRecordOp": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:panelIncrementAccess": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:panelIndex": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:panelRebuildIndex": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:panelSearch": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:panelUpdateTitle": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:recurringDue": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:recurringList": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:recurringMarkFailed": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:recurringMarkRun": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:recurringMarkSucceeded": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:recurringNextWakeAt": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:recurringSync": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotAppendHistory": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotClose": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotCreate": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotGet": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotHistory": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotListOpen": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotMove": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotReplaceHistory": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotResolveByEntity": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotSetCurrent": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotSetParent": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotSetPosition": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:slotUpdateCurrentStateArgs": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:canFork": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:chatOp": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:deliverEffectOutcome": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:getModelExecutionEvidence": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:initFromTrajectoryFork": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onChannelEnvelope": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onDeferredResult": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onEvalComplete": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onEvalProgress": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onMethodCall": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onSubagentComplete": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:postClone": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:subscribeChannel": {
+      "kind": "baseline"
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:unsubscribeChannel": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/explorer-agent/index.ts:runScheduledJob": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gad-store/index.ts:acknowledgeUserNotification": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:appendChannelEnvelope": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:appendChannelEnvelopeWithRegistryMutation": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:appendLogEvent": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:applyEditOps": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:archiveRepoMain": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:checkGadIntegrity": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:checkLogIntegrity": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:clearDirtyAfterValidation": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:clearPendingMerge": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:collectGarbageBlobRefs": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gad-store/index.ts:commitAncestors": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:commitWorking": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:computeMerge": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:deleteChannelInvite": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:deleteChannelMembership": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:deleteContextBase": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:deleteLogHead": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:deleteRef": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:deleteRefsByPrefix": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:deleteUserNotification": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:deleteWorktreeHead": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:diffGadStates": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:discardWorkingEdits": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:editsByActor": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:editsByInvocation": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:editsByTurn": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:ensureBlob": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:fileHistory": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:forkLog": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:forkTrajectoryBranch": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getChannelEnvelope": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getChannelInvite": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getContextBase": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getDownstreamConsumers": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getEnvelopesForTrajectory": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getGadStateProducer": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getGadStateTransition": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getLogEvent": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getLogHead": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getLogLineage": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getMemoryIndexMarker": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getMergeBase": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getMessageType": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getPendingMerge": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getPrivateLineageForPublishedEnvelope": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getPublishedArtifactsForTurn": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getStatus": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getTrajectoryBranchHead": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getTrajectoryEvent": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:getTrajectoryForEnvelope": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:hasLogEvents": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:indexMemoryFiles": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:ingestRepoGroup": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:ingestWorktreeState": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:inspectAgentHealth": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:inspectChannelEnvelopes": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:inspectChannelRoster": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:inspectInvocationState": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:inspectPublicationIntegrity": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:inspectStorageDiagnostics": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:inspectTurnState": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:knowledgeRecordClaim": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gad-store/index.ts:knowledgeRelateClaims": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gad-store/index.ts:knowledgeRetractClaim": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gad-store/index.ts:knowledgeReviseClaim": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listChannelLogs": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listChannelMembershipsForUser": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listCommitEdits": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listContextWorkingRepos": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listGadBranchFiles": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listManifest": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listMessageTypes": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listPublishedEnvelopesForTrajectory": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listRefLog": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listRefs": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listStateFiles": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listStoredValueRefs": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listTrajectoryEvents": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listUserNotificationsForMe": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listWorkingEdits": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:listWorktreeHeads": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:markPendingMergeMaterialized": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:provenanceForClaim": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:provenanceForFile": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:provenanceForSession": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:pruneProvenanceSoftState": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:purgeRevokedUserChannelIndexes": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gad-store/index.ts:putChannelMembership": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:putUserNotification": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:query": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:rawSql": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:readChannelEnvelopes": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:readGadFileAtState": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:readLog": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:rebuildTrajectoryProjections": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:recallMemory": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:resolveRef": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:resolveWorkingState": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:resolveWorktreeHead": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:restoreRepoMain": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:revertWorking": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:runGadGcMark": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gad-store/index.ts:runGadGcSweep": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gad-store/index.ts:setContextBase": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:setMemoryIndexMarker": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:setPendingMerge": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:stageWorktreeState": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:updateRef": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:validateGadHashes": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsAbortMerge": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsAdoptMainRepoIntoContext": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsBlameLines": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsCommitAncestors": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsCommitEdits": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsComposedViewWithRepoAt": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsContextRepoStates": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsContextStatus": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsDeleteRepo": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsDropContext": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsEditsByActor": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsEditsByInvocation": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsEditsByTurn": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsFileHistory": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsForkContext": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsForkRepo": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsHealPublishDrift": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsImportOperationStatus": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsImportPublish": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsLog": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsMerge": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsPick": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsPinContext": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsPublishHostMutation": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsPush": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsPushStatus": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsRebaseContext": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsResolveContextView": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsRestoreRepo": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gad-store/index.ts:vcsStatus": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:getAttentionPrefs": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:onGmailPushNotification": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:onWebhookDelivery": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:registerPushTarget": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:setAttentionPrefs": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:unregisterPushTarget": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/linked-agent/linked-agent-worker.ts:ackDelivery": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/linked-agent/linked-agent-worker.ts:attach": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/linked-agent/linked-agent-worker.ts:completeFromBridge": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/linked-agent/linked-agent-worker.ts:detachSelf": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/linked-agent/linked-agent-worker.ts:heartbeat": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/linked-agent/linked-agent-worker.ts:ingestHookEvent": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/linked-agent/linked-agent-worker.ts:linkedStatus": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/linked-agent/linked-agent-worker.ts:reportExternalExit": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/linked-agent/linked-agent-worker.ts:requestPermission": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/linked-agent/linked-agent-worker.ts:say": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/model-settings/index.ts:getDefaultModel": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/model-settings/index.ts:getSettings": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/model-settings/index.ts:listCatalog": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/model-settings/index.ts:setDefaultAgentConfig": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/news-agent/news-agent-worker.ts:runScheduledJob": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/news-agent/news-agent-worker.ts:startDeepDive": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:acknowledgeInvite": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:addMember": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:adminInspectAgent": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:adminInspectEnvelope": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:adminInspectLog": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:adminInspectSchema": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:adminReconstructTranscript": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:adminSetParticipantTypingState": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:adminUnsubscribeParticipant": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:adminUpdateParticipantMetadata": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:adminValidateLog": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:appendSeed": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:archiveFork": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:broadcastStoredEnvelopes": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:callMethod": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:cancelMethodCall": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:createChannel": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:deleteChannel": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:deleteChannelAsAdmin": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:error": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:fork": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getChannel": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getChannelPresence": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getConfig": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getContextId": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getEnvelope": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getMessageSender": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getMessageType": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getMessageTypes": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getParticipants": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getPolicyState": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getProvenance": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getReplayAfter": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getReplayBefore": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:inspectAgent": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:listForks": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:listInvitesForMe": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:listMembers": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:postClone": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:publish": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:recordTaskProvenance": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:recoverOwner": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:removeMember": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:renameFork": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:reportLineageHead": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:sendAsCaller": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:sendSignal": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:setTypingState": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:submitMethodProgress": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:submitMethodResult": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:subscribe": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:subscribeLineage": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:timeoutMethodCall": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:touch": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:transferOwner": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:unsubscribe": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:unsubscribeLineage": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:updateConfig": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:updateLockedStructure": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:updateMetadata": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:updateStructure": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/testkit-driver/index.ts:cdpClose": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/testkit-driver/index.ts:cdpDrainEvents": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/testkit-driver/index.ts:cdpOpen": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/testkit-driver/index.ts:cdpSend": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/testkit-driver/index.ts:cdpSubscribe": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/testkit-driver/index.ts:heapSnapshot": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/testkit-driver/index.ts:ping": {
+      "kind": "baseline"
+    },
+    "direct:workspace/workers/testkit-driver/index.ts:profilePanel": {
+      "kind": "baseline"
+    },
+    "host:account.getProfile": {
+      "kind": "baseline"
+    },
+    "host:account.isMember": {
+      "kind": "baseline"
+    },
+    "host:account.listWorkspaceMembers": {
+      "kind": "baseline"
+    },
+    "host:account.resolveProfiles": {
+      "kind": "baseline"
+    },
+    "host:account.updateProfile": {
+      "kind": "baseline"
+    },
+    "host:adblock.addCustomList": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:adblock.addToWhitelist": {
+      "kind": "baseline"
+    },
+    "host:adblock.getConfig": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:adblock.getPanelUrl": {
+      "kind": "baseline"
+    },
+    "host:adblock.getStats": {
+      "kind": "baseline"
+    },
+    "host:adblock.getStatsForPanel": {
+      "kind": "baseline"
+    },
+    "host:adblock.isActive": {
+      "kind": "baseline"
+    },
+    "host:adblock.isEnabledForPanel": {
+      "kind": "baseline"
+    },
+    "host:adblock.rebuildEngine": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:adblock.removeCustomList": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:adblock.removeFromWhitelist": {
+      "kind": "baseline"
+    },
+    "host:adblock.resetStats": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:adblock.resetStatsForPanel": {
+      "kind": "baseline"
+    },
+    "host:adblock.setEnabled": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:adblock.setEnabledForPanel": {
+      "kind": "baseline"
+    },
+    "host:adblock.setListEnabled": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:app.applyUpdate": {
+      "kind": "baseline"
+    },
+    "host:app.clearBuildCache": {
+      "kind": "baseline"
+    },
+    "host:app.getInfo": {
+      "kind": "baseline"
+    },
+    "host:app.getShellPages": {
+      "kind": "baseline"
+    },
+    "host:app.getSystemTheme": {
+      "kind": "baseline"
+    },
+    "host:app.listPendingUpdates": {
+      "kind": "baseline"
+    },
+    "host:app.openDevTools": {
+      "kind": "baseline"
+    },
+    "host:app.openExternal": {
+      "kind": "baseline"
+    },
+    "host:app.openWorkspacePath": {
+      "kind": "baseline"
+    },
+    "host:app.setThemeMode": {
+      "kind": "baseline"
+    },
+    "host:auth.getConnectionInfo": {
+      "kind": "baseline"
+    },
+    "host:auth.grantConnection": {
+      "kind": "baseline"
+    },
+    "host:auth.mintAgentCredential": {
+      "kind": "baseline"
+    },
+    "host:auth.revokeAgentCredential": {
+      "kind": "baseline"
+    },
+    "host:blobstore.delete": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:blobstore.diffTrees": {
+      "kind": "baseline"
+    },
+    "host:blobstore.getBase64": {
+      "kind": "baseline"
+    },
+    "host:blobstore.getRange": {
+      "kind": "baseline"
+    },
+    "host:blobstore.getRangeBytes": {
+      "kind": "baseline"
+    },
+    "host:blobstore.getText": {
+      "kind": "baseline"
+    },
+    "host:blobstore.getTree": {
+      "kind": "baseline"
+    },
+    "host:blobstore.grep": {
+      "kind": "baseline"
+    },
+    "host:blobstore.has": {
+      "kind": "baseline"
+    },
+    "host:blobstore.list": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:blobstore.listTree": {
+      "kind": "baseline"
+    },
+    "host:blobstore.materializeTree": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:blobstore.putBase64": {
+      "kind": "baseline"
+    },
+    "host:blobstore.putText": {
+      "kind": "baseline"
+    },
+    "host:blobstore.putTree": {
+      "kind": "baseline"
+    },
+    "host:blobstore.readFileAtTree": {
+      "kind": "baseline"
+    },
+    "host:blobstore.stat": {
+      "kind": "baseline"
+    },
+    "host:build.doctorExtension": {
+      "kind": "baseline"
+    },
+    "host:build.gc": {
+      "kind": "baseline"
+    },
+    "host:build.getAboutPages": {
+      "kind": "baseline"
+    },
+    "host:build.getBuild": {
+      "kind": "baseline"
+    },
+    "host:build.getBuildMetadata": {
+      "kind": "baseline"
+    },
+    "host:build.getBuildNpm": {
+      "kind": "baseline"
+    },
+    "host:build.getBuildReport": {
+      "kind": "baseline"
+    },
+    "host:build.getPanelMetadata": {
+      "kind": "baseline"
+    },
+    "host:build.getSourceDigest": {
+      "kind": "baseline"
+    },
+    "host:build.hasUnit": {
+      "kind": "baseline"
+    },
+    "host:build.inspectBuildProvenance": {
+      "kind": "baseline"
+    },
+    "host:build.listRecentBuildEvents": {
+      "kind": "baseline"
+    },
+    "host:build.listSkills": {
+      "kind": "baseline"
+    },
+    "host:build.recompute": {
+      "kind": "baseline"
+    },
+    "host:build.resolveExecutionAuthority": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:build.validate": {
+      "kind": "baseline"
+    },
+    "host:corsApproval.authorize": {
+      "kind": "baseline"
+    },
+    "host:credentials.audit": {
+      "kind": "baseline"
+    },
+    "host:credentials.cancelOAuth": {
+      "kind": "baseline"
+    },
+    "host:credentials.completeCapture": {
+      "kind": "baseline"
+    },
+    "host:credentials.configureClient": {
+      "kind": "baseline"
+    },
+    "host:credentials.connect": {
+      "kind": "baseline"
+    },
+    "host:credentials.deleteClientConfig": {
+      "kind": "baseline"
+    },
+    "host:credentials.forwardOAuthCallback": {
+      "kind": "baseline"
+    },
+    "host:credentials.getClientConfigStatus": {
+      "kind": "baseline"
+    },
+    "host:credentials.inspectStoredCredentials": {
+      "kind": "baseline"
+    },
+    "host:credentials.listStoredCredentials": {
+      "kind": "baseline"
+    },
+    "host:credentials.proxyFetch": {
+      "kind": "baseline"
+    },
+    "host:credentials.proxyGitHttp": {
+      "kind": "baseline"
+    },
+    "host:credentials.requestCredentialInput": {
+      "kind": "baseline"
+    },
+    "host:credentials.resolveCredential": {
+      "kind": "baseline"
+    },
+    "host:credentials.revokeCredential": {
+      "kind": "baseline"
+    },
+    "host:credentials.storeCredential": {
+      "kind": "baseline"
+    },
+    "host:devHost.eval.cancel": {
+      "kind": "baseline"
+    },
+    "host:devHost.eval.cancelChildChallenge": {
+      "kind": "closed",
+      "reason": "trusted development-host approval transport only"
+    },
+    "host:devHost.eval.completeChildRun": {
+      "kind": "closed",
+      "reason": "trusted development-host approval transport only"
+    },
+    "host:devHost.eval.confirmChildRoute": {
+      "kind": "closed",
+      "reason": "trusted development-host approval route preflight only"
+    },
+    "host:devHost.eval.events": {
+      "kind": "baseline"
+    },
+    "host:devHost.eval.get": {
+      "kind": "baseline"
+    },
+    "host:devHost.eval.resolveChildChallenge": {
+      "kind": "closed",
+      "reason": "trusted development-host approval transport only"
+    },
+    "host:devHost.eval.start": {
+      "kind": "baseline"
+    },
+    "host:devHost.launch": {
+      "kind": "baseline"
+    },
+    "host:devHost.logs": {
+      "kind": "baseline"
+    },
+    "host:devHost.rebuild": {
+      "kind": "baseline"
+    },
+    "host:devHost.status": {
+      "kind": "baseline"
+    },
+    "host:devHost.stop": {
+      "kind": "baseline"
+    },
+    "host:devHost.watch": {
+      "kind": "baseline"
+    },
+    "host:docs.describe": {
+      "kind": "baseline"
+    },
+    "host:docs.describeService": {
+      "kind": "baseline"
+    },
+    "host:docs.evalCapabilityCensus": {
+      "kind": "baseline"
+    },
+    "host:docs.getSchema": {
+      "kind": "baseline"
+    },
+    "host:docs.listServices": {
+      "kind": "baseline"
+    },
+    "host:docs.listSurfaces": {
+      "kind": "baseline"
+    },
+    "host:docs.search": {
+      "kind": "baseline"
+    },
+    "host:eval.beginCleanup": {
+      "kind": "closed",
+      "reason": "trusted eval-kernel lifecycle only"
+    },
+    "host:eval.cancel": {
+      "kind": "baseline"
+    },
+    "host:eval.delegatedStart": {
+      "kind": "closed",
+      "reason": "signed managed child-host transport only"
+    },
+    "host:eval.deleteScopeValue": {
+      "kind": "baseline"
+    },
+    "host:eval.forceReset": {
+      "kind": "baseline"
+    },
+    "host:eval.events": {
+      "kind": "baseline"
+    },
+    "host:eval.get": {
+      "kind": "baseline"
+    },
+    "host:eval.readScopeTextPage": {
+      "kind": "baseline"
+    },
+    "host:eval.renew": {
+      "kind": "closed",
+      "reason": "trusted eval-kernel lifecycle only"
+    },
+    "host:eval.reset": {
+      "kind": "baseline"
+    },
+    "host:eval.start": {
+      "kind": "baseline"
+    },
+    "host:events.subscribe": {
+      "kind": "baseline"
+    },
+    "host:events.unsubscribe": {
+      "kind": "baseline"
+    },
+    "host:events.unsubscribeAll": {
+      "kind": "baseline"
+    },
+    "host:extensions.emit": {
+      "kind": "baseline"
+    },
+    "host:extensions.fetchRequestBodyChunk": {
+      "kind": "baseline"
+    },
+    "host:extensions.fetchRequestBodyClose": {
+      "kind": "baseline"
+    },
+    "host:extensions.health": {
+      "kind": "baseline"
+    },
+    "host:extensions.invoke": {
+      "kind": "baseline"
+    },
+    "host:extensions.invokeProvider": {
+      "kind": "baseline"
+    },
+    "host:extensions.invokeStream": {
+      "kind": "baseline"
+    },
+    "host:extensions.list": {
+      "kind": "baseline"
+    },
+    "host:extensions.log": {
+      "kind": "baseline"
+    },
+    "host:extensions.on": {
+      "kind": "baseline"
+    },
+    "host:extensions.ready": {
+      "kind": "baseline"
+    },
+    "host:extensions.reload": {
+      "kind": "baseline"
+    },
+    "host:extensions.streamingMethods": {
+      "kind": "baseline"
+    },
+    "host:externalOpen.openExternal": {
+      "kind": "baseline"
+    },
+    "host:fs.access": {
+      "kind": "baseline"
+    },
+    "host:fs.appendFile": {
+      "kind": "baseline"
+    },
+    "host:fs.chmod": {
+      "kind": "baseline"
+    },
+    "host:fs.copyFile": {
+      "kind": "baseline"
+    },
+    "host:fs.ensureMaterialized": {
+      "kind": "baseline"
+    },
+    "host:fs.exists": {
+      "kind": "baseline"
+    },
+    "host:fs.glob": {
+      "kind": "baseline"
+    },
+    "host:fs.grep": {
+      "kind": "baseline"
+    },
+    "host:fs.handleClose": {
+      "kind": "baseline"
+    },
+    "host:fs.handleRead": {
+      "kind": "baseline"
+    },
+    "host:fs.handleStat": {
+      "kind": "baseline"
+    },
+    "host:fs.handleWrite": {
+      "kind": "baseline"
+    },
+    "host:fs.lstat": {
+      "kind": "baseline"
+    },
+    "host:fs.mkdir": {
+      "kind": "baseline"
+    },
+    "host:fs.mktemp": {
+      "kind": "baseline"
+    },
+    "host:fs.open": {
+      "kind": "baseline"
+    },
+    "host:fs.readdir": {
+      "kind": "baseline"
+    },
+    "host:fs.readFile": {
+      "kind": "baseline"
+    },
+    "host:fs.readlink": {
+      "kind": "baseline"
+    },
+    "host:fs.realpath": {
+      "kind": "baseline"
+    },
+    "host:fs.rename": {
+      "kind": "baseline"
+    },
+    "host:fs.rm": {
+      "kind": "baseline"
+    },
+    "host:fs.rmdir": {
+      "kind": "baseline"
+    },
+    "host:fs.stat": {
+      "kind": "baseline"
+    },
+    "host:fs.symlink": {
+      "kind": "baseline"
+    },
+    "host:fs.truncate": {
+      "kind": "baseline"
+    },
+    "host:fs.unlink": {
+      "kind": "baseline"
+    },
+    "host:fs.utimes": {
+      "kind": "baseline"
+    },
+    "host:fs.writeFile": {
+      "kind": "baseline"
+    },
+    "host:gateway.fetch": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.commitMapping": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.completeWorkspaceDependencies": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.createDisposableRemote": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.detachUpstream": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.importProject": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.inspectDisposableRemote": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.publishRepo": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.publishToDisposableRemote": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.pullUpstream": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.pushDisposableRemote": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.pushUpstream": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.removeDisposableRemote": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.removeSharedRemote": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.removeUpstream": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.resetExportMarker": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.setAutoPush": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.setSharedRemote": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.setUpstream": {
+      "kind": "baseline"
+    },
+    "host:gitInterop.upstreamStatus": {
+      "kind": "baseline"
+    },
+    "host:governance.list": {
+      "kind": "baseline"
+    },
+    "host:hostLifecycle.shutdown": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:hubControl.addWorkspaceMember": {
+      "kind": "baseline"
+    },
+    "host:hubControl.createWorkspace": {
+      "kind": "baseline"
+    },
+    "host:hubControl.deleteWorkspace": {
+      "kind": "baseline"
+    },
+    "host:hubControl.getProfile": {
+      "kind": "baseline"
+    },
+    "host:hubControl.inviteUser": {
+      "kind": "baseline"
+    },
+    "host:hubControl.listDevices": {
+      "kind": "baseline"
+    },
+    "host:hubControl.listUserPresence": {
+      "kind": "baseline"
+    },
+    "host:hubControl.listWorkspaceMembers": {
+      "kind": "baseline"
+    },
+    "host:hubControl.listWorkspaces": {
+      "kind": "baseline"
+    },
+    "host:hubControl.pairDevice": {
+      "kind": "baseline"
+    },
+    "host:hubControl.removeWorkspaceMember": {
+      "kind": "baseline"
+    },
+    "host:hubControl.revokeDevice": {
+      "kind": "baseline"
+    },
+    "host:hubControl.revokeUser": {
+      "kind": "baseline"
+    },
+    "host:hubControl.routeWorkspace": {
+      "kind": "baseline"
+    },
+    "host:hubControl.setRole": {
+      "kind": "baseline"
+    },
+    "host:hubControl.updateProfile": {
+      "kind": "baseline"
+    },
+    "host:menu.showContext": {
+      "kind": "baseline"
+    },
+    "host:menu.showHamburger": {
+      "kind": "baseline"
+    },
+    "host:menu.showPanelContext": {
+      "kind": "baseline"
+    },
+    "host:mirror.objects": {
+      "kind": "baseline"
+    },
+    "host:mirror.targets": {
+      "kind": "baseline"
+    },
+    "host:notification.dismiss": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:notification.reportAction": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:notification.show": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:notification.signalUserInbox": {
+      "kind": "baseline"
+    },
+    "host:palette.list": {
+      "kind": "baseline"
+    },
+    "host:palette.register": {
+      "kind": "baseline"
+    },
+    "host:palette.run": {
+      "kind": "baseline"
+    },
+    "host:palette.unregister": {
+      "kind": "baseline"
+    },
+    "host:panel.ensureLoaded": {
+      "kind": "baseline"
+    },
+    "host:panel.forceReloadView": {
+      "kind": "baseline"
+    },
+    "host:panel.getAddressOptions": {
+      "kind": "baseline"
+    },
+    "host:panel.getBrowserAddressOptions": {
+      "kind": "baseline"
+    },
+    "host:panel.getChromeState": {
+      "kind": "baseline"
+    },
+    "host:panel.getFocusedPanelId": {
+      "kind": "baseline"
+    },
+    "host:panel.getThemeConfig": {
+      "kind": "baseline"
+    },
+    "host:panel.getTreeSnapshot": {
+      "kind": "baseline"
+    },
+    "host:panel.listPinnedPanelIds": {
+      "kind": "baseline"
+    },
+    "host:panel.markBrowserNavigationIntent": {
+      "kind": "baseline"
+    },
+    "host:panel.reloadView": {
+      "kind": "baseline"
+    },
+    "host:panel.takeOver": {
+      "kind": "baseline"
+    },
+    "host:panel.togglePin": {
+      "kind": "baseline"
+    },
+    "host:panel.updateTheme": {
+      "kind": "baseline"
+    },
+    "host:panel.updateThemeConfig": {
+      "kind": "baseline"
+    },
+    "host:panelCdp.consoleHistory": {
+      "kind": "baseline"
+    },
+    "host:panelCdp.getCdpEndpoint": {
+      "kind": "baseline"
+    },
+    "host:panelCdp.goBack": {
+      "kind": "baseline"
+    },
+    "host:panelCdp.goForward": {
+      "kind": "baseline"
+    },
+    "host:panelCdp.hostProvider.close": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:panelCdp.hostProvider.open": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:panelCdp.hostProvider.send": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:panelCdp.navigate": {
+      "kind": "baseline"
+    },
+    "host:panelCdp.reload": {
+      "kind": "baseline"
+    },
+    "host:panelCdp.screenshot": {
+      "kind": "baseline"
+    },
+    "host:panelCdp.stop": {
+      "kind": "baseline"
+    },
+    "host:panelLog.append": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:panelRuntime.acquire": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:panelRuntime.getSnapshot": {
+      "kind": "baseline"
+    },
+    "host:panelRuntime.registerClient": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:panelRuntime.release": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:panelRuntime.takeOver": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:panelRuntime.unregisterClient": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:panelTree.archive": {
+      "kind": "baseline"
+    },
+    "host:panelTree.archiveOwnedRoots": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:panelTree.callAgent": {
+      "kind": "baseline"
+    },
+    "host:panelTree.close": {
+      "kind": "baseline"
+    },
+    "host:panelTree.create": {
+      "kind": "baseline"
+    },
+    "host:panelTree.ensureLoaded": {
+      "kind": "baseline"
+    },
+    "host:panelTree.expandIds": {
+      "kind": "baseline"
+    },
+    "host:panelTree.focus": {
+      "kind": "baseline"
+    },
+    "host:panelTree.getCollapsedIds": {
+      "kind": "baseline"
+    },
+    "host:panelTree.getFocusedPanelId": {
+      "kind": "baseline"
+    },
+    "host:panelTree.getRuntimeLease": {
+      "kind": "baseline"
+    },
+    "host:panelTree.getStateArgs": {
+      "kind": "baseline"
+    },
+    "host:panelTree.getTreeSnapshot": {
+      "kind": "baseline"
+    },
+    "host:panelTree.list": {
+      "kind": "baseline"
+    },
+    "host:panelTree.metadata": {
+      "kind": "baseline"
+    },
+    "host:panelTree.movePanel": {
+      "kind": "baseline"
+    },
+    "host:panelTree.navigate": {
+      "kind": "baseline"
+    },
+    "host:panelTree.navigateHistory": {
+      "kind": "baseline"
+    },
+    "host:panelTree.openDevTools": {
+      "kind": "baseline"
+    },
+    "host:panelTree.rebuildAndReload": {
+      "kind": "baseline"
+    },
+    "host:panelTree.rebuildPanel": {
+      "kind": "baseline"
+    },
+    "host:panelTree.reload": {
+      "kind": "baseline"
+    },
+    "host:panelTree.roots": {
+      "kind": "baseline"
+    },
+    "host:panelTree.setCollapsed": {
+      "kind": "baseline"
+    },
+    "host:panelTree.setStateArgs": {
+      "kind": "baseline"
+    },
+    "host:panelTree.snapshot": {
+      "kind": "baseline"
+    },
+    "host:panelTree.takeOver": {
+      "kind": "baseline"
+    },
+    "host:panelTree.unload": {
+      "kind": "baseline"
+    },
+    "host:panelTree.updatePanelState": {
+      "kind": "baseline"
+    },
+    "host:permissions.list": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:permissions.revoke": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:phoneProvisioning.devices": {
+      "kind": "baseline"
+    },
+    "host:phoneProvisioning.install": {
+      "kind": "baseline"
+    },
+    "host:phoneProvisioning.openPairing": {
+      "kind": "baseline"
+    },
+    "host:phoneProvisioning.providers": {
+      "kind": "baseline"
+    },
+    "host:presence.getPanelActiveOwner": {
+      "kind": "baseline"
+    },
+    "host:presence.markPanelActive": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:presence.markPanelsOwned": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:refs.listMainRefLog": {
+      "kind": "baseline"
+    },
+    "host:refs.listMains": {
+      "kind": "baseline"
+    },
+    "host:refs.readMain": {
+      "kind": "baseline"
+    },
+    "host:refs.updateMains": {
+      "kind": "baseline"
+    },
+    "host:remoteCred.clear": {
+      "kind": "baseline"
+    },
+    "host:remoteCred.getCurrent": {
+      "kind": "baseline"
+    },
+    "host:remoteCred.listDevices": {
+      "kind": "baseline"
+    },
+    "host:remoteCred.pair": {
+      "kind": "baseline"
+    },
+    "host:remoteCred.pairDevice": {
+      "kind": "baseline"
+    },
+    "host:remoteCred.reconnectNow": {
+      "kind": "baseline"
+    },
+    "host:remoteCred.relaunch": {
+      "kind": "baseline"
+    },
+    "host:remoteCred.revokeDevice": {
+      "kind": "baseline"
+    },
+    "host:runtime.cloneContext": {
+      "kind": "baseline"
+    },
+    "host:runtime.cleanupEvalOwnedContext": {
+      "kind": "closed",
+      "reason": "trusted terminal-lifecycle kernel operation; evaluated code uses automatic ownership or ctx.detachContext"
+    },
+    "host:runtime.createContext": {
+      "kind": "baseline"
+    },
+    "host:runtime.createEntity": {
+      "kind": "baseline"
+    },
+    "host:runtime.createSubagentContext": {
+      "kind": "baseline"
+    },
+    "host:runtime.destroyContext": {
+      "kind": "baseline"
+    },
+    "host:runtime.listEntities": {
+      "kind": "baseline"
+    },
+    "host:runtime.listOwnedContexts": {
+      "kind": "baseline"
+    },
+    "host:runtime.recordContextEdge": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:runtime.resolveContext": {
+      "kind": "baseline"
+    },
+    "host:runtime.retireEntity": {
+      "kind": "baseline"
+    },
+    "host:runtime.setTitle": {
+      "kind": "baseline"
+    },
+    "host:serverLog.query": {
+      "kind": "baseline"
+    },
+    "host:serverLog.stats": {
+      "kind": "baseline"
+    },
+    "host:serverLog.tail": {
+      "kind": "baseline"
+    },
+    "host:settings.getData": {
+      "kind": "baseline"
+    },
+    "host:shellApproval.blockCapability": {
+      "kind": "baseline"
+    },
+    "host:shellApproval.listPending": {
+      "kind": "baseline"
+    },
+    "host:shellApproval.resolve": {
+      "kind": "baseline"
+    },
+    "host:shellApproval.resolveBootstrap": {
+      "kind": "baseline"
+    },
+    "host:shellApproval.resolveExternalAgent": {
+      "kind": "baseline"
+    },
+    "host:shellApproval.resolveExternalAgentByRequest": {
+      "kind": "baseline"
+    },
+    "host:shellApproval.resolveUserland": {
+      "kind": "baseline"
+    },
+    "host:shellApproval.submitClientConfig": {
+      "kind": "baseline"
+    },
+    "host:shellApproval.submitCredentialInput": {
+      "kind": "baseline"
+    },
+    "host:shellApproval.submitSecretInput": {
+      "kind": "baseline"
+    },
+    "host:shellPresence.heartbeat": {
+      "kind": "baseline"
+    },
+    "host:shellPresence.status": {
+      "kind": "baseline"
+    },
+    "host:userlandApproval.list": {
+      "kind": "baseline"
+    },
+    "host:userlandApproval.ask": {
+      "kind": "baseline"
+    },
+    "host:userlandApproval.request": {
+      "kind": "baseline"
+    },
+    "host:userlandApproval.requestAs": {
+      "kind": "baseline"
+    },
+    "host:userlandApproval.requestExternal": {
+      "kind": "baseline"
+    },
+    "host:userlandApproval.requestSecretInput": {
+      "kind": "baseline"
+    },
+    "host:userlandApproval.requestSecretInputAs": {
+      "kind": "baseline"
+    },
+    "host:userlandApproval.revoke": {
+      "kind": "baseline"
+    },
+    "host:userlandApproval.settleExternal": {
+      "kind": "baseline"
+    },
+    "host:vcs.abortMerge": {
+      "kind": "baseline"
+    },
+    "host:vcs.commit": {
+      "kind": "baseline"
+    },
+    "host:vcs.contextDiff": {
+      "kind": "baseline"
+    },
+    "host:vcs.contextStatus": {
+      "kind": "baseline"
+    },
+    "host:vcs.diff": {
+      "kind": "baseline"
+    },
+    "host:vcs.diffContent": {
+      "kind": "baseline"
+    },
+    "host:vcs.discardEdits": {
+      "kind": "baseline"
+    },
+    "host:vcs.edit": {
+      "kind": "baseline"
+    },
+    "host:vcs.listFiles": {
+      "kind": "baseline"
+    },
+    "host:vcs.log": {
+      "kind": "baseline"
+    },
+    "host:vcs.merge": {
+      "kind": "baseline"
+    },
+    "host:vcs.pendingMerge": {
+      "kind": "baseline"
+    },
+    "host:vcs.pick": {
+      "kind": "baseline"
+    },
+    "host:vcs.previewBuild": {
+      "kind": "baseline"
+    },
+    "host:vcs.pushStatus": {
+      "kind": "baseline"
+    },
+    "host:vcs.readFile": {
+      "kind": "baseline"
+    },
+    "host:vcs.rebaseContext": {
+      "kind": "baseline"
+    },
+    "host:vcs.recall": {
+      "kind": "baseline"
+    },
+    "host:vcs.resolveHead": {
+      "kind": "baseline"
+    },
+    "host:vcs.revert": {
+      "kind": "baseline"
+    },
+    "host:vcs.status": {
+      "kind": "baseline"
+    },
+    "host:vcs.workspaceViewWithRepoAt": {
+      "kind": "baseline"
+    },
+    "host:view.bindNativePanelSlot": {
+      "kind": "baseline"
+    },
+    "host:view.browserForceReload": {
+      "kind": "baseline"
+    },
+    "host:view.browserGoBack": {
+      "kind": "baseline"
+    },
+    "host:view.browserGoForward": {
+      "kind": "baseline"
+    },
+    "host:view.browserNavigate": {
+      "kind": "baseline"
+    },
+    "host:view.browserReload": {
+      "kind": "baseline"
+    },
+    "host:view.browserStop": {
+      "kind": "baseline"
+    },
+    "host:view.clearNativePanelSlot": {
+      "kind": "baseline"
+    },
+    "host:view.forwardMouseClick": {
+      "kind": "baseline"
+    },
+    "host:view.hideContentOverlay": {
+      "kind": "baseline"
+    },
+    "host:view.hideNativeShellOverlay": {
+      "kind": "baseline"
+    },
+    "host:view.setBounds": {
+      "kind": "baseline"
+    },
+    "host:view.setHostedShellReady": {
+      "kind": "baseline"
+    },
+    "host:view.setShellOverlay": {
+      "kind": "baseline"
+    },
+    "host:view.setThemeCss": {
+      "kind": "baseline"
+    },
+    "host:view.setVisible": {
+      "kind": "baseline"
+    },
+    "host:view.showContentOverlay": {
+      "kind": "baseline"
+    },
+    "host:view.showNativeShellOverlay": {
+      "kind": "baseline"
+    },
+    "host:view.updateContentOverlay": {
+      "kind": "baseline"
+    },
+    "host:view.updateNativePanelSlot": {
+      "kind": "baseline"
+    },
+    "host:view.updateNativeShellOverlay": {
+      "kind": "baseline"
+    },
+    "host:webhookIngress.createSubscription": {
+      "kind": "baseline"
+    },
+    "host:webhookIngress.listSubscriptions": {
+      "kind": "baseline"
+    },
+    "host:webhookIngress.revokeSubscription": {
+      "kind": "baseline"
+    },
+    "host:webhookIngress.rotateSecret": {
+      "kind": "baseline"
+    },
+    "host:workerdInspector.getEndpoint": {
+      "kind": "baseline"
+    },
+    "host:workerdInspector.listTargets": {
+      "kind": "baseline"
+    },
+    "host:workerLog.write": {
+      "kind": "baseline"
+    },
+    "host:workers.listServices": {
+      "kind": "baseline"
+    },
+    "host:workers.listSources": {
+      "kind": "baseline"
+    },
+    "host:workers.resolveDurableObject": {
+      "kind": "baseline"
+    },
+    "host:workers.resolveService": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.alarmClear": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.alarmSet": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.entity.resolveActive": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.heartbeatRegister": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.heartbeatRemove": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.lifecycleLeaseClear": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.lifecycleLeaseUpsert": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.panel.incrementAccess": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.panel.index": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.panel.rebuildIndex": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.panel.search": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.panel.updateTitle": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.appendHistory": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.close": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.create": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.get": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.history": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.list": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.move": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.replaceHistory": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.resolveByEntity": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.setCurrent": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.setParent": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.setPosition": {
+      "kind": "baseline"
+    },
+    "host:workspace-state.slot.updateCurrentStateArgs": {
+      "kind": "baseline"
+    },
+    "host:workspace.create": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:workspace.delete": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:workspace.ensureContextFolder": {
+      "kind": "baseline"
+    },
+    "host:workspace.findUnitForPath": {
+      "kind": "baseline"
+    },
+    "host:workspace.getActive": {
+      "kind": "baseline"
+    },
+    "host:workspace.getActiveEntry": {
+      "kind": "baseline"
+    },
+    "host:workspace.getAgentsMd": {
+      "kind": "baseline"
+    },
+    "host:workspace.getConfig": {
+      "kind": "baseline"
+    },
+    "host:workspace.getInfo": {
+      "kind": "baseline"
+    },
+    "host:workspace.heartbeats.list": {
+      "kind": "baseline"
+    },
+    "host:workspace.heartbeats.pause": {
+      "kind": "baseline"
+    },
+    "host:workspace.heartbeats.resume": {
+      "kind": "baseline"
+    },
+    "host:workspace.heartbeats.runNow": {
+      "kind": "baseline"
+    },
+    "host:workspace.hostTargets.beginLaunch": {
+      "kind": "baseline"
+    },
+    "host:workspace.hostTargets.cancelLaunchSession": {
+      "kind": "baseline"
+    },
+    "host:workspace.hostTargets.clearSelection": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:workspace.hostTargets.getLaunchSession": {
+      "kind": "baseline"
+    },
+    "host:workspace.hostTargets.getSelection": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:workspace.hostTargets.launch": {
+      "kind": "baseline"
+    },
+    "host:workspace.hostTargets.list": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:workspace.hostTargets.preparePinnedRef": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:workspace.hostTargets.resolveLaunchSessionApproval": {
+      "kind": "baseline"
+    },
+    "host:workspace.hostTargets.setSelection": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:workspace.hostTargets.versions": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:workspace.list": {
+      "kind": "baseline"
+    },
+    "host:workspace.listSkills": {
+      "kind": "baseline"
+    },
+    "host:workspace.readSkill": {
+      "kind": "baseline"
+    },
+    "host:workspace.recurring.list": {
+      "kind": "baseline"
+    },
+    "host:workspace.select": {
+      "kind": "baseline"
+    },
+    "host:workspace.setConfigField": {
+      "kind": "baseline"
+    },
+    "host:workspace.setInitPanels": {
+      "kind": "baseline"
+    },
+    "host:workspace.sourceTree": {
+      "kind": "baseline"
+    },
+    "host:workspace.units.bakeAppDist": {
+      "kind": "closed",
+      "reason": "method does not admit the code principal"
+    },
+    "host:workspace.units.diagnostics": {
+      "kind": "baseline"
+    },
+    "host:workspace.units.inspector": {
+      "kind": "baseline"
+    },
+    "host:workspace.units.list": {
+      "kind": "baseline"
+    },
+    "host:workspace.units.logs": {
+      "kind": "baseline"
+    },
+    "host:workspace.units.restart": {
+      "kind": "baseline"
+    },
+    "host:workspace.units.rollback": {
+      "kind": "baseline"
+    },
+    "host:workspace.units.versions": {
+      "kind": "baseline"
+    },
+    "host:workspacePresence.list": {
+      "kind": "baseline"
+    },
+    "host:worktree.dependentRepos": {
+      "kind": "baseline"
+    },
+    "host:worktree.project": {
+      "kind": "baseline"
+    },
+    "host:worktree.scan": {
+      "kind": "baseline"
+    },
+    "userland:gad.workspace": {
+      "kind": "baseline"
+    },
+    "userland:vcs": {
+      "kind": "baseline"
+    },
+    "userland:channel": {
+      "kind": "baseline"
+    },
+    "userland:models": {
+      "kind": "baseline"
+    },
+    "userland:testkit-driver": {
+      "kind": "baseline"
+    }
+  }
+}

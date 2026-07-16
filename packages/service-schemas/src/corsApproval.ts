@@ -7,6 +7,7 @@
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { capability, requirementForPrincipals } from "@vibestudio/shared/authorization";
 
 // `authorize` may prompt the user for cross-origin response access (a network
 // approval gate scoped to the target origin), so it carries an `approval`
@@ -42,7 +43,7 @@ export type AuthorizeCorsRequest = z.infer<typeof authorizeCorsSchema>;
 // `decision` mirrors Exclude<GrantedDecision, "deny"> from the approval queue.
 export const corsApprovalResultSchema = z.object({
   allowed: z.boolean(),
-  decision: z.enum(["once", "session", "version"]).optional(),
+  decision: z.enum(["once", "run", "session", "version"]).optional(),
   reason: z.string().optional(),
 });
 
@@ -54,6 +55,30 @@ export const corsApprovalMethods = defineServiceMethods({
       "Request approval to read CORS-protected responses from a target origin; may prompt the user and returns whether access was granted (with the persisted decision scope).",
     args: z.tuple([authorizeCorsSchema]),
     returns: corsApprovalResultSchema,
+    authority: {
+      requirement: requirementForPrincipals(["code"], "$method"),
+      resource: { kind: "literal", key: "service:corsApproval.authorize" },
+      additional: [
+        {
+          capability: "cors-response-read",
+          requirement: capability("code", "cors-response-read"),
+          resource: {
+            kind: "argument",
+            index: 0,
+            path: ["targetUrl"],
+            transform: "url-origin",
+          },
+          when: { origins: ["code"] },
+          evalAcquisition: {
+            kind: "approval",
+            title: "Read cross-origin response",
+            description: "Allow this code to read CORS-protected responses from this origin.",
+            operation: { kind: "network", verb: "Read cross-origin response" },
+            grantScopes: ["run", "session", "version"],
+          },
+        },
+      ],
+    },
     access: AUTHORIZE_ACCESS,
     examples: [
       { args: [{ targetUrl: "https://api.example.com/data", requestOrigin: "https://app.local" }] },

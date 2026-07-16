@@ -536,6 +536,22 @@ describe("AgentVesselBase.processChannelEvent", () => {
 });
 
 describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
+  function evalResult<T extends { success: boolean; console: string }>(result: T) {
+    return {
+      ...result,
+      provenance: {
+        startIntentDigest: "a".repeat(64),
+        sourceDigest: "b".repeat(64),
+        executionProvenanceDigest: "c".repeat(64),
+        scopeInputRevision: "scope-1",
+        runDigest: "d".repeat(64),
+        sourceBundleDigest: "e".repeat(64),
+        manifestDigest: "f".repeat(64),
+        terminalReason: "completed",
+      },
+    };
+  }
+
   /** Replace the lazily-built driver with a spy so we can assert the delivered outcome. */
   function stubDriver(vessel: TestVessel): ReturnType<typeof vi.fn> {
     const deliverSpy = vi.fn(async () => {});
@@ -546,14 +562,15 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
     return deliverSpy;
   }
 
-  it("delivers the formatted result to the parked invocation effect (runId IS the invocationId)", async () => {
+  it("delivers the formatted result to the separately correlated parked invocation", async () => {
     const vessel = await makeVessel();
     const deliverSpy = stubDriver(vessel);
     vessel.callerKindForTest = "server";
 
     await vessel.onEvalComplete({
-      runId: "inv-77",
-      result: { success: true, console: "out", returnValue: 7, scopeKeys: ["a"] },
+      runId: "eval-run-77",
+      invocationId: "inv-77",
+      result: evalResult({ success: true, console: "out", returnValue: 7, scopeKeys: ["a"] }),
       channelId: CHANNEL,
     });
 
@@ -574,8 +591,9 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
     const deliverSpy = stubDriver(vessel);
     vessel.callerKindForTest = "server";
     await vessel.onEvalComplete({
-      runId: "inv-78",
-      result: { success: false, console: "", error: "boom" },
+      runId: "eval-run-78",
+      invocationId: "inv-78",
+      result: evalResult({ success: false, console: "", error: "boom" }),
       channelId: CHANNEL,
     });
     expect(deliverSpy.mock.calls[0]![1]).toMatchObject({
@@ -589,8 +607,16 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
     const vessel = await makeVessel();
     const deliverSpy = stubDriver(vessel);
     vessel.callerKindForTest = "server";
-    await vessel.onEvalComplete({ runId: "inv-79", result: { success: true, console: "" } });
-    await vessel.onEvalComplete({ runId: "inv-79", channelId: CHANNEL });
+    await vessel.onEvalComplete({
+      runId: "eval-run-79",
+      invocationId: "inv-79",
+      result: evalResult({ success: true, console: "" }),
+    });
+    await vessel.onEvalComplete({
+      runId: "eval-run-79",
+      invocationId: "inv-79",
+      channelId: CHANNEL,
+    });
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
@@ -600,8 +626,9 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
     vessel.callerKindForTest = "do"; // another DO trying to forge a completion
     await expect(
       vessel.onEvalComplete({
-        runId: "inv-80",
-        result: { success: true, console: "" },
+        runId: "eval-run-80",
+        invocationId: "inv-80",
+        result: evalResult({ success: true, console: "" }),
         channelId: CHANNEL,
       })
     ).rejects.toThrow(/server-only/);
@@ -670,28 +697,39 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
 
 /** Vessel whose `rpc.call` is a recording stub, so we can drive `runDeferredEval` (the eval gate). */
 class EvalGateProbe extends TestVessel {
-  rpcCalls: Array<{ method: string; args: unknown[] }> = [];
-  getRunStatus: { status: string; result?: unknown } = { status: "pending" };
-  /** When set, `eval.getRun` REJECTS with this error (a transient store/RPC hiccup). */
-  getRunError: Error | null = null;
-  /** When set, `eval.startRun` REJECTS with this error (the kick-off itself failed). */
-  startRunError: Error | null = null;
+  rpcCalls: Array<{
+    method: string;
+    args: unknown[];
+    options?: { idempotencyKey?: string };
+  }> = [];
+  getStatus: { status: string; result?: unknown } = { status: "running" };
+  startHandle = { runId: "eval-run-1", status: "accepted" };
+  /** When set, `eval.get` REJECTS with this error (a transient store/RPC hiccup). */
+  getError: Error | null = null;
+  /** When set, `eval.start` REJECTS with this error (the kick-off itself failed). */
+  startError: Error | null = null;
   /** When set, `eval.cancel`/`eval.forceReset` REJECT with this error. */
   cancelError: Error | null = null;
   protected override get rpc(): DeferrableRpcClient {
     return {
-      call: async (_target: string, method: string, args: unknown[]) => {
-        this.rpcCalls.push({ method, args });
-        if (method === "eval.getRun") {
-          if (this.getRunError) throw this.getRunError;
-          return this.getRunStatus;
+      call: async (
+        _target: string,
+        method: string,
+        args: unknown[],
+        options?: { idempotencyKey?: string }
+      ) => {
+        this.rpcCalls.push({ method, args, options });
+        if (method === "eval.get") {
+          if (this.getError) throw this.getError;
+          return this.getStatus;
         }
-        if (method === "eval.startRun" && this.startRunError) throw this.startRunError;
+        if (method === "eval.start" && this.startError) throw this.startError;
         if (method === "eval.cancel" || method === "eval.forceReset") {
           if (this.cancelError) throw this.cancelError;
           return { ok: true };
         }
-        return { runId: (args[0] as { runId: string }).runId, status: "pending" };
+        if (method === "eval.start") return this.startHandle;
+        return { status: "requested" };
       },
     } as unknown as DeferrableRpcClient;
   }
@@ -919,28 +957,33 @@ async function makeSubagentSpawnProbe(config?: unknown): Promise<SubagentSpawnPr
 }
 
 describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)", () => {
-  it("kicks off eval.startRun with runId===invocationId (subKey=channelId) and defers while pending", async () => {
+  it("starts one idempotent handle and polls by the returned run id", async () => {
     const probe = await makeGateProbe();
-    probe.getRunStatus = { status: "pending" };
+    probe.getStatus = { status: "running" };
+    probe.startHandle = { runId: "durable-run-1", status: "accepted" };
 
     const out = await probe.callGate(CHANNEL, "inv-1", { code: "1+1" });
 
     expect(out).toEqual({ deferred: true });
-    const start = probe.rpcCalls.find((c) => c.method === "eval.startRun");
+    const start = probe.rpcCalls.find((c) => c.method === "eval.start");
     expect(start?.args[0]).toMatchObject({
-      runId: "inv-1",
       channelId: CHANNEL,
-      subKey: CHANNEL,
-      code: "1+1",
+      idempotencyKey: "inv-1",
+      scope: { key: CHANNEL },
+      source: { kind: "inline", code: "1+1" },
     });
+    expect(start?.options).toEqual({ idempotencyKey: "inv-1" });
     // The poll backstop check happened even on the first dispatch.
-    expect(probe.rpcCalls.some((c) => c.method === "eval.getRun")).toBe(true);
+    expect(probe.rpcCalls.find((c) => c.method === "eval.get")?.args[0]).toEqual({
+      scope: { key: CHANNEL },
+      runId: "durable-run-1",
+    });
   });
 
-  it("completes INLINE when getRun already reports done (the lost-push poll backstop)", async () => {
+  it("completes inline when get already reports succeeded (the lost-push poll backstop)", async () => {
     const probe = await makeGateProbe();
-    probe.getRunStatus = {
-      status: "done",
+    probe.getStatus = {
+      status: "succeeded",
       result: { success: true, console: "out", returnValue: 5 },
     };
 
@@ -955,8 +998,8 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
 
   it("reports an inline failed eval as a tool failure", async () => {
     const probe = await makeGateProbe();
-    probe.getRunStatus = {
-      status: "done",
+    probe.getStatus = {
+      status: "succeeded",
       result: { success: false, console: "", error: "boom" },
     };
 
@@ -968,23 +1011,21 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     });
   });
 
-  it("returns a terminal error when getRun reports cancelled (reset)", async () => {
+  it("returns a terminal error when get reports cancelled (reset)", async () => {
     const probe = await makeGateProbe();
-    probe.getRunStatus = { status: "cancelled" };
+    probe.getStatus = { status: "cancelled" };
     const out = await probe.callGate(CHANNEL, "inv-3", { code: "x" });
     expect(out).toMatchObject({ isError: true, result: expect.stringContaining("cancelled") });
   });
 
   it("uses path as an inline source hint and rejects only a missing source", async () => {
     const probe = await makeGateProbe();
-    probe.getRunStatus = { status: "pending" };
+    probe.getStatus = { status: "running" };
     await expect(
       probe.callGate(CHANNEL, "inv-4", { code: "x", path: "meta", sourcePath: "src/probe.ts" })
     ).resolves.toEqual({ deferred: true });
-    expect(probe.rpcCalls.find((call) => call.method === "eval.startRun")?.args[0]).toMatchObject({
-      code: "x",
-      path: undefined,
-      sourcePath: "src/probe.ts",
+    expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
+      source: { kind: "inline", code: "x", pathHint: "src/probe.ts" },
     });
 
     const missing = await probe.callGate(CHANNEL, "inv-missing", {});
@@ -993,65 +1034,84 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
 
   it("treats an empty path emitted beside inline code as omitted", async () => {
     const probe = await makeGateProbe();
-    probe.getRunStatus = { status: "pending" };
+    probe.getStatus = { status: "running" };
     await expect(
       probe.callGate(CHANNEL, "inv-empty-path", { code: "1+1", path: "" })
     ).resolves.toEqual({
       deferred: true,
     });
-    expect(probe.rpcCalls.find((call) => call.method === "eval.startRun")?.args[0]).toMatchObject({
-      code: "1+1",
-      path: undefined,
+    expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
+      source: { kind: "inline", code: "1+1" },
     });
   });
 
   it("threads an atomic reset flag into the deferred eval start", async () => {
     const probe = await makeGateProbe();
-    probe.getRunStatus = { status: "pending" };
+    probe.getStatus = { status: "running" };
 
     await expect(
       probe.callGate(CHANNEL, "inv-reset", { reset: true, code: "return Object.keys(scope)" })
     ).resolves.toEqual({ deferred: true });
 
-    expect(probe.rpcCalls.find((call) => call.method === "eval.startRun")?.args[0]).toMatchObject({
-      runId: "inv-reset",
-      reset: true,
-      code: "return Object.keys(scope)",
+    expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
+      idempotencyKey: "inv-reset",
+      scope: { key: CHANNEL, reset: true },
+      source: { kind: "inline", code: "return Object.keys(scope)" },
     });
   });
 
-  it("F4: PARKS (deferred) when the getRun poll throws AFTER startRun succeeded — never a spurious error", async () => {
-    // The run is already in flight server-side (startRun returned). A transient getRun hiccup must
+  it("preserves an explicit logical idempotency key instead of replacing it with correlation", async () => {
+    const probe = await makeGateProbe();
+    probe.getStatus = { status: "running" };
+
+    await expect(
+      probe.callGate(CHANNEL, "invocation-correlation", {
+        code: "return 1",
+        idempotencyKey: "logical-run",
+      })
+    ).resolves.toEqual({ deferred: true });
+
+    expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
+      idempotencyKey: "logical-run",
+      channelId: CHANNEL,
+    });
+    expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.options).toEqual({
+      idempotencyKey: "invocation-correlation",
+    });
+  });
+
+  it("F4: PARKS (deferred) when the get poll throws AFTER start succeeded — never a spurious error", async () => {
+    // The run is already in flight server-side (start returned). A transient get hiccup must
     // NOT surface as the tool result (that would settle the invocation with a fake error AND drop the
     // real eval result when the held run later completes). It parks for the push / deferRedrive.
     const probe = await makeGateProbe();
-    probe.getRunError = new Error("transient store load failed");
+    probe.getError = new Error("transient store load failed");
 
     const out = await probe.callGate(CHANNEL, "inv-park", { code: "1+1" });
 
     // Parked, not errored.
     expect(out).toEqual({ deferred: true });
     expect((out as { isError?: boolean }).isError).toBeUndefined();
-    // startRun still kicked off the run (so the result can arrive out-of-band).
-    expect(probe.rpcCalls.find((c) => c.method === "eval.startRun")?.args[0]).toMatchObject({
-      runId: "inv-park",
+    // start still kicked off the run (so the result can arrive out-of-band).
+    expect(probe.rpcCalls.find((c) => c.method === "eval.start")?.args[0]).toMatchObject({
+      idempotencyKey: "inv-park",
       channelId: CHANNEL,
     });
     // The poll WAS attempted (and threw).
-    expect(probe.rpcCalls.some((c) => c.method === "eval.getRun")).toBe(true);
+    expect(probe.rpcCalls.some((c) => c.method === "eval.get")).toBe(true);
   });
 
-  it("F4: a startRun failure still propagates (the run was never kicked off — fail fast)", async () => {
-    // startRun throwing means the eval never started; there's nothing parked to settle later, so the
+  it("F4: a start failure still propagates (the run was never accepted — fail fast)", async () => {
+    // start throwing means the eval never started; there's nothing parked to settle later, so the
     // error must propagate to the tool executor (which renders it as the tool outcome). We only park
-    // for a getRun hiccup AFTER a successful startRun.
+    // for a get hiccup AFTER a successful start.
     const probe = await makeGateProbe();
-    probe.startRunError = new Error("startRun dispatch failed");
+    probe.startError = new Error("start dispatch failed");
     await expect(probe.callGate(CHANNEL, "inv-fail", { code: "1+1" })).rejects.toThrow(
-      /startRun dispatch failed/
+      /start dispatch failed/
     );
-    // The getRun poll was never reached.
-    expect(probe.rpcCalls.some((c) => c.method === "eval.getRun")).toBe(false);
+    // The get poll was never reached.
+    expect(probe.rpcCalls.some((c) => c.method === "eval.get")).toBe(false);
   });
 });
 
@@ -1900,7 +1960,12 @@ describe("AgentVesselBase.onEvalProgress (live eval console streaming)", () => {
     const vessel = await makeVessel();
     vessel.callerIdForTest = await expectedEvalCaller();
 
-    await vessel.onEvalProgress({ runId: "inv-5", channelId: CHANNEL, output: "hello\nworld" });
+    await vessel.onEvalProgress({
+      runId: "eval-run-5",
+      invocationId: "inv-5",
+      channelId: CHANNEL,
+      output: "hello\nworld",
+    });
 
     const published = vessel.channelStub.published.find(
       (p) => p.event.kind === "invocation.output"
@@ -1916,14 +1981,24 @@ describe("AgentVesselBase.onEvalProgress (live eval console streaming)", () => {
     const vessel = await makeVessel();
     vessel.callerIdForTest = "do:vibestudio/internal:EvalDO:someoneelse";
     await expect(
-      vessel.onEvalProgress({ runId: "inv-6", channelId: CHANNEL, output: "x" })
+      vessel.onEvalProgress({
+        runId: "eval-run-6",
+        invocationId: "inv-6",
+        channelId: CHANNEL,
+        output: "x",
+      })
     ).rejects.toThrow(/only this agent's own EvalDO/);
   });
 
   it("is a no-op for empty output (no event published)", async () => {
     const vessel = await makeVessel();
     vessel.callerIdForTest = await expectedEvalCaller();
-    await vessel.onEvalProgress({ runId: "inv-7", channelId: CHANNEL, output: "" });
+    await vessel.onEvalProgress({
+      runId: "eval-run-7",
+      invocationId: "inv-7",
+      channelId: CHANNEL,
+      output: "",
+    });
     expect(vessel.channelStub.published.some((p) => p.event.kind === "invocation.output")).toBe(
       false
     );

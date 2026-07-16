@@ -7,10 +7,11 @@ import {
   type EvalImportLoader,
 } from "@vibestudio/service-schemas/clients/evalImportLoader";
 import { eventsMethods } from "@vibestudio/service-schemas/events";
-import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import { fsMethods } from "@vibestudio/service-schemas/fs";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import { docsMethods } from "@vibestudio/service-schemas/docs";
+import { evalMethods } from "@vibestudio/service-schemas/eval";
+import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import { EVAL_AMBIENT_ONLY } from "@vibestudio/service-schemas/runtime/runtimeSurface.eval";
 import { buildOwnerBindings } from "./evalOwnerBindings.js";
 import { ConsoleStreamer } from "./consoleStreamer.js";
@@ -20,6 +21,7 @@ import {
   createTypedServiceClient,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 /**
  * EvalDO — the blessed, per-owner unsafe-eval kernel.
@@ -48,8 +50,26 @@ import {
  * `import { fs } from "@workspace/runtime"` does not initialize in a DO isolate.)
  */
 
-/** Reserved tables the user `db` may not DROP/DELETE/ALTER — base state, scope, sqlite internals. */
-const RESERVED_TABLE = /\b(state|repl_scopes|sqlite_[A-Za-z0-9_]*)\b/i;
+/**
+ * Eval kernel tables are declared once. Schema validation and destructive
+ * scope reset both consume this list so adding durable kernel state cannot
+ * silently turn it into resettable user data.
+ */
+const EVAL_KERNEL_TABLES = [
+  "eval_runs_v3",
+  "eval_run_progress_v3",
+  "eval_run_events_v3",
+  "eval_retained_modules_v1",
+  "eval_run_owned_contexts_v1",
+] as const;
+const EVAL_PROTECTED_TABLES = ["state", "repl_scopes", ...EVAL_KERNEL_TABLES] as const;
+const EVAL_PROTECTED_TABLE_SET = new Set<string>(EVAL_PROTECTED_TABLES);
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Reserved tables the user `db` may not mutate — kernel state, scope, lifecycle, retained modules. */
+const RESERVED_TABLE = new RegExp(
+  `\\b(?:${EVAL_PROTECTED_TABLES.map(escapeRegExp).join("|")}|sqlite_[A-Za-z0-9_]*)\\b`,
+  "i"
+);
 const DESTRUCTIVE_STMT = /^\s*(DROP|DELETE|ALTER|UPDATE|INSERT|REPLACE|TRUNCATE|CREATE)\b/i;
 
 /**
@@ -62,6 +82,14 @@ const RESULT_CONSOLE_MAX_CHARS = 80_000;
 const RESULT_RETURN_PREVIEW_CHARS = 60_000;
 const RESULT_ERROR_MAX_CHARS = 20_000;
 const RESULT_STORAGE_MAX_CHARS = 250_000;
+const MAX_RETAINED_FUNCTION_SOURCE_CHARS = 256 * 1024;
+const MAX_RETAINED_MODULES = 128;
+const MAX_RETAINED_MODULE_BYTES = 32 * 1024 * 1024;
+const MAX_FROZEN_SOURCE_CHARS = 64 * 1024 * 1024;
+const MAX_RUN_CLEANUP_HANDLERS = 128;
+const MAX_RUN_OWNED_CONTEXTS = 128;
+const MAX_RUN_CLEANUP_MS = 30_000;
+const EXECUTABLE_SOURCE_PATH = /\.(?:[cm]js|[cm]ts|jsx|tsx)$/i;
 
 interface UnsafeEvalBinding {
   eval(code: string, name?: string): unknown;
@@ -74,6 +102,7 @@ interface SandboxResult {
   returnValue?: unknown;
   exports?: Record<string, unknown>;
   error?: string;
+  errorCode?: string;
 }
 
 interface ScopeManagerLike {
@@ -82,6 +111,29 @@ interface ScopeManagerLike {
   hydrate(): Promise<unknown>;
   enterEval(): void;
   exitEval(): Promise<void>;
+  snapshotForProvenance(): SerializedScopeLike;
+}
+
+interface SerializedScopeExecutableLike {
+  source: string;
+  definitionSourceDigest: string;
+  definitionRunDigest: string;
+}
+
+interface ScopeExecutableCodecLike {
+  serialize(
+    value: (...args: unknown[]) => unknown,
+    path: string
+  ): SerializedScopeExecutableLike | null;
+  deserialize(value: SerializedScopeExecutableLike, path: string): (...args: unknown[]) => unknown;
+}
+
+interface SerializedScopeLike {
+  serialized: Record<string, unknown>;
+  spills: Array<{ key: string; valueJson: string }>;
+  serializedKeys: string[];
+  droppedPaths: Array<{ path: string; reason: string }>;
+  partialKeys: string[];
 }
 
 function utf16leBase64(value: string): string {
@@ -105,11 +157,31 @@ interface ScopeBlobBackendLike {
 }
 
 interface EvalEngine {
+  analyzeRetainedFunctionSource(source: string): { freeNames: string[] };
   executeSandbox(code: string, options: Record<string, unknown>): Promise<SandboxResult>;
+  loadSourceFileBundle(
+    entryPath: string,
+    loadSourceFile: (path: string) => Promise<string>,
+    entryCode?: string
+  ): Promise<{
+    entryPath: string;
+    files: Record<string, string>;
+    resolutions: Record<string, string>;
+  }>;
+  findStaticSpecifiers(code: string): string[];
+  inferImportsFromPackageJson(
+    specifiers: string[],
+    context: {
+      importerPath?: string;
+      loadSourceFile?: (path: string) => Promise<string>;
+      explicitImports?: Record<string, string>;
+    }
+  ): Promise<Record<string, string>>;
   ScopeManager: new (opts: {
     channelId: string;
     panelId: string;
     persistence: unknown;
+    executableCodec?: ScopeExecutableCodecLike;
   }) => ScopeManagerLike;
   SqlScopePersistence: new (sql: unknown, blobs: ScopeBlobBackendLike) => unknown;
 }
@@ -135,7 +207,6 @@ type WorkspaceRuntimeLike = Record<string, unknown>;
  */
 interface RuntimeSupportModule {
   createHostedRuntime(host: Record<string, unknown>): WorkspaceRuntimeLike;
-  createGatewayFetch(config: Record<string, unknown>): unknown;
   createRpcFs(rpc: unknown): unknown;
   createRuntimeParentHandle(
     getPanelHandle: (panelId: string) => unknown,
@@ -143,7 +214,10 @@ interface RuntimeSupportModule {
     parentEntityId: string,
     parentKind?: "panel" | "worker" | "do"
   ): unknown;
-  createServicesProxy(rt: WorkspaceRuntimeLike): Record<string, unknown>;
+  createServicesProxy(
+    rt: WorkspaceRuntimeLike,
+    knownServiceNames?: readonly string[]
+  ): Record<string, unknown>;
   createWorkerdClient(rpc: unknown): unknown;
   createPanelRuntime(options: Record<string, unknown>): PanelRuntimeApiLike;
   createRuntimeSelfHandle(options: { id: string }): unknown;
@@ -152,7 +226,6 @@ interface RuntimeSupportModule {
 /** The `./hosted` + `./panel-runtime` factory names the EvalDO requires. */
 const RUNTIME_HOSTED_FACTORIES = [
   "createHostedRuntime",
-  "createGatewayFetch",
   "createRpcFs",
   "createRuntimeParentHandle",
   "createServicesProxy",
@@ -165,6 +238,7 @@ type FsClient = TypedServiceClient<typeof fsMethods>;
 type BlobstoreClient = TypedServiceClient<typeof blobstoreMethods>;
 type DocsClient = TypedServiceClient<typeof docsMethods>;
 type EventsClient = TypedServiceClient<typeof eventsMethods>;
+type EvalClient = TypedServiceClient<typeof evalMethods>;
 type ExternalOpenClient = TypedServiceClient<typeof externalOpenMethods>;
 
 interface RunArgs {
@@ -185,6 +259,13 @@ interface RunArgs {
    */
   channelId?: string;
   /**
+   * Parked agent-tool invocation correlated with this run. This is derived by
+   * the eval service from the authenticated agent's idempotency key; evaluated
+   * code never supplies or observes it. A durable eval run id is deliberately
+   * independent from the agent-loop invocation id.
+   */
+  agentInvocationId?: string;
+  /**
    * The owning agent DO's runtime id (its own `do:source:Class:objectKey`).
    * Set by the eval service to the verified caller; the `chat` binding proxies
    * every op to `agentRef.chatOp(channelId, op, args)`. The agent re-derives
@@ -192,25 +273,45 @@ interface RunArgs {
    */
   agentRef?: string;
   /**
-   * Owner-scoped gateway bearer minted by the eval service for THIS EvalDO's
-   * concrete `do:...:EvalDO:<objectKey>` identity (NOT the shared internal-DO
-   * service bearer). Backs `gatewayConfig`/`gatewayFetch` so a leak is scoped to
-   * the owner. Server→DO arg only — never user-supplied.
-   */
-  gatewayToken?: string;
-  /**
    * The owner's nearest panel ancestor (resolved server-side by the eval service
    * from verified entity lineage), or absent when there is none. Backs the
    * portable `parent`/`getParent`/`getParentWithContract`. Server→DO arg only.
    */
   parent?: { parentId: string; parentEntityId: string; parentKind: "panel" | "worker" | "do" };
-  /** Caller-provided idempotency key for the run (agents: the raw invocationId). */
-  runId?: string;
   /** Opt-in deadline; the run is aborted after this many ms. Absent ⇒ unbounded. */
   timeoutMs?: number;
-  /** Read-only containment: outbound service calls from this run are dispatched
-   *  with ctx.readOnly, so the server refuses any non-`read` method. */
-  readOnly?: boolean;
+  startIntentDigest?: string;
+  manifestDigest?: string;
+  sourceBundleDigest?: string;
+  authorityPolicy?: {
+    mode: "adaptive" | "strict";
+    effects: "read-only" | "mutable";
+    approvals: "prompt" | "pregranted-only";
+    requests: readonly unknown[];
+  };
+}
+
+interface FrozenSourceBundle {
+  version: 1;
+  code: string;
+  sourcePath?: string;
+  /** Original context path when its bytes are returned as data rather than parsed as code. */
+  sourceReferencePath?: string;
+  sourceFiles: Record<string, string>;
+  importBundles: Record<string, string>;
+  retainedModules: Record<string, { ref: string; digest: string }>;
+  workspaceImports: string[];
+}
+
+interface RetainedModuleRecord {
+  specifier: string;
+  ref: string;
+  bundleDigest: string;
+}
+
+interface LiveInvocationLease {
+  credential: string;
+  policy: NonNullable<RunArgs["authorityPolicy"]>;
 }
 
 interface RunResult {
@@ -218,7 +319,40 @@ interface RunResult {
   console: string;
   returnValue?: unknown;
   error?: string;
+  errorCode?: string;
   scopeKeys?: string[];
+  authority?: unknown;
+  provenance?: {
+    startIntentDigest: string;
+    sourceDigest: string | null;
+    executionProvenanceDigest: string | null;
+    scopeInputRevision: string | null;
+    runDigest: string | null;
+    sourceBundleDigest: string | null;
+    manifestDigest: string | null;
+    terminalReason: string | null;
+  };
+}
+
+const TERMINAL_RUN_STATUSES = [
+  "succeeded",
+  "failed",
+  "cancelled",
+  "expired",
+  "interrupted",
+] as const;
+
+function isTerminalRunStatus(status: string): boolean {
+  return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
+}
+
+function cancelledRunResult(): RunResult {
+  return {
+    success: false,
+    console: "",
+    error: "eval: run cancelled",
+    errorCode: "EVAL_CANCELLED",
+  };
 }
 
 interface DurableRunActivity {
@@ -241,7 +375,7 @@ interface DurableRunActivity {
 }
 
 export class EvalDO extends DurableObjectBase {
-  static override schemaVersion = 1;
+  static override schemaVersion = 3;
 
   private engine: EvalEngine | null = null;
   private scopeManager: ScopeManagerLike | null = null;
@@ -255,15 +389,25 @@ export class EvalDO extends DurableObjectBase {
   private readonly activeRunIds = new Set<string>();
   /** Abort controllers per in-flight run — used by `reset` and the `timeoutMs` deadline. */
   private readonly runAborts = new Map<string, AbortController>();
-  /** Run-scoped cleanup registered by evaluated orchestration code. Cancel
-   *  executes these BEFORE aborting outbound RPC so child runtimes can retire
-   *  through the normal authority path instead of becoming orphans. */
-  private readonly runCancelHandlers = new Map<string, Set<() => void | Promise<void>>>();
+  /** Run-scoped cleanup registered by evaluated orchestration code. */
+  private readonly runCleanupHandlers = new Map<string, Set<() => void | Promise<void>>>();
+  private readonly runCleanupTasks = new Map<string, Promise<void>>();
+  private readonly runCleanupStarted = new Set<string>();
+  /** Distinguishes user execution from terminal cleanup across async continuations. */
+  private readonly authoredCallContext = new AsyncLocalStorage<{
+    phase: "run" | "cleanup";
+    signal?: AbortSignal;
+  }>();
+  /** Process-local by design. A cold incarnation cannot resume a run because
+   * no invocation secret or JavaScript continuation is durable. */
+  private readonly invocationLeases = new Map<string, LiveInvocationLease>();
   private buildClient: BuildServiceClient | null = null;
   private fsClient: FsClient | null = null;
-  private blobstoreClient: BlobstoreClient | null = null;
+  private preparationBlobstoreClient: BlobstoreClient | null = null;
+  private kernelBlobstoreClient: BlobstoreClient | null = null;
   private docsClient: DocsClient | null = null;
   private eventsClient: EventsClient | null = null;
+  private evalClient: EvalClient | null = null;
   private externalOpenClient: ExternalOpenClient | null = null;
   /**
    * The portable runtime surface (createHostedRuntime) — the SAME assembly panel
@@ -281,10 +425,10 @@ export class EvalDO extends DurableObjectBase {
   private portableHelpers: Record<string, unknown> | null = null;
   /** Owner identity baked into the cached hosted runtime at first init. A warm
    *  EvalDO serves exactly one owner (objectKey = sha256(ownerId\0subKey)), so a
-   *  later run arriving with a different contextId/gatewayToken is a routing or
+   *  later run arriving with a different contextId is a routing or
    *  ownership bug — refuse loudly rather than silently run under stale identity
    *  (Finding 3). */
-  private hostedRuntimeIdentity: { contextId: string; gatewayToken: string } | null = null;
+  private hostedRuntimeIdentity: { contextId: string } | null = null;
   private cdpLoaded = false;
   private warnedNoCdpProvider = false;
   /**
@@ -300,7 +444,24 @@ export class EvalDO extends DurableObjectBase {
    * get the current run's abort signal/read-only flag.
    */
   private currentRunReadOnly = false;
+  private currentEvalInvocation: { runId: string; credential: string } | null = null;
   private currentRunAbortSignal: AbortSignal | null = null;
+  /** Current bindings are installed only for the held execution interval. A
+   * durable function wrapper resolves them at CALL time, so it can never retain
+   * a previous run's authority-bearing clients or ctx object. */
+  private currentRunBindings: Record<string, unknown> | null = null;
+  private currentDefinitionProvenance: {
+    sourceDigest: string;
+    runDigest: string;
+  } | null = null;
+  private readonly retainedExecutableMetadata = new WeakMap<
+    (...args: unknown[]) => unknown,
+    SerializedScopeExecutableLike
+  >();
+  private readonly retainedExecutableCompilation = new WeakMap<
+    (...args: unknown[]) => unknown,
+    { runId: string; compiled: (...args: unknown[]) => unknown }
+  >();
 
   /**
    * Per-OBJECT module registry passed to the engine on every run. Many owners' EvalDOs share
@@ -310,6 +471,7 @@ export class EvalDO extends DurableObjectBase {
    * DO's runs for import continuity (a module loaded in one run is reusable by the next).
    */
   private moduleMap: Record<string, unknown> = {};
+  private readonly loadedModuleDigests = new Map<string, string>();
 
   /** Per-object require paired with `moduleMap` (resolves only THIS owner's loaded modules). */
   private engineRequire = (id: string): unknown => {
@@ -318,12 +480,25 @@ export class EvalDO extends DurableObjectBase {
     throw new Error(`Module "${id}" not available in EvalDO; use the imports parameter.`);
   };
 
+  private readonly scopeExecutableCodec: ScopeExecutableCodecLike = {
+    serialize: (value, path) => this.serializeRetainedExecutable(value, path),
+    deserialize: (value, path) => this.deserializeRetainedExecutable(value, path),
+  };
+
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
     this.ensureReady();
     // Runs once per boot (this instance), before any run executes — so every `running`
     // row is orphaned by a prior instance whose held connection dropped (server restart).
     this.reconcileOrphanedRuns();
+    // Run-owned lifecycle contexts are durable kernel state. If a prior
+    // incarnation vanished, reclaim resources for the runs just marked
+    // interrupted before accepting work in this incarnation.
+    void this.ctx
+      .blockConcurrencyWhile(() => this.reconcileTerminalOwnedContexts())
+      .catch((error) =>
+        console.error("[EvalDO] failed to reconcile terminal run-owned contexts", error)
+      );
   }
 
   protected createTables(): void {
@@ -331,47 +506,658 @@ export class EvalDO extends DurableObjectBase {
     // is created lazily by SqlScopePersistence on first run; user `db` tables are created
     // on demand by eval'd code.
     //
-    // The `runs` table is the durable job queue: `startRun` inserts, `executeRun` runs the
+    // The `runs` table is the durable job queue: `accept` inserts, `execute` runs the
     // sandbox synchronously in a HELD handler (the eval service holds the connection open —
-    // workerd does not cap held requests), `getRun` is the poll backstop. `agent_ref`/
-    // `channel_id` are stored so the alarm-free executeRun reconstructs the `chat` binding.
+    // workerd does not cap held requests), `get` is the poll backstop. `agent_ref`/
+    // `channel_id` are stored so the alarm-free execution reconstructs the `chat` binding.
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS runs (
+      CREATE TABLE IF NOT EXISTS eval_runs_v3 (
         run_id TEXT PRIMARY KEY,
-        args TEXT NOT NULL,
+        args TEXT,
         agent_ref TEXT,
         channel_id TEXT,
         status TEXT NOT NULL,
         result TEXT,
-        started_at INTEGER NOT NULL,
-        deadline_at INTEGER
+        accepted_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
+        deadline_at INTEGER,
+        start_intent_digest TEXT NOT NULL,
+        source_digest TEXT,
+        execution_provenance_digest TEXT,
+        scope_input_revision TEXT,
+        source_bundle_digest TEXT,
+        run_digest TEXT,
+        manifest_digest TEXT,
+        terminal_reason TEXT
       )
     `);
     // SqlStorage executes one statement per exec() call under real workerd.
     // Keep this separate from `runs` so existing objects and fresh objects both
     // receive the progress table deterministically.
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS run_progress (
+      CREATE TABLE IF NOT EXISTS eval_run_progress_v3 (
         run_id TEXT PRIMARY KEY,
         progress TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
-        FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+        FOREIGN KEY (run_id) REFERENCES eval_runs_v3(run_id) ON DELETE CASCADE
       )
     `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS eval_run_events_v3 (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        status TEXT,
+        detail TEXT,
+        FOREIGN KEY (run_id) REFERENCES eval_runs_v3(run_id) ON DELETE CASCADE
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS eval_retained_modules_v1 (
+        specifier TEXT PRIMARY KEY,
+        ref TEXT NOT NULL,
+        bundle_digest TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS eval_run_owned_contexts_v1 (
+        run_id TEXT NOT NULL,
+        context_id TEXT NOT NULL,
+        owner_entity_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, context_id),
+        FOREIGN KEY (run_id) REFERENCES eval_runs_v3(run_id) ON DELETE CASCADE
+      )
+    `);
+  }
+
+  protected override requiredTables(): readonly string[] {
+    return EVAL_KERNEL_TABLES;
   }
 
   /**
    * Crash recovery: a held `executeRun` connection drops on server restart → workerd cancels
    * the EvalDO handler → the run dies mid-flight, leaving a `running` row no in-memory executor
    * owns. Called once at construction (before any run is live), so every `running` row is stale.
-   * Mark them an interrupt error; the waiting caller's `getRun` poll surfaces it and the model
+   * Mark them an interrupt error; the waiting caller's `get` poll surfaces it and the model
    * re-issues (a fresh runId). We never auto-re-run — evals have side effects (spawned agents).
    */
   private reconcileOrphanedRuns(): void {
     this.sql.exec(
-      `UPDATE runs SET status = 'done', result = ? WHERE status = 'running'`,
-      JSON.stringify({ success: false, console: "", error: "eval interrupted by restart" })
+      `UPDATE eval_runs_v3
+       SET status = 'interrupted', result = ?, ended_at = ?, terminal_reason = ?
+       WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'expired', 'interrupted')`,
+      JSON.stringify({
+        success: false,
+        console: "",
+        error: "eval interrupted by process or EvalDO incarnation loss",
+        errorCode: "EVAL_INTERRUPTED",
+      }),
+      Date.now(),
+      "active continuation was lost; source was not replayed"
     );
+  }
+
+  private async reconcileTerminalOwnedContexts(): Promise<void> {
+    const rows = this.sql
+      .exec(
+        `SELECT DISTINCT owned.run_id
+         FROM eval_run_owned_contexts_v1 AS owned
+         INNER JOIN eval_runs_v3 AS run ON run.run_id = owned.run_id
+         WHERE run.status IN ('succeeded', 'failed', 'cancelled', 'expired', 'interrupted')`
+      )
+      .toArray();
+    for (const row of rows) {
+      try {
+        await this.cleanupRunOwnedContexts(String(row["run_id"]));
+      } catch (error) {
+        console.error(
+          `[EvalDO] retained run-owned context cleanup failed for ${String(row["run_id"])}`,
+          error
+        );
+      }
+    }
+  }
+
+  private appendRunEvent(runId: string, type: string, status?: string, detail?: unknown): void {
+    const count = Number(
+      this.sql
+        .exec(`SELECT COUNT(*) AS count FROM eval_run_events_v3 WHERE run_id = ?`, runId)
+        .toArray()[0]?.["count"] ?? 0
+    );
+    if (count >= 1_000) {
+      throw Object.assign(new Error("eval run event limit exceeded"), {
+        code: "EVAL_RESOURCE_LIMIT",
+      });
+    }
+    this.sql.exec(
+      `INSERT INTO eval_run_events_v3 (run_id, at, type, status, detail)
+       VALUES (?, ?, ?, ?, ?)`,
+      runId,
+      Date.now(),
+      type,
+      status ?? null,
+      detail === undefined ? null : JSON.stringify(detail)
+    );
+  }
+
+  private transition(runId: string, from: readonly string[], to: string, type: string): void {
+    const placeholders = from.map(() => "?").join(", ");
+    const startedAt = to === "running" ? Date.now() : null;
+    this.sql.exec(
+      `UPDATE eval_runs_v3 SET status = ?, started_at = COALESCE(started_at, ?)
+       WHERE run_id = ? AND status IN (${placeholders})`,
+      to,
+      startedAt,
+      runId,
+      ...from
+    );
+    const row = this.sql
+      .exec(`SELECT status FROM eval_runs_v3 WHERE run_id = ?`, runId)
+      .toArray()[0];
+    if (String(row?.["status"]) !== to) {
+      throw new Error(`eval: invalid run transition ${from.join("|")} -> ${to}`);
+    }
+    this.appendRunEvent(runId, type, to);
+  }
+
+  private finishRun(
+    runId: string,
+    requestedStatus: "succeeded" | "failed" | "expired" | "interrupted",
+    result: RunResult,
+    reason: string | null
+  ): void {
+    const row = this.sql
+      .exec(`SELECT status FROM eval_runs_v3 WHERE run_id = ?`, runId)
+      .toArray()[0];
+    const prior = String(row?.["status"] ?? "interrupted");
+    const status = prior === "cancellation-requested" ? "cancelled" : requestedStatus;
+    if (
+      ["cancelled", "expired", "interrupted"].includes(prior) &&
+      prior !== "cancellation-requested"
+    ) {
+      return;
+    }
+    const terminalResult =
+      status === "cancelled"
+        ? { success: false, console: result.console, error: "eval: run cancelled" }
+        : result;
+    this.sql.exec(
+      `UPDATE eval_runs_v3
+       SET status = ?, result = ?, ended_at = ?, terminal_reason = ?
+       WHERE run_id = ?`,
+      status,
+      JSON.stringify(terminalResult),
+      Date.now(),
+      reason,
+      runId
+    );
+    this.appendRunEvent(runId, "terminal", status, reason ? { reason } : undefined);
+  }
+
+  private cancelNonterminalRuns(reason: string): void {
+    const rows = this.sql
+      .exec(
+        `SELECT run_id FROM eval_runs_v3
+         WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'expired', 'interrupted')`
+      )
+      .toArray();
+    for (const row of rows) {
+      const runId = String(row["run_id"]);
+      const inFlight = this.inFlightRuns.has(runId);
+      const status = inFlight ? "cancellation-requested" : "cancelled";
+      if (inFlight) {
+        this.sql.exec(
+          `UPDATE eval_runs_v3 SET status = ?, ended_at = NULL, terminal_reason = ?
+           WHERE run_id = ?`,
+          status,
+          reason,
+          runId
+        );
+      } else {
+        this.sql.exec(
+          `UPDATE eval_runs_v3 SET status = ?, result = ?, ended_at = ?, terminal_reason = ?
+           WHERE run_id = ?`,
+          status,
+          JSON.stringify(cancelledRunResult()),
+          Date.now(),
+          reason,
+          runId
+        );
+      }
+      this.appendRunEvent(runId, inFlight ? "cancellation-requested" : "terminal", status, {
+        reason,
+      });
+    }
+  }
+
+  private async sha256Text(value: string): Promise<string> {
+    const bytes = new TextEncoder().encode(value);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
+      ""
+    );
+  }
+
+  private canonicalJson(value: unknown): string {
+    const canonicalize = (candidate: unknown): unknown => {
+      if (Array.isArray(candidate)) return candidate.map(canonicalize);
+      if (candidate && typeof candidate === "object") {
+        return Object.fromEntries(
+          Object.entries(candidate as Record<string, unknown>)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, child]) => [key, canonicalize(child)])
+        );
+      }
+      return candidate;
+    };
+    return JSON.stringify(canonicalize(value));
+  }
+
+  private retainedModuleRecords(): RetainedModuleRecord[] {
+    const rows = this.sql
+      .exec(
+        `SELECT specifier, ref, bundle_digest
+         FROM eval_retained_modules_v1
+         ORDER BY specifier ASC
+         LIMIT ?`,
+        MAX_RETAINED_MODULES + 1
+      )
+      .toArray();
+    if (rows.length > MAX_RETAINED_MODULES) {
+      throw Object.assign(
+        new Error(`eval retained module limit (${MAX_RETAINED_MODULES}) exceeded`),
+        {
+          code: "EVAL_RESOURCE_LIMIT",
+        }
+      );
+    }
+    return rows.map((row) => ({
+      specifier: String(row["specifier"]),
+      ref: String(row["ref"]),
+      bundleDigest: String(row["bundle_digest"]),
+    }));
+  }
+
+  private async materializeSource(
+    runId: string,
+    args: RunArgs
+  ): Promise<{
+    sourceDigest: string;
+    executionProvenanceDigest: string;
+    scopeInputRevision: string;
+    sourceBundleDigest: string;
+  }> {
+    const engine = await this.ensureEngine();
+    const readFiles: Record<string, string> = {};
+    const readFrozenFile = async (path: string): Promise<string> => {
+      if (Object.prototype.hasOwnProperty.call(readFiles, path)) return readFiles[path]!;
+      const value = await this.readSourceFile(path);
+      readFiles[path] = value;
+      return value;
+    };
+    const requestedSourcePath = args.sourcePath ?? args.path;
+    const requestedCode =
+      args.code !== undefined
+        ? args.code
+        : requestedSourcePath
+          ? await readFrozenFile(requestedSourcePath)
+          : "";
+    const executesContextFile =
+      args.code === undefined &&
+      requestedSourcePath !== undefined &&
+      EXECUTABLE_SOURCE_PATH.test(requestedSourcePath);
+    // Data/document paths are a first-class eval UX: freeze the exact bytes at
+    // preparation and return those bytes from the immutable source bundle.
+    // Never authorize one file and then re-read a mutable path during execute.
+    const code =
+      args.code === undefined && requestedSourcePath && !executesContextFile
+        ? `return ${JSON.stringify(requestedCode)};`
+        : requestedCode;
+    const sourcePath =
+      args.code !== undefined
+        ? args.sourcePath
+        : executesContextFile
+          ? requestedSourcePath
+          : undefined;
+    const sourceGraph = sourcePath
+      ? await engine.loadSourceFileBundle(sourcePath, readFrozenFile, requestedCode)
+      : { entryPath: "", files: {}, resolutions: {} };
+    const sourceFiles = { ...readFiles, ...sourceGraph.files };
+    const explicitImports = { ...(args.imports ?? {}) };
+    const resolvedImports: Record<string, string> = { ...explicitImports };
+    const retainedModules = this.retainedModuleRecords();
+    const retainedBySpecifier = new Map(
+      retainedModules.map((record) => [record.specifier, record] as const)
+    );
+    for (const retained of retainedModules) {
+      if (resolvedImports[retained.specifier] === undefined) {
+        resolvedImports[retained.specifier] = retained.ref;
+      }
+    }
+    const importLoader = this.makeLoadImport();
+    const workspaceImports = new Set<string>();
+    const sourceEntries = sourcePath
+      ? Object.entries(sourceGraph.files)
+      : [[args.sourcePath ?? "<inline>", code] as const];
+    for (const [importerPath, source] of sourceEntries) {
+      const specifiers = engine.findStaticSpecifiers(source);
+      Object.assign(
+        resolvedImports,
+        await engine.inferImportsFromPackageJson(specifiers, {
+          importerPath: sourcePath ? importerPath : undefined,
+          loadSourceFile: sourcePath ? readFrozenFile : undefined,
+          explicitImports,
+        })
+      );
+      for (const specifier of specifiers) {
+        if (
+          specifier.startsWith(".") ||
+          specifier.startsWith("#") ||
+          specifier.startsWith("node:") ||
+          resolvedImports[specifier] !== undefined
+        ) {
+          continue;
+        }
+        if (await importLoader.resolveWorkspaceImport(specifier)) {
+          resolvedImports[specifier] = "latest";
+          workspaceImports.add(specifier);
+        }
+      }
+    }
+    const runtimeSource = this.declaredProviderSource("EVAL_RUNTIME_SOURCE");
+    const retainedSpecifierCount = Object.keys(resolvedImports).filter(
+      (specifier) =>
+        !runtimeSource ||
+        (specifier !== runtimeSource && !specifier.startsWith(`${runtimeSource}/`))
+    ).length;
+    if (retainedSpecifierCount > MAX_RETAINED_MODULES) {
+      throw Object.assign(
+        new Error(`eval retained module limit (${MAX_RETAINED_MODULES}) exceeded`),
+        {
+          code: "EVAL_RESOURCE_LIMIT",
+        }
+      );
+    }
+    const importBundles: Record<string, string> = {};
+    const frozenRetainedModules: Record<string, { ref: string; digest: string }> = {};
+    // The eval runtime root is a host-injected module. Keep it external from
+    // every retained workspace bundle even during preparation, which happens
+    // before the per-run hosted runtime exists. At execution the per-object
+    // module map supplies the run-neutral facade backed by the active lease.
+    const externals = new Set([
+      ...Object.keys(this.moduleMap),
+      ...(runtimeSource ? [runtimeSource] : []),
+    ]);
+    let retainedModuleBytes = 0;
+    for (const [specifier, ref] of Object.entries(resolvedImports).sort(([a], [b]) =>
+      a.localeCompare(b)
+    )) {
+      if (
+        runtimeSource &&
+        (specifier === runtimeSource || specifier.startsWith(`${runtimeSource}/`))
+      ) {
+        continue;
+      }
+      const retained = retainedBySpecifier.get(specifier);
+      const bundle =
+        retained?.ref === ref
+          ? await this.preparationBlobstore().getText(retained.bundleDigest)
+          : await importLoader(specifier, ref, [...externals]);
+      if (bundle == null) {
+        throw Object.assign(new Error(`Retained eval module ${specifier}@${ref} is unavailable`), {
+          code: "EVAL_INTERRUPTED",
+        });
+      }
+      retainedModuleBytes += bundle.length;
+      if (retainedModuleBytes > MAX_RETAINED_MODULE_BYTES) {
+        throw Object.assign(
+          new Error(
+            `eval retained module source exceeds the ${MAX_RETAINED_MODULE_BYTES}-character limit`
+          ),
+          { code: "EVAL_RESOURCE_LIMIT" }
+        );
+      }
+      importBundles[`${specifier}\0${ref}`] = bundle;
+      const storedModule =
+        retained?.ref === ref
+          ? { digest: retained.bundleDigest }
+          : await this.preparationBlobstore().putText(bundle);
+      frozenRetainedModules[specifier] = { ref, digest: storedModule.digest };
+      this.sql.exec(
+        `INSERT INTO eval_retained_modules_v1 (specifier, ref, bundle_digest, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(specifier) DO UPDATE SET
+           ref = excluded.ref,
+           bundle_digest = excluded.bundle_digest,
+           updated_at = excluded.updated_at`,
+        specifier,
+        ref,
+        storedModule.digest,
+        Date.now()
+      );
+      externals.add(specifier);
+    }
+    if (Object.keys(frozenRetainedModules).length > MAX_RETAINED_MODULES) {
+      throw Object.assign(
+        new Error(`eval retained module limit (${MAX_RETAINED_MODULES}) exceeded`),
+        {
+          code: "EVAL_RESOURCE_LIMIT",
+        }
+      );
+    }
+    const frozen: FrozenSourceBundle = {
+      version: 1,
+      code,
+      ...(sourcePath ? { sourcePath: sourceGraph.entryPath || sourcePath } : {}),
+      ...(!sourcePath && requestedSourcePath ? { sourceReferencePath: requestedSourcePath } : {}),
+      sourceFiles,
+      importBundles,
+      retainedModules: frozenRetainedModules,
+      workspaceImports: [...workspaceImports].sort(),
+    };
+    const encodedBundle = JSON.stringify(frozen);
+    if (encodedBundle.length > MAX_FROZEN_SOURCE_CHARS) {
+      throw Object.assign(
+        new Error(`eval immutable source bundle exceeds ${MAX_FROZEN_SOURCE_CHARS} characters`),
+        { code: "EVAL_RESOURCE_LIMIT" }
+      );
+    }
+    const sourceDigest = await this.sha256Text(encodedBundle);
+    const scopeManager = await this.ensureScopeManager(engine);
+    const scopeSnapshot = scopeManager.snapshotForProvenance();
+    const scopeInputRevision = await this.sha256Text(
+      this.canonicalJson({
+        objectKey: this.objectKey,
+        serialized: scopeSnapshot.serialized,
+        spills: scopeSnapshot.spills
+          .map(({ key, valueJson }) => ({ key, valueJson }))
+          .sort((left, right) => left.key.localeCompare(right.key)),
+        droppedPaths: scopeSnapshot.droppedPaths,
+      })
+    );
+    const executionProvenanceDigest = await this.sha256Text(
+      this.canonicalJson({
+        sourceDigest,
+        retainedModules: frozenRetainedModules,
+        scopeInputRevision,
+      })
+    );
+    const stored = await this.preparationBlobstore().putText(encodedBundle);
+    const sourceBundleDigest = stored.digest;
+    this.sql.exec(
+      `UPDATE eval_runs_v3
+       SET source_digest = ?, execution_provenance_digest = ?, scope_input_revision = ?,
+           source_bundle_digest = ?
+       WHERE run_id = ? AND status = 'preparing'`,
+      sourceDigest,
+      executionProvenanceDigest,
+      scopeInputRevision,
+      sourceBundleDigest,
+      runId
+    );
+    this.appendRunEvent(runId, "source-materialized", "preparing", {
+      sourceDigest,
+      executionProvenanceDigest,
+      scopeInputRevision,
+      sourceBundleDigest,
+    });
+    return { sourceDigest, executionProvenanceDigest, scopeInputRevision, sourceBundleDigest };
+  }
+
+  private serializeRetainedExecutable(
+    value: (...args: unknown[]) => unknown,
+    path: string
+  ): SerializedScopeExecutableLike | null {
+    const retained = this.retainedExecutableMetadata.get(value);
+    if (retained) return retained;
+    const provenance = this.currentDefinitionProvenance;
+    if (!provenance) return null;
+    const source = Function.prototype.toString.call(value);
+    if (/\[native code\]/.test(source) || /^\s*class\b/.test(source)) return null;
+    if (source.length > MAX_RETAINED_FUNCTION_SOURCE_CHARS) {
+      throw Object.assign(
+        new Error(
+          `eval scope executable ${path} exceeds the ${MAX_RETAINED_FUNCTION_SOURCE_CHARS}-character source limit`
+        ),
+        { code: "EVAL_RESOURCE_LIMIT" }
+      );
+    }
+    const bindings = this.currentRunBindings;
+    if (!bindings) return null;
+    let freeNames: string[];
+    try {
+      freeNames = this.analyzeRetainedExecutable(source, path);
+    } catch {
+      return null;
+    }
+    if (!this.retainedExecutableDependenciesAvailable(freeNames, bindings)) return null;
+    const record = {
+      source,
+      definitionSourceDigest: provenance.sourceDigest,
+      definitionRunDigest: provenance.runDigest,
+    };
+    this.retainedExecutableMetadata.set(value, record);
+    return record;
+  }
+
+  private deserializeRetainedExecutable(
+    record: SerializedScopeExecutableLike,
+    path: string
+  ): (...args: unknown[]) => unknown {
+    if (
+      !record ||
+      typeof record.source !== "string" ||
+      typeof record.definitionSourceDigest !== "string" ||
+      typeof record.definitionRunDigest !== "string" ||
+      record.source.length > MAX_RETAINED_FUNCTION_SOURCE_CHARS
+    ) {
+      throw Object.assign(new Error(`Invalid retained executable record at ${path || "<root>"}`), {
+        code: "EVAL_INVOCATION_INVALID",
+      });
+    }
+    this.analyzeRetainedExecutable(record.source, path);
+    const invoke = this.invokeRetainedExecutable.bind(this);
+    const retainedExecutable = function (this: unknown, ...args: unknown[]): unknown {
+      return invoke(retainedExecutable, record, this, args);
+    };
+    this.retainedExecutableMetadata.set(retainedExecutable, record);
+    return retainedExecutable;
+  }
+
+  private invokeRetainedExecutable(
+    wrapper: (...args: unknown[]) => unknown,
+    record: SerializedScopeExecutableLike,
+    receiver: unknown,
+    args: unknown[]
+  ): unknown {
+    const bindings = this.currentRunBindings;
+    const runId = this.currentEvalInvocation?.runId;
+    if (!bindings || !runId) {
+      throw Object.assign(
+        new Error("Retained eval functions can only be invoked inside an active eval run"),
+        { code: "EVAL_INVOCATION_INVALID" }
+      );
+    }
+    let compiled = this.retainedExecutableCompilation.get(wrapper);
+    if (!compiled || compiled.runId !== runId) {
+      const freeNames = this.analyzeRetainedExecutable(record.source, "<invocation>");
+      const unavailable = freeNames.filter(
+        (name) => !this.retainedExecutableDependencyAvailable(name, bindings)
+      );
+      if (unavailable.length > 0) {
+        throw Object.assign(
+          new Error(
+            `Retained eval function depends on unavailable bindings: ${unavailable.join(", ")}`
+          ),
+          { code: "EVAL_INVOCATION_INVALID" }
+        );
+      }
+      const g = globalThis as GlobalBag;
+      const compile = g["__vibestudioCompileFunction__"] as
+        | ((argNames: string[], body: string) => (...args: unknown[]) => unknown)
+        | undefined;
+      if (!compile) throw new Error("EvalDO: retained-function compiler is unavailable");
+      const bindingNames = Object.keys(bindings);
+      const factory = compile(
+        ["require", "console", ...bindingNames],
+        `"use strict"; return (${record.source});`
+      );
+      const callable = factory(
+        this.engineRequire,
+        console,
+        ...bindingNames.map((name) => bindings[name])
+      );
+      if (typeof callable !== "function") {
+        throw Object.assign(new Error("Retained executable source did not produce a function"), {
+          code: "EVAL_INVOCATION_INVALID",
+        });
+      }
+      compiled = { runId, compiled: callable as (...args: unknown[]) => unknown };
+      this.retainedExecutableCompilation.set(wrapper, compiled);
+    }
+    return Reflect.apply(compiled.compiled, receiver, args);
+  }
+
+  private analyzeRetainedExecutable(source: string, path: string): string[] {
+    const engine = this.engine;
+    try {
+      if (!engine?.analyzeRetainedFunctionSource) {
+        throw new Error("eval engine has no retained-function analyzer");
+      }
+      return engine.analyzeRetainedFunctionSource(source).freeNames;
+    } catch (error) {
+      throw Object.assign(
+        new Error(
+          `Invalid retained executable at ${path || "<root>"}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        ),
+        { code: "EVAL_INVOCATION_INVALID" }
+      );
+    }
+  }
+
+  private retainedExecutableDependencyAvailable(
+    name: string,
+    bindings: Record<string, unknown>
+  ): boolean {
+    return (
+      name === "require" ||
+      name === "console" ||
+      Object.prototype.hasOwnProperty.call(bindings, name) ||
+      name in globalThis
+    );
+  }
+
+  private retainedExecutableDependenciesAvailable(
+    names: readonly string[],
+    bindings: Record<string, unknown>
+  ): boolean {
+    return names.every((name) => this.retainedExecutableDependencyAvailable(name, bindings));
   }
 
   private rearmIdleEviction(): void {
@@ -382,37 +1168,37 @@ export class EvalDO extends DurableObjectBase {
     const row = this.sql
       .exec(
         `SELECT COUNT(*) AS count, MIN(started_at) AS oldest_started_at
-         FROM runs
-         WHERE status IN ('pending', 'running')`
+         FROM eval_runs_v3
+         WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'expired', 'interrupted')`
       )
       .toArray()[0];
     const activeRuns = this.sql
       .exec(
         `SELECT run_id, status, started_at, deadline_at
-         FROM runs
-         WHERE status IN ('pending', 'running')
-         ORDER BY started_at ASC
+         FROM eval_runs_v3
+         WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'expired', 'interrupted')
+         ORDER BY accepted_at ASC
          LIMIT 5`
       )
       .toArray()
       .map((r) => ({
         runId: String(r["run_id"]),
         status: String(r["status"]),
-        startedAt: Number(r["started_at"]),
+        startedAt: Number(r["started_at"] ?? 0),
         deadlineAt: r["deadline_at"] == null ? null : Number(r["deadline_at"]),
       }));
     const latestRuns = this.sql
       .exec(
         `SELECT run_id, status, started_at, deadline_at, agent_ref, channel_id
-         FROM runs
-         ORDER BY started_at DESC
+         FROM eval_runs_v3
+         ORDER BY accepted_at DESC
          LIMIT 5`
       )
       .toArray()
       .map((r) => ({
         runId: String(r["run_id"]),
         status: String(r["status"]),
-        startedAt: Number(r["started_at"]),
+        startedAt: Number(r["started_at"] ?? 0),
         deadlineAt: r["deadline_at"] == null ? null : Number(r["deadline_at"]),
         agentRef: r["agent_ref"] == null ? null : String(r["agent_ref"]),
         channelId: r["channel_id"] == null ? null : String(r["channel_id"]),
@@ -430,12 +1216,151 @@ export class EvalDO extends DurableObjectBase {
     method: string,
     args: unknown[]
   ): Promise<unknown> =>
-    this.rpc.call(
-      "main",
-      `${service}.${method}`,
-      args,
-      this.currentRunReadOnly ? { readOnly: true } : undefined
+    this.callAuthoredRpc("main", `${service}.${method}`, args, this.currentRunCallOptions());
+
+  /** Trusted-kernel transport for lifecycle cleanup only. Clients using this
+   * path must never be reachable from evaluated bindings. */
+  private readonly callKernelService = (
+    service: string,
+    method: string,
+    args: unknown[]
+  ): Promise<unknown> => this.rpc.call("main", `${service}.${method}`, args);
+
+  /**
+   * Observe lifecycle calls at the one transport boundary every eval-authored
+   * runtime client shares. A fresh context is owned by the run that created it
+   * until code explicitly detaches it or successfully destroys it. This is
+   * bookkeeping, not authority: terminal destruction still passes through the
+   * runtime service's server-side parent/lifecycle ownership checks.
+   */
+  private async callAuthoredRpc(
+    target: string,
+    method: string,
+    args: unknown[],
+    options?: Record<string, unknown>
+  ): Promise<unknown> {
+    const runId = this.currentEvalInvocation?.runId ?? null;
+    const result = await this.rpc.call(target, method, args, options);
+    if (runId && target === "main") this.observeAuthoredLifecycleCall(runId, method, args, result);
+    return result;
+  }
+
+  private observeAuthoredLifecycleCall(
+    runId: string,
+    method: string,
+    args: unknown[],
+    result: unknown
+  ): void {
+    if (method === "runtime.destroyContext") {
+      const contextId = (args[0] as { contextId?: unknown } | undefined)?.contextId;
+      if (typeof contextId === "string") this.detachRunOwnedContext(runId, contextId);
+      return;
+    }
+    if (method !== "runtime.createEntity") return;
+    const requestedContextId = (args[0] as { contextId?: unknown } | undefined)?.contextId;
+    // Joining an existing context is not a new lifecycle child. Only a fresh
+    // context minted by this run belongs to its terminal lifecycle.
+    if (
+      requestedContextId !== undefined &&
+      requestedContextId !== null &&
+      requestedContextId !== ""
+    ) {
+      return;
+    }
+    const contextId = (result as { contextId?: unknown } | null)?.contextId;
+    const ownerEntityId = (result as { id?: unknown } | null)?.id;
+    if (
+      typeof contextId !== "string" ||
+      contextId.length === 0 ||
+      typeof ownerEntityId !== "string" ||
+      ownerEntityId.length === 0
+    ) {
+      return;
+    }
+    this.sql.exec(
+      `INSERT INTO eval_run_owned_contexts_v1
+         (run_id, context_id, owner_entity_id, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(run_id, context_id) DO UPDATE SET
+         owner_entity_id = excluded.owner_entity_id`,
+      runId,
+      contextId,
+      ownerEntityId,
+      Date.now()
     );
+    const count = Number(
+      this.sql
+        .exec(`SELECT COUNT(*) AS count FROM eval_run_owned_contexts_v1 WHERE run_id = ?`, runId)
+        .toArray()[0]?.["count"] ?? 0
+    );
+    // Retain the over-limit row so terminal cleanup cannot orphan the context
+    // whose successful creation exposed the resource violation.
+    if (count > MAX_RUN_OWNED_CONTEXTS) {
+      throw Object.assign(
+        new Error(`ctx run-owned context limit (${MAX_RUN_OWNED_CONTEXTS}) exceeded`),
+        { code: "EVAL_RESOURCE_LIMIT" }
+      );
+    }
+  }
+
+  private detachRunOwnedContext(runId: string, contextId: string): boolean {
+    const existed =
+      this.sql
+        .exec(
+          `SELECT 1 AS present FROM eval_run_owned_contexts_v1
+           WHERE run_id = ? AND context_id = ?`,
+          runId,
+          contextId
+        )
+        .toArray().length > 0;
+    if (existed) {
+      this.sql.exec(
+        `DELETE FROM eval_run_owned_contexts_v1 WHERE run_id = ? AND context_id = ?`,
+        runId,
+        contextId
+      );
+    }
+    return existed;
+  }
+
+  private async cleanupRunOwnedContexts(runId: string): Promise<void> {
+    const contexts = this.sql
+      .exec(
+        `SELECT context_id, owner_entity_id
+         FROM eval_run_owned_contexts_v1
+         WHERE run_id = ?
+         ORDER BY created_at ASC, context_id ASC`,
+        runId
+      )
+      .toArray()
+      .map((row) => ({
+        contextId: String(row["context_id"]),
+        ownerEntityId: String(row["owner_entity_id"]),
+      }));
+    const results = await Promise.allSettled(
+      contexts.map(({ contextId, ownerEntityId }) =>
+        this.callKernelService("runtime", "cleanupEvalOwnedContext", [
+          { contextId, ownerEntityId, recursive: true },
+        ])
+      )
+    );
+    for (let index = 0; index < results.length; index += 1) {
+      if (results[index]?.status !== "fulfilled") continue;
+      this.sql.exec(
+        `DELETE FROM eval_run_owned_contexts_v1 WHERE run_id = ? AND context_id = ?`,
+        runId,
+        contexts[index]!.contextId
+      );
+    }
+    this.throwCleanupFailures(results, `run ${runId} owned contexts`);
+  }
+
+  private ownedContextRunIds(): string[] {
+    return this.sql
+      .exec(`SELECT DISTINCT run_id FROM eval_run_owned_contexts_v1 ORDER BY run_id ASC`)
+      .toArray()
+      .map((row) => String(row["run_id"]));
+  }
 
   private mainBuild(): BuildServiceClient {
     return (this.buildClient ??= createBuildServiceClient(this.callMainService));
@@ -445,11 +1370,21 @@ export class EvalDO extends DurableObjectBase {
     return (this.fsClient ??= createTypedServiceClient("fs", fsMethods, this.callMainService));
   }
 
-  private mainBlobstore(): BlobstoreClient {
-    return (this.blobstoreClient ??= createTypedServiceClient(
+  /** Source/import CAS writes run through the attenuated preparation principal. */
+  private preparationBlobstore(): BlobstoreClient {
+    return (this.preparationBlobstoreClient ??= createTypedServiceClient(
       "blobstore",
       blobstoreMethods,
       this.callMainService
+    ));
+  }
+
+  /** Trusted run/scope storage is EvalDO kernel state, never invocation authority. */
+  private kernelBlobstore(): BlobstoreClient {
+    return (this.kernelBlobstoreClient ??= createTypedServiceClient(
+      "blobstore",
+      blobstoreMethods,
+      this.callKernelService
     ));
   }
 
@@ -465,7 +1400,15 @@ export class EvalDO extends DurableObjectBase {
     return (this.eventsClient ??= createTypedServiceClient(
       "events",
       eventsMethods,
-      this.callMainService
+      this.callKernelService
+    ));
+  }
+
+  private mainEval(): EvalClient {
+    return (this.evalClient ??= createTypedServiceClient(
+      "eval",
+      evalMethods,
+      this.callKernelService
     ));
   }
 
@@ -519,7 +1462,7 @@ export class EvalDO extends DurableObjectBase {
    * Keep the inbound `respond()` watchdog disabled explicitly: `executeRun` is a HELD handler that
    * legitimately runs for the eval's whole duration (the eval service holds the connection with a
    * no-`headersTimeout` dispatcher). An opt-in `timeoutMs` bounds a run, and a dropped connection
-   * (server restart) ends it (reconciled on boot). Quick methods (startRun/getRun) resolve at once.
+   * (server restart) ends it (reconciled on boot). Quick lifecycle methods resolve at once.
    */
   protected override get respondTimeoutMs(): number {
     return 0;
@@ -527,49 +1470,258 @@ export class EvalDO extends DurableObjectBase {
 
   // ── public RPC methods (dispatched by the server `eval` service) ──────────────
 
-  /**
-   * Held synchronous run for connection-holding callers (panels over their persistent WS, the CLI):
-   * insert + execute in this held handler, return the result in one response. The CALLER holds its
-   * own leg; the server holds the EvalDO leg. workerd does not cap a held request.
-   */
-  @rpc({ principals: ["host"] })
-  async run(args: RunArgs): Promise<RunResult> {
-    const runId = args.runId ?? crypto.randomUUID();
-    await this.startRun({ ...args, runId });
-    return this.executeRun(runId);
+  @rpc({ principals: ["host"], sensitivity: "write" })
+  accept(input: { runId: string; startIntentDigest: string; deadlineAt: number | null }): {
+    runId: string;
+    status: string;
+    acceptedAt: number;
+    startIntentDigest: string;
+    needsStart: boolean;
+  } {
+    const existing = this.sql
+      .exec(
+        `SELECT status, accepted_at, start_intent_digest
+         FROM eval_runs_v3 WHERE run_id = ?`,
+        input.runId
+      )
+      .toArray()[0];
+    if (existing) {
+      const existingDigest = String(existing["start_intent_digest"]);
+      if (existingDigest !== input.startIntentDigest) {
+        throw Object.assign(new Error("eval idempotency key was reused with different input"), {
+          code: "EVAL_IDEMPOTENCY_CONFLICT",
+        });
+      }
+      return {
+        runId: input.runId,
+        status: String(existing["status"]),
+        acceptedAt: Number(existing["accepted_at"]),
+        startIntentDigest: existingDigest,
+        // The first accept owns launch. A concurrent lost-response retry gets
+        // the same handle but never issues a second live invocation lease.
+        needsStart: false,
+      };
+    }
+    const acceptedAt = Date.now();
+    this.sql.exec(
+      `INSERT INTO eval_runs_v3
+       (run_id, status, accepted_at, deadline_at, start_intent_digest)
+       VALUES (?, 'accepted', ?, ?, ?)`,
+      input.runId,
+      acceptedAt,
+      input.deadlineAt,
+      input.startIntentDigest
+    );
+    this.appendRunEvent(input.runId, "accepted", "accepted");
+    this.rearmIdleEviction();
+    return {
+      runId: input.runId,
+      status: "accepted",
+      acceptedAt,
+      startIntentDigest: input.startIntentDigest,
+      needsStart: true,
+    };
   }
 
-  /**
-   * Quick, idempotent enqueue — insert a `pending` row, return at once (no execution). The eval
-   * service awaits this before returning `runId` to an async (agent) caller, so the row exists for
-   * `getRun`. Idempotent on `run_id`: a replayed run returns the existing row, never a duplicate.
-   */
-  @rpc({ principals: ["host"] })
-  async startRun(args: RunArgs & { runId: string }): Promise<{ runId: string; status: string }> {
-    const runId = args.runId;
-    const existing = this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0];
-    if (existing) {
-      const status = String(existing["status"]);
-      if (status === "pending" || status === "running") this.rearmIdleEviction();
-      return { runId, status };
+  @rpc({ principals: ["host"], sensitivity: "write" })
+  begin(
+    input: RunArgs & {
+      runId: string;
+      invocationCredential: string;
+      authorityPolicy: NonNullable<RunArgs["authorityPolicy"]>;
     }
-    // Reset and enqueue are one DO turn and ordered before insertion. This is
-    // safe under startRun replay because an existing run returns above without
-    // resetting a second time (or cancelling its own in-flight execution).
-    if (args.reset === true) await this.forceReset();
-    const deadlineAt = args.timeoutMs ? Date.now() + args.timeoutMs : null;
+  ): { runId: string; status: "queued" } {
+    const row = this.sql
+      .exec(`SELECT status FROM eval_runs_v3 WHERE run_id = ?`, input.runId)
+      .toArray()[0];
+    if (!row) throw new Error(`eval: unknown accepted run ${input.runId}`);
+    if (String(row["status"]) !== "accepted") {
+      throw new Error(`eval: run ${input.runId} cannot begin from ${String(row["status"])}`);
+    }
+    const { invocationCredential, ...durableArgs } = input;
+    this.invocationLeases.set(input.runId, {
+      credential: invocationCredential,
+      policy: input.authorityPolicy,
+    });
     this.sql.exec(
-      `INSERT INTO runs (run_id, args, agent_ref, channel_id, status, started_at, deadline_at)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
-      runId,
-      JSON.stringify(args),
-      args.agentRef ?? null,
-      args.channelId ?? null,
-      Date.now(),
-      deadlineAt
+      `UPDATE eval_runs_v3
+       SET args = ?, agent_ref = ?, channel_id = ?, status = 'queued', manifest_digest = ?
+       WHERE run_id = ? AND status = 'accepted'`,
+      JSON.stringify(durableArgs),
+      input.agentRef ?? null,
+      input.channelId ?? null,
+      input.manifestDigest ?? null,
+      input.runId
     );
+    this.appendRunEvent(input.runId, "queued", "queued");
     this.rearmIdleEviction();
-    return { runId, status: "pending" };
+    return { runId: input.runId, status: "queued" };
+  }
+
+  /** Materialize source and its import closure under the short-lived
+   * preparation invocation. The final run principal does not exist yet. */
+  @rpc({ principals: ["host"], sensitivity: "write" })
+  async prepare(runId: string): Promise<{
+    sourceDigest: string;
+    executionProvenanceDigest: string;
+    scopeInputRevision: string;
+  }> {
+    this.transition(runId, ["queued"], "preparing", "preparing");
+    const row = this.sql.exec(`SELECT args FROM eval_runs_v3 WHERE run_id = ?`, runId).toArray()[0];
+    if (!row?.["args"]) throw new Error(`eval: unknown queued run ${runId}`);
+    const args = JSON.parse(String(row["args"])) as RunArgs;
+    const lease = this.invocationLeases.get(runId);
+    if (!lease)
+      throw Object.assign(new Error("eval preparation lease was lost"), {
+        code: "EVAL_INTERRUPTED",
+      });
+    const heartbeat = this.startInvocationHeartbeat(runId, lease);
+    this.activeRunIds.add(runId);
+    const prepared = this.runChain.then(async () => {
+      this.currentEvalInvocation = { runId, credential: lease.credential };
+      this.currentRunReadOnly = false;
+      try {
+        if (args.reset === true) this.resetLocked();
+        const materialized = await this.materializeSource(runId, args);
+        // Runtime factories and the optional CDP facade are trusted execution
+        // dependencies, not operations performed by evaluated JavaScript.
+        // Resolve them while the source/import/build preparation principal is
+        // live so strict/read-only run manifests never need an incidental
+        // build capability and adaptive authority census stays code-shaped.
+        await this.ensureRuntimeSupport();
+        if (this.declaredProviderSource("EVAL_CDP_CLIENT_SOURCE")) {
+          await this.ensureCdpModule();
+        }
+        return materialized;
+      } finally {
+        this.currentEvalInvocation = null;
+        this.currentRunReadOnly = false;
+      }
+    });
+    this.runChain = prepared.then(
+      () => undefined,
+      () => undefined
+    );
+    try {
+      const result = await prepared;
+      if (heartbeat.failure) throw heartbeat.failure;
+      return {
+        sourceDigest: result.sourceDigest,
+        executionProvenanceDigest: result.executionProvenanceDigest,
+        scopeInputRevision: result.scopeInputRevision,
+      };
+    } finally {
+      heartbeat.stop();
+      this.activeRunIds.delete(runId);
+    }
+  }
+
+  @rpc({ principals: ["host"], sensitivity: "write" })
+  awaitPreauthorization(runId: string): { runId: string; status: "awaiting-preauthorization" } {
+    this.transition(runId, ["preparing"], "awaiting-preauthorization", "awaiting-preauthorization");
+    return { runId, status: "awaiting-preauthorization" };
+  }
+
+  @rpc({ principals: ["host"], sensitivity: "write" })
+  authorityChallenge(input: {
+    runId: string;
+    phase: "preparation" | "run";
+    waiting: boolean;
+    capability: string;
+    resourceKey: string;
+  }): { status: string } {
+    const waitingStatus =
+      input.phase === "preparation" ? "awaiting-preparation-challenge" : "awaiting-challenge";
+    const resumedStatus = input.phase === "preparation" ? "preparing" : "running";
+    const from = input.waiting
+      ? input.phase === "preparation"
+        ? ["preparing"]
+        : ["running"]
+      : [waitingStatus];
+    this.transition(
+      input.runId,
+      from,
+      input.waiting ? waitingStatus : resumedStatus,
+      input.waiting ? "authority-challenge" : "authority-challenge-resolved"
+    );
+    this.appendRunEvent(
+      input.runId,
+      "authority-challenge-detail",
+      input.waiting ? waitingStatus : resumedStatus,
+      {
+        capability: input.capability,
+        resourceKey: input.resourceKey,
+      }
+    );
+    return { status: input.waiting ? waitingStatus : resumedStatus };
+  }
+
+  /** Rotate from preparation to the final source-bound invocation lease. */
+  @rpc({ principals: ["host"], sensitivity: "write" })
+  activate(input: {
+    runId: string;
+    runDigest: string;
+    manifestDigest: string;
+    invocationCredential: string;
+    authorityPolicy: NonNullable<RunArgs["authorityPolicy"]>;
+  }): { runId: string; status: "preparing" } {
+    const row = this.sql
+      .exec(`SELECT status FROM eval_runs_v3 WHERE run_id = ?`, input.runId)
+      .toArray()[0];
+    if (!["preparing", "awaiting-preauthorization"].includes(String(row?.["status"]))) {
+      throw new Error(`eval: run ${input.runId} cannot activate from ${String(row?.["status"])}`);
+    }
+    this.invocationLeases.set(input.runId, {
+      credential: input.invocationCredential,
+      policy: input.authorityPolicy,
+    });
+    this.sql.exec(
+      `UPDATE eval_runs_v3 SET run_digest = ?, manifest_digest = ? WHERE run_id = ?`,
+      input.runDigest,
+      input.manifestDigest,
+      input.runId
+    );
+    this.appendRunEvent(input.runId, "authority-resolved", "preparing", {
+      runDigest: input.runDigest,
+      manifestDigest: input.manifestDigest,
+    });
+    return { runId: input.runId, status: "preparing" };
+  }
+
+  @rpc({ principals: ["host"], sensitivity: "write" })
+  terminate(input: {
+    runId: string;
+    status: "failed" | "expired" | "interrupted";
+    error: string;
+    errorCode?: string;
+  }): { status: "failed" | "expired" | "interrupted" | "terminal" } {
+    const row = this.sql
+      .exec(`SELECT status FROM eval_runs_v3 WHERE run_id = ?`, input.runId)
+      .toArray()[0];
+    const status = String(row?.["status"] ?? "");
+    if (isTerminalRunStatus(status)) {
+      return { status: "terminal" };
+    }
+    this.invocationLeases.delete(input.runId);
+    const errorCode =
+      input.errorCode ??
+      (input.status === "expired"
+        ? "EVAL_INVOCATION_EXPIRED"
+        : input.status === "interrupted"
+          ? "EVAL_INTERRUPTED"
+          : undefined);
+    this.finishRun(
+      input.runId,
+      input.status,
+      {
+        success: false,
+        console: "",
+        error: input.error,
+        ...(errorCode ? { errorCode } : {}),
+      },
+      input.error
+    );
+    return { status: input.status };
   }
 
   /**
@@ -578,11 +1730,11 @@ export class EvalDO extends DurableObjectBase {
    * rather than starting a second sandbox run — so a deferRedrive that races the first dispatch can
    * never double-run the eval (which would double-spawn headless agents).
    */
-  @rpc({ principals: ["host"] })
-  async executeRun(runId: string): Promise<RunResult> {
+  @rpc({ principals: ["host"], sensitivity: "write" })
+  async execute(runId: string): Promise<RunResult> {
     const inFlight = this.inFlightRuns.get(runId);
     if (inFlight) return inFlight;
-    const promise = this.runEval(runId);
+    const promise = this.executeAcceptedRun(runId);
     this.inFlightRuns.set(runId, promise);
     void promise.catch(() => undefined).finally(() => this.inFlightRuns.delete(runId));
     return promise;
@@ -593,30 +1745,51 @@ export class EvalDO extends DurableObjectBase {
    * `runChain` so ScopeManager's single enter/exit is never concurrent), and persist the result with
    * a CAS so a concurrent `reset` cancel is never resurrected.
    */
-  private async runEval(runId: string): Promise<RunResult> {
-    this.sql.exec(
-      `UPDATE runs SET status = 'running' WHERE run_id = ? AND status = 'pending'`,
-      runId
-    );
+  private async executeAcceptedRun(runId: string): Promise<RunResult> {
     const row = this.sql
-      .exec(`SELECT status, args, deadline_at, result FROM runs WHERE run_id = ?`, runId)
+      .exec(
+        `SELECT status, args, deadline_at, result, manifest_digest, source_bundle_digest, source_digest, run_digest
+         FROM eval_runs_v3 WHERE run_id = ?`,
+        runId
+      )
       .toArray()[0];
     if (!row) return { success: false, console: "", error: `eval: unknown run ${runId}` };
     const claimed = String(row["status"]);
-    if (claimed !== "running") {
+    if (claimed !== "preparing" && claimed !== "awaiting-preauthorization") {
       // Already terminal (idempotent re-dispatch, or cancelled before we claimed it).
-      if (claimed === "done" && row["result"] != null) {
+      if (isTerminalRunStatus(claimed) && row["result"] != null) {
         return JSON.parse(String(row["result"])) as RunResult;
       }
       return { success: false, console: "", error: `eval: run ${runId} is ${claimed}` };
     }
 
     const args = JSON.parse(String(row["args"])) as RunArgs;
+    const runDigest = row["run_digest"];
+    if (typeof runDigest !== "string" || runDigest.length === 0) {
+      throw Object.assign(new Error(`eval: run ${runId} has no activated run digest`), {
+        code: "EVAL_INVOCATION_INVALID",
+      });
+    }
+    const invocationLease = this.invocationLeases.get(runId);
+    if (!invocationLease) {
+      const interrupted = {
+        success: false,
+        console: "",
+        error: "eval interrupted before execution; live invocation lease was lost",
+        errorCode: "EVAL_INTERRUPTED",
+      };
+      this.finishRun(runId, "interrupted", interrupted, "live invocation lease was lost");
+      return interrupted;
+    }
     const deadlineAt = row["deadline_at"] != null ? Number(row["deadline_at"]) : null;
     const controller = new AbortController();
     this.runAborts.set(runId, controller);
+    const heartbeat = this.startInvocationHeartbeat(runId, invocationLease, () =>
+      controller.abort()
+    );
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let cancellationCleanupError: unknown;
+    let deadlineExpired = false;
+    let deadlineCleanupError: unknown;
 
     let result: RunResult;
     this.activeRunIds.add(runId);
@@ -624,45 +1797,94 @@ export class EvalDO extends DurableObjectBase {
       if (deadlineAt != null) {
         const remaining = deadlineAt - Date.now();
         if (remaining <= 0) {
+          deadlineExpired = true;
+          controller.abort();
           try {
-            await this.executeRunCancelHandlers(runId);
-          } finally {
-            controller.abort();
+            await this.executeRunCleanupHandlers(runId);
+          } catch (error) {
+            deadlineCleanupError = error;
           }
         } else {
           timer = setTimeout(() => {
-            void this.executeRunCancelHandlers(runId)
-              .catch((error) => {
-                cancellationCleanupError = error;
-                console.error(
-                  `[EvalDO] cancellation cleanup failed for timed-out run ${runId}`,
-                  error
-                );
-              })
-              .finally(() => controller.abort());
+            deadlineExpired = true;
+            controller.abort();
+            void this.executeRunCleanupHandlers(runId).catch((error) => {
+              deadlineCleanupError = error;
+              console.error(`[EvalDO] terminal cleanup failed for timed-out run ${runId}`, error);
+            });
           }, remaining);
           timer.unref?.();
         }
       }
-      const ran = this.runChain.then(() => this.runLocked(args, controller.signal, runId));
-      this.runChain = ran.catch(() => undefined);
-      result = await ran;
-      if (controller.signal.aborted && result.success) {
+      if (deadlineExpired) {
+        result = {
+          success: false,
+          console: "",
+          error: `eval timed out after ${args.timeoutMs}ms`,
+          errorCode: "EVAL_INVOCATION_EXPIRED",
+        };
+      } else {
+        const ran = this.runChain.then(async () => {
+          this.transition(runId, ["preparing", "awaiting-preauthorization"], "running", "running");
+          const execution = await Promise.allSettled([
+            this.authoredCallContext.run({ phase: "run", signal: controller.signal }, () =>
+              this.runLocked(
+                args,
+                controller.signal,
+                runId,
+                invocationLease,
+                String(row["source_bundle_digest"]),
+                String(row["source_digest"]),
+                runDigest
+              )
+            ),
+          ]);
+          const cleanup = await Promise.allSettled([this.executeRunCleanupHandlers(runId)]);
+          const executionOutcome = execution[0]!;
+          const cleanupOutcome = cleanup[0]!;
+          if (executionOutcome.status === "rejected") {
+            if (cleanupOutcome.status === "rejected") {
+              throw new AggregateError(
+                [executionOutcome.reason, cleanupOutcome.reason],
+                `eval: run ${runId} execution and terminal cleanup failed`
+              );
+            }
+            throw executionOutcome.reason;
+          }
+          if (cleanupOutcome.status === "rejected") {
+            const cleanupMessage =
+              cleanupOutcome.reason instanceof Error
+                ? cleanupOutcome.reason.message
+                : String(cleanupOutcome.reason);
+            return {
+              ...executionOutcome.value,
+              success: false,
+              error: `${executionOutcome.value.error ?? "eval completed"}; terminal cleanup failed: ${cleanupMessage}`,
+            };
+          }
+          return executionOutcome.value;
+        });
+        this.runChain = ran.catch(() => undefined);
+        result = await ran;
+      }
+      if (heartbeat.failure) throw heartbeat.failure;
+      if (deadlineExpired) {
         result = {
           success: false,
           console: result.console,
           error: `eval timed out after ${args.timeoutMs}ms`,
+          errorCode: "EVAL_INVOCATION_EXPIRED",
         };
       }
-      if (cancellationCleanupError !== undefined) {
+      if (deadlineCleanupError !== undefined) {
         const cleanupMessage =
-          cancellationCleanupError instanceof Error
-            ? cancellationCleanupError.message
-            : String(cancellationCleanupError);
+          deadlineCleanupError instanceof Error
+            ? deadlineCleanupError.message
+            : String(deadlineCleanupError);
         result = {
           ...result,
           success: false,
-          error: `${result.error ?? `eval timed out after ${args.timeoutMs}ms`}; cancellation cleanup failed: ${cleanupMessage}`,
+          error: `${result.error ?? `eval timed out after ${args.timeoutMs}ms`}; terminal cleanup failed: ${cleanupMessage}`,
         };
       }
     } catch (err) {
@@ -670,25 +1892,39 @@ export class EvalDO extends DurableObjectBase {
         success: false,
         console: "",
         error: err instanceof Error ? err.message : String(err),
+        ...(err instanceof Error && typeof (err as Error & { code?: unknown }).code === "string"
+          ? { errorCode: (err as Error & { code: string }).code }
+          : {}),
       };
     } finally {
+      heartbeat.stop();
       if (timer) clearTimeout(timer);
       this.runAborts.delete(runId);
       this.activeRunIds.delete(runId);
-      if (!controller.signal.aborted) this.runCancelHandlers.delete(runId);
+      this.invocationLeases.delete(runId);
+      this.currentRunBindings = null;
+      this.currentDefinitionProvenance = null;
+      this.currentRunAbortSignal = null;
+      this.currentRunReadOnly = false;
+      this.currentEvalInvocation = null;
+      this.runCleanupHandlers.delete(runId);
+      this.runCleanupTasks.delete(runId);
+      this.runCleanupStarted.delete(runId);
       // Arm best-effort idle-eviction now that the run is done (never fires mid-run — see alarm()).
       this.rearmIdleEviction();
     }
 
     const terminalResult = this.compactRunResult(result);
-    // CAS persist: write `done` only if still `running`, so a concurrent `reset` → `cancelled` wins.
-    this.sql.exec(
-      `UPDATE runs SET status = 'done', result = ? WHERE run_id = ? AND status = 'running'`,
-      JSON.stringify(terminalResult),
-      runId
-    );
+    const terminalStatus = terminalResult.success
+      ? "succeeded"
+      : terminalResult.errorCode === "EVAL_INVOCATION_EXPIRED"
+        ? "expired"
+        : terminalResult.errorCode === "EVAL_INTERRUPTED"
+          ? "interrupted"
+          : "failed";
+    this.finishRun(runId, terminalStatus, terminalResult, terminalResult.error ?? null);
     const finalStatus = this.sql
-      .exec(`SELECT status FROM runs WHERE run_id = ?`, runId)
+      .exec(`SELECT status FROM eval_runs_v3 WHERE run_id = ?`, runId)
       .toArray()[0]?.["status"];
     if (String(finalStatus) === "cancelled") {
       return this.compactRunResult({
@@ -700,24 +1936,106 @@ export class EvalDO extends DurableObjectBase {
     return terminalResult;
   }
 
-  /** Poll backstop: a run's status + result (`status` is 'pending'|'running'|'done'|'cancelled'|'unknown'). */
-  @rpc({ principals: ["host"] })
-  getRun(runId: string): { status: string; result?: RunResult; progress?: unknown } {
-    const row = this.sql
-      .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
-      .toArray()[0];
-    if (!row) return { status: "unknown" };
+  @rpc({ principals: ["host"], sensitivity: "read" })
+  get(runId: string): Record<string, unknown> {
+    const row = this.sql.exec(`SELECT * FROM eval_runs_v3 WHERE run_id = ?`, runId).toArray()[0];
+    if (!row) throw new Error(`eval: unknown run ${runId}`);
     const status = String(row["status"]);
     const progressRow = this.sql
-      .exec(`SELECT progress FROM run_progress WHERE run_id = ?`, runId)
+      .exec(`SELECT progress FROM eval_run_progress_v3 WHERE run_id = ?`, runId)
       .toArray()[0];
     const progress =
       progressRow?.["progress"] != null ? JSON.parse(String(progressRow["progress"])) : undefined;
+    const result =
+      row["result"] == null
+        ? undefined
+        : this.withRunProvenance(row, JSON.parse(String(row["result"])) as RunResult);
     return {
       status,
-      ...(row["result"] != null ? { result: JSON.parse(String(row["result"])) as RunResult } : {}),
+      runId,
+      acceptedAt: Number(row["accepted_at"]),
+      startedAt: row["started_at"] == null ? null : Number(row["started_at"]),
+      endedAt: row["ended_at"] == null ? null : Number(row["ended_at"]),
+      deadlineAt: row["deadline_at"] == null ? null : Number(row["deadline_at"]),
+      startIntentDigest: String(row["start_intent_digest"]),
+      sourceDigest: row["source_digest"] == null ? null : String(row["source_digest"]),
+      executionProvenanceDigest:
+        row["execution_provenance_digest"] == null
+          ? null
+          : String(row["execution_provenance_digest"]),
+      scopeInputRevision:
+        row["scope_input_revision"] == null ? null : String(row["scope_input_revision"]),
+      manifestDigest: row["manifest_digest"] == null ? null : String(row["manifest_digest"]),
+      runDigest: row["run_digest"] == null ? null : String(row["run_digest"]),
+      sourceBundleDigest:
+        row["source_bundle_digest"] == null ? null : String(row["source_bundle_digest"]),
+      terminalReason: row["terminal_reason"] == null ? null : String(row["terminal_reason"]),
+      ...(result ? { result } : {}),
       ...(progress !== undefined ? { progress } : {}),
     };
+  }
+
+  @rpc({ principals: ["host"], sensitivity: "write" })
+  attachAuthoritySummary(runId: string, authority: unknown): RunResult {
+    const row = this.sql.exec(`SELECT * FROM eval_runs_v3 WHERE run_id = ?`, runId).toArray()[0];
+    if (!row?.["result"] || !isTerminalRunStatus(String(row["status"]))) {
+      throw new Error(`eval: run ${runId} has no terminal result to annotate`);
+    }
+    const result = this.withRunProvenance(row, {
+      ...(JSON.parse(String(row["result"])) as RunResult),
+      ...(authority == null ? {} : { authority }),
+    });
+    this.sql.exec(
+      `UPDATE eval_runs_v3 SET result = ? WHERE run_id = ?`,
+      JSON.stringify(result),
+      runId
+    );
+    return result;
+  }
+
+  private withRunProvenance(row: Record<string, unknown>, result: RunResult): RunResult {
+    return {
+      ...result,
+      provenance: {
+        startIntentDigest: String(row["start_intent_digest"]),
+        sourceDigest: row["source_digest"] == null ? null : String(row["source_digest"]),
+        executionProvenanceDigest:
+          row["execution_provenance_digest"] == null
+            ? null
+            : String(row["execution_provenance_digest"]),
+        scopeInputRevision:
+          row["scope_input_revision"] == null ? null : String(row["scope_input_revision"]),
+        runDigest: row["run_digest"] == null ? null : String(row["run_digest"]),
+        sourceBundleDigest:
+          row["source_bundle_digest"] == null ? null : String(row["source_bundle_digest"]),
+        manifestDigest: row["manifest_digest"] == null ? null : String(row["manifest_digest"]),
+        terminalReason: row["terminal_reason"] == null ? null : String(row["terminal_reason"]),
+      },
+    };
+  }
+
+  @rpc({ principals: ["host"], sensitivity: "read" })
+  events(runId: string, after = 0): { events: unknown[]; next: number } {
+    const exists = this.sql
+      .exec(`SELECT 1 AS present FROM eval_runs_v3 WHERE run_id = ?`, runId)
+      .toArray()[0];
+    if (!exists) throw new Error(`eval: unknown run ${runId}`);
+    const rows = this.sql
+      .exec(
+        `SELECT seq, at, type, status, detail FROM eval_run_events_v3
+         WHERE run_id = ? AND seq > ? ORDER BY seq ASC LIMIT 200`,
+        runId,
+        after
+      )
+      .toArray();
+    const events = rows.map((event) => ({
+      seq: Number(event["seq"]),
+      at: Number(event["at"]),
+      type: String(event["type"]),
+      ...(event["status"] == null ? {} : { status: String(event["status"]) }),
+      ...(event["detail"] == null ? {} : { detail: JSON.parse(String(event["detail"])) }),
+    }));
+    return { events, next: events.length ? Number(events.at(-1)!.seq) : after };
   }
 
   /**
@@ -725,7 +2043,7 @@ export class EvalDO extends DurableObjectBase {
    * scope. Reads join `runChain`, so they observe every prior eval's persisted
    * mutations and cannot race a later eval that overwrites the same key.
    */
-  @rpc({ principals: ["host"] })
+  @rpc({ principals: ["host"], sensitivity: "read" })
   async readScopeTextPage(
     key: string,
     offset: number,
@@ -762,7 +2080,7 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /** Persistently remove one temporary large-result cache key. */
-  @rpc({ principals: ["host"] })
+  @rpc({ principals: ["host"], sensitivity: "destructive" })
   async deleteScopeValue(key: string): Promise<{ ok: boolean; existed: boolean }> {
     const remove = this.runChain.then(async () => {
       const manager = await this.ensureScopeManager(await this.ensureEngine());
@@ -789,7 +2107,7 @@ export class EvalDO extends DurableObjectBase {
   /** Persist a bounded, JSON-safe heartbeat for the currently executing run. */
   private persistRunProgress(runId: string, progress: unknown): void {
     const exists = this.sql
-      .exec(`SELECT 1 AS present FROM runs WHERE run_id = ?`, runId)
+      .exec(`SELECT 1 AS present FROM eval_runs_v3 WHERE run_id = ?`, runId)
       .toArray()[0];
     if (!exists) throw new Error(`eval: cannot report progress for unknown run ${runId}`);
     let encoded: string;
@@ -805,7 +2123,7 @@ export class EvalDO extends DurableObjectBase {
       throw new Error("eval progress exceeds the 256 KiB durable heartbeat limit");
     }
     this.sql.exec(
-      `INSERT INTO run_progress (run_id, progress, updated_at) VALUES (?, ?, ?)
+      `INSERT INTO eval_run_progress_v3 (run_id, progress, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(run_id) DO UPDATE SET progress = excluded.progress, updated_at = excluded.updated_at`,
       runId,
       encoded,
@@ -815,77 +2133,157 @@ export class EvalDO extends DurableObjectBase {
 
   /** Reset the eval context: cancel in-flight runs, then wipe user tables + scope
    *  while preserving the durable queue and its progress rows. */
-  @rpc({ principals: ["host"] })
-  async reset(): Promise<{ ok: boolean }> {
+  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  async reset(): Promise<{ status: "reset" | "waiting-for-safe-boundary" }> {
     // Cancel queued + in-flight runs FIRST so a run finishing normally can't CAS itself `done`
     // (executeRun's write requires status='running'); then abort any live run.
-    this.sql.exec(`UPDATE runs SET status = 'cancelled' WHERE status IN ('pending', 'running')`);
-    const runIds = new Set([...this.inFlightRuns.keys(), ...this.runCancelHandlers.keys()]);
-    const cleanupResults = await Promise.allSettled(
-      [...runIds].map((id) => this.executeRunCancelHandlers(id))
-    );
+    this.cancelNonterminalRuns("scope reset requested");
+    const runIds = new Set([
+      ...this.inFlightRuns.keys(),
+      ...this.runCleanupHandlers.keys(),
+      ...this.runCleanupTasks.keys(),
+      ...this.ownedContextRunIds(),
+    ]);
     for (const id of runIds) this.runAborts.get(id)?.abort();
+    const cleanupResults = await Promise.allSettled(
+      [...runIds].map((id) => this.executeRunCleanupHandlers(id))
+    );
     const result = this.runChain.then(() => this.resetLocked());
     this.runChain = result.catch(() => undefined);
-    let value: { ok: boolean };
+    let value: { status: "reset" };
     try {
       value = await result;
     } catch (error) {
-      const cleanupFailures = this.cancellationCleanupFailures(cleanupResults);
+      const cleanupFailures = this.cleanupFailures(cleanupResults);
       if (cleanupFailures.length > 0) {
         throw new AggregateError(
           [error, ...cleanupFailures],
-          "eval: reset and cancellation cleanup failed"
+          "eval: reset and terminal cleanup failed"
         );
       }
       throw error;
     }
-    this.throwCancellationCleanupFailures(cleanupResults, "reset");
+    this.throwCleanupFailures(cleanupResults, "reset");
     return value;
   }
 
   /**
    * Cancel ONE run without touching scope or other runs. CAS the row to `cancelled` FIRST (only if
-   * still pending/running) so a late finish loses — `runEval`'s persist requires `status='running'`
+   * still pending/running) so a late finish loses — `executeAcceptedRun` persists only from a
+   * live execution state
    * and its post-write status read returns the cancelled failure instead of resurrecting `done`.
    * Then abort the run's controller so a run wedged on an outbound rpc.call unwinds (the signal is
    * threaded into every outbound call in `runLocked`). A no-op for an already-terminal run.
    */
-  @rpc({ principals: ["host"] })
-  async cancel(runId: string): Promise<{ ok: boolean }> {
-    this.sql.exec(
-      `UPDATE runs SET status = 'cancelled' WHERE run_id = ? AND status IN ('pending', 'running')`,
-      runId
-    );
-    try {
-      await this.executeRunCancelHandlers(runId);
-    } finally {
-      this.runAborts.get(runId)?.abort();
+  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  async cancel(runId: string): Promise<{ status: "requested" | "cancelled" | "terminal" }> {
+    const row = this.sql
+      .exec(`SELECT status FROM eval_runs_v3 WHERE run_id = ?`, runId)
+      .toArray()[0];
+    if (!row) throw new Error(`eval: unknown run ${runId}`);
+    const prior = String(row["status"]);
+    if (isTerminalRunStatus(prior)) {
+      return { status: "terminal" };
     }
-    return { ok: true };
+    const inFlight = this.inFlightRuns.has(runId);
+    const next = inFlight ? "cancellation-requested" : "cancelled";
+    if (inFlight) {
+      this.sql.exec(
+        `UPDATE eval_runs_v3 SET status = ?, ended_at = NULL, terminal_reason = ? WHERE run_id = ?`,
+        next,
+        "cooperative cancellation requested",
+        runId
+      );
+    } else {
+      this.sql.exec(
+        `UPDATE eval_runs_v3 SET status = ?, result = ?, ended_at = ?, terminal_reason = ?
+         WHERE run_id = ?`,
+        next,
+        JSON.stringify(cancelledRunResult()),
+        Date.now(),
+        "cooperative cancellation requested",
+        runId
+      );
+    }
+    this.appendRunEvent(runId, inFlight ? "cancellation-requested" : "terminal", next, {
+      reason: "cooperative cancellation requested",
+    });
+    this.runAborts.get(runId)?.abort();
+    await this.executeRunCleanupHandlers(runId);
+    return { status: inFlight ? "requested" : "cancelled" };
   }
 
-  private async executeRunCancelHandlers(runId: string): Promise<void> {
-    const handlers = [...(this.runCancelHandlers.get(runId) ?? [])];
-    this.runCancelHandlers.delete(runId);
-    if (handlers.length === 0) return;
-    const results = await Promise.allSettled(
-      handlers.map((handler) => Promise.resolve().then(handler))
-    );
-    this.throwCancellationCleanupFailures(results, `run ${runId}`);
+  private executeRunCleanupHandlers(runId: string): Promise<void> {
+    const existing = this.runCleanupTasks.get(runId);
+    if (existing) return existing;
+    this.runCleanupStarted.add(runId);
+    const handlers = [...(this.runCleanupHandlers.get(runId) ?? [])];
+    this.runCleanupHandlers.delete(runId);
+    const task = (async () => {
+      const cleanupController = new AbortController();
+      let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+      const cleanupDeadline = new Promise<never>((_resolve, reject) => {
+        cleanupTimer = setTimeout(() => {
+          const error = Object.assign(
+            new Error(`eval: run ${runId} cleanup exceeded ${MAX_RUN_CLEANUP_MS}ms`),
+            { code: "EVAL_RESOURCE_LIMIT" }
+          );
+          cleanupController.abort(error);
+          reject(error);
+        }, MAX_RUN_CLEANUP_MS);
+      });
+      cleanupTimer?.unref?.();
+      const invocationLease = this.invocationLeases.get(runId);
+      const cleanupAuthority = await Promise.allSettled([
+        handlers.length > 0 && invocationLease
+          ? Promise.race([
+              this.mainEval().beginCleanup({
+                runId,
+                credential: invocationLease.credential,
+              }),
+              cleanupDeadline,
+            ])
+          : Promise.resolve(undefined),
+      ]);
+      const cleanupAuthorityOutcome = cleanupAuthority[0]!;
+      const handlerResults =
+        cleanupAuthorityOutcome.status === "fulfilled"
+          ? await Promise.allSettled(
+              handlers.map((handler) =>
+                Promise.race([
+                  Promise.resolve().then(() =>
+                    this.authoredCallContext.run(
+                      { phase: "cleanup", signal: cleanupController.signal },
+                      handler
+                    )
+                  ),
+                  cleanupDeadline,
+                ])
+              )
+            )
+          : [cleanupAuthorityOutcome];
+      if (cleanupTimer !== undefined) clearTimeout(cleanupTimer);
+      const contextCleanup = await Promise.allSettled([this.cleanupRunOwnedContexts(runId)]);
+      this.throwCleanupFailures([...handlerResults, ...contextCleanup], `run ${runId}`);
+    })();
+    this.runCleanupTasks.set(runId, task);
+    return task;
   }
 
-  private throwCancellationCleanupFailures(
-    results: PromiseSettledResult<unknown>[],
-    operation: string
-  ): void {
-    const failures = this.cancellationCleanupFailures(results);
+  private throwCleanupFailures(results: PromiseSettledResult<unknown>[], operation: string): void {
+    const failures = this.cleanupFailures(results);
     if (failures.length > 0) {
-      throw new AggregateError(failures, `eval: cancellation cleanup failed during ${operation}`);
+      const details = failures
+        .map((failure) => (failure instanceof Error ? failure.message : String(failure)))
+        .join("; ");
+      throw new AggregateError(
+        failures,
+        `eval: terminal cleanup failed during ${operation}: ${details}`
+      );
     }
   }
 
-  private cancellationCleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
+  private cleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
     return results
       .filter((result): result is PromiseRejectedResult => result.status === "rejected")
       .map((result) => result.reason);
@@ -895,8 +2293,9 @@ export class EvalDO extends DurableObjectBase {
    * Guaranteed recovery for a WEDGED DO: a run stuck on a never-returning outbound call holds
    * `runChain`, so `reset` (which `.then()`s off that chain) would hang behind it. Instead we:
    *  1. CAS every non-terminal run to `cancelled` (so any orphaned run's eventual finish loses its
-   *     CAS persist — see `runEval` — and is neutralized; it can never resurrect itself `done`),
-   *  2. await every registered cancellation handler, then abort EVERY in-flight controller (a run
+   *     CAS persist — see `executeAcceptedRun` — and is neutralized; it can never resurrect itself
+   *     as terminal success),
+   *  2. await every registered terminal-cleanup handler, then abort EVERY in-flight controller (a run
    *     wedged on an outbound rpc.call unwinds via its threaded signal),
    *  3. REPLACE `this.runChain` with a fresh resolved promise — we ORPHAN the stuck chain rather
    *     than `.then()` off it, so we never wait on the wedged run, and
@@ -906,48 +2305,60 @@ export class EvalDO extends DurableObjectBase {
    * safely — and even if the orphan later runs `exitEval` against the wiped scope, its `cancelled`
    * status already discarded its result, so a fresh run is unaffected.
    */
-  @rpc({ principals: ["host"] })
-  async forceReset(): Promise<{ ok: boolean }> {
-    this.sql.exec(`UPDATE runs SET status = 'cancelled' WHERE status IN ('pending', 'running')`);
-    const runIds = new Set([...this.runAborts.keys(), ...this.runCancelHandlers.keys()]);
-    const cleanupResults = await Promise.allSettled(
-      [...runIds].map((id) => this.executeRunCancelHandlers(id))
-    );
+  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  async forceReset(): Promise<{
+    status: "requested" | "reset" | "requires-process-restart";
+  }> {
+    this.cancelNonterminalRuns("force reset requested");
+    const runIds = new Set([
+      ...this.runAborts.keys(),
+      ...this.runCleanupHandlers.keys(),
+      ...this.runCleanupTasks.keys(),
+      ...this.ownedContextRunIds(),
+    ]);
     for (const controller of this.runAborts.values()) controller.abort();
-    // Orphan the (possibly wedged) chain — do NOT `.then()` off it, or we'd hang behind the stuck
-    // run. A subsequently-enqueued run chains off this fresh resolved promise and proceeds at once.
-    this.runChain = Promise.resolve();
-    let result: { ok: boolean };
+    const cleanupResults = await Promise.allSettled(
+      [...runIds].map((id) => this.executeRunCleanupHandlers(id))
+    );
+    if (this.inFlightRuns.size > 0) {
+      return { status: "requires-process-restart" };
+    }
+    let result: { status: "reset" };
     try {
       result = this.resetLocked();
     } catch (error) {
-      const cleanupFailures = this.cancellationCleanupFailures(cleanupResults);
+      const cleanupFailures = this.cleanupFailures(cleanupResults);
       if (cleanupFailures.length > 0) {
         throw new AggregateError(
           [error, ...cleanupFailures],
-          "eval: force reset and cancellation cleanup failed"
+          "eval: force reset and terminal cleanup failed"
         );
       }
       throw error;
     }
-    this.throwCancellationCleanupFailures(cleanupResults, "force reset");
+    this.throwCleanupFailures(cleanupResults, "force reset");
     return result;
   }
 
-  private resetLocked(): { ok: boolean } {
+  private resetLocked(): { status: "reset" } {
+    for (const retained of this.retainedModuleRecords()) {
+      delete this.moduleMap[retained.specifier];
+    }
+    this.loadedModuleDigests.clear();
+    this.sql.exec(`DELETE FROM eval_retained_modules_v1`);
     const tables = this.sql
-      .exec(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('state', 'repl_scopes', 'runs', 'run_progress')`
-      )
-      .toArray() as Array<{ name: string }>;
-    for (const { name } of tables) {
+      .exec(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+      .toArray()
+      .map((row) => String(row["name"]))
+      .filter((name) => !EVAL_PROTECTED_TABLE_SET.has(name));
+    for (const name of tables) {
       this.sql.exec(`DROP TABLE IF EXISTS "${name.replace(/"/g, '""')}"`);
     }
     // Drop the scope table (lazily created by SqlScopePersistence) — IF EXISTS so reset
     // works before the first run (e.g. `--fresh-scope`); the next run recreates it empty.
     this.sql.exec(`DROP TABLE IF EXISTS repl_scopes`);
     this.scopeManager = null; // force fresh hydrate (empty) on next run
-    return { ok: true };
+    return { status: "reset" };
   }
 
   /**
@@ -994,16 +2405,56 @@ export class EvalDO extends DurableObjectBase {
 
   // ── internals ─────────────────────────────────────────────────────────────────
 
-  private async runLocked(args: RunArgs, signal?: AbortSignal, runId?: string): Promise<RunResult> {
+  private async runLocked(
+    args: RunArgs,
+    signal: AbortSignal | undefined,
+    runId: string,
+    invocationLease: LiveInvocationLease,
+    sourceBundleDigest: string,
+    expectedSourceDigest: string,
+    expectedRunDigest: string
+  ): Promise<RunResult> {
+    this.currentEvalInvocation = {
+      runId,
+      credential: invocationLease.credential,
+    };
+    this.currentRunReadOnly = invocationLease.policy.effects === "read-only";
+    this.currentRunAbortSignal = signal ?? null;
+    const encodedBundle = await this.kernelBlobstore().getText(sourceBundleDigest);
+    if (encodedBundle == null) {
+      throw Object.assign(new Error(`eval source bundle ${sourceBundleDigest} is unavailable`), {
+        code: "EVAL_INTERRUPTED",
+      });
+    }
+    if ((await this.sha256Text(encodedBundle)) !== expectedSourceDigest) {
+      throw Object.assign(new Error("eval source bundle digest mismatch"), {
+        code: "EVAL_INVOCATION_INVALID",
+      });
+    }
+    const frozen = JSON.parse(encodedBundle) as FrozenSourceBundle;
+    if (frozen.version !== 1)
+      throw new Error(`Unsupported eval source bundle version ${frozen.version}`);
+    if (
+      !frozen.retainedModules ||
+      Object.keys(frozen.retainedModules).length > MAX_RETAINED_MODULES
+    ) {
+      throw Object.assign(new Error("Invalid retained module provenance in eval source bundle"), {
+        code: "EVAL_INVOCATION_INVALID",
+      });
+    }
+    for (const [specifier, retained] of Object.entries(frozen.retainedModules)) {
+      if (this.loadedModuleDigests.get(specifier) !== retained.digest) {
+        delete this.moduleMap[specifier];
+        this.loadedModuleDigests.delete(specifier);
+      }
+    }
     const engine = await this.ensureEngine();
     const support = await this.ensureRuntimeSupport();
     const scopeManager = await this.ensureScopeManager(engine);
     // The hosted runtime's `resolveParent` reads `this.parentMeta` live, so set it
     // before (re)building the host. Server-supplied; defaults to no parent.
     this.parentMeta = args.parent ?? null;
-    this.currentRunReadOnly = args.readOnly ?? false;
-    this.currentRunAbortSignal = signal ?? null;
-    const rt = this.ensureHostedRuntime(support, args.contextId ?? "", args.gatewayToken);
+    const rt = this.ensureHostedRuntime(support, args.contextId ?? "");
 
     // Thread THIS run's abort signal + read-only flag into EVERY outbound rpc.call the eval makes: the
     // abort signal so a `cancel(runId)`/`forceReset()` that aborts `controller` unwinds a run wedged on
@@ -1020,7 +2471,18 @@ export class EvalDO extends DurableObjectBase {
     //  2. dynamic fallback — any other service becomes `callMain("<name>.<method>", …)`.
     // It adds no access: the fallback routes through `callMain`, so the server dispatcher's
     // each method's canonical authority declaration remains the sole gate.
-    const services = support.createServicesProxy(rt);
+    const registeredServiceNames: string[] = [];
+    let serviceCatalogLoaded = false;
+    const loadRegisteredServiceNames = async (): Promise<readonly string[]> => {
+      if (!serviceCatalogLoaded) {
+        registeredServiceNames.push(
+          ...(await this.mainDocs().listServices()).map((service) => service.name)
+        );
+        serviceCatalogLoaded = true;
+      }
+      return registeredServiceNames;
+    };
+    const services = support.createServicesProxy(rt, registeredServiceNames);
 
     // Layer 2 — the importable surface (gad/workspace/credentials/openPanel/…)
     // injected ambiently too (same refs as importing the declared runtime
@@ -1040,13 +2502,35 @@ export class EvalDO extends DurableObjectBase {
         ...(runId
           ? {
               reportProgress: (progress: unknown) => this.persistRunProgress(runId, progress),
-              onCancel: (handler: unknown) => {
+              signal,
+              onCleanup: (handler: unknown) => {
                 if (typeof handler !== "function") {
-                  throw new Error("ctx.onCancel requires a cleanup function");
+                  throw new Error("ctx.onCleanup requires a cleanup function");
                 }
-                const handlers = this.runCancelHandlers.get(runId) ?? new Set();
-                handlers.add(handler as () => void | Promise<void>);
-                this.runCancelHandlers.set(runId, handlers);
+                if (this.runCleanupStarted.has(runId)) {
+                  throw new Error("ctx.onCleanup cannot register after terminal cleanup starts");
+                }
+                const cleanup = handler as () => void | Promise<void>;
+                const handlers = this.runCleanupHandlers.get(runId) ?? new Set();
+                if (!handlers.has(cleanup) && handlers.size >= MAX_RUN_CLEANUP_HANDLERS) {
+                  throw Object.assign(
+                    new Error(`ctx.onCleanup handler limit (${MAX_RUN_CLEANUP_HANDLERS}) exceeded`),
+                    { code: "EVAL_RESOURCE_LIMIT" }
+                  );
+                }
+                handlers.add(cleanup);
+                this.runCleanupHandlers.set(runId, handlers);
+                return () => {
+                  const current = this.runCleanupHandlers.get(runId);
+                  current?.delete(cleanup);
+                  if (current?.size === 0) this.runCleanupHandlers.delete(runId);
+                };
+              },
+              detachContext: (contextId: unknown) => {
+                if (typeof contextId !== "string" || contextId.length === 0) {
+                  throw new Error("ctx.detachContext requires a non-empty context id");
+                }
+                return this.detachRunOwnedContext(runId, contextId);
               },
             }
           : {}),
@@ -1125,7 +2609,7 @@ export class EvalDO extends DurableObjectBase {
           // Names only — keeps the eval scope lean. For a service's methods +
           // typed schemas, call help('<name>') (rich bindings show the ergonomic
           // surface) or use the docs_open/docs_search tools (raw catalog).
-          services: (await this.mainDocs().listServices()).map((s) => s.name),
+          services: await loadRegisteredServiceNames(),
           importable: Object.keys(rt).sort(),
           ambient: [...EVAL_AMBIENT_ONLY],
           guidance:
@@ -1139,7 +2623,7 @@ export class EvalDO extends DurableObjectBase {
             "actually call (e.g. fs.open()→FileHandle), not the raw RPC service; or use the " +
             "docs_search/docs_open tools for full typed schemas in the service/runtime catalog. `importable` " +
             `names come from \`import {…} from "${runtimeModuleName}"\`; \`ambient\` names are pre-injected ` +
-            "globals and may also be imported in eval as a compatibility form when present. Use the `imports` parameter for npm/workspace packages. " +
+            "globals and must be used directly. Use the `imports` parameter for npm/workspace packages. " +
             "Full reference: skills/sandbox/EVAL.md.",
         };
       },
@@ -1159,24 +2643,10 @@ export class EvalDO extends DurableObjectBase {
       // are outbound rpc.calls too, so a cancelled run unwinds them instead of wedging the chain.
       buildOwnerBindings(args, (t, m, a) => this.rpc.call(t, m, a, callOptions))
     );
-    // Eval-only helpers are ambient for terse REPL use, but importing them is a
-    // reasonable TypeScript habit. Mirror the same live references onto this
-    // owner's runtime module so importing help/scope/db is compatibility-
-    // equivalent to using the ambient binding and cannot shadow it with
-    // undefined.
-    const evalRuntimeModule = this.moduleMap[runtimeModuleName];
-    if (evalRuntimeModule && typeof evalRuntimeModule === "object") {
-      const namespace = evalRuntimeModule as Record<string, unknown>;
-      for (const name of EVAL_AMBIENT_ONLY) {
-        if (name in bindings) namespace[name] = bindings[name];
-      }
-    }
-
     // In path mode, load the entry file. The eval service validates exactly one of
     // `code` or `path`; this fallback remains defensive for direct/internal calls.
-    const entryCode =
-      args.code !== undefined ? args.code : args.path ? await this.readSourceFile(args.path) : "";
-    const sourcePath = args.sourcePath ?? args.path;
+    const entryCode = frozen.code;
+    const sourcePath = frozen.sourcePath;
 
     // Lazily build the cdp-client bundle ONLY when this run references CDP. Most
     // evals (fs/vcs/git) never touch it, and the build is a cold-path round-trip
@@ -1196,24 +2666,49 @@ export class EvalDO extends DurableObjectBase {
     // renders the console live. CLI/panel eval (no `agentRef`) gets the full console in the result.
     const agentRef = args.agentRef;
     const channelId = args.channelId;
+    const agentInvocationId = args.agentInvocationId;
     const streamer =
-      agentRef && channelId && runId
+      agentRef && channelId && agentInvocationId
         ? new ConsoleStreamer((chunk) =>
             this.rpc
-              .call(agentRef, "onEvalProgress", [{ runId, channelId, output: chunk }])
+              .call(agentRef, "onEvalProgress", [
+                { runId, invocationId: agentInvocationId, channelId, output: chunk },
+              ])
               .then(() => undefined)
           )
         : null;
 
     let consoleOutput = "";
+    this.currentRunBindings = bindings;
+    this.currentDefinitionProvenance = {
+      sourceDigest: expectedSourceDigest,
+      runDigest: expectedRunDigest,
+    };
     scopeManager.enterEval();
     try {
       const result = await engine.executeSandbox(entryCode, {
         syntax: args.syntax ?? "tsx",
-        imports: args.imports,
+        imports: Object.fromEntries(
+          Object.entries(frozen.retainedModules).map(([specifier, retained]) => [
+            specifier,
+            retained.ref,
+          ])
+        ),
         sourcePath,
-        loadImport: this.makeLoadImport(),
-        loadSourceFile: sourcePath ? (p: string) => this.readSourceFile(p) : undefined,
+        loadImport: this.frozenImportLoader(frozen),
+        sourceFiles: frozen.sourceFiles,
+        loadSourceFile: sourcePath
+          ? async (path: string) => {
+              const value = frozen.sourceFiles[path];
+              if (value === undefined) {
+                throw Object.assign(
+                  new Error(`Source file ${path} is absent from the immutable eval bundle`),
+                  { code: "EVAL_INVOCATION_INVALID" }
+                );
+              }
+              return value;
+            }
+          : undefined,
         bindings,
         // Per-object map/require so this owner's loaded imports never leak to other owners
         // sharing the isolate (the engine's global module map is the multi-tenant leak).
@@ -1227,6 +2722,11 @@ export class EvalDO extends DurableObjectBase {
           streamer?.push(formatted);
         },
       });
+      for (const [specifier, retained] of Object.entries(frozen.retainedModules)) {
+        if (this.moduleMap[specifier] !== undefined) {
+          this.loadedModuleDigests.set(specifier, retained.digest);
+        }
+      }
       // Drain the streamed console before returning — guarantees every chunk lands before the
       // invocation terminal that `onEvalComplete` publishes once `executeRun` returns.
       if (streamer) await streamer.finalFlush();
@@ -1241,26 +2741,97 @@ export class EvalDO extends DurableObjectBase {
         console: consoleText,
         returnValue: result.returnValue,
         error: result.error,
+        errorCode: result.errorCode,
         scopeKeys: Object.keys(scopeManager.current),
       };
     } finally {
-      try {
-        await scopeManager.exitEval();
-      } finally {
-        this.currentRunAbortSignal = null;
-        this.currentRunReadOnly = false;
-      }
+      await scopeManager.exitEval();
     }
   }
 
   private currentRunCallOptions<T extends Record<string, unknown> | undefined>(opts?: T): T {
-    const signal = this.currentRunAbortSignal;
-    if (!signal && !this.currentRunReadOnly) return opts as T;
+    const authoredContext = this.authoredCallContext.getStore();
+    const signal =
+      authoredContext?.signal ??
+      (authoredContext === undefined ? this.currentRunAbortSignal : null);
+    const evalInvocation = this.currentEvalInvocation;
+    if (!evalInvocation) {
+      throw Object.assign(new Error("Eval runtime call has no active invocation authority"), {
+        code: "EVAL_INVOCATION_INVALID",
+      });
+    }
     return {
       ...(opts ?? {}),
       ...(signal ? { signal } : {}),
       ...(this.currentRunReadOnly ? { readOnly: true } : {}),
-    } as T;
+      evalInvocation,
+    } as unknown as T;
+  }
+
+  /** Keep the invocation credential short-lived even for long-running code or
+   * a visible approval wait. This is a trusted kernel call and deliberately
+   * does not carry the evaluated invocation metadata. */
+  private startInvocationHeartbeat(
+    runId: string,
+    lease: LiveInvocationLease,
+    onFailure?: (error: Error) => void
+  ): { readonly failure: Error | null; stop(): void } {
+    let stopped = false;
+    let pending = false;
+    let failure: Error | null = null;
+    const pulse = async (): Promise<void> => {
+      if (stopped || pending || failure) return;
+      pending = true;
+      try {
+        await this.mainEval().renew({ runId, credential: lease.credential });
+      } catch (cause) {
+        const error = Object.assign(
+          new Error(
+            `Eval invocation lease renewal failed: ${cause instanceof Error ? cause.message : String(cause)}`
+          ),
+          {
+            code:
+              cause instanceof Error &&
+              typeof (cause as Error & { code?: unknown }).code === "string"
+                ? (cause as Error & { code: string }).code
+                : "EVAL_INTERRUPTED",
+          }
+        );
+        failure = error;
+        onFailure?.(error);
+      } finally {
+        pending = false;
+      }
+    };
+    const timer = setInterval(() => void pulse(), 10_000);
+    return {
+      get failure() {
+        return failure;
+      },
+      stop() {
+        stopped = true;
+        clearInterval(timer);
+      },
+    };
+  }
+
+  private frozenImportLoader(frozen: FrozenSourceBundle): EvalImportLoader {
+    const loader = async (specifier: string, ref: string | undefined): Promise<string> => {
+      const direct = frozen.importBundles[`${specifier}\0${ref ?? ""}`];
+      const latest = frozen.importBundles[`${specifier}\0latest`];
+      const bundle = direct ?? latest;
+      if (bundle === undefined) {
+        throw Object.assign(
+          new Error(`Import ${specifier} was not materialized into the immutable eval bundle`),
+          { code: "EVAL_INVOCATION_INVALID" }
+        );
+      }
+      return bundle;
+    };
+    return Object.assign(loader, {
+      resolveWorkspaceImport: async (specifier: string) =>
+        frozen.workspaceImports.includes(specifier),
+    });
   }
 
   private compactRunResult(result: RunResult): RunResult {
@@ -1270,7 +2841,10 @@ export class EvalDO extends DurableObjectBase {
       ...(result.error
         ? { error: this.windowText(result.error, RESULT_ERROR_MAX_CHARS, "$lastConsole") }
         : {}),
+      ...(result.errorCode ? { errorCode: result.errorCode } : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 500) } : {}),
+      ...(result.authority !== undefined ? { authority: result.authority } : {}),
+      ...(result.provenance !== undefined ? { provenance: result.provenance } : {}),
     };
     if (result.returnValue !== undefined) {
       compact.returnValue = this.compactReturnValue(result.returnValue);
@@ -1283,6 +2857,7 @@ export class EvalDO extends DurableObjectBase {
       success: compact.success,
       console: this.windowText(compact.console, 20_000, "$lastConsole"),
       ...(compact.error ? { error: this.windowText(compact.error, 10_000, "$lastConsole") } : {}),
+      ...(compact.errorCode ? { errorCode: compact.errorCode } : {}),
       ...(compact.returnValue !== undefined
         ? {
             returnValue: {
@@ -1302,6 +2877,7 @@ export class EvalDO extends DurableObjectBase {
       console:
         "[eval] Result exceeded the EvalDO storage limit. Large console/return data may be available in scope.$lastConsole and scope.$lastReturn.",
       ...(result.error ? { error: this.windowText(result.error, 10_000, "$lastConsole") } : {}),
+      ...(result.errorCode ? { errorCode: result.errorCode } : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 100) } : {}),
     };
   }
@@ -1515,7 +3091,7 @@ export class EvalDO extends DurableObjectBase {
 
   private async ensureScopeManager(engine: EvalEngine): Promise<ScopeManagerLike> {
     if (this.scopeManager) return this.scopeManager;
-    const blobstore = this.mainBlobstore();
+    const blobstore = this.kernelBlobstore();
     const persistence = new engine.SqlScopePersistence(this.sql, {
       putText: (valueJson: string) => blobstore.putText(valueJson),
       getText: (digest: string) => blobstore.getText(digest),
@@ -1524,6 +3100,7 @@ export class EvalDO extends DurableObjectBase {
       channelId: this.objectKey, // one scope per EvalDO instance
       panelId: "eval",
       persistence,
+      executableCodec: this.scopeExecutableCodec,
     });
     // MUST await hydrate before the manager is used: enterEval/exitEval read &
     // re-persist `current`, so a run that proceeds before the prior scope loads
@@ -1537,9 +3114,10 @@ export class EvalDO extends DurableObjectBase {
 
   /** loadImport over the build service (same on-demand build surface as the in-app eval tool). */
   private makeLoadImport(): EvalImportLoader {
-    // The eval sandbox runs in this workerd DO — resolve imports as a worker,
-    // from the same caller context that backs its fs/vcs/runtime surfaces.
-    return createEvalImportLoader(this.mainBuild(), "worker", {
+    // Eval is a distinct library target: ordinary packages retain worker-safe
+    // fallbacks while host-injected packages (notably @workspace/runtime) expose
+    // their richer, run-neutral eval surface for static analysis.
+    return createEvalImportLoader(this.mainBuild(), "eval", {
       defaultWorkspaceRef: () => {
         const contextId = this.hostedRuntimeIdentity?.contextId;
         return contextId ? `ctx:${contextId}` : undefined;
@@ -1565,21 +3143,14 @@ export class EvalDO extends DurableObjectBase {
    */
   private ensureHostedRuntime(
     support: RuntimeSupportModule,
-    contextId: string,
-    gatewayToken?: string
+    contextId: string
   ): WorkspaceRuntimeLike {
-    // Owner-scoped gateway token from the eval service (Finding 4 hardening); the
-    // env `RPC_AUTH_TOKEN` (shared internal-DO service bearer) is only a fallback
-    // for direct/internal calls. gatewayFetch is `relativeOnly` so the bearer
-    // never reaches a non-gateway host (eval code is prompt-injectable).
-    const token = gatewayToken ?? String(this.env["RPC_AUTH_TOKEN"] ?? "");
     if (this.hostedRuntime) {
       const prev = this.hostedRuntimeIdentity;
-      if (prev && (prev.contextId !== contextId || prev.gatewayToken !== token)) {
+      if (prev && prev.contextId !== contextId) {
         throw new Error(
-          `eval: hosted-runtime identity drift — this EvalDO was initialized with contextId=${prev.contextId} but a run requested contextId=${contextId}` +
-            (prev.gatewayToken === token ? "" : " (and a different gateway token)") +
-            `. A warm EvalDO serves one owner; this indicates a routing/ownership bug.`
+          `eval: hosted-runtime identity drift — this EvalDO was initialized with contextId=${prev.contextId} but a run requested contextId=${contextId}. ` +
+            `A warm EvalDO serves one owner; this indicates a routing/ownership bug.`
         );
       }
       return this.hostedRuntime;
@@ -1590,23 +3161,59 @@ export class EvalDO extends DurableObjectBase {
     // `this.rpc` directly (unwrapped), so durable/trajectory writes are never read-only-blocked.
     const baseRpc = this.rpc;
     const rpc = new Proxy(baseRpc, {
-      get: (t, prop, receiver) =>
-        prop === "call"
-          ? (...callArgs: unknown[]) => {
-              const opts = callArgs[3] as Record<string, unknown> | undefined;
-              const merged = this.currentRunCallOptions(opts);
-              return (baseRpc.call as (...a: unknown[]) => Promise<unknown>)(
-                callArgs[0],
-                callArgs[1],
-                callArgs[2],
-                merged
-              );
-            }
-          : Reflect.get(t, prop, receiver),
+      get: (t, prop, receiver) => {
+        if (prop !== "call" && prop !== "stream" && prop !== "streamReadable") {
+          return Reflect.get(t, prop, receiver);
+        }
+        return (...callArgs: unknown[]) => {
+          const opts = callArgs[3] as Record<string, unknown> | undefined;
+          const merged = this.currentRunCallOptions(opts);
+          if (prop === "call") {
+            return this.callAuthoredRpc(
+              String(callArgs[0]),
+              String(callArgs[1]),
+              callArgs[2] as unknown[],
+              merged
+            );
+          }
+          return (Reflect.get(baseRpc, prop) as (...args: unknown[]) => Promise<unknown>)(
+            callArgs[0],
+            callArgs[1],
+            callArgs[2],
+            merged
+          );
+        };
+      },
     }) as typeof baseRpc;
-    const gatewayConfig = {
-      serverUrl: String(this.env["GATEWAY_URL"] ?? ""),
-      token,
+    const gatewayFetch = async (path: string, init: RequestInit = {}): Promise<Response> => {
+      if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) {
+        throw new Error(
+          `gatewayFetch: only gateway-relative absolute paths are allowed (got ${JSON.stringify(path)})`
+        );
+      }
+      const probe = new Request(`http://eval-gateway.invalid${path}`, init);
+      const bodyBuffer = await probe.arrayBuffer();
+      const body =
+        bodyBuffer.byteLength === 0
+          ? null
+          : new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array(bodyBuffer));
+                controller.close();
+              },
+            });
+      return rpc.stream(
+        "main",
+        "gateway.fetch",
+        [
+          {
+            path: probe.url.slice("http://eval-gateway.invalid".length),
+            method: probe.method,
+            headers: Object.fromEntries(probe.headers.entries()),
+          },
+        ],
+        { signal: init.signal ?? undefined, body }
+      );
     };
     const panelRuntime = support.createPanelRuntime({
       rpc,
@@ -1622,8 +3229,8 @@ export class EvalDO extends DurableObjectBase {
       contextId,
       rpc,
       fs: support.createRpcFs(rpc),
-      gatewayConfig,
-      gatewayFetch: support.createGatewayFetch({ ...gatewayConfig, relativeOnly: true }),
+      gatewayConfig: null,
+      gatewayFetch,
       panelRuntime,
       workers: support.createWorkerdClient(rpc),
       openExternal: (url: string, options?: unknown) =>
@@ -1661,7 +3268,7 @@ export class EvalDO extends DurableObjectBase {
     );
     this.moduleMap[runtimeModuleKey] = { ...rt, ...(this.portableHelpers ?? {}) };
     this.hostedRuntime = rt;
-    this.hostedRuntimeIdentity = { contextId, gatewayToken: token };
+    this.hostedRuntimeIdentity = { contextId };
     return rt;
   }
 

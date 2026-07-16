@@ -604,6 +604,14 @@ function reactivatesWaitingTurn(event: AgenticEvent): boolean {
   return (
     event.kind === "message.started" ||
     event.kind === "message.delta" ||
-    event.kind === "invocation.started"
+    event.kind === "invocation.started" ||
+    (event.kind === "system.event" &&
+      String(
+        (event.payload as Record<string, unknown>)["kind"] ??
+          ((event.payload as Record<string, unknown>)["details"] as
+            | Record<string, unknown>
+            | undefined)?.["kind"] ??
+          ""
+      ) === "model.deferred_resolved")
   );
 }

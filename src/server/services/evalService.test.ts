@@ -1,585 +1,480 @@
-import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { DODispatch } from "../doDispatch.js";
-import {
-  EVAL_DO_SOURCE,
-  WORKSPACE_DO_SOURCE,
-  productSeedExecutionDigest,
-} from "../internalDOs/productBootManifest.js";
+import { EVAL_DO_SOURCE, productSeedExecutionDigest } from "../internalDOs/productBootManifest.js";
 import { createEvalService } from "./evalService.js";
-import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
-import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import {
+  DevHostEvalAuthorityIssuer,
+  type DevEvalGenerationIdentity,
+} from "./devHostEvalAuthority.js";
 
-const WORKSPACE_REF = {
-  source: WORKSPACE_DO_SOURCE,
-  className: "WorkspaceDO",
-  objectKey: "ws_1",
-};
+const EXECUTION_DIGEST = productSeedExecutionDigest(EVAL_DO_SOURCE);
+const SOURCE_DIGEST = "s".repeat(64);
+const PROVENANCE_DIGEST = "p".repeat(64);
+const caller = createVerifiedCaller("do:workers/agent:Agent:one", "do");
+const source = { kind: "inline" as const, code: "return 42;" };
 
-function evalKey(ownerId: string, subKey: string): string {
-  return createHash("sha256").update(`${ownerId}\0${subKey}`).digest("hex").slice(0, 40);
+function evalKey(ownerId: string, scopeKey: string): string {
+  return createHash("sha256").update(`${ownerId}\0${scopeKey}`).digest("hex").slice(0, 40);
 }
 
-function createHarness(contexts: Record<string, string | null>) {
-  const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
+function harness(
+  options: {
+    needsStart?: boolean;
+    delegatedAuthority?: {
+      parentHostId: string;
+      publicKeySpki: string;
+      generation: DevEvalGenerationIdentity;
+      recipientPrivateKey: string;
+    };
+    preauthorize?: (signal: AbortSignal) => Promise<void>;
+    prepareError?: Error;
+    execute?: (runId: string) => Promise<unknown>;
+  } = {}
+) {
+  const calls: Array<{ method: string; args: unknown[] }> = [];
+  let finish!: () => void;
+  const settled = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const terminal = { success: true, console: "ok", returnValue: 42 };
   const doDispatch = {
-    async dispatchHeld(
-      this: { dispatch: (ref: unknown, method: string, ...args: unknown[]) => Promise<unknown> },
-      ref: unknown,
-      method: string,
-      ...args: unknown[]
-    ) {
-      return this.dispatch(ref, method, ...args);
-    },
-    async dispatch(ref: unknown, method: string, ...args: unknown[]) {
-      calls.push({ ref, method, args });
-      if (method === "entityResolveContext") {
-        return contexts[String(args[0])] ?? null;
+    dispatch: vi.fn(async (_ref: unknown, method: string, ...args: unknown[]) => {
+      calls.push({ method, args });
+      if (method === "accept") {
+        const accepted = args[0] as { runId: string; startIntentDigest: string };
+        return {
+          runId: accepted.runId,
+          status: "accepted",
+          acceptedAt: 10,
+          startIntentDigest: accepted.startIntentDigest,
+          needsStart: options.needsStart ?? true,
+        };
       }
-      if (method === "entityActivate") {
-        return undefined;
+      if (method === "begin") return { status: "queued" };
+      if (method === "prepare") {
+        if (options.prepareError) throw options.prepareError;
+        return {
+          sourceDigest: SOURCE_DIGEST,
+          executionProvenanceDigest: PROVENANCE_DIGEST,
+          scopeInputRevision: "scope-1",
+        };
       }
-      if (method === "entityResolve") {
-        // No lineage in the mock → resolveParentPanel walk ends with no parent.
-        return null;
+      if (method === "awaitPreauthorization") return { status: "awaiting-preauthorization" };
+      if (method === "activate") return { status: "preparing" };
+      if (method === "execute") return options.execute?.(String(args[0])) ?? terminal;
+      if (method === "attachAuthoritySummary") return { ...terminal, authority: args[1] };
+      if (method === "get") return { runId: args[0], status: "running" };
+      if (method === "events") return { events: [], next: args[1] };
+      if (method === "cancel") return { status: "requested" };
+      if (method === "terminate") {
+        return { status: (args[0] as { status: string }).status };
       }
-      if (method === "slotResolveByEntity") {
-        // No panel slots in the mock → resolveParentPanel resolves to no owning panel.
-        return null;
-      }
-      if (method === "run") {
-        return { success: true, console: "", scopeKeys: [] };
-      }
-      if (method === "reset") {
-        return { ok: true };
-      }
-      if (method === "cancel") {
-        return { ok: true };
-      }
-      if (method === "forceReset") {
-        return { ok: true };
-      }
-      if (method === "startRun") {
-        return { runId: (args[0] as { runId: string }).runId, status: "pending" };
-      }
-      if (method === "executeRun") {
-        return { success: true, console: "ok", scopeKeys: [] };
-      }
-      if (method === "getRun") {
-        return { status: "done", result: { success: true, console: "", scopeKeys: [] } };
-      }
+      if (method === "reset" || method === "forceReset") return { status: "reset" };
       if (method === "readScopeTextPage") {
         return { length: 3, encoding: "utf16le-base64", chunk: "YQBiAGMA" };
       }
-      if (method === "deleteScopeValue") {
-        return { ok: true, existed: true };
-      }
-      if (method === "onEvalComplete") {
-        return undefined;
-      }
+      if (method === "deleteScopeValue") return { ok: true, existed: true };
+      if (method === "onEvalComplete") return undefined;
       throw new Error(`unexpected dispatch ${method}`);
+    }),
+    dispatchHeld: vi.fn(async (ref: unknown, method: string, ...args: unknown[]) =>
+      doDispatch.dispatch(ref, method, ...args)
+    ),
+  };
+  const entityStore = {
+    cache: {
+      resolveActive: vi.fn(() => null),
+      resolve: vi.fn(() => null),
     },
-  } as unknown as DODispatch;
-  // A real store over the mocked dispatch + cache: entity ops (activate /
-  // resolveContext) flow through it to `doDispatch`, so `calls` still captures
-  // them — exactly the path the eval service exercises in production.
-  const entityCache = {
-    resolveContext(id: string) {
-      return contexts[id] ?? null;
-    },
-    // Always a cache miss → ensureEvalDO takes the activate path, so the existing
-    // entityActivate-dispatch assertions still hold.
-    resolveActive() {
-      return null;
-    },
-    // Cache miss for the parent-resolution walk → falls back to entityResolve.
-    resolve() {
-      return null;
-    },
-    _onActivate() {},
-    _onRetire() {},
-  } as unknown as EntityCache;
-  const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
-  const service = createEvalService({
-    doDispatch,
-    entityStore,
-    tokenManager: {
-      ensureToken: (callerId: string) => `tok:${callerId}`,
-    } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
+    resolveContext: vi.fn(async (id: string) => (id === "missing" ? null : "ctx-1")),
+    activate: vi.fn(async () => undefined),
+    resolveSlotByEntity: vi.fn(async () => undefined),
+    resolveRecord: vi.fn(async () => null),
+  };
+  const coordinator = {
+    issuePreparation: vi.fn(() => ({
+      runId: "run-1",
+      credential: "preparation-credential",
+      policy: { mode: "adaptive", effects: "mutable", approvals: "prompt", requests: [] },
+    })),
+    finalize: vi.fn(() => ({
+      runId: "run-1",
+      runDigest: "run-digest",
+      credential: "run-credential",
+      invocationPrincipal: "invocation:run-1",
+      policy: { mode: "adaptive", effects: "mutable", approvals: "prompt", requests: [] },
+      manifestDigest: "manifest-digest",
+    })),
+    authoritySummary: vi.fn(() => ({ requested: 0, granted: 0, reused: 0, denied: 0 })),
+    invalidate: vi.fn(),
+    invalidateObject: vi.fn(),
+    renew: vi.fn(() => ({ expiresAt: Date.now() + 30_000 })),
+    beginCleanup: vi.fn(() => ({ expiresAt: Date.now() + 30_000 })),
+  };
+  const preauthorize = vi.fn(async (input: { signal: AbortSignal }) => {
+    await options.preauthorize?.(input.signal);
   });
-  return { service, calls };
+  const activity = { begin: vi.fn(), end: vi.fn(() => finish()) };
+  const service = createEvalService({
+    doDispatch: doDispatch as never,
+    entityStore: entityStore as never,
+    invocationCoordinator: coordinator as never,
+    preauthorize,
+    activity: activity as never,
+    ...(options.delegatedAuthority ? { delegatedAuthority: options.delegatedAuthority } : {}),
+  });
+  return { service, calls, coordinator, doDispatch, entityStore, preauthorize, activity, settled };
 }
 
 describe("createEvalService", () => {
-  it("runs CLI eval as the selected session owner and context", async () => {
-    const { service, calls } = createHarness({ "session:default": "ctx_1" });
-
-    await service.handler({ caller: createVerifiedCaller("shell:dev_cli", "shell") }, "run", [
-      {
-        ownerId: "session:default",
-        contextId: "ctx_1",
-        subKey: "default",
-        code: "return 1;",
-      },
+  it("binds one accepted handle to the verified owner and executes the unified lifecycle", async () => {
+    const h = harness();
+    const result = await h.service.handler({ caller }, "start", [
+      { source, scope: { key: "channel-1" }, idempotencyKey: "turn-1" },
     ]);
+    expect(result).toMatchObject({ status: "accepted", acceptedAt: 10 });
+    await h.settled;
 
-    const objectKey = evalKey("session:default", "default");
-    expect(calls[0]).toEqual({
-      ref: WORKSPACE_REF,
-      method: "entityActivate",
-      args: [
-        {
-          kind: "do",
-          source: { repoPath: EVAL_DO_SOURCE },
-          contextId: "ctx_1",
-          className: "EvalDO",
-          key: objectKey,
-          activeExecutionDigest: productSeedExecutionDigest(EVAL_DO_SOURCE),
-          ownerUserId: undefined,
-          // The EvalDO's launch parent IS its owner — bridges the lineage so entities spawned FROM an
-          // eval (e.g. headless sub-agents) resolve up through the owner to the owner's panel.
-          parentId: "session:default",
-          stateArgs: { ownerPrincipalId: "session:default", subKey: "default" },
-        },
-      ],
-    });
-    expect(calls.find((c) => c.method === "run")).toMatchObject({
-      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
-      method: "run",
-      args: [
-        expect.objectContaining({
-          code: "return 1;",
-          contextId: "ctx_1",
-        }),
-      ],
-    });
-  });
-
-  it("keeps entity callers bound to their verified runtime owner", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
-
-    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "run", [
-      { subKey: "chan_1", channelId: "chan_1", code: "return 1;" },
-    ]);
-
-    const objectKey = evalKey(ownerId, "chan_1");
-    expect(calls[0]).toMatchObject({
-      method: "entityActivate",
-      args: [
-        expect.objectContaining({
-          contextId: "ctx_agent",
-          key: objectKey,
-          stateArgs: { ownerPrincipalId: ownerId, subKey: "chan_1" },
-        }),
-      ],
-    });
-    expect(calls.find((c) => c.method === "run")).toMatchObject({
-      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
-      method: "run",
-      args: [
-        expect.objectContaining({
-          contextId: "ctx_agent",
-          channelId: "chan_1",
-          agentRef: ownerId,
-        }),
-      ],
-    });
-  });
-
-  it("resolves the eval's parent as the agent caller's owning panel (lineage walk)", async () => {
-    // Lineage: an agent DO whose launch parent (recorded at createEntity) is a panel.
-    const rec = (
-      over: Partial<EntityRecord> & { id: string; kind: EntityRecord["kind"] }
-    ): EntityRecord => ({
-      source: { repoPath: "src" },
-      contextId: "ctx_agent",
-      key: over.id,
-      createdAt: 0,
-      status: "active",
-      cleanupComplete: true,
-      ...over,
-    });
-    const records: Record<string, EntityRecord> = {
-      "do:src:Agent:k": rec({ id: "do:src:Agent:k", kind: "do", parentId: "panel:p" }),
-      "panel:p": rec({ id: "panel:p", kind: "panel", contextId: "ctx_panel" }),
-    };
-    const calls: Array<{ method: string; args: unknown[] }> = [];
-    const doDispatch = {
-      async dispatchHeld(
-        this: { dispatch: (ref: unknown, method: string, ...args: unknown[]) => Promise<unknown> },
-        ref: unknown,
-        method: string,
-        ...args: unknown[]
-      ) {
-        return this.dispatch(ref, method, ...args);
-      },
-      async dispatch(_ref: unknown, method: string, ...args: unknown[]) {
-        calls.push({ method, args });
-        if (method === "entityActivate") return undefined;
-        if (method === "entityResolve") return records[String(args[0])] ?? null;
-        // Durable nav→slot: the panel entity "panel:p" is the current entity of open slot "panel:tree/p".
-        if (method === "slotResolveByEntity")
-          return String(args[0]) === "panel:p" ? "panel:tree/p" : null;
-        if (method === "run") return { success: true, console: "", scopeKeys: [] };
-        throw new Error(`unexpected dispatch ${method}`);
-      },
-    } as unknown as DODispatch;
-    const entityCache = {
-      resolveContext: (id: string) => records[id]?.contextId ?? null,
-      resolve: (id: string) => records[id] ?? null,
-      resolveActive: () => null,
-      _onActivate() {},
-      _onRetire() {},
-    } as unknown as EntityCache;
-    const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws", entityCache });
-    const service = createEvalService({
-      doDispatch,
-      entityStore,
-      tokenManager: {
-        ensureToken: (id: string) => `tok:${id}`,
-      } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
-    });
-
-    await service.handler({ caller: createVerifiedCaller("do:src:Agent:k", "do") }, "run", [
-      { channelId: "c", code: "return 1;" },
-    ]);
-
-    const runCall = calls.find((c) => c.method === "run");
-    // The parent is the owning panel's TREE SLOT id (durable nav→slot of "panel:p" → "panel:tree/p"),
-    // not the panel's entity id — so defaultOpenParentId/getPanelHandle nest under the real slot.
-    expect((runCall?.args[0] as { parent?: unknown }).parent).toEqual({
-      parentId: "panel:tree/p",
-      parentEntityId: "panel:tree/p",
-      parentKind: "panel",
-    });
-  });
-
-  it("rejects owner overrides from unprivileged callers", async () => {
-    const { service } = createHarness({
-      "panel:one": "ctx_panel",
-      "session:default": "ctx_1",
-    });
-
-    await expect(
-      service.handler({ caller: createVerifiedCaller("panel:one", "panel") }, "run", [
-        {
-          ownerId: "session:default",
-          contextId: "ctx_1",
-          subKey: "default",
-          code: "return 1;",
-        },
-      ])
-    ).rejects.toThrow(/restricted to shell\/server/);
-  });
-
-  it("rejects missing or ambiguous run sources even when handler is called directly", async () => {
-    const { service } = createHarness({ "session:default": "ctx_1" });
-    const ctx = { caller: createVerifiedCaller("shell:dev_cli", "shell") };
-
-    await expect(
-      service.handler(ctx, "run", [
-        { ownerId: "session:default", contextId: "ctx_1", subKey: "default" },
-      ])
-    ).rejects.toThrow(/exactly one of code or path/);
-
-    await expect(
-      service.handler(ctx, "run", [
-        {
-          ownerId: "session:default",
-          contextId: "ctx_1",
-          subKey: "default",
-          code: "return 1;",
-          path: "/snippet.ts",
-        },
-      ])
-    ).rejects.toThrow(/exactly one of code or path/);
-  });
-
-  it("startRun: inserts with the caller's runId, returns it, and pushes completion to the agent", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
-
-    const ret = await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
-      { subKey: "chan_1", channelId: "chan_1", code: "return 1;", runId: "inv-42" },
-    ]);
-    expect(ret).toEqual({ runId: "inv-42" });
-
-    const objectKey = evalKey(ownerId, "chan_1");
-    // startRun dispatched to the owner's EvalDO with the CALLER's runId + assembled args.
-    expect(calls.find((c) => c.method === "startRun")).toMatchObject({
-      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
-      args: [expect.objectContaining({ runId: "inv-42", channelId: "chan_1", agentRef: ownerId })],
-    });
-
-    // The held run + completion push run on a background task — let them settle.
-    await new Promise((r) => setTimeout(r, 10));
-    // executeRun was dispatched HELD (the mock records dispatchHeld as a dispatch).
-    expect(calls.find((c) => c.method === "executeRun")).toMatchObject({ args: ["inv-42"] });
-    // Completion pushed to the owning agent DO, content-routed by channelId.
-    expect(calls.find((c) => c.method === "onEvalComplete")).toMatchObject({
-      ref: { source: "workers/agent-worker", className: "AiChatWorker", objectKey: "abc" },
-      args: [expect.objectContaining({ runId: "inv-42", channelId: "chan_1" })],
-    });
-  });
-
-  it("startRun without a caller runId mints a server uuid (and uses it for the run)", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
-
-    const ret = (await service.handler(
-      { caller: createVerifiedCaller(ownerId, "do") },
-      "startRun",
-      [{ subKey: "chan_1", channelId: "chan_1", code: "return 1;" }]
-    )) as { runId: string };
-    expect(ret.runId).toBeTruthy();
-    expect(calls.find((c) => c.method === "startRun")).toMatchObject({
-      args: [expect.objectContaining({ runId: ret.runId })],
-    });
-  });
-
-  it("getRun: routes to the owner's EvalDO by (owner, subKey)", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
-
-    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "getRun", [
-      { subKey: "chan_1", runId: "inv-42" },
-    ]);
-
-    const objectKey = evalKey(ownerId, "chan_1");
-    expect(calls.find((c) => c.method === "getRun")).toMatchObject({
-      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
-      args: ["inv-42"],
-    });
-  });
-
-  it("large-result scope paging stays owner-scoped and forwards only bounded page fields", async () => {
-    const ownerId = "session:default";
-    const { service, calls } = createHarness({ [ownerId]: "ctx_1" });
-    const caller = { caller: createVerifiedCaller("shell:dev_cli", "shell") };
-
-    const page = await service.handler(caller, "readScopeTextPage", [
-      {
-        ownerId,
-        contextId: "ctx_1",
-        subKey: "system-tests",
-        key: "__temporary",
-        offset: 131_072,
-        limit: 4096,
-      },
-    ]);
-    expect(page).toEqual({ length: 3, encoding: "utf16le-base64", chunk: "YQBiAGMA" });
-    expect(calls.find((call) => call.method === "readScopeTextPage")).toMatchObject({
-      ref: {
-        source: EVAL_DO_SOURCE,
-        className: "EvalDO",
-        objectKey: evalKey(ownerId, "system-tests"),
-      },
-      args: ["__temporary", 131_072, 4096],
-    });
-
-    await service.handler(caller, "deleteScopeValue", [
-      {
-        ownerId,
-        contextId: "ctx_1",
-        subKey: "system-tests",
-        key: "__temporary",
-      },
-    ]);
-    expect(calls.find((call) => call.method === "deleteScopeValue")).toMatchObject({
-      ref: {
-        source: EVAL_DO_SOURCE,
-        className: "EvalDO",
-        objectKey: evalKey(ownerId, "system-tests"),
-      },
-      args: ["__temporary"],
-    });
-  });
-
-  it("cancel: routes to the owner's EvalDO by (owner, subKey) and forwards the runId", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
-
-    const ret = await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "cancel", [
-      { subKey: "chan_1", runId: "inv-42" },
-    ]);
-    expect(ret).toEqual({ ok: true });
-
-    const objectKey = evalKey(ownerId, "chan_1");
-    expect(calls.find((c) => c.method === "cancel")).toMatchObject({
-      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
-      args: ["inv-42"],
-    });
-  });
-
-  it("forceReset: routes to the owner's EvalDO by (owner, subKey)", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
-
-    const ret = await service.handler(
-      { caller: createVerifiedCaller(ownerId, "do") },
-      "forceReset",
-      [{ subKey: "chan_1" }]
+    const objectKey = evalKey(caller.runtime.id, "channel-1");
+    expect(h.entityStore.activate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "do",
+        source: { repoPath: EVAL_DO_SOURCE },
+        activeExecutionDigest: EXECUTION_DIGEST,
+        contextId: "ctx-1",
+        key: objectKey,
+        parentId: caller.runtime.id,
+      })
     );
-    expect(ret).toEqual({ ok: true });
-
-    const objectKey = evalKey(ownerId, "chan_1");
-    expect(calls.find((c) => c.method === "forceReset")).toMatchObject({
-      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
-    });
-  });
-});
-
-/**
- * F2: when the held `executeRun` dispatch dies (server restart dropped the connection), the service
- * reconciles the run's terminal state via `getRun` and pushes `onEvalComplete` itself, so the agent's
- * parked invocation settles even if its own poll backstop never re-fires.
- */
-function createHeldFailHarness(opts: {
-  contextId: string;
-  getRunResponse: { status: string; result?: unknown };
-}) {
-  const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
-  const doDispatch = {
-    async dispatchHeld(_ref: unknown, method: string, ..._args: unknown[]) {
-      if (method === "executeRun") {
-        throw new Error("held connection dropped (server restart)");
-      }
-      // run (the synchronous held path) is not exercised here.
-      throw new Error(`unexpected dispatchHeld ${method}`);
-    },
-    async dispatch(ref: unknown, method: string, ...args: unknown[]) {
-      calls.push({ ref, method, args });
-      if (method === "entityResolveContext") return opts.contextId;
-      if (method === "entityActivate") return undefined;
-      if (method === "entityResolve") return null;
-      if (method === "slotResolveByEntity") return null;
-      if (method === "startRun")
-        return { runId: (args[0] as { runId: string }).runId, status: "pending" };
-      if (method === "getRun") return opts.getRunResponse;
-      if (method === "onEvalComplete") return undefined;
-      throw new Error(`unexpected dispatch ${method}`);
-    },
-  } as unknown as DODispatch;
-  const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-  const entityCache = {
-    resolveContext: () => opts.contextId,
-    resolveActive: () => null,
-    resolve: () => null,
-    _onActivate() {},
-    _onRetire() {},
-  } as unknown as EntityCache;
-  const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
-  const service = createEvalService({
-    doDispatch,
-    entityStore,
-    tokenManager: {
-      ensureToken: (id: string) => `tok:${id}`,
-    } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
-  });
-  return { service, calls, ownerId };
-}
-
-describe("createEvalService — F2 held-run failure reconciliation", () => {
-  it("pushes onEvalComplete with the reconciled getRun result when the held run died but completed (done)", async () => {
-    const result = { success: true, console: "ok", returnValue: 7 };
-    const { service, calls, ownerId } = createHeldFailHarness({
-      contextId: "ctx_agent",
-      getRunResponse: { status: "done", result },
-    });
-
-    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
-      { subKey: "chan_1", channelId: "chan_1", code: "return 7;", runId: "inv-h1" },
+    expect(h.calls.map((call) => call.method)).toEqual([
+      "accept",
+      "begin",
+      "prepare",
+      "activate",
+      "execute",
+      "attachAuthoritySummary",
     ]);
-    await new Promise((r) => setTimeout(r, 10));
-
-    // After the held dispatch threw, the service reconciled via getRun and pushed the REAL result.
-    expect(calls.find((c) => c.method === "getRun")).toMatchObject({ args: ["inv-h1"] });
-    expect(calls.find((c) => c.method === "onEvalComplete")).toMatchObject({
-      ref: { source: "workers/agent-worker", className: "AiChatWorker", objectKey: "abc" },
-      args: [expect.objectContaining({ runId: "inv-h1", channelId: "chan_1", result })],
-    });
-  });
-
-  it("pushes a synthetic terminal failure when the held run is gone (cancelled/unknown)", async () => {
-    const { service, calls, ownerId } = createHeldFailHarness({
-      contextId: "ctx_agent",
-      getRunResponse: { status: "cancelled" },
-    });
-
-    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
-      { subKey: "chan_1", channelId: "chan_1", code: "return 1;", runId: "inv-h2" },
-    ]);
-    await new Promise((r) => setTimeout(r, 10));
-
-    const push = calls.find((c) => c.method === "onEvalComplete");
-    expect(push).toBeTruthy();
-    expect((push!.args[0] as { result: { success: boolean } }).result.success).toBe(false);
-    expect((push!.args[0] as { runId: string }).runId).toBe("inv-h2");
-  });
-
-  it("does NOT push a terminal when the run is still in flight (running) — never bounds a long eval", async () => {
-    const { service, calls, ownerId } = createHeldFailHarness({
-      contextId: "ctx_agent",
-      getRunResponse: { status: "running" },
-    });
-
-    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
-      { subKey: "chan_1", channelId: "chan_1", code: "while(true){}", runId: "inv-h3" },
-    ]);
-    await new Promise((r) => setTimeout(r, 10));
-
-    // The run is genuinely still running elsewhere → leave it alone (its own completion push covers
-    // it); forcing a terminal here would cut a legitimately long-running eval short.
-    expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
-  });
-
-  // Plan §6.4: an `agent` caller binds to its host-verified entity binding with
-  // zero flags; the EvalDO trusts the binding, not client-supplied owner/context.
-  it("binds agent eval to the entity binding (owner = binding.entityId, context = binding.contextId)", async () => {
-    const { service, calls } = createHarness({});
-    const binding = {
-      entityId: "ent_agent",
-      contextId: "ctx_bound",
-      channelId: "chan_1",
-      agentId: "ag_1",
-      userId: "usr_test",
-    };
-
-    await service.handler(
-      { caller: createVerifiedCaller("agent:ent_agent", "agent", null, binding) },
-      "run",
-      [{ code: "return 1;" }]
+    expect(h.coordinator.invalidate).toHaveBeenCalledWith(
+      (result as { runId: string }).runId,
+      objectKey
     );
-
-    // Registered + ran against the EvalDO keyed by the BINDING entity, in the
-    // bound context — no ownerId/contextId came from the client.
-    const objectKey = evalKey("ent_agent", "default");
-    const activate = calls.find((c) => c.method === "entityActivate");
-    expect(activate).toBeTruthy();
-    expect((activate!.args[0] as { contextId?: string }).contextId).toBe("ctx_bound");
-    const run = calls.find((c) => c.method === "run");
-    expect((run!.ref as { objectKey: string }).objectKey).toBe(objectKey);
   });
 
-  it("rejects an agent eval whose client-supplied owner/context contradicts the binding", async () => {
-    const { service } = createHarness({});
-    const binding = {
-      entityId: "ent_agent",
-      contextId: "ctx_bound",
-      channelId: "chan_1",
-      agentId: "ag_1",
-      userId: "usr_test",
+  it("returns an idempotent accepted handle without starting a second invocation", async () => {
+    const h = harness({ needsStart: false });
+    await h.service.handler({ caller }, "start", [
+      { source, scope: { key: "default" }, idempotencyKey: "same" },
+    ]);
+    expect(h.coordinator.issuePreparation).not.toHaveBeenCalled();
+    expect(h.calls.map((call) => call.method)).toEqual(["accept"]);
+  });
+
+  it("does not mint a preparation lease until a queued run owns its scope", async () => {
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let execution = 0;
+    const h = harness({
+      execute: async () => {
+        execution += 1;
+        if (execution === 1) await firstBlocked;
+        return { success: true, console: "ok", returnValue: execution };
+      },
+    });
+
+    await h.service.handler({ caller }, "start", [
+      { source, scope: { key: "shared" }, idempotencyKey: "first" },
+    ]);
+    await vi.waitFor(() => expect(h.coordinator.issuePreparation).toHaveBeenCalledTimes(1));
+    await h.service.handler({ caller }, "start", [
+      { source, scope: { key: "shared" }, idempotencyKey: "second" },
+    ]);
+
+    expect(h.coordinator.issuePreparation).toHaveBeenCalledTimes(1);
+    releaseFirst();
+    await vi.waitFor(() => expect(h.coordinator.issuePreparation).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(h.activity.end).toHaveBeenCalledTimes(2));
+  });
+
+  it("uses RPC delivery correlation for agent completion independently of logical idempotency", async () => {
+    const h = harness();
+    await h.service.handler({ caller, idempotencyKey: "tool-call-7" }, "start", [
+      {
+        source,
+        scope: { key: "channel-1" },
+        channelId: "channel-1",
+        idempotencyKey: "logical-run",
+      },
+    ]);
+    await h.settled;
+
+    expect(h.calls.find((call) => call.method === "onEvalComplete")?.args[0]).toMatchObject({
+      invocationId: "tool-call-7",
+    });
+  });
+
+  it("preauthorizes canonical call intents before activation", async () => {
+    const h = harness();
+    await h.service.handler({ caller }, "start", [
+      {
+        source,
+        authority: {
+          preauthorize: [{ plane: "host-service", method: "fs.readFile", args: ["README.md"] }],
+        },
+      },
+    ]);
+    await h.settled;
+    expect(h.preauthorize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.any(String),
+        credential: "run-credential",
+        readOnly: false,
+      })
+    );
+    const methods = h.calls.map((call) => call.method);
+    expect(methods.indexOf("awaitPreauthorization")).toBeLessThan(methods.indexOf("activate"));
+  });
+
+  it("aborts a pending preauthorization when the run deadline expires", async () => {
+    let observedSignal: AbortSignal | null = null;
+    const h = harness({
+      preauthorize: (signal) => {
+        observedSignal = signal;
+        return new Promise<void>((_resolve, reject) => {
+          const rejectFromAbort = () => reject(signal.reason);
+          if (signal.aborted) rejectFromAbort();
+          else signal.addEventListener("abort", rejectFromAbort, { once: true });
+        });
+      },
+    });
+    await h.service.handler({ caller }, "start", [
+      {
+        source,
+        deadlineMs: 20,
+        authority: {
+          preauthorize: [{ plane: "host-service", method: "fs.readFile", args: ["README.md"] }],
+        },
+      },
+    ]);
+    await h.settled;
+
+    expect((observedSignal as AbortSignal | null)?.aborted).toBe(true);
+    expect(h.calls.find((call) => call.method === "terminate")?.args[0]).toMatchObject({
+      status: "expired",
+      errorCode: "EVAL_INVOCATION_EXPIRED",
+    });
+    expect(h.calls.map((call) => call.method)).not.toContain("activate");
+    expect(h.coordinator.invalidate).toHaveBeenCalled();
+  });
+
+  it("preserves deterministic preparation failures instead of reporting process loss", async () => {
+    const failure = Object.assign(new Error("source bundle is too large"), {
+      code: "EVAL_RESOURCE_LIMIT",
+    });
+    const h = harness({ prepareError: failure });
+    await h.service.handler({ caller }, "start", [{ source }]);
+    await h.settled;
+
+    expect(h.calls.find((call) => call.method === "terminate")?.args[0]).toMatchObject({
+      status: "failed",
+      error: "source bundle is too large",
+      errorCode: "EVAL_RESOURCE_LIMIT",
+    });
+  });
+
+  it("routes lifecycle reads and cancellation through the owner-derived EvalDO", async () => {
+    const h = harness({ needsStart: false });
+    await h.service.handler({ caller }, "get", [{ runId: "run-1", scope: { key: "x" } }]);
+    await h.service.handler({ caller }, "events", [
+      { runId: "run-1", scope: { key: "x" }, after: 7 },
+    ]);
+    await h.service.handler({ caller }, "cancel", [{ runId: "run-1", scope: { key: "x" } }]);
+    expect(h.calls.map((call) => call.method)).toEqual(["get", "events", "cancel"]);
+    expect(h.coordinator.invalidate).toHaveBeenCalledWith("run-1", evalKey(caller.runtime.id, "x"));
+    expect(h.doDispatch.dispatch.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      h.coordinator.invalidate.mock.invocationCallOrder.at(-1)!
+    );
+  });
+
+  it("invalidates every scope lease after reset and force-reset cleanup settles", async () => {
+    const h = harness({ needsStart: false });
+    const objectKey = evalKey(caller.runtime.id, "x");
+    await h.service.handler({ caller }, "reset", [{ scope: { key: "x" } }]);
+    await h.service.handler({ caller }, "forceReset", [{ scope: { key: "x" } }]);
+    expect(h.coordinator.invalidateObject).toHaveBeenNthCalledWith(1, objectKey);
+    expect(h.coordinator.invalidateObject).toHaveBeenNthCalledWith(2, objectKey);
+    expect(h.calls.map((call) => call.method)).toEqual(["reset", "forceReset"]);
+    expect(h.doDispatch.dispatch.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      h.coordinator.invalidateObject.mock.invocationCallOrder.at(-1)!
+    );
+  });
+
+  it("only renews a lease for the matching EvalDO kernel", async () => {
+    const h = harness({ needsStart: false });
+    const objectKey = "scope-object";
+    const credential = "c".repeat(43);
+    const evalCaller = createVerifiedCaller(`do:${EVAL_DO_SOURCE}:EvalDO:${objectKey}`, "do");
+    await expect(
+      h.service.handler({ caller: evalCaller }, "renew", [{ runId: "run-1", credential }])
+    ).resolves.toEqual(expect.objectContaining({ expiresAt: expect.any(Number) }));
+    expect(h.coordinator.renew).toHaveBeenCalledWith({
+      runId: "run-1",
+      credential,
+      objectKey,
+    });
+    await expect(
+      h.service.handler({ caller }, "renew", [{ runId: "run-1", credential }])
+    ).rejects.toThrow("active EvalDO kernel");
+  });
+
+  it("only opens the cleanup phase for the matching EvalDO kernel", async () => {
+    const h = harness({ needsStart: false });
+    const objectKey = "scope-object";
+    const credential = "c".repeat(43);
+    const evalCaller = createVerifiedCaller(`do:${EVAL_DO_SOURCE}:EvalDO:${objectKey}`, "do");
+    await expect(
+      h.service.handler({ caller: evalCaller }, "beginCleanup", [{ runId: "run-1", credential }])
+    ).resolves.toEqual(expect.objectContaining({ expiresAt: expect.any(Number) }));
+    expect(h.coordinator.beginCleanup).toHaveBeenCalledWith({
+      runId: "run-1",
+      credential,
+      objectKey,
+    });
+    await expect(
+      h.service.handler({ caller }, "beginCleanup", [{ runId: "run-1", credential }])
+    ).rejects.toThrow("active EvalDO kernel");
+  });
+
+  it("rejects attached-session authority overrides from ordinary entities", async () => {
+    const h = harness({ needsStart: false });
+    await expect(
+      h.service.handler({ caller }, "start", [
+        {
+          source,
+          target: { kind: "attached-session", ownerId: "other", contextId: "ctx-2" },
+        },
+      ])
+    ).rejects.toThrow("restricted to shell/server callers");
+  });
+
+  it("accepts a managed child start only from the signed original initiator", async () => {
+    const generation: DevEvalGenerationIdentity = {
+      launchId: "launch-1",
+      hostBuildId: "build-1",
+      childServerId: "child-1",
+      processIdentity: "123:boot",
+      childWorkspaceId: "workspace-1",
+      childContextId: "unbound",
+      recipientPublicKey: "",
     };
+    const recipient = generateKeyPairSync("x25519");
+    generation.recipientPublicKey = recipient.publicKey
+      .export({ type: "spki", format: "der" })
+      .toString("base64url");
+    const recipientPrivateKey = recipient.privateKey
+      .export({ type: "pkcs8", format: "der" })
+      .toString("base64url");
+    const issuer = new DevHostEvalAuthorityIssuer("parent:boot");
+    const initiator = createVerifiedCaller("worker:agent", "worker", {
+      callerId: "worker:agent",
+      callerKind: "worker",
+      repoPath: "workers/agent",
+      executionDigest: "b".repeat(64),
+      requested: [],
+      delegations: [],
+    });
+    const input = { source };
+    const authority = issuer.issue({ generation, initiator, start: input });
+    const approvalRoute = issuer.issueApprovalRoute({ generation, authority });
+    const h = harness({
+      delegatedAuthority: {
+        parentHostId: issuer.parentHostId,
+        publicKeySpki: issuer.publicKeySpki,
+        generation,
+        recipientPrivateKey,
+      },
+    });
+    await h.service.handler({ caller }, "delegatedStart", [{ input, authority, approvalRoute }]);
+    expect(h.coordinator.issuePreparation).toHaveBeenCalledWith(
+      expect.objectContaining({ initiator })
+    );
+  });
+
+  it("maps replay of one delegated authority envelope to the same durable run", async () => {
+    const recipient = generateKeyPairSync("x25519");
+    const generation: DevEvalGenerationIdentity = {
+      launchId: "launch-replay",
+      hostBuildId: "build-1",
+      childServerId: "child-1",
+      processIdentity: "125:boot",
+      childWorkspaceId: "workspace-1",
+      childContextId: "unbound",
+      recipientPublicKey: recipient.publicKey
+        .export({ type: "spki", format: "der" })
+        .toString("base64url"),
+    };
+    const issuer = new DevHostEvalAuthorityIssuer("parent:boot");
+    const input = { source };
+    const authority = issuer.issue({ generation, initiator: caller, start: input });
+    const approvalRoute = issuer.issueApprovalRoute({ generation, authority });
+    const h = harness({
+      needsStart: false,
+      delegatedAuthority: {
+        parentHostId: issuer.parentHostId,
+        publicKeySpki: issuer.publicKeySpki,
+        generation,
+        recipientPrivateKey: recipient.privateKey
+          .export({ type: "pkcs8", format: "der" })
+          .toString("base64url"),
+      },
+    });
+
+    const first = await h.service.handler({ caller }, "delegatedStart", [
+      { input, authority, approvalRoute },
+    ]);
+    const replay = await h.service.handler({ caller }, "delegatedStart", [
+      { input, authority, approvalRoute },
+    ]);
+
+    expect(replay).toMatchObject({ runId: (first as { runId: string }).runId });
+    expect(h.calls.filter((call) => call.method === "accept").map((call) => call.args[0])).toEqual([
+      expect.objectContaining({ runId: (first as { runId: string }).runId }),
+      expect.objectContaining({ runId: (first as { runId: string }).runId }),
+    ]);
+  });
+
+  it("refuses prompt-capable managed child eval before source preparation when no route is live", async () => {
+    const recipient = generateKeyPairSync("x25519");
+    const generation: DevEvalGenerationIdentity = {
+      launchId: "launch-route-loss",
+      hostBuildId: "build-1",
+      childServerId: "child-1",
+      processIdentity: "124:boot",
+      childWorkspaceId: "workspace-1",
+      childContextId: "unbound",
+      recipientPublicKey: recipient.publicKey
+        .export({ type: "spki", format: "der" })
+        .toString("base64url"),
+    };
+    const issuer = new DevHostEvalAuthorityIssuer("parent:boot");
+    const input = { source };
+    const authority = issuer.issue({ generation, initiator: caller, start: input });
+    const h = harness({
+      delegatedAuthority: {
+        parentHostId: issuer.parentHostId,
+        publicKeySpki: issuer.publicKeySpki,
+        generation,
+        recipientPrivateKey: recipient.privateKey
+          .export({ type: "pkcs8", format: "der" })
+          .toString("base64url"),
+      },
+    });
 
     await expect(
-      service.handler(
-        { caller: createVerifiedCaller("agent:ent_agent", "agent", null, binding) },
-        "run",
-        [{ ownerId: "someone_else", contextId: "ctx_bound", code: "return 1;" }]
-      )
-    ).rejects.toThrow(/must match the connection's entity binding/);
+      h.service.handler({ caller }, "delegatedStart", [{ input, authority }])
+    ).rejects.toMatchObject({ code: "EVAL_APPROVAL_ROUTE_LOST" });
+    expect(h.coordinator.issuePreparation).not.toHaveBeenCalled();
   });
 });

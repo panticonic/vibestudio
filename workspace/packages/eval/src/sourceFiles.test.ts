@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { compileComponent, executeSandbox, loadSourceFileBundle } from "./index";
+import {
+  compileComponent,
+  executeSandbox,
+  findStaticSpecifiers,
+  loadSourceFileBundle,
+} from "./index";
 
 describe("source file bundles", () => {
   let originalModuleMap: unknown;
@@ -55,6 +60,40 @@ describe("source file bundles", () => {
       "src/math.ts",
       "src/nested/base.ts",
     ]);
+  });
+
+  it("discovers literal dynamic imports without treating computed imports as frozen input", () => {
+    expect(
+      findStaticSpecifiers(`
+        const first = await import("@workspace/testkit");
+        const second = await import('./local.js');
+        const name = "@workspace/runtime";
+        const unresolved = await import(name);
+      `)
+    ).toEqual(["@workspace/testkit", "./local.js"]);
+  });
+
+  it("freezes and executes literal dynamic relative imports", async () => {
+    const code = `const mod = await import("./math.js"); return mod.double(21);`;
+    const files: Record<string, string> = {
+      "src/main.ts": code,
+      "src/math.ts": `export const double = (n: number) => n * 2;`,
+    };
+
+    const bundle = await loadSourceFileBundle("src/main.ts", async (path) => {
+      const source = files[path];
+      if (source === undefined) throw new Error(`Missing ${path}`);
+      return source;
+    });
+    expect(Object.keys(bundle.files).sort()).toEqual(["src/main.ts", "src/math.ts"]);
+
+    const result = await executeSandbox(code, {
+      syntax: "typescript",
+      sourcePath: bundle.entryPath,
+      sourceFiles: bundle.files,
+    });
+    expect(result.success).toBe(true);
+    expect(result.returnValue).toBe(42);
   });
 
   it("executes eval files with relative imports", async () => {

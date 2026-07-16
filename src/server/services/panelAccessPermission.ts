@@ -4,8 +4,9 @@ import {
   panelAccessSeverityForTarget,
 } from "@vibestudio/shared/panelAccessPolicy";
 import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 import { hasPanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
-import { requireContextBoundaryPermission, type ContextBoundaryDeps } from "./contextBoundary.js";
+import { prepareContextBoundaryAuthority, type ContextBoundaryDeps } from "./contextBoundary.js";
 
 export interface PanelAccessPermissionTarget extends PanelAccessTarget {
   title?: string;
@@ -33,15 +34,6 @@ export interface PanelAccessPermissionDeps extends ContextBoundaryDeps {
   resolveSubjectCaller(entityId: string): VerifiedCaller | null;
   /** Used by panelTreeService.targetForCreate to resolve a panel caller's own slot. */
   resolveRequesterPanel?(caller: VerifiedCaller): Promise<PanelAccessPermissionTarget | null>;
-  /** Retained for wiring compatibility; the context-boundary gate no longer reads it. */
-  hasApprovalSession?(): boolean;
-}
-
-export interface PanelAccessPermissionResult {
-  allowed: boolean;
-  capability?: string;
-  prompted?: boolean;
-  reason?: string;
 }
 
 /** Ops that change a panel's context (gate against the DESTINATION, not the current, context). */
@@ -115,15 +107,15 @@ function verbFor(op: PanelAccessOperation): string {
  * host-mediated `server`/`shell` call) the host-set anchor entity — never the
  * host itself. Same-context, fresh-context, and open (read) ops are free.
  */
-export async function requirePanelAccessPermission(
+export async function preparePanelAccessAuthority(
   deps: PanelAccessPermissionDeps,
   ctx: ServiceContext,
   op: PanelAccessOperation,
   target: PanelAccessPermissionTarget
-): Promise<PanelAccessPermissionResult> {
-  if (isOpenPanelOperation(op)) return { allowed: true };
+): Promise<readonly PreparedAuthoritySelection[]> {
+  if (isOpenPanelOperation(op)) return [];
   if (await hasPanelHostingAuthority(ctx)) {
-    return { allowed: true };
+    return [];
   }
 
   // Resolve the subject. A direct userland caller carries `.code`; an `agent`
@@ -138,12 +130,12 @@ export async function requirePanelAccessPermission(
   if (!ctx.caller.code && !isAgentCaller) {
     const anchorId = anchorEntityId(target);
     const anchor = anchorId ? deps.resolveSubjectCaller(anchorId) : null;
-    if (!anchor) return { allowed: true };
+    if (!anchor) return [];
     subjectCaller = anchor;
   }
 
   const targetContextId = destinationContextId(deps, op, target);
-  if (targetContextId == null) return { allowed: true }; // fresh / no-change / unknown
+  if (targetContextId == null) return []; // fresh / no-change / unknown
 
   // Agent callers: same-context (per the host-verified credential binding) is
   // free; cross-context is DENY-not-prompt — the capability-approval pipeline
@@ -154,22 +146,22 @@ export async function requirePanelAccessPermission(
   if (isAgentCaller) {
     const agentContextId = ctx.caller.agentBinding?.contextId ?? null;
     if (agentContextId !== null && targetContextId === agentContextId) {
-      return { allowed: true };
+      return [];
     }
-    if (!deps.contextExists(targetContextId)) return { allowed: true };
-    return {
-      allowed: false,
-      reason:
-        `${verbFor(op)} ${targetContextId} denied: agents may only automate panels in ` +
+    if (!deps.contextExists(targetContextId)) return [];
+    const error = new Error(
+      `${verbFor(op)} ${targetContextId} denied: agents may only automate panels in ` +
         `their own context (${agentContextId ?? "unbound"}). Open a preview instance in ` +
         `your context instead (eval: openPanel(source, { contextId }) ), or ask a user ` +
-        `in the conversation to act on the foreign panel.`,
-    };
+        `in the conversation to act on the foreign panel.`
+    ) as Error & { code: string };
+    error.code = "EACCES";
+    throw error;
   }
 
   const originContextId = await deps.resolveCallerContext(subjectCaller.runtime.id);
 
-  const result = await requireContextBoundaryPermission(deps, {
+  return prepareContextBoundaryAuthority(deps, {
     subjectCaller,
     originContextId,
     targetContextId,
@@ -181,10 +173,4 @@ export async function requirePanelAccessPermission(
       ...(target.operationGroupKey ? { groupKey: target.operationGroupKey } : {}),
     },
   });
-
-  return {
-    allowed: result.allowed,
-    ...(result.reason ? { reason: result.reason } : {}),
-    ...(result.decision !== undefined ? { prompted: true } : {}),
-  };
 }

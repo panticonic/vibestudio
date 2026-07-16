@@ -1,6 +1,17 @@
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { HubPairingInvite } from "./hubControl.js";
+import {
+  evalCancelInputSchema,
+  evalEventsInputSchema,
+  evalGetInputSchema,
+  evalRunHandleSchema,
+  evalRunSnapshotSchema,
+  evalStartInputSchema,
+  evalParentAuthorityEnvelopeSchema,
+  evalParentApprovalRouteProofSchema,
+} from "./eval.js";
+import { APPROVAL_DECISIONS } from "@vibestudio/shared/approvalContract";
 
 export const devHostTargetSchema = z.discriminatedUnion("kind", [
   z
@@ -70,6 +81,7 @@ export const devLaunchStatusSchema = z
         hostBuildId: z.string(),
         serverId: z.string(),
         endpoint: z.string(),
+        evalAuthorityRecipientKey: z.string().nullable(),
       })
       .strict()
       .nullable(),
@@ -126,6 +138,9 @@ export interface DevHostProviderLaunchInput {
     createdAt: number;
   };
   executionGrant: { resource: string; authorizedAt: number };
+  /** Parent-process verification key installed into this exact managed child
+   * generation. The private signing key never leaves the current host. */
+  evalAuthorityBridge: { parentHostId: string; publicKeySpki: string };
   /** Host-minted, single-use material. Present only for current-host-client. */
   currentHostPairing?: {
     invite: HubPairingInvite;
@@ -138,11 +153,11 @@ export type DevHostProviderRebuildInput = Omit<DevHostProviderLaunchInput, "idem
 
 export type UnapprovedLaunchInput = Omit<
   DevHostProviderLaunchInput,
-  "executionGrant" | "currentHostPairing"
+  "executionGrant" | "currentHostPairing" | "evalAuthorityBridge"
 >;
 export type UnapprovedRebuildInput = Omit<
   DevHostProviderRebuildInput,
-  "executionGrant" | "currentHostPairing"
+  "executionGrant" | "currentHostPairing" | "evalAuthorityBridge"
 >;
 
 const providerSnapshotSchema = z
@@ -181,9 +196,7 @@ export const devHostProviderPreparationInputSchema = z.discriminatedUnion("opera
       request: unapprovedProviderRequestSchema.extend({ idempotencyKey: z.string().min(1) }),
     })
     .strict(),
-  z
-    .object({ operation: z.literal("rebuild"), request: unapprovedProviderRequestSchema })
-    .strict(),
+  z.object({ operation: z.literal("rebuild"), request: unapprovedProviderRequestSchema }).strict(),
 ]);
 
 export type DevHostProviderPreparationResult =
@@ -208,7 +221,10 @@ export const DEV_HOST_PROVIDER_METHOD_NAMES = [
   "status",
   "rebuild",
   "stop",
-  "eval",
+  "evalStart",
+  "evalGet",
+  "evalEvents",
+  "evalCancel",
   "logs",
   "watch",
 ] as const;
@@ -223,13 +239,8 @@ export const devBuildResultSchema = z
   })
   .strict();
 
-export const devEvalResultSchema = z
-  .object({
-    launchId: z.string(),
-    hostBuildId: z.string(),
-    sourceStateHash: z.string(),
-    result: z.unknown(),
-  })
+const devEvalGenerationSchema = z
+  .object({ launchId: z.string(), hostBuildId: z.string(), sourceStateHash: z.string() })
   .strict();
 
 export const devLogEntrySchema = z
@@ -276,10 +287,116 @@ export const devHostMethods = defineServiceMethods({
     description: "Stop an owned development launch and all of its managed processes.",
     access: { sensitivity: "destructive" },
   },
-  eval: {
-    args: z.tuple([z.object({ launchId: z.string(), code: z.string() }).strict()]),
-    returns: devEvalResultSchema,
-    description: "Evaluate code against the verified active generation of an owned launch.",
+  "eval.start": {
+    args: z.tuple([z.object({ launchId: z.string(), input: evalStartInputSchema }).strict()]),
+    returns: devEvalGenerationSchema.extend({ handle: evalRunHandleSchema }).strict(),
+    description: "Start an eval against the verified active generation of an owned launch.",
+    access: { sensitivity: "write" },
+  },
+  "eval.confirmChildRoute": {
+    args: z.tuple([
+      z
+        .object({
+          launchId: z.string().min(1),
+          hostBuildId: z.string().min(1),
+          processIdentity: z.string().min(1),
+          authority: evalParentAuthorityEnvelopeSchema,
+        })
+        .strict(),
+    ]),
+    returns: z.object({ proof: evalParentApprovalRouteProofSchema }).strict(),
+    description:
+      "Trusted extension preflight proving the current parent challenge route is live before child eval acceptance.",
+    agentFacing: false,
+    authority: { principals: ["code"] },
+    access: { sensitivity: "read" },
+  },
+  "eval.get": {
+    args: z.tuple([z.object({ launchId: z.string(), input: evalGetInputSchema }).strict()]),
+    returns: devEvalGenerationSchema.extend({ snapshot: evalRunSnapshotSchema }).strict(),
+    description: "Read a child eval snapshot after re-authorizing launch ownership and generation.",
+    access: { sensitivity: "read" },
+  },
+  "eval.events": {
+    args: z.tuple([z.object({ launchId: z.string(), input: evalEventsInputSchema }).strict()]),
+    returns: z
+      .object({
+        launchId: z.string(),
+        hostBuildId: z.string(),
+        sourceStateHash: z.string(),
+        page: z.object({ events: z.array(z.unknown()), next: z.number().int() }).strict(),
+      })
+      .strict(),
+    description: "Read bounded child eval events for the active verified generation.",
+    access: { sensitivity: "read" },
+  },
+  "eval.cancel": {
+    args: z.tuple([z.object({ launchId: z.string(), input: evalCancelInputSchema }).strict()]),
+    returns: devEvalGenerationSchema
+      .extend({ status: z.enum(["requested", "cancelled", "terminal"]) })
+      .strict(),
+    description: "Cooperatively cancel a child eval in the active verified generation.",
+    access: { sensitivity: "write" },
+  },
+  "eval.resolveChildChallenge": {
+    args: z.tuple([
+      z
+        .object({
+          launchId: z.string().min(1),
+          hostBuildId: z.string().min(1),
+          processIdentity: z.string().min(1),
+          runId: z.string().min(1),
+          challengeId: z.string().min(1),
+          capability: z.string().min(1),
+          resource: z
+            .object({ type: z.string(), label: z.string(), value: z.string(), key: z.string() })
+            .strict(),
+          allowedDecisions: z.array(z.enum(APPROVAL_DECISIONS)).max(6),
+          authority: evalParentAuthorityEnvelopeSchema,
+        })
+        .strict(),
+    ]),
+    returns: z.object({ decision: z.enum(APPROVAL_DECISIONS) }).strict(),
+    description: "Trusted dev-host transport relay for one canonical child eval challenge.",
+    agentFacing: false,
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
+  },
+  "eval.cancelChildChallenge": {
+    args: z.tuple([
+      z
+        .object({
+          launchId: z.string().min(1),
+          hostBuildId: z.string().min(1),
+          processIdentity: z.string().min(1),
+          runId: z.string().min(1),
+          challengeId: z.string().min(1),
+          authority: evalParentAuthorityEnvelopeSchema,
+        })
+        .strict(),
+    ]),
+    returns: z.object({ cancelled: z.boolean() }).strict(),
+    description: "Withdraw a live bridged child challenge after run or generation loss.",
+    agentFacing: false,
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
+  },
+  "eval.completeChildRun": {
+    args: z.tuple([
+      z
+        .object({
+          launchId: z.string().min(1),
+          hostBuildId: z.string().min(1),
+          processIdentity: z.string().min(1),
+          runId: z.string().min(1),
+          authority: evalParentAuthorityEnvelopeSchema,
+        })
+        .strict(),
+    ]),
+    returns: z.object({ released: z.boolean() }).strict(),
+    description: "Release the parent authority route after a child eval reaches a terminal state.",
+    agentFacing: false,
+    authority: { principals: ["code"] },
     access: { sensitivity: "write" },
   },
   logs: {

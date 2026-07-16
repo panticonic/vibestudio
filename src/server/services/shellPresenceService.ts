@@ -6,6 +6,11 @@ export interface ShellPresenceInternal {
   isAnyShellActive(maxAgeMs?: number): boolean;
   markActive(callerId: string): void;
   getActiveShellCount(maxAgeMs?: number): number;
+  status(maxAgeMs?: number): {
+    reachable: boolean;
+    activeApproverCount: number;
+    maxAgeMs: number;
+  };
 }
 
 export interface ShellPresenceServiceResult {
@@ -46,10 +51,35 @@ export function createShellPresenceService(
       prune(maxAgeMs);
       return activeShells.size;
     },
+
+    status(maxAgeMs = defaultMaxAgeMs) {
+      prune(maxAgeMs);
+      return {
+        reachable: activeShells.size > 0,
+        activeApproverCount: activeShells.size,
+        maxAgeMs,
+      };
+    },
   };
 
   const methods = {
-    heartbeat: { args: z.tuple([]) },
+    heartbeat: {
+      description: "Mark the authenticated shell or CLI approval surface as active",
+      args: z.tuple([]),
+      access: { sensitivity: "write" as const },
+    },
+    status: {
+      description: "Report whether any approval-capable client is currently reachable",
+      args: z.tuple([]),
+      returns: z
+        .object({
+          reachable: z.boolean(),
+          activeApproverCount: z.number().int().nonnegative(),
+          maxAgeMs: z.number().int().positive(),
+        })
+        .strict(),
+      access: { sensitivity: "read" as const },
+    },
   };
 
   const definition: ServiceDefinition = {
@@ -62,6 +92,7 @@ export function createShellPresenceService(
         internal.markActive(ctx.caller.runtime.id);
         return { activeShellCount: internal.getActiveShellCount() };
       },
+      status: () => internal.status(),
     }),
   };
 

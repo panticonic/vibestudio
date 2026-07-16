@@ -1,10 +1,7 @@
 import type { PendingCapabilityApproval } from "@vibestudio/shared/approvals";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import {
-  requestCapabilityPermission,
-  type CapabilityPermissionDeps,
-  type CapabilityPermissionResult,
-} from "./capabilityPermission.js";
+import { type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
+import { CONTEXT_BOUNDARY_CAPABILITY } from "@vibestudio/service-schemas/authority/contextBoundary";
 
 /**
  * The single context-isolation capability. A control-plane action (launch a
@@ -14,14 +11,14 @@ import {
  * are free. This replaces the former `panel.structural` / `panel.automate` /
  * `workerd.lifecycle` / `runtime.crossContextEntity` capabilities.
  */
-export const CONTEXT_BOUNDARY_CAPABILITY = "context.boundary" as const;
+export { CONTEXT_BOUNDARY_CAPABILITY } from "@vibestudio/service-schemas/authority/contextBoundary";
 
 /** Grant key: one approval covers a (subject, target-context) pair. */
 export function contextBoundaryResourceKey(targetContextId: string, subjectId: string): string {
   return `context:${targetContextId}:requester:${subjectId}`;
 }
 
-export interface ContextBoundaryDeps extends CapabilityPermissionDeps {
+export interface ContextBoundaryDeps {
   /** True when the target context already holds state (active entity OR a materialized folder). */
   contextExists(contextId: string): boolean;
   /** Human label for the entity owning the target context, for prompt copy. */
@@ -45,10 +42,9 @@ export interface ContextBoundaryAction {
 
 export interface ContextBoundaryRequest {
   /**
-   * Identity the prompt/grant is attributed to. MUST carry `.code` (a
-   * panel/worker/do/app principal) — `requestCapabilityPermission` denies
-   * (does not prompt) a `server`/`shell` caller, so callers resolve a concrete
-   * subject (the acting entity, or the host-set anchor entity) first.
+   * Identity the canonical authority decision is attributed to. Host-mediated
+   * operations resolve the acting entity (or host-set anchor entity) here so a
+   * server/shell transport can never become the grantee.
    */
   subjectCaller: VerifiedCaller;
   /** The acting/origin context. `null` => no usable origin (treated as foreign). */
@@ -212,22 +208,25 @@ function defaultTargetLabelName(action: ContextBoundaryAction): string {
  * the subject AND already exists. Pure (no side effects); run it BEFORE any
  * mutation so denial is non-destructive.
  */
-export async function requireContextBoundaryPermission(
+export function prepareContextBoundaryAuthority(
   deps: ContextBoundaryDeps,
   request: ContextBoundaryRequest
-): Promise<CapabilityPermissionResult> {
+): readonly PreparedAuthoritySelection[] {
   const { subjectCaller, originContextId, targetContextId, action } = request;
 
   // Own context → free (subsumes self-targeting).
   if (originContextId != null && targetContextId === originContextId) {
-    return { allowed: true };
+    return [];
   }
   // Foreign but fresh (no existing state to intrude on) → free.
   if (!deps.contextExists(targetContextId)) {
-    return { allowed: true };
+    return [];
   }
 
-  const subjectId = subjectCaller.runtime.id;
+  // A relayed/eval call executes through a deputy runtime, but its authenticated
+  // agent binding is the stable entity principal that owns the work. Decisions
+  // and deduplication follow that principal rather than an ephemeral transport.
+  const subjectId = subjectCaller.agentBinding?.entityId ?? subjectCaller.runtime.id;
   const ownerLabel = deps.resolveContextOwnerLabel?.(targetContextId);
   const target = ownerLabel ?? targetContextId;
   const resourceKey = contextBoundaryResourceKey(targetContextId, subjectId);
@@ -242,22 +241,34 @@ export async function requireContextBoundaryPermission(
     });
   }
 
-  return requestCapabilityPermission(deps, {
-    caller: subjectCaller,
-    capability: CONTEXT_BOUNDARY_CAPABILITY,
-    ...(action.severity ? { severity: action.severity } : {}),
-    dedupKey: `context-boundary:${subjectId}:${targetContextId}`,
-    ...(action.signal ? { signal: action.signal } : {}),
-    resource: { type: "context", label: "File context", value: target, key: resourceKey },
-    operation: {
-      kind: action.kind,
-      verb: action.verb,
-      object: { type: "context", label: "File context", value: target },
-      ...(action.groupKey ? { groupKey: action.groupKey } : {}),
+  const deniedReason = `${action.verb} denied: ${target} is another agent or panel's existing state`;
+  return [
+    {
+      capability: CONTEXT_BOUNDARY_CAPABILITY,
+      resourceKey,
+      authorizingCaller: subjectCaller,
+      challenge: {
+        title: promptTitle(action),
+        description: promptDescription(action, ownerLabel, targetContextId),
+        deniedReason,
+        dedupKey: `context-boundary:${subjectId}:${targetContextId}`,
+        ...(action.severity ? { severity: action.severity } : {}),
+        // Destructive context-boundary authority is intrinsically one-shot.
+        // Persisting "trust" for an operation that consumes its exact resource
+        // has no coherent meaning and would silently authorize future retries.
+        ...(action.severity === "severe"
+          ? { allowedDecisions: ["once", "deny", "dismiss"] as const }
+          : {}),
+        ...(action.signal ? { signal: action.signal } : {}),
+        resource: { type: "context", label: "File context", value: target },
+        operation: {
+          kind: action.kind,
+          verb: action.verb,
+          object: { type: "context", label: "File context", value: target },
+          ...(action.groupKey ? { groupKey: action.groupKey } : {}),
+        },
+        details,
+      },
     },
-    title: promptTitle(action),
-    description: promptDescription(action, ownerLabel, targetContextId),
-    details,
-    deniedReason: `${action.verb} denied: ${target} is another agent or panel's existing state`,
-  });
+  ];
 }

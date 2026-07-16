@@ -14,6 +14,7 @@ function startupApproval(id = "startup-1"): PendingUnitBatchApproval {
     repoPath: "meta",
     executionDigest: "sourceDigest:startup",
     requestedAt: 10,
+    decisionDeadlineAt: 60_010,
     title: "Workspace apps need approval",
     description: "Approve startup apps.",
     trigger: "startup",
@@ -35,6 +36,7 @@ describe("shellApprovalService", () => {
     const service = createShellApprovalService({
       approvalQueue: {
         request: vi.fn(),
+        requestCapability: vi.fn(),
         requestClientConfig: vi.fn(),
         requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
         requestCredentialInput: vi.fn(),
@@ -55,7 +57,7 @@ describe("shellApprovalService", () => {
       },
     });
 
-    for (const decision of ["once", "session", "version", "deny", "dismiss"] as const) {
+    for (const decision of ["once", "run", "session", "version", "deny", "dismiss"] as const) {
       expect(() => service.methods["resolve"]?.args.parse(["approval-1", decision])).not.toThrow();
     }
   });
@@ -66,6 +68,7 @@ describe("shellApprovalService", () => {
     const service = createShellApprovalService({
       approvalQueue: {
         request: vi.fn(),
+        requestCapability: vi.fn(),
         requestClientConfig: vi.fn(),
         requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
         requestCredentialInput: vi.fn(),
@@ -88,11 +91,13 @@ describe("shellApprovalService", () => {
             callerKind: "worker" as const,
             repoPath: "workers/alpha",
             executionDigest: "hash-1",
+            delegations: [],
             requested: [
               { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
               { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
             ],
             requestedAt: 10,
+            decisionDeadlineAt: 60_010,
             kind: "userland" as const,
             subject: { id: "team-x:foo" },
             title: "Allow foo?",
@@ -148,6 +153,7 @@ describe("shellApprovalService", () => {
     const service = createShellApprovalService({
       approvalQueue: {
         request: vi.fn(),
+        requestCapability: vi.fn(),
         requestClientConfig: vi.fn(),
         requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
         requestCredentialInput: vi.fn(),
@@ -184,6 +190,7 @@ describe("shellApprovalService", () => {
     const service = createShellApprovalService({
       approvalQueue: {
         request: vi.fn(),
+        requestCapability: vi.fn(),
         requestClientConfig: vi.fn(),
         requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
         requestCredentialInput: vi.fn(),
@@ -208,6 +215,7 @@ describe("shellApprovalService", () => {
             repoPath: "workers/alpha",
             executionDigest: "sourceDigest:worker",
             requestedAt: 10,
+            decisionDeadlineAt: 60_010,
             credentialId: "openai",
             credentialLabel: "ChatGPT Codex model credential",
           } as PendingApproval,
@@ -231,6 +239,7 @@ describe("shellApprovalService", () => {
     const service = createShellApprovalService({
       approvalQueue: {
         request: vi.fn(),
+        requestCapability: vi.fn(),
         requestClientConfig: vi.fn(),
         requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
         requestCredentialInput: vi.fn(),

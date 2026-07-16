@@ -25,19 +25,37 @@ function roundTrip(scope: Map<string, unknown>) {
   for (const [key, value] of deserializeScope(data)) {
     out.set(
       key,
-      isScopeBlobRef(value) ? deserializeScopeValue(blobs.get(value[SCOPE_BLOB_REF] as string)!) : value
+      isScopeBlobRef(value)
+        ? deserializeScopeValue(blobs.get(value[SCOPE_BLOB_REF] as string)!)
+        : value
     );
   }
   return { ...res, data, blobs, out };
 }
 
+const executableCodec = {
+  serialize(value: (...args: unknown[]) => unknown) {
+    return {
+      source: Function.prototype.toString.call(value),
+      definitionSourceDigest: "source-1",
+      definitionRunDigest: "run-1",
+    };
+  },
+  deserialize(value: { source: string }) {
+    // Test-only codec; production compilation is owned by EvalDO's UnsafeEval realm.
+    return Function(`return (${value.source})`)() as (...args: unknown[]) => unknown;
+  },
+};
+
 describe("scope serialization — spill (not drop) of large values", () => {
   it("spills an oversized top-level value to a blob and hydrates it losslessly", () => {
     const big = "x".repeat(512 * 1024);
-    const rt = roundTrip(new Map<string, unknown>([
-      ["small", { ok: true }],
-      ["results", big],
-    ]));
+    const rt = roundTrip(
+      new Map<string, unknown>([
+        ["small", { ok: true }],
+        ["results", big],
+      ])
+    );
 
     expect(rt.data.length).toBeLessThan(64 * 1024); // the inline row stays tiny (small + a ref)
     expect(rt.spills.map((s) => s.key)).toContain("results");
@@ -54,13 +72,15 @@ describe("scope serialization — spill (not drop) of large values", () => {
   });
 
   it("spills the largest keys when the inline total exceeds budget — none dropped", () => {
-    const rt = roundTrip(new Map<string, unknown>([
-      ["a", "a".repeat(100 * 1024)],
-      ["b", "b".repeat(100 * 1024)],
-      ["c", "c".repeat(100 * 1024)],
-      ["d", "d".repeat(100 * 1024)],
-      ["small", "kept"],
-    ]));
+    const rt = roundTrip(
+      new Map<string, unknown>([
+        ["a", "a".repeat(100 * 1024)],
+        ["b", "b".repeat(100 * 1024)],
+        ["c", "c".repeat(100 * 1024)],
+        ["d", "d".repeat(100 * 1024)],
+        ["small", "kept"],
+      ])
+    );
 
     expect(rt.data.length).toBeLessThanOrEqual(256 * 1024 + 4096);
     expect(rt.spills.length).toBeGreaterThan(0);
@@ -96,5 +116,25 @@ describe("scope serialization — spill (not drop) of large values", () => {
     expect(rt.out.has("fn")).toBe(false);
     expect(rt.droppedPaths.length).toBeGreaterThan(0);
     expect(rt.droppedPaths.length).toBeLessThanOrEqual(201); // MAX_DROPPED_ENTRIES + truncation note
+  });
+
+  it("round-trips source-reconstructible functions when the host supplies a codec", () => {
+    const source = new Map<string, unknown>([["nested", { double: (value: number) => value * 2 }]]);
+    const encoded = serializeScope(source, executableCodec);
+    const restored = deserializeScope(JSON.stringify(encoded.serialized), executableCodec);
+    const double = (restored.get("nested") as { double: (value: number) => number }).double;
+
+    expect(double(21)).toBe(42);
+    expect(encoded.droppedPaths).toEqual([]);
+    expect(encoded.serializedKeys).toEqual(["nested"]);
+  });
+
+  it("bounds persistent executable cardinality", () => {
+    const functions = Object.fromEntries(
+      Array.from({ length: 257 }, (_, index) => [`f${index}`, () => index])
+    );
+    expect(() => serializeScope(new Map([["functions", functions]]), executableCodec)).toThrow(
+      expect.objectContaining({ code: "EVAL_RESOURCE_LIMIT" })
+    );
   });
 });

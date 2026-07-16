@@ -48,6 +48,7 @@ import {
 import {
   type ApprovalAttribution,
   formatAccount,
+  formatApprovalDecisionDeadline,
   formatCredentialInputAudienceSummary,
   formatInjection,
   getApprovalAttribution,
@@ -117,7 +118,7 @@ interface CallerInfo {
   shortId: string;
 }
 
-function basename(path: string): string {
+function basename(path: string | undefined): string {
   if (!path) return "";
   const trimmed = path.replace(/\/+$/, "");
   const idx = trimmed.lastIndexOf("/");
@@ -173,6 +174,24 @@ function resolveCallerInfo(approval: PendingApproval): CallerInfo {
     return {
       label: serverTitle ?? "Workspace",
       kindLabel: "Workspace",
+      kind: "system",
+      shortId,
+    };
+  }
+  if (
+    approval.callerKind === "shell" ||
+    approval.callerKind === "server" ||
+    approval.callerKind === "agent"
+  ) {
+    const kindLabel =
+      approval.callerKind === "shell"
+        ? "Shell"
+        : approval.callerKind === "agent"
+          ? "Agent"
+          : "Server";
+    return {
+      label: serverTitle ?? prettifyId(approval.callerId),
+      kindLabel,
       kind: "system",
       shortId,
     };
@@ -458,6 +477,9 @@ export function ApprovalSheet({
                   canNavigate={!!onNavigateToPanel && !!callerInfo.panelId}
                   onPress={showRequestingPanel}
                 />
+                <Text style={[styles.callerRowLabel, { color: colors.textSecondary }]}>
+                  {formatApprovalDecisionDeadline(current.decisionDeadlineAt)}
+                </Text>
                 {copy.summary ? <ApprovalMarkdown source={copy.summary} tone="muted" /> : null}
                 {copy.warning ? <WarningBand message={copy.warning} /> : null}
                 {current.kind === "device-code" ? <DeviceCodePanel approval={current} /> : null}
@@ -1048,8 +1070,32 @@ function ApprovalDetails({
               code
             />
           ) : null}
-          <DetailRow icon={Globe} label="Requester repo" value={approval.repoPath} code />
-          <DetailRow icon={Lock} label="Requester version" value={approval.executionDigest} code />
+          {approval.repoPath && approval.executionDigest ? (
+            <>
+              <DetailRow icon={Globe} label="Requester repo" value={approval.repoPath} code />
+              <DetailRow
+                icon={Lock}
+                label="Requester version"
+                value={approval.executionDigest}
+                code
+              />
+            </>
+          ) : approval.authoritySubject ? (
+            <DetailRow
+              icon={Lock}
+              label="Authority subject"
+              value={approval.authoritySubject}
+              code
+            />
+          ) : null}
+          {approval.authoritySessionId && !approval.executionDigest ? (
+            <DetailRow
+              icon={Lock}
+              label="Authority session"
+              value={approval.authoritySessionId}
+              code
+            />
+          ) : null}
           {approval.kind === "credential" ? (
             <CredentialDetails approval={approval} />
           ) : approval.kind === "client-config" ? (
@@ -1525,19 +1571,36 @@ function StandardActions({
 }) {
   const copy = getStandardActionCopy(approval);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
+  const allowed =
+    approval.kind === "capability" && approval.allowedDecisions
+      ? new Set(approval.allowedDecisions)
+      : null;
   return (
     <View style={styles.actionGroups}>
       <View style={styles.actionRow}>
-        <DecisionButton
-          label={copy.once.label}
-          description={copy.once.description}
-          variant="surface"
-          disabled={busy}
-          loading={pendingAction === "once"}
-          onPress={() => onChoose("once")}
-          testID="approval-action-once"
-        />
-        {copy.version && (
+        {(!allowed || allowed.has("once")) && (
+          <DecisionButton
+            label={copy.once.label}
+            description={copy.once.description}
+            variant="surface"
+            disabled={busy}
+            loading={pendingAction === "once"}
+            onPress={() => onChoose("once")}
+            testID="approval-action-once"
+          />
+        )}
+        {allowed?.has("run") && (
+          <DecisionButton
+            label="Allow for run"
+            description="Allow matching calls until this eval run ends."
+            variant={isSevereCapability ? "dangerPrimary" : "primary"}
+            disabled={busy}
+            loading={pendingAction === "run"}
+            onPress={() => onChoose("run")}
+            testID="approval-action-run"
+          />
+        )}
+        {copy.version && (!allowed || allowed.has("version")) && (
           <DecisionButton
             label={copy.version.label}
             description={copy.version.description}
@@ -1549,21 +1612,23 @@ function StandardActions({
             testID="approval-action-version"
           />
         )}
-        <DecisionButton
-          label="Deny"
-          description={copy.denyDescription}
-          variant="danger"
-          disabled={busy}
-          loading={pendingAction === "deny"}
-          icon={XCircle}
-          onPress={() => onChoose("deny")}
-          testID="approval-action-deny"
-        />
+        {(!allowed || allowed.has("deny")) && (
+          <DecisionButton
+            label="Deny"
+            description={copy.denyDescription}
+            variant="danger"
+            disabled={busy}
+            loading={pendingAction === "deny"}
+            icon={XCircle}
+            onPress={() => onChoose("deny")}
+            testID="approval-action-deny"
+          />
+        )}
       </View>
       <View style={styles.actionRow}>
         {SECONDARY_GRANT_DECISIONS.map((decision) => {
           const decisionCopy = copy[decision];
-          if (!decisionCopy) return null;
+          if (!decisionCopy || (allowed && !allowed.has(decision))) return null;
           return (
             <DecisionButton
               key={decision}

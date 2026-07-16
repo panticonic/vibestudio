@@ -15,6 +15,7 @@ import type {
 import { APPROVAL_DECISIONS } from "@vibestudio/shared/approvalContract";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import type { Principal } from "@vibestudio/rpc";
 
 export const shellApprovalValuesSchema = z
   .record(z.string().min(1).max(128), z.string().max(4096))
@@ -149,10 +150,25 @@ const diffReviewSchema = z
 const pendingApprovalBaseShape = {
   approvalId: z.string(),
   callerId: z.string(),
-  callerKind: z.enum(["panel", "app", "worker", "do", "extension", "system"]),
-  repoPath: z.string(),
-  executionDigest: z.string(),
+  callerKind: z.enum([
+    "panel",
+    "app",
+    "worker",
+    "do",
+    "extension",
+    "shell",
+    "server",
+    "agent",
+    "system",
+  ]),
+  authoritySubject: (z
+    .string()
+    .regex(/^(host|user|device|code|entity):.+$/u) as z.ZodType<Principal>).optional(),
+  authoritySessionId: z.string().optional(),
+  repoPath: z.string().optional(),
+  executionDigest: z.string().optional(),
   requestedAt: z.number(),
+  decisionDeadlineAt: z.number(),
   callerTitle: z.string().optional(),
   requester: approvalRequesterSchema.optional(),
   operation: approvalOperationSchema.optional(),
@@ -333,6 +349,7 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
         ])
         .optional(),
       details: z.array(approvalDetailSchema).optional(),
+      allowedDecisions: z.array(z.enum(APPROVAL_DECISIONS)).optional(),
     })
     .strict(),
   pendingUnitBatchApprovalSchema,

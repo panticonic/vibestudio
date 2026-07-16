@@ -1,89 +1,95 @@
-/**
- * Eval cancellation + forced recovery.
- *
- * Covers the run-chain hardening:
- *  - `cancel(runId)`: an in-flight run wedged on an outbound rpc.call unwinds once cancelled (its
- *    abort signal — threaded into `runLocked` — fires and the run rejects), and the CAS to
- *    `cancelled` makes a late finish lose so it can never resurrect itself `done`.
- *  - `forceReset()`: a WEDGED run holding `runChain` does NOT block a subsequently-enqueued run
- *    (the chain is REPLACED, not `.then()`'d off), and user tables + scope are cleared immediately.
- *
- * The EvalDO's heavy engine (a workerd build of `@workspace/eval`) is NOT instantiated here — we
- * override `runLocked` to simulate a run that blocks until its threaded abort signal fires, which is
- * EXACTLY what a real outbound `rpc.call` does on abort (rpc client.ts rejects the pending request
- * when `options.signal` aborts). So this faithfully exercises `runEval`'s controller wiring, the CAS
- * persist, and the `cancel`/`forceReset`/run-chain machinery — the code under change.
- *
- * Recovery tests use abort/forced-reset directly; one expired-deadline regression
- * verifies cleanup failures still reach a durable terminal result.
- */
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { EvalDO } from "./evalDO.js";
 
-type RunResult = { success: boolean; console: string; returnValue?: unknown; error?: string };
-type RunLockedFn = (args: unknown, signal?: AbortSignal, runId?: string) => Promise<RunResult>;
+type RunResult = {
+  success: boolean;
+  console: string;
+  returnValue?: unknown;
+  error?: string;
+  errorCode?: string;
+};
+type RunLockedFn = (...args: unknown[]) => Promise<RunResult>;
+type Sql = { exec: (query: string, ...bindings: unknown[]) => unknown };
 
-/** Access a private method/field on the instance without TS visibility friction (test-only). */
 function priv<T = unknown>(instance: object, key: string): T {
-  return (instance as unknown as Record<string, unknown>)[key] as T;
-}
-function setPriv(instance: object, key: string, value: unknown): void {
-  (instance as unknown as Record<string, unknown>)[key] = value;
+  return (instance as Record<string, unknown>)[key] as T;
 }
 
-/**
- * A run that BLOCKS until its threaded abort signal fires, then rejects — mirroring a real outbound
- * rpc.call wedged on a never-returning peer (the rpc client rejects the pending request on abort).
- * Resolves the returned `started` promise once the run is actually executing so tests can sequence.
- */
+function setPriv(instance: object, key: string, value: unknown): void {
+  (instance as Record<string, unknown>)[key] = value;
+}
+
+const policy = {
+  mode: "adaptive" as const,
+  effects: "mutable" as const,
+  approvals: "prompt" as const,
+  requests: [],
+};
+
+function seedPreparedRun(
+  instance: EvalDO,
+  sql: Sql,
+  runId: string,
+  options: { status?: string; deadlineAt?: number | null } = {}
+): void {
+  sql.exec(
+    `INSERT INTO eval_runs_v3
+      (run_id, args, status, accepted_at, started_at, deadline_at, start_intent_digest,
+       source_digest, source_bundle_digest, manifest_digest, run_digest)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    runId,
+    JSON.stringify({ code: "return 1", contextId: "ctx" }),
+    options.status ?? "preparing",
+    Date.now(),
+    Date.now(),
+    options.deadlineAt ?? null,
+    "a".repeat(64),
+    "b".repeat(64),
+    "c".repeat(64),
+    "d".repeat(64),
+    "e".repeat(64)
+  );
+  priv<Map<string, unknown>>(instance, "invocationLeases").set(runId, {
+    credential: "credential",
+    policy,
+  });
+  setPriv(instance, "evalClient", {
+    beginCleanup: vi.fn(async () => ({ expiresAt: Date.now() + 30_000 })),
+    renew: vi.fn(async () => ({ expiresAt: Date.now() + 30_000 })),
+  });
+}
+
 function blockUntilAborted(): {
   runLocked: RunLockedFn;
-  started: Promise<{ signal: AbortSignal | undefined; runId: string | undefined }>;
+  started: Promise<AbortSignal>;
 } {
-  let resolveStarted!: (v: { signal: AbortSignal | undefined; runId: string | undefined }) => void;
-  const started = new Promise<{ signal: AbortSignal | undefined; runId: string | undefined }>(
-    (r) => (resolveStarted = r)
-  );
-  const runLocked: RunLockedFn = (_args, signal, runId) =>
-    new Promise<RunResult>((_resolve, reject) => {
-      resolveStarted({ signal, runId });
-      if (signal?.aborted) {
-        reject(new Error("aborted"));
-        return;
-      }
-      signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  let resolveStarted!: (signal: AbortSignal) => void;
+  const started = new Promise<AbortSignal>((resolve) => {
+    resolveStarted = resolve;
+  });
+  const runLocked: RunLockedFn = async (_args, signal) =>
+    await new Promise<RunResult>((_resolve, reject) => {
+      const abort = signal as AbortSignal;
+      resolveStarted(abort);
+      if (abort.aborted) return reject(new Error("aborted"));
+      abort.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
     });
   return { runLocked, started };
 }
 
-/** Insert a pending run row directly (bypasses the schema-validated service so the DO is exercised). */
-function seedPendingRun(
-  sql: { exec: (q: string, ...b: unknown[]) => unknown },
-  runId: string
-): void {
-  sql.exec(
-    `INSERT INTO runs (run_id, args, agent_ref, channel_id, status, started_at, deadline_at)
-     VALUES (?, ?, NULL, NULL, 'pending', ?, NULL)`,
-    runId,
-    JSON.stringify({ code: "return 1;", contextId: "ctx" }),
-    Date.now()
-  );
-}
-
-describe("EvalDO cancellation + forced recovery", () => {
-  it("pages large scope text losslessly without creating eval runs and persists cleanup", async () => {
+describe("EvalDO lifecycle, cancellation, and recovery", () => {
+  it("pages and deletes persistent scope text without creating a run", async () => {
     const { instance } = await createTestDO(EvalDO);
     const value = `before-${"😀\u0000".repeat(60_000)}-after`;
     const current: Record<string, unknown> = { temporary: value };
-    const enterEval = vi.fn();
-    const exitEval = vi.fn(() => Promise.resolve());
-    setPriv(instance, "ensureEngine", () => Promise.resolve({}));
+    const exitEval = vi.fn(async () => undefined);
+    setPriv(instance, "ensureEngine", async () => ({}));
     setPriv(instance, "scopeManager", {
       current,
       api: {},
-      hydrate: () => Promise.resolve(),
-      enterEval,
+      hydrate: async () => undefined,
+      enterEval: vi.fn(),
       exitEval,
     });
 
@@ -91,33 +97,97 @@ describe("EvalDO cancellation + forced recovery", () => {
     const second = await instance.readScopeTextPage("temporary", 131_072, 131_072);
     const decode = (chunk: string) => Buffer.from(chunk, "base64").toString("utf16le");
     expect(decode(first.chunk) + decode(second.chunk)).toBe(value);
-    expect(first.length).toBe(value.length);
-
     await expect(instance.deleteScopeValue("temporary")).resolves.toEqual({
       ok: true,
       existed: true,
     });
-    expect(Object.prototype.hasOwnProperty.call(current, "temporary")).toBe(false);
-    expect(enterEval).toHaveBeenCalledOnce();
+    expect(current).not.toHaveProperty("temporary");
     expect(exitEval).toHaveBeenCalledOnce();
+  });
+
+  it("accept is idempotent for identical intent and conflicts on changed input", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const input = {
+      runId: "run-idempotent",
+      startIntentDigest: "a".repeat(64),
+      deadlineAt: null,
+    };
+    const first = instance.accept(input);
+    const replay = instance.accept(input);
+    expect(first).toMatchObject({ status: "accepted", needsStart: true });
+    expect(replay).toEqual({ ...first, needsStart: false });
+    expect(() => instance.accept({ ...input, startIntentDigest: "b".repeat(64) })).toThrow(
+      /different input/
+    );
+  });
+
+  it("persists host-classified terminal failures without rewriting their error code", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    instance.accept({
+      runId: "run-preparation-failed",
+      startIntentDigest: "a".repeat(64),
+      deadlineAt: null,
+    });
+
+    expect(
+      instance.terminate({
+        runId: "run-preparation-failed",
+        status: "failed",
+        error: "source bundle is too large",
+        errorCode: "EVAL_RESOURCE_LIMIT",
+      })
+    ).toEqual({ status: "failed" });
+    expect(instance.get("run-preparation-failed")).toMatchObject({
+      status: "failed",
+      result: {
+        success: false,
+        error: "source bundle is too large",
+        errorCode: "EVAL_RESOURCE_LIMIT",
+      },
+    });
+  });
+
+  it("preserves every eval kernel table when resetting user scope", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec(`CREATE TABLE user_scratch (value TEXT)`);
+
+    await expect(instance.reset()).resolves.toEqual({ status: "reset" });
+
+    const tables = new Set(
+      (
+        sql.exec(`SELECT name FROM sqlite_master WHERE type = 'table'`).toArray() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name)
+    );
+    expect([...tables]).toEqual(
+      expect.arrayContaining([
+        "state",
+        "eval_runs_v3",
+        "eval_run_progress_v3",
+        "eval_run_events_v3",
+        "eval_retained_modules_v1",
+        "eval_run_owned_contexts_v1",
+      ])
+    );
+    expect(tables.has("user_scratch")).toBe(false);
+    expect(tables.has("repl_scopes")).toBe(false);
   });
 
   it("persists bounded run progress without queueing another eval", async () => {
     const { instance } = await createTestDO(EvalDO);
-    await instance.startRun({
+    instance.accept({
       runId: "run-progress",
-      code: "return 1",
-      syntax: "typescript",
+      startIntentDigest: "a".repeat(64),
+      deadlineAt: null,
     });
-
     priv<(runId: string, progress: unknown) => void>(instance, "persistRunProgress").call(
       instance,
       "run-progress",
       { active: ["fs-write-read"], completed: 2 }
     );
-
-    expect(instance.getRun("run-progress")).toMatchObject({
-      status: "pending",
+    expect(instance.get("run-progress")).toMatchObject({
+      status: "accepted",
       progress: { active: ["fs-write-read"], completed: 2 },
     });
     expect(() =>
@@ -128,493 +198,383 @@ describe("EvalDO cancellation + forced recovery", () => {
       )
     ).toThrow(/256 KiB/);
   });
-  it("startRun counts as activity and re-arms idle eviction", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    const setAlarmAt = vi
-      .spyOn(
-        instance as unknown as { setAlarmAt: (timeMs: number, opts?: unknown) => void },
-        "setAlarmAt"
-      )
-      .mockImplementation(() => undefined);
 
-    const ret = await priv<
-      (args: { runId: string; code: string; contextId: string }) => Promise<{
-        runId: string;
-        status: string;
-      }>
-    >(instance, "startRun").call(instance, {
-      runId: "queued",
-      code: "return 1;",
-      contextId: "ctx",
-    });
-
-    expect(ret).toEqual({ runId: "queued", status: "pending" });
-    expect(setAlarmAt).toHaveBeenCalledTimes(1);
-    expect(setAlarmAt).toHaveBeenCalledWith(expect.any(Number), { bestEffort: true });
+  it("makes a suspended authority challenge visible and resumes the same live run", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPreparedRun(instance, sql, "run-challenge", { status: "running" });
+    expect(
+      instance.authorityChallenge({
+        runId: "run-challenge",
+        phase: "run",
+        waiting: true,
+        capability: "service:externalOpen.open",
+        resourceKey: "https://example.com",
+      })
+    ).toEqual({ status: "awaiting-challenge" });
+    expect(instance.get("run-challenge")).toMatchObject({ status: "awaiting-challenge" });
+    expect(
+      instance.authorityChallenge({
+        runId: "run-challenge",
+        phase: "run",
+        waiting: false,
+        capability: "service:externalOpen.open",
+        resourceKey: "https://example.com",
+      })
+    ).toEqual({ status: "running" });
+    expect(instance.get("run-challenge")).toMatchObject({ status: "running" });
   });
 
-  it.each(["pending", "running"] as const)(
-    "alarm re-arms instead of aborting when a durable %s run exists",
+  it.each(["accepted", "preparing", "running"])(
+    "keeps a durable %s run resident",
     async (status) => {
       const { instance, sql } = await createTestDO(EvalDO);
-      seedPendingRun(sql, "active-run");
-      if (status === "running") {
-        sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'active-run'`);
-      }
-      const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      seedPreparedRun(instance, sql, `active-${status}`, { status });
+      const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
       const setAlarmAt = vi
-        .spyOn(
-          instance as unknown as { setAlarmAt: (timeMs: number, opts?: unknown) => void },
-          "setAlarmAt"
-        )
+        .spyOn(instance as never, "setAlarmAt")
         .mockImplementation(() => undefined);
-
       await instance.alarm();
-
-      expect(setAlarmAt).toHaveBeenCalledTimes(1);
       expect(setAlarmAt).toHaveBeenCalledWith(expect.any(Number), { bestEffort: true });
-      expect(consoleInfo).toHaveBeenCalledWith(
+      expect(info).toHaveBeenCalledWith(
         "[EvalDO] idle eviction alarm",
-        expect.objectContaining({
-          objectKey: "test-key",
-          inFlightRuns: 0,
-          durableRuns: 1,
-          oldestDurableRunStartedAt: expect.any(Number),
-        })
+        expect.objectContaining({ durableRuns: 1 })
       );
-      consoleInfo.mockRestore();
     }
   );
 
-  it("alarm re-arms instead of aborting when an in-memory claimed run exists", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    priv<Set<string>>(instance, "activeRunIds").add("claimed-run");
-    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const setAlarmAt = vi
-      .spyOn(
-        instance as unknown as { setAlarmAt: (timeMs: number, opts?: unknown) => void },
-        "setAlarmAt"
-      )
-      .mockImplementation(() => undefined);
-
-    await instance.alarm();
-
-    expect(setAlarmAt).toHaveBeenCalledTimes(1);
-    expect(setAlarmAt).toHaveBeenCalledWith(expect.any(Number), { bestEffort: true });
-    expect(consoleInfo).toHaveBeenCalledWith(
-      "[EvalDO] idle eviction alarm",
-      expect.objectContaining({
-        objectKey: "test-key",
-        inFlightRuns: 0,
-        activeRunIds: 1,
-        inMemoryRunIds: ["claimed-run"],
-        durableRuns: 0,
-      })
-    );
-    consoleInfo.mockRestore();
-  });
-
-  it("alarm does not log the detailed state dump for confirmed-idle eviction", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const unsubscribeAll = vi.fn(() => Promise.resolve());
-    setPriv(instance, "mainEvents", () => ({ unsubscribeAll }));
-    const abort = vi.fn();
-    priv<{ abort?: (reason?: string) => void }>(instance, "ctx").abort = abort;
-
-    await instance.alarm();
-
-    expect(consoleInfo).not.toHaveBeenCalled();
-    expect(unsubscribeAll).toHaveBeenCalledTimes(1);
-    expect(abort).toHaveBeenCalledWith("EvalDO: idle eviction (reclaim memory; SQLite preserved)");
-    consoleInfo.mockRestore();
-  });
-
-  it("executeRun persists a bounded terminal result for huge console and return payloads", async () => {
+  it("executes once and stores a bounded terminal result", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
+    const cleanup = vi.fn(async () => undefined);
     const hugeConsole = `console-start\n${"c".repeat(220_000)}\nconsole-end`;
     const hugeReturn = { value: `return-start\n${"r".repeat(220_000)}\nreturn-end` };
-    setPriv(instance, "runLocked", () =>
-      Promise.resolve({ success: true, console: hugeConsole, returnValue: hugeReturn })
-    );
-    seedPendingRun(sql, "huge-run");
-
-    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
-      instance,
-      "huge-run"
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.console.length).toBeLessThan(100_000);
-    expect(result.console).toContain("scope.$lastConsole");
-    expect(result.returnValue).toMatchObject({
-      truncated: true,
-      scopeKey: "$lastReturn",
-    });
-
-    const persisted = priv<(id: string) => { status: string; result?: RunResult }>(
-      instance,
-      "getRun"
-    ).call(instance, "huge-run");
-    expect(persisted.status).toBe("done");
-    expect(persisted.result).toEqual(result);
-    expect(JSON.stringify(persisted.result).length).toBeLessThan(250_000);
-  });
-
-  it("retains a small structured return for REPL-style follow-up inspection", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    const scope: Record<string, unknown> = {};
-
-    priv<(scope: Record<string, unknown>, console: string, value: unknown) => void>(
-      instance,
-      "spillLargeOutput"
-    ).call(instance, scope, "", { methods: { inspect: true } });
-
-    expect(scope["$lastReturn"]).toEqual({ methods: { inspect: true } });
-  });
-
-  it("cancel(runId): an in-flight run wedged on an outbound call unwinds once cancelled", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
-    const { runLocked, started } = blockUntilAborted();
+    const runLocked = vi.fn<RunLockedFn>(async () => ({
+      success: true,
+      console: hugeConsole,
+      returnValue: hugeReturn,
+    }));
     setPriv(instance, "runLocked", runLocked);
-
-    seedPendingRun(sql, "run-A");
-    // Kick the held execution; do NOT await — it wedges until cancelled.
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
-      instance,
-      "run-A"
-    );
-    runP.catch(() => undefined); // avoid an unhandled-rejection warning before the assertion awaits
-
-    // The run is now executing (blocked on the simulated outbound call).
-    const { signal } = await started;
-    expect(signal).toBeInstanceOf(AbortSignal);
-    expect(signal!.aborted).toBe(false);
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'run-A'`).toArray()[0]).toMatchObject({
-      status: "running",
-    });
-    const cleanup = vi.fn(async () => {
-      expect(signal!.aborted).toBe(false);
-    });
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-      "run-A",
+    seedPreparedRun(instance, sql, "huge-run");
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCleanupHandlers").set(
+      "huge-run",
       new Set([cleanup])
     );
 
-    // Cancel: CAS row → cancelled, then abort the controller threaded into the run.
-    const cancelRet = await priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
-      instance,
-      "run-A"
-    );
-    expect(cancelRet).toEqual({ ok: true });
+    const result = await instance.execute("huge-run");
+    expect(runLocked.mock.calls[0]?.[6]).toBe("e".repeat(64));
+    expect(result.success).toBe(true);
+    expect(result.console.length).toBeLessThan(100_000);
+    expect(result.console).toContain("scope.$lastConsole");
+    expect(result.returnValue).toMatchObject({ truncated: true, scopeKey: "$lastReturn" });
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(signal!.aborted).toBe(true);
+    expect(instance.get("huge-run")).toMatchObject({ status: "succeeded", result });
+    const annotated = instance.attachAuthoritySummary("huge-run", {
+      manifestDigest: "d".repeat(64),
+      activated: [],
+      approvalsRequested: 0,
+      approvalsReused: 0,
+      approvalsDenied: 0,
+      constraintFailures: 0,
+    });
+    expect(annotated).toMatchObject({
+      provenance: {
+        startIntentDigest: "a".repeat(64),
+        sourceDigest: "b".repeat(64),
+        runDigest: "e".repeat(64),
+        sourceBundleDigest: "c".repeat(64),
+        manifestDigest: "d".repeat(64),
+      },
+      authority: { approvalsRequested: 0 },
+    });
+  });
 
-    // The wedged run unwinds (rejects), and `runEval` maps the cancelled status to a failure result —
-    // it can NEVER resurrect itself `done` (the CAS persist requires status='running').
-    const result = await runP;
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/cancelled/i);
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'run-A'`).toArray()[0]).toMatchObject({
+  it("cancels a live run at its awaited outbound boundary without resurrecting it", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const kernelCall = vi.fn(async () => undefined);
+    setPriv(instance, "connectionless", { client: { call: kernelCall } });
+    const blocked = blockUntilAborted();
+    setPriv(instance, "runLocked", blocked.runLocked);
+    seedPreparedRun(instance, sql, "run-cancel");
+    // runLocked normally installs this live invocation before user code starts;
+    // the test replaces runLocked with an abort boundary, so install its state explicitly.
+    setPriv(instance, "currentEvalInvocation", {
+      runId: "run-cancel",
+      credential: "credential",
+    });
+    priv<(runId: string, method: string, args: unknown[], result: unknown) => void>(
+      instance,
+      "observeAuthoredLifecycleCall"
+    ).call(
+      instance,
+      "run-cancel",
+      "runtime.createEntity",
+      [{ kind: "do", source: "workers/agent", className: "AgentDO" }],
+      { id: "do:workers/agent:AgentDO:child", contextId: "ctx-child" }
+    );
+
+    const execution = instance.execute("run-cancel");
+    const signal = await blocked.started;
+    expect(signal.aborted).toBe(false);
+    const cleanup = vi.fn(async () => {
+      expect(signal.aborted).toBe(true);
+      const cleanupContext = priv<{
+        getStore(): { phase: string; signal?: AbortSignal } | undefined;
+      }>(instance, "authoredCallContext").getStore();
+      expect(cleanupContext?.phase).toBe("cleanup");
+      expect(cleanupContext?.signal).not.toBe(signal);
+      expect(cleanupContext?.signal?.aborted).toBe(false);
+      const cleanupOptions = priv<() => { signal: AbortSignal }>(
+        instance,
+        "currentRunCallOptions"
+      ).call(instance);
+      expect(cleanupOptions.signal).toBe(cleanupContext?.signal);
+    });
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCleanupHandlers").set(
+      "run-cancel",
+      new Set([cleanup])
+    );
+    await expect(instance.cancel("run-cancel")).resolves.toEqual({ status: "requested" });
+    expect(signal.aborted).toBe(true);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(kernelCall).toHaveBeenCalledWith("main", "runtime.cleanupEvalOwnedContext", [
+      {
+        contextId: "ctx-child",
+        ownerEntityId: "do:workers/agent:AgentDO:child",
+        recursive: true,
+      },
+    ]);
+    await expect(execution).resolves.toMatchObject({
+      success: false,
+      error: "eval: run cancelled",
+    });
+    expect(instance.get("run-cancel")).toMatchObject({ status: "cancelled" });
+  });
+
+  it("persists and annotates cancellation before execution begins", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPreparedRun(instance, sql, "run-cancel-before-execute");
+
+    await expect(instance.cancel("run-cancel-before-execute")).resolves.toEqual({
       status: "cancelled",
     });
+    const terminal = instance.get("run-cancel-before-execute");
+    expect(terminal).toMatchObject({
+      status: "cancelled",
+      result: {
+        success: false,
+        error: "eval: run cancelled",
+        errorCode: "EVAL_CANCELLED",
+      },
+    });
+    await expect(instance.execute("run-cancel-before-execute")).resolves.toMatchObject({
+      success: false,
+      error: "eval: run cancelled",
+      errorCode: "EVAL_CANCELLED",
+    });
+    expect(
+      instance.attachAuthoritySummary("run-cancel-before-execute", { approvalsRequested: 0 })
+    ).toMatchObject({
+      success: false,
+      errorCode: "EVAL_CANCELLED",
+      authority: { approvalsRequested: 0 },
+    });
+    expect(instance.events("run-cancel-before-execute").events).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "terminal", status: "cancelled" })])
+    );
   });
 
-  it("cancel(runId): a no-op for an already-terminal run, and leaves other runs untouched", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
-    // A done run + a pending run that is NOT the cancel target.
-    sql.exec(
-      `INSERT INTO runs (run_id, args, status, started_at) VALUES ('done-1', '{}', 'done', ?)`,
-      Date.now()
-    );
-    seedPendingRun(sql, "other");
-
-    const ret = await priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
+  it("automatically owns fresh runtime contexts and permits explicit detachment", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    instance.accept({
+      runId: "run-owned",
+      startIntentDigest: "a".repeat(64),
+      deadlineAt: null,
+    });
+    const kernelCall = vi.fn(async () => undefined);
+    setPriv(instance, "connectionless", { client: { call: kernelCall } });
+    const observe = priv<(runId: string, method: string, args: unknown[], result: unknown) => void>(
       instance,
-      "done-1"
+      "observeAuthoredLifecycleCall"
     );
-    expect(ret).toEqual({ ok: true });
-    // The done run is NOT flipped to cancelled (CAS only touches pending/running), and `other` is untouched.
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'done-1'`).toArray()[0]).toMatchObject({
-      status: "done",
-    });
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'other'`).toArray()[0]).toMatchObject({
-      status: "pending",
-    });
+
+    observe.call(
+      instance,
+      "run-owned",
+      "runtime.createEntity",
+      [{ kind: "do", source: "workers/agent", className: "AgentDO" }],
+      { id: "do:workers/agent:AgentDO:owned", contextId: "ctx-owned" }
+    );
+    observe.call(
+      instance,
+      "run-owned",
+      "runtime.createEntity",
+      [{ kind: "do", contextId: "ctx-shared" }],
+      { id: "do:workers/agent:AgentDO:shared", contextId: "ctx-shared" }
+    );
+    expect(
+      priv<(runId: string, contextId: string) => boolean>(instance, "detachRunOwnedContext").call(
+        instance,
+        "run-owned",
+        "ctx-owned"
+      )
+    ).toBe(true);
+    observe.call(
+      instance,
+      "run-owned",
+      "runtime.createEntity",
+      [{ kind: "worker", source: "workers/task" }],
+      { id: "worker:workers/task:owned", contextId: "ctx-cleanup" }
+    );
+    await priv<(runId: string) => Promise<void>>(instance, "executeRunCleanupHandlers").call(
+      instance,
+      "run-owned"
+    );
+    expect(kernelCall).toHaveBeenCalledWith("main", "runtime.cleanupEvalOwnedContext", [
+      {
+        contextId: "ctx-cleanup",
+        ownerEntityId: "worker:workers/task:owned",
+        recursive: true,
+      },
+    ]);
   });
 
-  it("an already-expired run reports cleanup failure and still releases its lifecycle state", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
-    sql.exec(
-      `INSERT INTO runs (run_id, args, status, started_at, deadline_at)
-       VALUES (?, ?, 'pending', ?, ?)`,
-      "expired",
-      JSON.stringify({ code: "return 1", contextId: "ctx", timeoutMs: 1 }),
-      Date.now() - 10,
-      Date.now() - 1
+  it("retains a failed kernel cleanup record for a later terminal reconciliation", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    instance.accept({
+      runId: "run-retry-cleanup",
+      startIntentDigest: "a".repeat(64),
+      deadlineAt: null,
+    });
+    const kernelCall = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("runtime temporarily unavailable"))
+      .mockResolvedValueOnce(undefined);
+    setPriv(instance, "connectionless", { client: { call: kernelCall } });
+    priv<(runId: string, method: string, args: unknown[], result: unknown) => void>(
+      instance,
+      "observeAuthoredLifecycleCall"
+    ).call(
+      instance,
+      "run-retry-cleanup",
+      "runtime.createEntity",
+      [{ kind: "worker", source: "workers/task" }],
+      { id: "worker:workers/task:retry", contextId: "ctx-retry" }
     );
+
+    await expect(
+      priv<(runId: string) => Promise<void>>(instance, "cleanupRunOwnedContexts").call(
+        instance,
+        "run-retry-cleanup"
+      )
+    ).rejects.toThrow(/runtime temporarily unavailable/);
+    await expect(
+      priv<(runId: string) => Promise<void>>(instance, "cleanupRunOwnedContexts").call(
+        instance,
+        "run-retry-cleanup"
+      )
+    ).resolves.toBeUndefined();
+    expect(kernelCall).toHaveBeenCalledTimes(2);
+    expect(
+      priv<(runId: string, contextId: string) => boolean>(instance, "detachRunOwnedContext").call(
+        instance,
+        "run-retry-cleanup",
+        "ctx-retry"
+      )
+    ).toBe(false);
+  });
+
+  it("holds the scope FIFO lease until terminal cleanup settles", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    let releaseCleanup!: () => void;
+    const cleanupBlocked = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const started: string[] = [];
+    setPriv(
+      instance,
+      "runLocked",
+      vi.fn(async (_args, _signal, runId) => {
+        started.push(String(runId));
+        return { success: true, console: String(runId) };
+      })
+    );
+    seedPreparedRun(instance, sql, "run-first");
+    seedPreparedRun(instance, sql, "run-second");
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCleanupHandlers").set(
+      "run-first",
+      new Set([() => cleanupBlocked])
+    );
+
+    const first = instance.execute("run-first");
+    const second = instance.execute("run-second");
+    await vi.waitFor(() => expect(started).toEqual(["run-first"]));
+    releaseCleanup();
+
+    await expect(first).resolves.toMatchObject({ success: true });
+    await expect(second).resolves.toMatchObject({ success: true });
+    expect(started).toEqual(["run-first", "run-second"]);
+  });
+
+  it("returns terminal for a completed run and leaves other runs untouched", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPreparedRun(instance, sql, "done", { status: "succeeded" });
+    seedPreparedRun(instance, sql, "other", { status: "accepted" });
+    await expect(instance.cancel("done")).resolves.toEqual({ status: "terminal" });
+    expect(instance.get("done")).toMatchObject({ status: "succeeded" });
+    expect(instance.get("other")).toMatchObject({ status: "accepted" });
+  });
+
+  it("reports cleanup failure for an already-expired run and releases live state", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPreparedRun(instance, sql, "expired", { deadlineAt: Date.now() - 1 });
     const runLocked = vi.fn(async () => ({ success: true, console: "unexpected" }));
     setPriv(instance, "runLocked", runLocked);
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCleanupHandlers").set(
       "expired",
       new Set([async () => Promise.reject(new Error("cleanup exploded"))])
     );
 
-    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
-      instance,
-      "expired"
-    );
-
+    const result = await instance.execute("expired");
     expect(result).toMatchObject({ success: false });
-    expect(result.error).toMatch(/cancellation cleanup failed/i);
+    expect(result.error).toMatch(/terminal cleanup failed/i);
     expect(runLocked).not.toHaveBeenCalled();
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'expired'`).toArray()[0]).toMatchObject(
-      {
-        status: "done",
-      }
-    );
+    expect(instance.get("expired")).toMatchObject({
+      status: "expired",
+      result: { errorCode: "EVAL_INVOCATION_EXPIRED" },
+    });
     expect(priv<Map<string, unknown>>(instance, "runAborts").has("expired")).toBe(false);
-    expect(priv<Set<string>>(instance, "activeRunIds").has("expired")).toBe(false);
   });
 
-  it("forceReset(): a wedged run on runChain does not block a later run, and tables/scope are cleared", async () => {
+  it("does not orphan a non-yielding run during force reset", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
+    const blocked = blockUntilAborted();
+    setPriv(instance, "runLocked", blocked.runLocked);
+    seedPreparedRun(instance, sql, "wedged");
+    const execution = instance.execute("wedged");
+    const signal = await blocked.started;
 
-    // 1) A wedged run that holds `runChain` forever (never aborts on its own).
-    const { runLocked: wedge, started: wedgeStarted } = blockUntilAborted();
-    setPriv(instance, "runLocked", wedge);
-    seedPendingRun(sql, "wedged");
-    const wedgedP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
-      instance,
-      "wedged"
-    );
-    wedgedP.catch(() => undefined);
-    const { signal } = await wedgeStarted; // the wedged run now occupies runChain
-    let releaseCleanup!: () => void;
-    let announceCleanup!: () => void;
-    const cleanupStarted = new Promise<void>((resolve) => (announceCleanup = resolve));
-    const cleanup = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          announceCleanup();
-          releaseCleanup = resolve;
-        })
-    );
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-      "wedged",
-      new Set([cleanup])
-    );
-
-    // Seed user table + a fake scope table so we can assert resetLocked wiped them.
-    sql.exec(`CREATE TABLE IF NOT EXISTS user_data (k TEXT)`);
-    sql.exec(`INSERT INTO user_data (k) VALUES ('x')`);
-    sql.exec(`CREATE TABLE IF NOT EXISTS repl_scopes (id TEXT)`);
-    setPriv(instance, "scopeManager", { marker: "stale" });
-
-    // 2) forceReset: cancel non-terminal runs, abort in-flight, REPLACE runChain, resetLocked NOW.
-    const chainBefore = priv<Promise<unknown>>(instance, "runChain");
-    const forcePromise = priv<() => Promise<{ ok: boolean }>>(instance, "forceReset").call(
-      instance
-    );
-    await cleanupStarted;
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(signal?.aborted).toBe(false);
-    releaseCleanup();
-    const forceRet = await forcePromise;
-    expect(forceRet).toEqual({ ok: true });
-
-    // The wedged run was CAS'd to cancelled and aborted (so it unwinds rather than leaking forever).
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'wedged'`).toArray()[0]).toMatchObject({
-      status: "cancelled",
+    await expect(instance.forceReset()).resolves.toEqual({
+      status: "requires-process-restart",
     });
-    const wedgedResult = await wedgedP;
-    expect(wedgedResult.success).toBe(false);
-
-    // runChain was REPLACED (orphaned), not chained off the stuck one.
-    const chainAfter = priv<Promise<unknown>>(instance, "runChain");
-    expect(chainAfter).not.toBe(chainBefore);
-    await expect(chainAfter).resolves.toBeUndefined();
-
-    // resetLocked ran directly (not queued behind the wedged run): user tables + scope cleared.
-    const tables = sql
-      .exec(`SELECT name FROM sqlite_master WHERE type='table'`)
-      .toArray()
-      .map((r) => (r as { name: string }).name);
-    expect(tables).not.toContain("user_data");
-    expect(tables).not.toContain("repl_scopes");
-    expect(priv(instance, "scopeManager")).toBeNull();
-
-    // 3) A NEW run enqueued AFTER forceReset proceeds at once — the chain was not wedged.
-    const { runLocked: fresh, started: freshStarted } = (() => {
-      let resolveStarted!: () => void;
-      const startedP = new Promise<void>((r) => (resolveStarted = r));
-      const fn: RunLockedFn = () => {
-        resolveStarted();
-        return Promise.resolve({ success: true, console: "ok" });
-      };
-      return { runLocked: fn, started: startedP };
-    })();
-    setPriv(instance, "runLocked", fresh);
-    seedPendingRun(sql, "after");
-    const afterP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
-      instance,
-      "after"
-    );
-    await freshStarted; // proves the new run actually ran (did not hang behind the wedged chain)
-    const afterResult = await afterP;
-    expect(afterResult).toMatchObject({ success: true, console: "ok" });
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'after'`).toArray()[0]).toMatchObject({
-      status: "done",
-    });
+    expect(signal.aborted).toBe(true);
+    await execution;
+    expect(instance.get("wedged")).toMatchObject({ status: "cancelled" });
   });
 
-  it("forceReset reports cleanup failures after completing the reset", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
-    seedPendingRun(sql, "cleanup-failure");
-    sql.exec(`CREATE TABLE IF NOT EXISTS user_cleanup_probe (value TEXT)`);
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-      "cleanup-failure",
-      new Set([async () => Promise.reject(new Error("cleanup failed"))])
-    );
-
-    await expect(
-      priv<() => Promise<{ ok: boolean }>>(instance, "forceReset").call(instance)
-    ).rejects.toThrow(/cancellation cleanup failed during force reset/i);
-
-    expect(
-      sql.exec(`SELECT name FROM sqlite_master WHERE name = 'user_cleanup_probe'`).toArray()
-    ).toEqual([]);
-    expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'cleanup-failure'`).toArray()[0]
-    ).toMatchObject({ status: "cancelled" });
-  });
-
-  it("startRun reset is atomic and idempotent on the run id", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
-    sql.exec(`CREATE TABLE IF NOT EXISTS user_reset_probe (value TEXT)`);
-    sql.exec(`INSERT INTO user_reset_probe (value) VALUES ('before')`);
-    sql.exec(`CREATE TABLE IF NOT EXISTS repl_scopes (id TEXT)`);
-    setPriv(instance, "scopeManager", { marker: "stale" });
-
-    const first = await priv<
-      (args: { runId: string; code: string; reset: boolean }) => Promise<{
-        runId: string;
-        status: string;
-      }>
-    >(instance, "startRun").call(instance, {
-      runId: "reset-run",
-      code: "return Object.keys(scope)",
-      reset: true,
-    });
-
-    expect(first).toEqual({ runId: "reset-run", status: "pending" });
-    const tablesAfterFirst = sql
-      .exec(`SELECT name FROM sqlite_master WHERE type='table'`)
-      .toArray()
-      .map((row) => String(row["name"]));
-    expect(tablesAfterFirst).not.toContain("user_reset_probe");
-    expect(tablesAfterFirst).not.toContain("repl_scopes");
-
-    sql.exec(`CREATE TABLE user_after_insert (value TEXT)`);
-    const replay = await priv<
-      (args: { runId: string; code: string; reset: boolean }) => Promise<{
-        runId: string;
-        status: string;
-      }>
-    >(instance, "startRun").call(instance, {
-      runId: "reset-run",
-      code: "return Object.keys(scope)",
-      reset: true,
-    });
-
-    expect(replay).toEqual({ runId: "reset-run", status: "pending" });
-    expect(
-      sql.exec(`SELECT name FROM sqlite_master WHERE name='user_after_insert'`).toArray()
-    ).toHaveLength(1);
-  });
-
-  it("runLocked threads the run's abort signal into eval outbound rpc.call", async () => {
-    // Verifies task 2a end-to-end through the REAL runLocked: the `rpc` binding handed to the sandbox
-    // forwards the current run's signal as the rpc call's `options.signal`, so abort can unwind it.
+  it("keeps invocation credentials run-local and supplies them only in live call options", async () => {
     const { instance } = await createTestDO(EvalDO);
+    const signal = new AbortController().signal;
+    setPriv(instance, "currentEvalInvocation", { runId: "run-1", credential: "secret" });
+    setPriv(instance, "currentRunAbortSignal", signal);
+    setPriv(instance, "currentRunReadOnly", true);
 
-    // Capture the options every outbound rpc.call receives.
-    const seenOptions: Array<{ method: string; options: unknown }> = [];
-    const fakeRpc = {
-      selfId: "do:test:EvalDO:test-key",
-      call: vi.fn((_target: string, method: string, _args: unknown[], options?: unknown) => {
-        seenOptions.push({ method, options });
-        return Promise.resolve("ok");
-      }),
-      stream: vi.fn(),
-      emit: vi.fn(),
-      on: vi.fn(() => vi.fn()),
-      expose: vi.fn(),
-      exposeAll: vi.fn(),
-      exposeStreaming: vi.fn(),
-      peer: vi.fn(() => ({})),
-      status: vi.fn(() => "connected"),
-      ready: vi.fn(() => Promise.resolve()),
-      onStatusChange: vi.fn(() => vi.fn()),
-    };
-    // `runLocked` reads `this.rpc` for the binding closures — stub it.
-    Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
-
-    // The runtime factories are loaded dynamically from the manifest-declared
-    // runtime unit (providers.evalRuntime → EVAL_RUNTIME_SOURCE binding); the
-    // host bundle carries no static workspace imports. Declare the provider on
-    // the env and stub the loaded module with minimal factories — the rt's
-    // `rpc` is the host's option-threading proxy, which is what this test pins.
-    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
-      "@workspace/runtime";
-    setPriv(instance, "ensureRuntimeSupport", () =>
-      Promise.resolve({
-        createHostedRuntime: (host: Record<string, unknown>) => ({
-          rpc: host["rpc"],
-          fs: host["fs"],
-        }),
-        createPanelRuntime: () => ({ getPanelHandle: () => null }),
-        createRuntimeSelfHandle: () => ({}),
-        createGatewayFetch: () => () => {},
-        createRpcFs: () => ({}),
-        createRuntimeParentHandle: () => null,
-        createServicesProxy: () => ({}),
-        createWorkerdClient: () => ({}),
-      })
+    expect(priv<() => unknown>(instance, "currentRunCallOptions").call(instance)).toEqual({
+      evalInvocation: { runId: "run-1", credential: "secret" },
+      signal,
+      readOnly: true,
+    });
+    setPriv(instance, "currentEvalInvocation", null);
+    expect(() => priv<() => unknown>(instance, "currentRunCallOptions").call(instance)).toThrow(
+      /no active invocation authority/
     );
-
-    // Stub the heavy engine path: capture the bindings, then invoke the eval's rpc binding ourselves.
-    const fakeScope = {
-      current: {},
-      api: {},
-      enterEval: () => {},
-      exitEval: () => Promise.resolve(),
-    };
-    setPriv(instance, "ensureEngine", () =>
-      Promise.resolve({
-        executeSandbox: async (_code: string, opts: { bindings: Record<string, unknown> }) => {
-          const rpcBinding = opts.bindings["rpc"] as {
-            call: (t: string, m: string, a: unknown[]) => Promise<unknown>;
-          };
-          // Eval uses the same portable RpcClient call shape as panels/workers.
-          await rpcBinding.call("main", "svc.method", []);
-          await rpcBinding.call("do:peer", "ping", []);
-          return { success: true, consoleOutput: "", returnValue: undefined };
-        },
-      })
-    );
-    setPriv(instance, "ensureScopeManager", () => Promise.resolve(fakeScope));
-
-    const controller = new AbortController();
-    const runLocked = priv<RunLockedFn>(instance, "runLocked").bind(instance);
-    await runLocked({ code: "x", contextId: "ctx" }, controller.signal, "run-sig");
-
-    // Both outbound calls carried the SAME run signal in their options.
-    expect(seenOptions).toHaveLength(2);
-    for (const { options } of seenOptions) {
-      expect((options as { signal?: AbortSignal }).signal).toBe(controller.signal);
-    }
-    // And aborting the run's controller would unwind those calls (rpc client honors options.signal).
-    expect(controller.signal.aborted).toBe(false);
   });
 });

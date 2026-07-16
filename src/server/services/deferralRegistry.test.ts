@@ -126,6 +126,36 @@ describe("DeferralRegistry", () => {
     expect(registry.size).toBe(2);
   });
 
+  it("aborts and drops only a retired caller's detached work without late delivery", async () => {
+    const { registry, deliveries } = makeRegistry();
+    let retiredSignal!: AbortSignal;
+    let liveSignal!: AbortSignal;
+    let resolveRetired!: (value: unknown) => void;
+    registry.createApi(info({ callerId: "do:retired:Agent:1" })).run(
+      (signal) =>
+        new Promise((resolve) => {
+          retiredSignal = signal;
+          resolveRetired = resolve;
+        })
+    );
+    registry.createApi(info({ callerId: "do:live:Agent:2", requestId: "req-2" })).run(
+      (signal) =>
+        new Promise(() => {
+          liveSignal = signal;
+        })
+    );
+
+    expect(registry.cancelForCaller("do:retired:Agent:1")).toBe(1);
+    expect(retiredSignal.aborted).toBe(true);
+    expect(liveSignal.aborted).toBe(false);
+    expect(registry.size).toBe(1);
+
+    resolveRetired("late provider result");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(deliveries).toEqual([]);
+  });
+
   it("TTL expiry settles a never-resolving call as an error", async () => {
     const { registry, deliveries, fireTimers } = makeRegistry({ ttlMs: 1000 });
     registry.createApi(info()).run(() => new Promise(() => {})); // never settles

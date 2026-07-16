@@ -14,7 +14,10 @@ import type { ShellPresenceInternal } from "./shellPresenceService.js";
 interface ApprovalPushBridgeDeps {
   approvalQueue: Pick<ApprovalQueueWithListeners, "listPending" | "onPendingChanged">;
   push: PushServiceInternal;
-  shellPresence: ShellPresenceInternal;
+  shellPresence: Pick<
+    ShellPresenceInternal,
+    "isAnyShellActive" | "markActive" | "getActiveShellCount"
+  >;
   /**
    * This child's workspace member userIds (WP4 §4.4, WP2-backed). A child process
    * IS one workspace, so its members are exactly the push audience for that
@@ -56,6 +59,12 @@ function actionsFor(approval: PendingApproval): readonly string[] {
       ? ["once", "session", "deny", "open"]
       : ["once", "deny", "open"];
   }
+  if (approval.kind === "capability" && approval.allowedDecisions) {
+    const allowed = new Set(approval.allowedDecisions);
+    return ["once", "run", "version", "deny", "open", "session"].filter(
+      (id) => id === "open" || allowed.has(id as "once" | "run" | "version" | "deny" | "session")
+    );
+  }
   return approval.kind === "credential" || approval.kind === "capability"
     ? NOTIFICATION_ACTION_IDS_STANDARD
     : NOTIFICATION_ACTION_IDS_INPUT_REQUIRED;
@@ -63,6 +72,7 @@ function actionsFor(approval: PendingApproval): readonly string[] {
 
 const ACTION_TITLES: Record<string, string> = {
   once: "Once",
+  run: "This run",
   session: "Session",
   deny: "Deny",
   open: "Open",

@@ -9,11 +9,16 @@ import { getProductBootManifest } from "../internalDOs/productBootManifest.js";
 
 export type CapabilityGrantDecision = "session" | "version";
 
-export interface CapabilityGrantIdentity {
-  callerId: string;
-  repoPath: string;
-  executionDigest: string;
-}
+/** Verified subject used by the canonical AuthorityGrant store. Code subjects
+ * carry their exact artifact binding; user/entity/device subjects are bound to
+ * their authenticated principal and may only receive session-scoped grants. */
+export type CapabilityGrantSubject =
+  | {
+      principal: Principal;
+      sessionId: string;
+      code: { repoPath: string; executionDigest: string };
+    }
+  | { principal: Principal; sessionId: string; code?: never };
 
 interface CapabilityGrantFile {
   version: 2;
@@ -45,25 +50,25 @@ export class CapabilityGrantStore {
   hasGrant(
     capability: string,
     resourceKey: string,
-    identity: CapabilityGrantIdentity,
+    subject: CapabilityGrantSubject,
     resourceScope?: ApprovalResourceScope
   ): boolean {
-    return this.hasEffect("allow", capability, resourceKey, identity, resourceScope);
+    return this.hasEffect("allow", capability, resourceKey, subject, resourceScope);
   }
 
   hasDenial(
     capability: string,
     resourceKey: string,
-    identity: CapabilityGrantIdentity,
+    subject: CapabilityGrantSubject,
     resourceScope?: ApprovalResourceScope
   ): boolean {
-    return this.hasEffect("deny", capability, resourceKey, identity, resourceScope);
+    return this.hasEffect("deny", capability, resourceKey, subject, resourceScope);
   }
 
   grant(
     capability: string,
     resourceKey: string,
-    identity: CapabilityGrantIdentity,
+    subject: CapabilityGrantSubject,
     lifetime: CapabilityGrantDecision,
     resourceScope?: ApprovalResourceScope,
     now = Date.now(),
@@ -71,30 +76,31 @@ export class CapabilityGrantStore {
     issuedBy: Principal = this.issuer,
     provenance = "user-capability-approval"
   ): AuthorityGrant {
-    assertExactCodeIdentity(identity);
+    assertGrantSubject(subject, lifetime);
     const resource = resourceScope ?? exactResourceScope(resourceKey);
-    const subject = codePrincipal(identity);
     const next: AuthorityGrant = {
-      subject,
+      subject: subject.principal,
       capability,
       resource,
       effect,
       issuedBy,
       createdAt: now,
-      constraints: lifetime === "session" ? { sessionId: identity.callerId } : undefined,
+      constraints: lifetime === "session" ? { sessionId: subject.sessionId } : undefined,
       binding:
-        lifetime === "session"
+        lifetime === "session" && subject.code
           ? {
               kind: "session",
-              sessionId: identity.callerId,
-              repoPath: identity.repoPath,
-              executionDigest: identity.executionDigest,
+              sessionId: subject.sessionId,
+              repoPath: subject.code.repoPath,
+              executionDigest: subject.code.executionDigest,
             }
-          : {
-              kind: "exact-execution",
-              repoPath: identity.repoPath,
-              executionDigest: identity.executionDigest,
-            },
+          : lifetime === "version" && subject.code
+            ? {
+                kind: "exact-execution",
+                repoPath: subject.code.repoPath,
+                executionDigest: subject.code.executionDigest,
+              }
+            : { kind: "principal" },
       provenance: `${provenance}:${lifetime}`,
     };
 
@@ -153,17 +159,17 @@ export class CapabilityGrantStore {
     effect: AuthorityGrant["effect"],
     capability: string,
     resourceKey: string,
-    identity: CapabilityGrantIdentity,
+    subject: CapabilityGrantSubject,
     resourceScope?: ApprovalResourceScope
   ): boolean {
-    if (!hasExactCodeIdentity(identity)) return false;
+    if (!isGrantSubject(subject)) return false;
     const requested = resourceScope ?? exactResourceScope(resourceKey);
     const now = Date.now();
     return [...this.sessionGrants.values(), ...this.persistent.grants].some(
       (grant) =>
         grant.effect === effect &&
         isActive(grant, now) &&
-        grantMatches(grant, capability, resourceKey, requested, identity)
+        grantMatches(grant, capability, resourceKey, requested, subject)
     );
   }
 
@@ -247,35 +253,40 @@ function grantMatches(
   capability: string,
   resourceKey: string,
   requestedScope: ApprovalResourceScope,
-  identity: CapabilityGrantIdentity
+  subject: CapabilityGrantSubject
 ): boolean {
   return (
-    grant.subject === codePrincipal(identity) &&
+    grant.subject === subject.principal &&
     grant.capability === capability &&
     resourceScopeCovers(grant.resource, requestedScope, resourceKey) &&
-    bindingMatches(grant, identity)
+    bindingMatches(grant, subject)
   );
 }
 
-function bindingMatches(grant: AuthorityGrant, identity: CapabilityGrantIdentity): boolean {
+function bindingMatches(grant: AuthorityGrant, subject: CapabilityGrantSubject): boolean {
   switch (grant.binding.kind) {
     case "session":
       return (
-        grant.binding.sessionId === identity.callerId &&
-        grant.binding.repoPath === identity.repoPath &&
-        grant.binding.executionDigest === identity.executionDigest
+        subject.code !== undefined &&
+        grant.binding.sessionId === subject.sessionId &&
+        grant.binding.repoPath === subject.code.repoPath &&
+        grant.binding.executionDigest === subject.code.executionDigest
       );
     case "exact-execution":
       return (
-        grant.binding.repoPath === identity.repoPath &&
-        grant.binding.executionDigest === identity.executionDigest
+        subject.code !== undefined &&
+        grant.binding.repoPath === subject.code.repoPath &&
+        grant.binding.executionDigest === subject.code.executionDigest
       );
     case "selector":
       // Selector inheritance requires a live resolver proof. This store does not
       // guess from a digest and therefore cannot satisfy one by itself.
       return false;
     case "principal":
-      return false;
+      return (
+        grant.constraints?.sessionId === undefined ||
+        grant.constraints.sessionId === subject.sessionId
+      );
   }
 }
 
@@ -417,10 +428,6 @@ function isConstraints(value: unknown): value is AuthorityGrant["constraints"] {
   );
 }
 
-function codePrincipal(identity: CapabilityGrantIdentity): Principal {
-  return `code:${identity.repoPath}@${identity.executionDigest}`;
-}
-
 function isPrincipal(value: unknown): value is Principal {
   return (
     typeof value === "string" &&
@@ -445,17 +452,27 @@ function hasExactDigest(value: unknown): value is string {
   }
 }
 
-function hasExactCodeIdentity(identity: CapabilityGrantIdentity): boolean {
-  return Boolean(
-    identity.callerId && identity.repoPath && hasExactDigest(identity.executionDigest)
+function isGrantSubject(subject: CapabilityGrantSubject): boolean {
+  if (!subject.sessionId || !isPrincipal(subject.principal)) return false;
+  if (!subject.code) return !subject.principal.startsWith("code:");
+  return (
+    Boolean(subject.code.repoPath) &&
+    hasExactDigest(subject.code.executionDigest) &&
+    subject.principal === `code:${subject.code.repoPath}@${subject.code.executionDigest}`
   );
 }
 
-function assertExactCodeIdentity(identity: CapabilityGrantIdentity): void {
-  if (!identity.callerId || !identity.repoPath) {
-    throw new Error("Capability grant identity requires callerId and repoPath");
+function assertGrantSubject(
+  subject: CapabilityGrantSubject,
+  lifetime: CapabilityGrantDecision
+): void {
+  if (!isGrantSubject(subject)) throw new Error("Capability grant subject is not canonical");
+  if (lifetime === "version" && !subject.code) {
+    throw new Error("Version grants require a verified exact code artifact");
   }
-  parseSha256(identity.executionDigest, "capability grant execution digest");
+  if (subject.code) {
+    parseSha256(subject.code.executionDigest, "capability grant execution digest");
+  }
 }
 
 function exactResourceScope(key: string): ApprovalResourceScope {

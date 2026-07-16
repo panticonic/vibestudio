@@ -11,8 +11,37 @@ import {
   type DevHostProviderRebuildInput,
   type DevLaunchStatus,
 } from "@vibestudio/service-schemas/devHost";
+import type {
+  EvalCancelInput,
+  EvalEventsInput,
+  EvalGetInput,
+  EvalRunHandle,
+  EvalRunSnapshot,
+  EvalStartInput,
+} from "@vibestudio/service-schemas/eval";
 import type { ExecutionSnapshot } from "../execution/executionSnapshotService.js";
 import { domainHash } from "@vibestudio/shared/execution/identity";
+import type { EvalParentAuthorityEnvelope } from "@vibestudio/service-schemas/eval";
+import { DevHostEvalAuthorityIssuer } from "./devHostEvalAuthority.js";
+import { decodeDevHostEvalAuthority } from "./devHostEvalAuthority.js";
+import type { ApprovalDecision } from "@vibestudio/shared/approvals";
+import type { CapabilityPermissionResult } from "./capabilityPermission.js";
+
+export function childEvalContinuationDecision(
+  permission: CapabilityPermissionResult,
+  allowedDecisions: readonly ApprovalDecision[]
+): ApprovalDecision {
+  if (!permission.allowed) return permission.decision ?? "deny";
+
+  const preferred =
+    permission.decision === "once" ? (["once", "run"] as const) : (["run", "once"] as const);
+  const continuation = preferred.find((decision) => allowedDecisions.includes(decision));
+  if (continuation) return continuation;
+
+  throw Object.assign(new Error("Child challenge has no non-persistent continuation decision"), {
+    code: "EVAL_INVOCATION_INVALID",
+  });
+}
 
 export interface DevHostProvider {
   prepare(input: DevHostProviderPreparationInput): Promise<DevHostProviderPreparationResult>;
@@ -30,13 +59,27 @@ export interface DevHostProvider {
     state: DevLaunchStatus["state"];
   }>;
   stop(launchId: string): Promise<{ launchId: string; stopped: boolean }>;
-  eval(launchId: string, code: string): Promise<unknown>;
+  evalStart(
+    launchId: string,
+    input: EvalStartInput,
+    authority: EvalParentAuthorityEnvelope
+  ): Promise<EvalRunHandle>;
+  evalGet(launchId: string, input: EvalGetInput): Promise<EvalRunSnapshot>;
+  evalEvents(
+    launchId: string,
+    input: EvalEventsInput
+  ): Promise<{ events: unknown[]; next: number }>;
+  evalCancel(
+    launchId: string,
+    input: EvalCancelInput
+  ): Promise<{ status: "requested" | "cancelled" | "terminal" }>;
   logs(launchId: string, after?: number): Promise<Response>;
   watch(launchId: string, after?: number): Promise<Response>;
 }
 
 export interface DevHostServiceDeps {
   workspaceId: string;
+  parentHostId: string;
   resolveCallerContext(callerId: string): string | null;
   resolveSource(contextId: string): Promise<{ stateHash: string; dirtyCount: number }>;
   createSnapshot(input: { stateHash: string; target: DevHostTarget }): Promise<ExecutionSnapshot>;
@@ -52,7 +95,10 @@ export interface DevHostServiceDeps {
       | "service:devHost.status"
       | "service:devHost.rebuild"
       | "service:devHost.stop"
-      | "service:devHost.eval"
+      | "service:devHost.eval.start"
+      | "service:devHost.eval.get"
+      | "service:devHost.eval.events"
+      | "service:devHost.eval.cancel"
       | "service:devHost.logs"
       | "service:devHost.watch"
       | "devHost.admin";
@@ -61,6 +107,16 @@ export interface DevHostServiceDeps {
   }): Promise<void>;
   /** Binds provider invocations to the authenticated caller for host-side attribution. */
   provider(ctx: ServiceContext): DevHostProvider;
+  resolveChildChallenge(input: {
+    initiator: ServiceContext["caller"];
+    launch: DevLaunchStatus;
+    runId: string;
+    challengeId: string;
+    capability: string;
+    resource: { type: string; label: string; value: string; key: string };
+    allowedDecisions: ApprovalDecision[];
+    signal: AbortSignal;
+  }): Promise<ApprovalDecision>;
   now?: () => number;
 }
 
@@ -147,6 +203,50 @@ export class DevHostSourceWatcher {
 }
 
 export function createDevHostService(deps: DevHostServiceDeps): ServiceDefinition {
+  const evalAuthorityIssuer = new DevHostEvalAuthorityIssuer(deps.parentHostId);
+  const evalAuthorityBridge = {
+    parentHostId: evalAuthorityIssuer.parentHostId,
+    publicKeySpki: evalAuthorityIssuer.publicKeySpki,
+  };
+  const childEvalRoutes = new Map<
+    string,
+    {
+      signature: string;
+      initiator: ServiceContext["caller"];
+      runId: string | null;
+      launchId: string;
+      hostBuildId: string;
+      processIdentity: string;
+      expiresAt: number;
+    }
+  >();
+  const childChallengeWaiters = new Map<
+    string,
+    { authorityPayload: string; controller: AbortController }
+  >();
+  const pruneChildEvalRoutes = (now = (deps.now ?? Date.now)()) => {
+    for (const [key, route] of childEvalRoutes) {
+      if (route.expiresAt <= now) childEvalRoutes.delete(key);
+    }
+  };
+  const removeChildEvalRoutes = (
+    predicate: (route: {
+      runId: string | null;
+      launchId: string;
+      hostBuildId: string;
+      processIdentity: string;
+    }) => boolean
+  ) => {
+    for (const [key, route] of childEvalRoutes) {
+      if (!predicate(route)) continue;
+      childEvalRoutes.delete(key);
+      for (const [waiterKey, waiter] of childChallengeWaiters) {
+        if (waiter.authorityPayload !== key) continue;
+        waiter.controller.abort();
+        childChallengeWaiters.delete(waiterKey);
+      }
+    }
+  };
   const ownerOf = (ctx: ServiceContext, contextId: string): DevLaunchStatus["owner"] => ({
     principal: ctx.caller.code
       ? `code:${ctx.caller.code.repoPath}@${ctx.caller.code.executionDigest}`
@@ -156,6 +256,19 @@ export function createDevHostService(deps: DevHostServiceDeps): ServiceDefinitio
     workspaceId: deps.workspaceId,
     contextId,
   });
+  const assertTrustedDevHostExtension = (ctx: ServiceContext, method: string): void => {
+    if (
+      ctx.caller.runtime.kind !== "extension" ||
+      ctx.caller.code?.repoPath !== "extensions/dev-host"
+    ) {
+      throw new ServiceError(
+        "devHost",
+        method,
+        "Only the exact trusted dev-host extension may use the child authority bridge",
+        "EACCES"
+      );
+    }
+  };
   const assertOwned = async (
     ctx: ServiceContext,
     launchId: string,
@@ -245,6 +358,7 @@ export function createDevHostService(deps: DevHostServiceDeps): ServiceDefinitio
                 : undefined;
             return await provider.launch({
               ...approvedRequest,
+              evalAuthorityBridge,
               executionGrant: {
                 resource: `${resource}/execution:${approvedRequest.snapshot.executionInputHash}`,
                 authorizedAt: (deps.now ?? Date.now)(),
@@ -334,14 +448,22 @@ export function createDevHostService(deps: DevHostServiceDeps): ServiceDefinitio
               launch.target.kind === "current-host-client"
                 ? await deps.prepareCurrentHostClient(ctx, approvedRequest.snapshot)
                 : undefined;
-            return await provider.rebuild({
+            const result = await provider.rebuild({
               ...approvedRequest,
+              evalAuthorityBridge,
               executionGrant: {
                 resource: `${launchResource(launch)}/execution:${approvedRequest.snapshot.executionInputHash}`,
                 authorizedAt: (deps.now ?? Date.now)(),
               },
               ...(currentHostPairing ? { currentHostPairing } : {}),
             });
+            if (result.active && result.hostBuildId) {
+              removeChildEvalRoutes(
+                (route) =>
+                  route.launchId === launch.launchId && route.hostBuildId !== result.hostBuildId
+              );
+            }
+            return result;
           } catch (error) {
             await provider
               .failPreparation(preparation, preparationFailure(error))
@@ -354,15 +476,154 @@ export function createDevHostService(deps: DevHostServiceDeps): ServiceDefinitio
       },
       stop: async (ctx, [input]) => {
         await assertOwned(ctx, input.launchId, "service:devHost.stop");
-        return deps.provider(ctx).stop(input.launchId);
+        const result = await deps.provider(ctx).stop(input.launchId);
+        removeChildEvalRoutes((route) => route.launchId === input.launchId);
+        return result;
       },
-      eval: async (ctx, [input]) => {
-        const launch = await assertOwned(ctx, input.launchId, "service:devHost.eval");
+      "eval.start": async (ctx, [input]) => {
+        const launch = await assertOwned(ctx, input.launchId, "service:devHost.eval.start");
         if (!launch.activeHostBuildId || launch.state === "stopped" || launch.state === "failed") {
           throw new ServiceError(
             "devHost",
-            "eval",
+            "eval.start",
             "Launch has no ready active generation",
+            "ENOTREADY"
+          );
+        }
+        if (
+          !launch.readinessIdentity ||
+          !launch.readinessIdentity.evalAuthorityRecipientKey ||
+          !launch.processIdentity ||
+          !launch.childWorkspaceId
+        ) {
+          throw new ServiceError(
+            "devHost",
+            "eval.start",
+            "Active generation has no complete child authority identity",
+            "ENOTREADY"
+          );
+        }
+        const generation = {
+          launchId: launch.launchId,
+          hostBuildId: launch.activeHostBuildId,
+          childServerId: launch.readinessIdentity.serverId,
+          processIdentity: launch.processIdentity,
+          childWorkspaceId: launch.childWorkspaceId,
+          childContextId: launch.childContextId ?? "unbound",
+          recipientPublicKey: launch.readinessIdentity.evalAuthorityRecipientKey,
+        };
+        const authority = evalAuthorityIssuer.issue({
+          generation,
+          initiator: ctx.caller,
+          start: input.input,
+          now: (deps.now ?? Date.now)(),
+          ...(input.input.deadlineMs
+            ? { ttlMs: Math.max(60_000, input.input.deadlineMs + 60_000) }
+            : {}),
+        });
+        const attested = decodeDevHostEvalAuthority(authority);
+        pruneChildEvalRoutes();
+        if (childEvalRoutes.size >= 256) {
+          throw new ServiceError(
+            "devHost",
+            "eval.start",
+            "Live child eval authority route limit exceeded",
+            "EVAL_RESOURCE_LIMIT"
+          );
+        }
+        childEvalRoutes.set(authority.payload, {
+          signature: authority.signature,
+          initiator: structuredClone(ctx.caller),
+          runId: null,
+          launchId: launch.launchId,
+          hostBuildId: launch.activeHostBuildId,
+          processIdentity: launch.processIdentity,
+          expiresAt: attested.expiresAt,
+        });
+        let handle: EvalRunHandle;
+        try {
+          handle = await deps.provider(ctx).evalStart(input.launchId, input.input, authority);
+          const route = childEvalRoutes.get(authority.payload);
+          if (!route) {
+            await deps.provider(ctx).evalCancel(input.launchId, { runId: handle.runId });
+            throw new ServiceError(
+              "devHost",
+              "eval.start",
+              "Parent approval route was lost before child eval acceptance",
+              "EVAL_APPROVAL_ROUTE_LOST"
+            );
+          }
+          route.runId = handle.runId;
+        } catch (error) {
+          removeChildEvalRoutes((route) => route === childEvalRoutes.get(authority.payload));
+          throw error;
+        }
+        return {
+          launchId: launch.launchId,
+          hostBuildId: launch.activeHostBuildId,
+          sourceStateHash: launch.sourceStateHash,
+          handle,
+        };
+      },
+      "eval.confirmChildRoute": async (ctx, [input]) => {
+        assertTrustedDevHostExtension(ctx, "eval.confirmChildRoute");
+        const route = childEvalRoutes.get(input.authority.payload);
+        if (
+          !route ||
+          route.signature !== input.authority.signature ||
+          route.launchId !== input.launchId ||
+          route.hostBuildId !== input.hostBuildId ||
+          route.processIdentity !== input.processIdentity ||
+          route.expiresAt <= (deps.now ?? Date.now)()
+        ) {
+          throw new ServiceError(
+            "devHost",
+            "eval.confirmChildRoute",
+            "Parent approval route is absent or stale",
+            "EVAL_APPROVAL_ROUTE_LOST"
+          );
+        }
+        const launch = (await deps.provider(ctx).status()).find(
+          (candidate) => candidate.launchId === route.launchId
+        );
+        if (
+          !launch ||
+          launch.activeHostBuildId !== route.hostBuildId ||
+          launch.processIdentity !== route.processIdentity ||
+          launch.state !== "ready"
+        ) {
+          removeChildEvalRoutes((candidate) => candidate === route);
+          throw new ServiceError(
+            "devHost",
+            "eval.confirmChildRoute",
+            "Child generation is no longer active",
+            "EVAL_INTERRUPTED"
+          );
+        }
+        const attested = decodeDevHostEvalAuthority(input.authority);
+        return {
+          proof: evalAuthorityIssuer.issueApprovalRoute({
+            generation: {
+              launchId: attested.launchId,
+              hostBuildId: attested.hostBuildId,
+              childServerId: attested.childServerId,
+              processIdentity: attested.processIdentity,
+              childWorkspaceId: attested.childWorkspaceId,
+              childContextId: attested.childContextId,
+              recipientPublicKey: attested.recipientPublicKey,
+            },
+            authority: input.authority,
+            now: (deps.now ?? Date.now)(),
+          }),
+        };
+      },
+      "eval.get": async (ctx, [input]) => {
+        const launch = await assertOwned(ctx, input.launchId, "service:devHost.eval.get");
+        if (!launch.activeHostBuildId) {
+          throw new ServiceError(
+            "devHost",
+            "eval.get",
+            "Launch has no active generation",
             "ENOTREADY"
           );
         }
@@ -370,8 +631,149 @@ export function createDevHostService(deps: DevHostServiceDeps): ServiceDefinitio
           launchId: launch.launchId,
           hostBuildId: launch.activeHostBuildId,
           sourceStateHash: launch.sourceStateHash,
-          result: await deps.provider(ctx).eval(input.launchId, input.code),
+          snapshot: await deps.provider(ctx).evalGet(input.launchId, input.input),
         };
+      },
+      "eval.events": async (ctx, [input]) => {
+        const launch = await assertOwned(ctx, input.launchId, "service:devHost.eval.events");
+        if (!launch.activeHostBuildId) {
+          throw new ServiceError(
+            "devHost",
+            "eval.events",
+            "Launch has no active generation",
+            "ENOTREADY"
+          );
+        }
+        return {
+          launchId: launch.launchId,
+          hostBuildId: launch.activeHostBuildId,
+          sourceStateHash: launch.sourceStateHash,
+          page: await deps.provider(ctx).evalEvents(input.launchId, input.input),
+        };
+      },
+      "eval.cancel": async (ctx, [input]) => {
+        const launch = await assertOwned(ctx, input.launchId, "service:devHost.eval.cancel");
+        if (!launch.activeHostBuildId) {
+          throw new ServiceError(
+            "devHost",
+            "eval.cancel",
+            "Launch has no active generation",
+            "ENOTREADY"
+          );
+        }
+        const result = {
+          launchId: launch.launchId,
+          hostBuildId: launch.activeHostBuildId,
+          sourceStateHash: launch.sourceStateHash,
+          ...(await deps.provider(ctx).evalCancel(input.launchId, input.input)),
+        };
+        removeChildEvalRoutes(
+          (route) => route.launchId === input.launchId && route.runId === input.input.runId
+        );
+        return result;
+      },
+      "eval.resolveChildChallenge": async (ctx, [input]) => {
+        assertTrustedDevHostExtension(ctx, "eval.resolveChildChallenge");
+        const route = childEvalRoutes.get(input.authority.payload);
+        if (
+          !route ||
+          route.signature !== input.authority.signature ||
+          route.runId !== input.runId ||
+          route.launchId !== input.launchId ||
+          route.hostBuildId !== input.hostBuildId ||
+          route.processIdentity !== input.processIdentity ||
+          route.expiresAt <= (deps.now ?? Date.now)()
+        ) {
+          throw new ServiceError(
+            "devHost",
+            "eval.resolveChildChallenge",
+            "Child challenge route is stale or belongs to another run generation",
+            "EVAL_INVOCATION_INVALID"
+          );
+        }
+        const launch = (await deps.provider(ctx).status()).find(
+          (candidate) => candidate.launchId === route.launchId
+        );
+        if (
+          !launch ||
+          launch.activeHostBuildId !== route.hostBuildId ||
+          launch.processIdentity !== route.processIdentity ||
+          launch.state !== "ready"
+        ) {
+          childEvalRoutes.delete(input.authority.payload);
+          throw new ServiceError(
+            "devHost",
+            "eval.resolveChildChallenge",
+            "Child generation was replaced while approval was pending",
+            "EVAL_INTERRUPTED"
+          );
+        }
+        const waiterKey = `${input.authority.payload}\0${input.challengeId}`;
+        if (childChallengeWaiters.has(waiterKey)) {
+          throw new ServiceError(
+            "devHost",
+            "eval.resolveChildChallenge",
+            "Child challenge is already awaiting a parent decision",
+            "EVAL_IDEMPOTENCY_CONFLICT"
+          );
+        }
+        const controller = new AbortController();
+        childChallengeWaiters.set(waiterKey, {
+          authorityPayload: input.authority.payload,
+          controller,
+        });
+        try {
+          return {
+            decision: await deps.resolveChildChallenge({
+              initiator: route.initiator,
+              launch,
+              runId: input.runId,
+              challengeId: input.challengeId,
+              capability: input.capability,
+              resource: input.resource,
+              allowedDecisions: input.allowedDecisions,
+              signal: controller.signal,
+            }),
+          };
+        } finally {
+          childChallengeWaiters.delete(waiterKey);
+        }
+      },
+      "eval.cancelChildChallenge": async (ctx, [input]) => {
+        assertTrustedDevHostExtension(ctx, "eval.cancelChildChallenge");
+        const route = childEvalRoutes.get(input.authority.payload);
+        if (
+          !route ||
+          route.signature !== input.authority.signature ||
+          route.runId !== input.runId ||
+          route.launchId !== input.launchId ||
+          route.hostBuildId !== input.hostBuildId ||
+          route.processIdentity !== input.processIdentity
+        ) {
+          return { cancelled: false };
+        }
+        const waiter = childChallengeWaiters.get(
+          `${input.authority.payload}\0${input.challengeId}`
+        );
+        if (!waiter) return { cancelled: false };
+        waiter.controller.abort();
+        return { cancelled: true };
+      },
+      "eval.completeChildRun": async (ctx, [input]) => {
+        assertTrustedDevHostExtension(ctx, "eval.completeChildRun");
+        const route = childEvalRoutes.get(input.authority.payload);
+        if (
+          !route ||
+          route.signature !== input.authority.signature ||
+          route.runId !== input.runId ||
+          route.launchId !== input.launchId ||
+          route.hostBuildId !== input.hostBuildId ||
+          route.processIdentity !== input.processIdentity
+        ) {
+          return { released: false };
+        }
+        removeChildEvalRoutes((candidate) => candidate === route);
+        return { released: true };
       },
       logs: async (ctx, [input]) => {
         await assertOwned(ctx, input.launchId, "service:devHost.logs");

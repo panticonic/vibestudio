@@ -50,6 +50,7 @@ import type {
 } from "@vibestudio/shared/approvals";
 import {
   formatAccount,
+  formatApprovalDecisionDeadline,
   formatInjection,
   getApprovalAttribution,
   getApprovalCopy,
@@ -67,7 +68,9 @@ import {
 } from "@vibestudio/shared/approvalMarkdown";
 import { DiffViewer, type DiffContentFetcher, type DiffReviewEntry } from "@workspace/ui";
 import {
+  approvalAllowsDecision,
   approvalAccent,
+  primaryApprovalDecision,
   prettifyId,
   truncateId,
   type ApprovalCardIntentBody,
@@ -128,7 +131,7 @@ export function ApprovalCard({
       } else if (approval.kind === "userland") {
         const deny = approval.options.find((option) => option.value === "deny");
         if (deny) emitForApproval({ type: "resolve-userland", choice: deny.value });
-      } else if (approval.kind !== "device-code") {
+      } else if (approval.kind !== "device-code" && approvalAllowsDecision(approval, "deny")) {
         emitForApproval({ type: "decide", decision: "deny" });
       }
     } else if (event.key === "Enter" && !actionPending) {
@@ -142,11 +145,11 @@ export function ApprovalCard({
       } else if (approval.kind === "external-agent") {
         emitForApproval({ type: "resolve-external-agent", behavior: "allow" });
       } else if (approval.kind === "userland") {
-        const primary =
-          approval.options.find((option) => option.tone === "primary") ?? approval.options[0];
+        const primary = primaryUserlandOption(approval);
         if (primary) emitForApproval({ type: "resolve-userland", choice: primary.value });
       } else if (approval.kind !== "device-code") {
-        emitForApproval({ type: "decide", decision: "once" });
+        const decision = primaryApprovalDecision(approval);
+        if (decision) emitForApproval({ type: "decide", decision });
       }
     }
   };
@@ -269,6 +272,10 @@ export function ApprovalCard({
               ) : null}
             </Flex>
 
+            <Text size="1" color="gray">
+              {formatApprovalDecisionDeadline(approval.decisionDeadlineAt)}
+            </Text>
+
             {approval.kind === "credential" && approval.grantResource ? (
               <ApprovalGrantSummary approval={approval} />
             ) : null}
@@ -362,11 +369,7 @@ export function ApprovalCard({
         </Flex>
       </div>
 
-      <fieldset
-        className="approval-card-footer"
-        disabled={actionPending}
-        aria-busy={actionPending}
-      >
+      <fieldset className="approval-card-footer" disabled={actionPending} aria-busy={actionPending}>
         {actions}
         {actionPending ? (
           <Text size="1" color="gray" ml="2" role="status">
@@ -604,39 +607,60 @@ function StandardApprovalActions({
 }) {
   const copy = getStandardActionCopy(approval);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
+  const allowed =
+    approval.kind === "capability" && approval.allowedDecisions
+      ? new Set(approval.allowedDecisions)
+      : null;
+  const primaryDecision = primaryApprovalDecision(approval);
+  const primaryColor = isSevereCapability ? "amber" : "sky";
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
-      <DecisionButton
-        label={copy.once.label}
-        description={copy.once.description}
-        color={isSevereCapability ? "amber" : "sky"}
-        variant="solid"
-        onClick={() => decide("once")}
-      />
-      {copy.session && (
+      {(!allowed || allowed.has("once")) && (
+        <DecisionButton
+          label={copy.once.label}
+          description={copy.once.description}
+          color={primaryDecision === "once" ? primaryColor : undefined}
+          variant={primaryDecision === "once" ? "solid" : "surface"}
+          onClick={() => decide("once")}
+        />
+      )}
+      {allowed?.has("run") && (
+        <DecisionButton
+          label="Allow for run"
+          description="Allow matching calls until this eval run ends."
+          color={primaryDecision === "run" ? primaryColor : undefined}
+          variant={primaryDecision === "run" ? "solid" : "surface"}
+          onClick={() => decide("run")}
+        />
+      )}
+      {copy.session && (!allowed || allowed.has("session")) && (
         <DecisionButton
           label={copy.session.label}
           description={copy.session.description}
-          variant="surface"
+          color={primaryDecision === "session" ? primaryColor : undefined}
+          variant={primaryDecision === "session" ? "solid" : "surface"}
           onClick={() => decide("session")}
         />
       )}
-      {copy.version && (
+      {copy.version && (!allowed || allowed.has("version")) && (
         <DecisionButton
           label={copy.version.label}
           description={copy.version.description}
-          variant="surface"
+          color={primaryDecision === "version" ? primaryColor : undefined}
+          variant={primaryDecision === "version" ? "solid" : "surface"}
           onClick={() => decide("version")}
         />
       )}
-      <DecisionButton
-        label="Deny"
-        description={copy.denyDescription}
-        color="red"
-        icon={<CrossCircledIcon />}
-        style={{ marginLeft: 6 }}
-        onClick={() => decide("deny")}
-      />
+      {(!allowed || allowed.has("deny")) && (
+        <DecisionButton
+          label="Deny"
+          description={copy.denyDescription}
+          color="red"
+          icon={<CrossCircledIcon />}
+          style={{ marginLeft: 6 }}
+          onClick={() => decide("deny")}
+        />
+      )}
       {approval.kind === "capability" ? (
         <DecisionButton
           label="Block"
@@ -646,11 +670,13 @@ function StandardApprovalActions({
           onClick={onBlock}
         />
       ) : null}
-      <Tooltip content="Dismiss">
-        <IconButton size="1" variant="ghost" color="gray" onClick={() => decide("dismiss")}>
-          <Cross2Icon />
-        </IconButton>
-      </Tooltip>
+      {(!allowed || allowed.has("dismiss")) && (
+        <Tooltip content="Dismiss">
+          <IconButton size="1" variant="ghost" color="gray" onClick={() => decide("dismiss")}>
+            <Cross2Icon />
+          </IconButton>
+        </Tooltip>
+      )}
     </Flex>
   );
 }
@@ -834,6 +860,7 @@ function UserlandApprovalActions({
   approval: PendingUserlandApproval;
   onChoose: (choice: string) => void;
 }) {
+  const primaryOption = primaryUserlandOption(approval);
   const oneTimeOption =
     approval.promptOptions === "scoped"
       ? null
@@ -848,8 +875,8 @@ function UserlandApprovalActions({
             key={option.value}
             label={option.label}
             description={option.description ?? option.label}
-            color={option.tone === "danger" ? "red" : option.tone === "primary" ? "sky" : undefined}
-            variant={option.tone === "primary" ? "solid" : "surface"}
+            color={option.tone === "danger" ? "red" : option === primaryOption ? "sky" : undefined}
+            variant={option === primaryOption ? "solid" : "surface"}
             icon={option.tone === "danger" ? <CrossCircledIcon /> : <CheckCircledIcon />}
             onClick={() => onChoose(option.value)}
           />
@@ -876,6 +903,14 @@ function UserlandApprovalActions({
       </Text>
     </Flex>
   );
+}
+
+function primaryUserlandOption(approval: PendingUserlandApproval) {
+  if (approval.defaultAction === "deny") {
+    const deny = approval.options.find((option) => option.value === "deny");
+    if (deny) return deny;
+  }
+  return approval.options.find((option) => option.tone === "primary") ?? approval.options[0];
 }
 
 function ExternalAgentActions({ onDecide }: { onDecide: (behavior: "allow" | "deny") => void }) {
@@ -1154,16 +1189,33 @@ function ApprovalDetails({
             }
           />
         ) : null}
-        <Detail
-          icon={<GlobeIcon />}
-          label="Requester repo"
-          value={<InlineCode>{approval.repoPath}</InlineCode>}
-        />
-        <Detail
-          icon={<LockClosedIcon />}
-          label="Requester version"
-          value={<IdCode value={approval.executionDigest} />}
-        />
+        {approval.repoPath && approval.executionDigest ? (
+          <>
+            <Detail
+              icon={<GlobeIcon />}
+              label="Requester repo"
+              value={<InlineCode>{approval.repoPath}</InlineCode>}
+            />
+            <Detail
+              icon={<LockClosedIcon />}
+              label="Requester version"
+              value={<IdCode value={approval.executionDigest} />}
+            />
+          </>
+        ) : approval.authoritySubject ? (
+          <Detail
+            icon={<LockClosedIcon />}
+            label="Authority subject"
+            value={<IdCode value={approval.authoritySubject} />}
+          />
+        ) : null}
+        {approval.authoritySessionId && !approval.executionDigest ? (
+          <Detail
+            icon={<LockClosedIcon />}
+            label="Authority session"
+            value={<IdCode value={approval.authoritySessionId} />}
+          />
+        ) : null}
         {approval.kind === "credential" ? (
           <CredentialDetails approval={approval} />
         ) : approval.kind === "client-config" ? (
@@ -1619,7 +1671,11 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
                 value={<InlineCode>{`${entry.source.repo}@${entry.source.ref}`}</InlineCode>}
               />
               {entry.sourceDigest ? (
-                <Detail icon={<LockClosedIcon />} label="Source digest" value={<IdCode value={entry.sourceDigest} />} />
+                <Detail
+                  icon={<LockClosedIcon />}
+                  label="Source digest"
+                  value={<IdCode value={entry.sourceDigest} />}
+                />
               ) : null}
               {entry.integrity ? (
                 <Detail

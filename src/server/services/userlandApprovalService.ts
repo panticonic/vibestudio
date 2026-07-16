@@ -20,6 +20,7 @@ import {
   externalAgentSettleSchema,
   secretInputRequestSchema,
   userlandApprovalRequestSchema,
+  userlandQuestionSchema,
   userlandApprovalSubjectIdSchema,
 } from "@vibestudio/shared/approvals";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
@@ -28,6 +29,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EntityRecord, RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { UserlandApprovalGrantStore } from "./userlandApprovalGrantStore.js";
+import { scopedUserlandApprovalOptions } from "./userlandApprovalOptions.js";
 
 const SERVICE_NAME = "userlandApproval";
 /**
@@ -42,45 +44,6 @@ const BINARY_OPTIONS: UserlandApprovalOption[] = [
   { value: "allow", label: "Allow", tone: "primary" },
   { value: "deny", label: "Deny", tone: "danger" },
 ];
-
-function scopedAllowOptions(_principal: ApprovalPrincipal): UserlandApprovalOption[] {
-  return [
-    {
-      value: "once",
-      label: "Allow once",
-      description: "Allow this request only.",
-      tone: "neutral",
-    },
-    {
-      value: "session",
-      label: "Allow this session",
-      description: "Remember for this caller until Vibestudio restarts.",
-      tone: "neutral",
-    },
-    {
-      value: "version",
-      label: "Trust version",
-      description: "Remember for this exact code version.",
-      tone: "primary",
-    },
-    { value: "deny", label: "Deny", description: "Do not allow this request.", tone: "danger" },
-  ];
-}
-
-// Dangerous prompts (or those defaulting to deny) present Deny first so the
-// safe choice leads; other prompts keep the allow-first ordering.
-function scopedOptionsFor(
-  principal: ApprovalPrincipal,
-  req: UserlandApprovalRequest
-): UserlandApprovalOption[] {
-  const options = scopedAllowOptions(principal);
-  if (req.severity === "dangerous" || req.defaultAction === "deny") {
-    const deny = options.filter((option) => option.value === "deny");
-    const rest = options.filter((option) => option.value !== "deny");
-    return [...deny, ...rest];
-  }
-  return options;
-}
 
 export function createUserlandApprovalService(deps: {
   approvalQueue: ApprovalQueue;
@@ -239,6 +202,35 @@ export function createUserlandApprovalService(deps: {
     return requestForPrincipal(ctx, principal, req);
   }
 
+  async function ask(
+    ctx: ServiceContext,
+    rawReq: UserlandApprovalRequest
+  ): Promise<UserlandApprovalChoice> {
+    const req = userlandQuestionSchema.parse(rawReq);
+    const principal = await resolvePrincipal(ctx, "ask");
+    if (!principal) return { kind: "uncallable", reason: "no-user-context" };
+    const issuer = extensionIssuer(ctx);
+    const decoratedReq = decorateForIssuer(req, issuer);
+    const options = decoratedReq.options!;
+    const result = await deps.approvalQueue.requestUserland({
+      principal,
+      issuer,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+      ...decoratedReq,
+      promptOptions: "choices",
+      options,
+    });
+    if (result.kind !== "choice") return result;
+    // Unwrap the queue's optional one-shot envelope, but deliberately ignore
+    // the persistence instruction returned by resolvePromptChoice. `ask` is a
+    // domain interaction, not an authority decision, and can never mint a
+    // caller/session/version grant.
+    return {
+      kind: "choice",
+      choice: resolvePromptChoice("choices", options, result.choice).choice,
+    };
+  }
+
   async function requestAs(
     ctx: ServiceContext,
     rawPrincipal: ApprovalPrincipal,
@@ -321,7 +313,7 @@ export function createUserlandApprovalService(deps: {
     const promptOptions = decoratedReq.promptOptions ?? "scoped";
     const options =
       promptOptions === "scoped"
-        ? scopedOptionsFor(principal, decoratedReq)
+        ? scopedUserlandApprovalOptions(decoratedReq)
         : (decoratedReq.options ?? BINARY_OPTIONS);
     const hit = deps.grantStore.lookup(principal, decoratedReq.subject.id, issuer);
     if (hit) {
@@ -360,7 +352,15 @@ export function createUserlandApprovalService(deps: {
             if (approval.kind !== "userland") return false;
             // Userland approvals always have a panel/app/worker/do principal; the
             // "system" principal is only used for host-initiated prompts.
-            if (approval.callerKind === "system") return false;
+            if (
+              approval.callerKind === "system" ||
+              approval.callerKind === "shell" ||
+              approval.callerKind === "server" ||
+              approval.callerKind === "agent" ||
+              !approval.repoPath ||
+              !approval.executionDigest
+            )
+              return false;
             if (approval.promptOptions !== "scoped") return false;
             if (!approval.options.some((option) => option.value === result.choice)) return false;
             const hit = deps.grantStore.lookup(
@@ -464,27 +464,46 @@ export function createUserlandApprovalService(deps: {
   }
 
   const methods = {
-    request: { args: z.tuple([userlandApprovalRequestSchema]) },
-    requestSecretInput: { args: z.tuple([secretInputRequestSchema]) },
+    request: {
+      args: z.tuple([userlandApprovalRequestSchema]),
+      access: { sensitivity: "write" as const },
+    },
+    ask: {
+      description:
+        "Ask one typed, ephemeral userland question through the shared challenge transport. The answer resumes the exact caller and is never cached or written as a capability grant.",
+      args: z.tuple([userlandQuestionSchema]),
+      access: { sensitivity: "write" as const },
+    },
+    requestSecretInput: {
+      args: z.tuple([secretInputRequestSchema]),
+      access: { sensitivity: "write" as const },
+    },
     requestAs: {
       args: z.tuple([approvalPrincipalSchema, userlandApprovalRequestSchema]),
       authority: { principals: ["code"] },
+      access: { sensitivity: "write" as const },
     },
     requestSecretInputAs: {
       args: z.tuple([approvalPrincipalSchema, secretInputRequestSchema]),
       authority: { principals: ["code"] },
+      access: { sensitivity: "write" as const },
     },
     // External-agent relay: bound agent runtimes may be either DOs or workers.
     requestExternal: {
       args: z.tuple([externalAgentApprovalRequestSchema]),
       authority: { principals: ["code"] },
+      access: { sensitivity: "write" as const },
     },
     settleExternal: {
       args: z.tuple([externalAgentSettleSchema]),
       authority: { principals: ["code"] },
+      access: { sensitivity: "write" as const },
     },
-    revoke: { args: z.tuple([userlandApprovalSubjectIdSchema]) },
-    list: { args: z.tuple([]) },
+    revoke: {
+      args: z.tuple([userlandApprovalSubjectIdSchema]),
+      access: { sensitivity: "destructive" as const },
+    },
+    list: { args: z.tuple([]), access: { sensitivity: "read" as const } },
   } satisfies ServiceDefinition["methods"];
 
   return {
@@ -494,6 +513,7 @@ export function createUserlandApprovalService(deps: {
     methods,
     handler: defineServiceHandler(SERVICE_NAME, methods, {
       request: (ctx, [requestArg]) => request(ctx, requestArg),
+      ask: (ctx, [requestArg]) => ask(ctx, requestArg),
       requestSecretInput: (ctx, [requestArg]) => requestSecretInput(ctx, requestArg),
       requestAs: (ctx, [principal, requestArg]) => requestAs(ctx, principal, requestArg),
       requestSecretInputAs: (ctx, [principal, requestArg]) =>

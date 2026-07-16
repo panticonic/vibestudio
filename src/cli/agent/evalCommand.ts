@@ -8,7 +8,8 @@
  * a context-relative file the server reads itself.
  */
 import * as fs from "node:fs";
-import { evalMethods } from "@vibestudio/service-schemas/eval";
+import { evalMethods, evalStartInputSchema } from "@vibestudio/service-schemas/eval";
+import { executeEval } from "@vibestudio/service-schemas/clients/evalClient";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import {
   jsonMode,
@@ -89,6 +90,20 @@ function parseImports(inv: ParsedInvocation): Record<string, string> | undefined
   return parsed as Record<string, string>;
 }
 
+function parseJsonArrayFlag(inv: ParsedInvocation, name: string): unknown[] | undefined {
+  const raw = inv.flags[name];
+  if (typeof raw !== "string") return undefined;
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!Array.isArray(value)) throw new Error("expected an array");
+    return value;
+  } catch (error) {
+    throw new UsageError(
+      `--${name} must be a JSON array: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
 function parseSyntax(
   inv: ParsedInvocation
 ): "javascript" | "typescript" | "jsx" | "tsx" | undefined {
@@ -101,16 +116,22 @@ function parseSyntax(
 }
 
 /**
- * Race an eval RPC against the local timeout. The server keeps running the
- * eval if the deadline trips — the CLI just stops waiting and reports a
- * timeout (exit 4), preserving the previous `--timeout` contract.
+ * Race lifecycle observation against the local timeout. The same deadline is
+ * persisted with the run, and aborting observation immediately requests
+ * cooperative server-side cancellation before the CLI reports exit 4.
  */
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      reject(new TimeoutError(`eval timed out after ${timeoutMs}ms (still running server-side)`));
+      controller.abort();
+      reject(
+        new TimeoutError(
+          `eval timed out after ${timeoutMs}ms; cooperative cancellation was requested`
+        )
+      );
     }, timeoutMs);
-    promise.then(
+    run(controller.signal).then(
       (value) => {
         clearTimeout(timer);
         resolve(value);
@@ -134,6 +155,8 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     const code = await resolveCode(inv, serverPath);
     const timeoutMs = parseTimeout(inv);
     const imports = parseImports(inv);
+    const requests = parseJsonArrayFlag(inv, "requests");
+    const preauthorize = parseJsonArrayFlag(inv, "preauthorize");
     const syntax = parseSyntax(inv);
     // Scope (credential + context + owner identity) is fully resolved by
     // resolveSessionScope — including the agent-token path, which has no device
@@ -143,26 +166,38 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     const evalClient = typedClient("eval", evalMethods, client);
     const subKey = session.scopeKey;
 
-    // --fresh-scope wipes the persistent scope (and user db) before the run, so
-    // the snippet starts from an empty REPL scope.
-    if (inv.flags["fresh-scope"] === true) {
-      await evalClient.reset({ ownerId: session.entityId, contextId, subKey });
-    }
-
-    const runArgs = {
-      ownerId: session.entityId,
-      contextId,
-      subKey,
-      code,
-      path: serverPath,
-      syntax,
+    const runArgs = evalStartInputSchema.parse({
+      target: {
+        kind: "attached-session" as const,
+        ownerId: session.entityId,
+        contextId,
+      },
+      scope: {
+        key: subKey,
+        ...(inv.flags["fresh-scope"] === true ? { reset: true } : {}),
+      },
+      source:
+        serverPath !== undefined
+          ? { kind: "context-file" as const, path: serverPath, syntax }
+          : { kind: "inline" as const, code: code ?? "", syntax },
       imports,
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-    };
+      ...(timeoutMs !== undefined ? { deadlineMs: timeoutMs } : {}),
+      ...(typeof inv.flags["idempotency-key"] === "string"
+        ? { idempotencyKey: inv.flags["idempotency-key"] }
+        : {}),
+      authority: {
+        ...(inv.flags["strict"] === true || requests
+          ? { mode: "strict" as const, requests: requests ?? [] }
+          : {}),
+        ...(inv.flags["read-only"] === true ? { effects: "read-only" as const } : {}),
+        ...(inv.flags["pregranted-only"] === true ? { approvals: "pregranted-only" as const } : {}),
+        ...(preauthorize ? { preauthorize } : {}),
+      },
+    });
     const result =
       timeoutMs !== undefined
-        ? await withTimeout(evalClient.run(runArgs), timeoutMs)
-        : await evalClient.run(runArgs);
+        ? await withTimeout((signal) => executeEval(evalClient, runArgs, { signal }), timeoutMs)
+        : await executeEval(evalClient, runArgs);
 
     if (json) {
       printResult(result, { json: true });
@@ -194,15 +229,14 @@ async function evalReplReset(inv: ParsedInvocation): Promise<number> {
     const { client, contextId, session } = resolveSessionScope(inv);
     const evalClient = typedClient("eval", evalMethods, client);
     const result = await evalClient.reset({
-      ownerId: session.entityId,
-      contextId,
-      subKey: session.scopeKey,
+      target: { kind: "attached-session", ownerId: session.entityId, contextId },
+      scope: { key: session.scopeKey },
     });
     printResult(result, {
       json,
       human: () => console.log(`scope reset for session ${session.name}`),
     });
-    return result.ok ? 0 : 1;
+    return result.status === "reset" ? 0 : 1;
   } catch (error) {
     return printError(error, { json });
   }
@@ -230,6 +264,36 @@ export const evalCommands: CliCommand[] = [
         name: "fresh-scope",
         takesValue: false,
         description: "Reset the REPL scope before running",
+      },
+      {
+        name: "read-only",
+        takesValue: false,
+        description: "Allow only methods canonically declared as reads",
+      },
+      {
+        name: "strict",
+        takesValue: false,
+        description: "Use an exact strict authority envelope (empty unless --requests is supplied)",
+      },
+      {
+        name: "requests",
+        takesValue: true,
+        description: "JSON capability-scope array for strict mode",
+      },
+      {
+        name: "preauthorize",
+        takesValue: true,
+        description: "JSON canonical call-intent array to approve before code starts",
+      },
+      {
+        name: "idempotency-key",
+        takesValue: true,
+        description: "Return the same handle for an equivalent lost-response retry",
+      },
+      {
+        name: "pregranted-only",
+        takesValue: false,
+        description: "Never prompt; return a structured missing-grant error",
       },
       {
         name: "syntax",

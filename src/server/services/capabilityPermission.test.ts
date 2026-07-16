@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
+  authoritySessionIdForCaller,
+  constrainApprovalDecisions,
   normalizeCallerKind,
   panelCapabilityResourceKey,
   requestCapabilityPermission,
@@ -23,6 +25,7 @@ function createApprovalQueueMock(
 ): ApprovalQueue {
   return {
     request: vi.fn(async () => decision),
+    requestCapability: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
@@ -47,15 +50,24 @@ function createApprovalQueueMock(
 }
 
 describe("capabilityPermission", () => {
+  it("intersects operation policy with the acquisition's available decisions", () => {
+    expect(
+      constrainApprovalDecisions(
+        ["once", "run", "session", "version", "deny", "dismiss"],
+        ["once", "deny", "dismiss"]
+      )
+    ).toEqual(["once", "deny", "dismiss"]);
+  });
+
   it("stores session approvals as canonical authority grants", () => {
     const store = new CapabilityGrantStore({ statePath: tempStatePath() });
     store.grant(
       "native.notifications",
       "desktop",
       {
-        callerId: "app:apps/shell:window-1",
-        repoPath: "apps/shell",
-        executionDigest: DIGEST_A,
+        principal: `code:apps/shell@${DIGEST_A}`,
+        sessionId: "app:apps/shell:window-1",
+        code: { repoPath: "apps/shell", executionDigest: DIGEST_A },
       },
       "session",
       undefined,
@@ -94,6 +106,7 @@ describe("capabilityPermission", () => {
           callerKind: "panel",
           repoPath: "panels/source",
           executionDigest: DIGEST_A,
+          delegations: [],
           requested: [
             { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
             { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -120,9 +133,10 @@ describe("capabilityPermission", () => {
       allowed: true,
     });
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
+        authoritySessionId: authoritySessionIdForCaller(request.caller),
         requestedByUserId: "usr_requester",
         resource: {
           type: "example",
@@ -131,6 +145,49 @@ describe("capabilityPermission", () => {
         },
       })
     );
+  });
+
+  it("prompts and reuses a canonical user-principal session grant without fake code metadata", async () => {
+    const approvalQueue = createApprovalQueueMock("session");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+    const request = {
+      caller: createVerifiedCaller("shell:device-1", "shell", null, null, {
+        userId: "usr_interactive",
+        handle: "interactive",
+      }),
+      capability: "example-capability",
+      authoritySessionId: "session-1",
+      resource: { type: "example", label: "Example", value: "stable-key" },
+      title: "Interactive eval action",
+      deniedReason: "Denied",
+      allowedDecisions: ["session", "version", "deny"] as Array<"session" | "version" | "deny">,
+    };
+
+    await expect(requestCapabilityPermission(deps, request)).resolves.toMatchObject({
+      allowed: true,
+    });
+    await expect(requestCapabilityPermission(deps, request)).resolves.toMatchObject({
+      allowed: true,
+    });
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callerKind: "shell",
+        authoritySubject: "user:usr_interactive",
+        authoritySessionId: "session-1",
+        allowedDecisions: ["session", "deny"],
+      })
+    );
+    expect(deps.grantStore.listSession()).toEqual([
+      expect.objectContaining({
+        subject: "user:usr_interactive",
+        binding: { kind: "principal" },
+        constraints: { sessionId: "session-1" },
+      }),
+    ]);
   });
 
   it("reuses version-scoped capability grants", async () => {
@@ -145,6 +202,7 @@ describe("capabilityPermission", () => {
         callerKind: "worker",
         repoPath: "workers/source",
         executionDigest: DIGEST_A,
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -159,7 +217,7 @@ describe("capabilityPermission", () => {
     await requestCapabilityPermission(deps, request);
     await requestCapabilityPermission(deps, request);
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
   });
 
   it("does not reuse a version grant for a different artifact digest", async () => {
@@ -174,6 +232,7 @@ describe("capabilityPermission", () => {
         callerKind: "worker" as const,
         repoPath: "workers/source",
         executionDigest,
+        delegations: [],
         requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
       }),
       capability: "example-capability",
@@ -185,7 +244,7 @@ describe("capabilityPermission", () => {
     await requestCapabilityPermission(deps, request(DIGEST_A));
     await requestCapabilityPermission(deps, request(DIGEST_B));
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed before prompting when code has no exact artifact digest", async () => {
@@ -202,6 +261,7 @@ describe("capabilityPermission", () => {
           callerKind: "worker",
           repoPath: "workers/source",
           executionDigest: "unknown",
+          delegations: [],
           requested: [
             { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
             { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -216,7 +276,7 @@ describe("capabilityPermission", () => {
       allowed: false,
       reason: "capability caller execution digest must be a full lowercase SHA-256 digest",
     });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.requestCapability).not.toHaveBeenCalled();
   });
 
   it("shares version grants across incarnations of the same exact code artifact", async () => {
@@ -239,6 +299,7 @@ describe("capabilityPermission", () => {
         callerKind: "do",
         repoPath: "workers/eval",
         executionDigest: DIGEST_A,
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -252,6 +313,7 @@ describe("capabilityPermission", () => {
         callerKind: "do",
         repoPath: "workers/eval",
         executionDigest: DIGEST_A,
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -265,6 +327,7 @@ describe("capabilityPermission", () => {
         callerKind: "do",
         repoPath: "workers/eval",
         executionDigest: DIGEST_A,
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -272,7 +335,7 @@ describe("capabilityPermission", () => {
       }),
     });
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
   });
 
   it("refuses the retired caller-bound grant format without rewriting it", () => {
@@ -348,6 +411,7 @@ describe("capabilityPermission", () => {
         callerKind: "panel",
         repoPath: "panels/source",
         executionDigest: DIGEST_A,
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -361,6 +425,7 @@ describe("capabilityPermission", () => {
         callerKind: "panel",
         repoPath: "panels/source",
         executionDigest: DIGEST_A,
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -368,7 +433,7 @@ describe("capabilityPermission", () => {
       }),
     });
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(2);
   });
 
   it("keeps session network grants scoped to the requested origin", async () => {
@@ -382,6 +447,7 @@ describe("capabilityPermission", () => {
       callerKind: "worker",
       repoPath: "workers/network",
       executionDigest: DIGEST_A,
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -405,15 +471,15 @@ describe("capabilityPermission", () => {
     await requestCapabilityPermission(deps, requestForOrigin("https://one.example"));
     await requestCapabilityPermission(deps, requestForOrigin("https://two.example"));
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.requestCapability).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         grantResourceKey: "https://one.example",
         resourceScope: { kind: "origin", origin: "https://one.example" },
       })
     );
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         grantResourceKey: "https://two.example",
@@ -433,6 +499,7 @@ describe("capabilityPermission", () => {
       callerKind: "worker",
       repoPath: "workers/network",
       executionDigest: DIGEST_A,
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -465,7 +532,7 @@ describe("capabilityPermission", () => {
       requestFor("cors-response-read", "https://two.example")
     );
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(2);
   });
 
   it("shares broad network trust across incarnations of one exact artifact", async () => {
@@ -480,6 +547,7 @@ describe("capabilityPermission", () => {
         callerKind: "do",
         repoPath: "workers/eval",
         executionDigest: DIGEST_A,
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -512,7 +580,7 @@ describe("capabilityPermission", () => {
       requestFor("do:workers/eval:EvalDO:two", "https://two.example")
     );
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(1);
   });
 
   it("supports requester-entity scoped panel grants even for repo/version approvals", async () => {
@@ -538,6 +606,7 @@ describe("capabilityPermission", () => {
       callerKind: "panel",
       repoPath: "panels/source",
       executionDigest: DIGEST_A,
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -564,6 +633,7 @@ describe("capabilityPermission", () => {
       callerKind: "panel",
       repoPath: "panels/source",
       executionDigest: DIGEST_A,
+      delegations: [],
       requested: [
         { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
         { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -580,14 +650,14 @@ describe("capabilityPermission", () => {
 
     // Each requester entity is scoped by its own resource key, so a version/repo
     // grant from one requester does not satisfy another's prompt.
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.requestCapability).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         grantResourceKey: panelCapabilityResourceKey(targetPanelId, firstCaller.runtime.id),
       })
     );
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         grantResourceKey: panelCapabilityResourceKey(targetPanelId, secondCaller.runtime.id),
@@ -608,6 +678,7 @@ describe("capabilityPermission", () => {
         callerKind: "panel",
         repoPath: "panels/source",
         executionDigest: DIGEST_A,
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -625,7 +696,7 @@ describe("capabilityPermission", () => {
       deniedReason: "Denied",
     });
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(approvalQueue.requestCapability).toHaveBeenCalledWith(
       expect.objectContaining({
         severity: "severe",
       })
@@ -661,6 +732,7 @@ describe("capabilityPermission", () => {
         callerKind: "worker",
         repoPath: "workers/source",
         executionDigest: DIGEST_A,
+        delegations: [],
         requested: [
           { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
           { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
@@ -675,6 +747,6 @@ describe("capabilityPermission", () => {
     await requestCapabilityPermission(deps, request);
     await requestCapabilityPermission(deps, request);
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.requestCapability).toHaveBeenCalledTimes(2);
   });
 });

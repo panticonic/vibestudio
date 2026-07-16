@@ -76,6 +76,7 @@ const workerCtx: ServiceContext = {
     callerKind: "worker",
     repoPath: "workers/alpha",
     executionDigest: TEST_EXECUTION_DIGEST,
+    delegations: [],
     requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
   }),
 };
@@ -85,6 +86,7 @@ const doCtx: ServiceContext = {
     callerKind: "do",
     repoPath: "workers/alpha",
     executionDigest: TEST_EXECUTION_DIGEST,
+    delegations: [],
     requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
   }),
 };
@@ -95,6 +97,7 @@ const extensionCtx: ServiceContext = {
     callerKind: "panel",
     repoPath: "panels/alpha",
     executionDigest: PANEL_EXECUTION_DIGEST,
+    delegations: [],
     requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
   },
 };
@@ -154,6 +157,7 @@ describe("userlandApprovalService", () => {
         callerKind: "panel",
         repoPath: "workers/alpha",
         executionDigest: TEST_EXECUTION_DIGEST,
+        delegations: [],
         requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
       }),
     };
@@ -207,6 +211,28 @@ describe("userlandApprovalService", () => {
       choice: "allow",
     });
     expect(queued).not.toHaveBeenCalled();
+  });
+
+  it("asks an ephemeral typed question without reading or writing grants", async () => {
+    const { service, queued, lookup, record } = createDeps();
+    queued.mockResolvedValueOnce({ kind: "choice", choice: "once:continue" });
+    const question = {
+      ...validRequest,
+      subject: { id: "eval:test-question", label: "Eval test question" },
+      title: "Continue the harmless test?",
+      options: [
+        { value: "continue", label: "Continue" },
+        { value: "cancel", label: "Cancel" },
+      ],
+    };
+
+    await expect(service.handler(workerCtx, "ask", [question])).resolves.toEqual({
+      kind: "choice",
+      choice: "continue",
+    });
+    expect(lookup).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(queued).toHaveBeenCalledTimes(1);
   });
 
   it("revokes stale cached choices and prompts when the current options changed", async () => {

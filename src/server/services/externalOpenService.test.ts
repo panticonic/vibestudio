@@ -1,245 +1,60 @@
-import {
-  createVerifiedCaller,
-  DEFERRED_RESULT,
-  isDeferredResult,
-} from "@vibestudio/shared/serviceDispatcher";
-import { describe, expect, it, vi } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { EventService } from "@vibestudio/shared/eventsService";
+import { describe, expect, it, vi } from "vitest";
 import { createExternalOpenService } from "./externalOpenService.js";
-import { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import type { ApprovalQueue } from "./approvalQueue.js";
 
 describe("externalOpenService", () => {
-  function tempStatePath(): string {
-    return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-external-open-"));
-  }
+  const panelCaller = () => createVerifiedCaller("panel-1", "panel");
 
-  function createApprovalQueueMock(): ApprovalQueue {
-    return {
-      request: vi.fn(async () => "session" as const),
-      requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
-      requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
-      requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
-      requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
-      presentDeviceCode: vi.fn(() => ({
-        approvalId: "device-code-test",
-        cancelled: new AbortController().signal,
-        dispose: vi.fn(),
-      })),
-      resolve: vi.fn(),
-      resolveUserland: vi.fn(),
-      requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
-      resolveExternalAgent: vi.fn(),
-      settleExternalAgent: vi.fn(() => 0),
-      resolveExternalAgentByRequest: vi.fn(async () => 0),
-      submitClientConfig: vi.fn(),
-      submitSecretInput: vi.fn(),
-      submitCredentialInput: vi.fn(),
-      listPending: vi.fn(() => []),
-      cancelForCaller: vi.fn(),
-    };
-  }
-
-  const panelCaller = () =>
-    createVerifiedCaller("panel-1", "panel", {
-      callerId: "panel-1",
-      callerKind: "panel",
-      repoPath: "panels/example",
-      executionDigest: "a".repeat(64),
-      requested: [
-        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
-        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
-      ],
-    });
-
-  const workerCaller = () =>
-    createVerifiedCaller("worker-1", "worker", {
-      callerId: "worker-1",
-      callerKind: "worker",
-      repoPath: "workers/example",
-      executionDigest: "a".repeat(64),
-      requested: [
-        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
-        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
-      ],
-    });
-
-  const doCaller = () =>
-    createVerifiedCaller("do:workers/example:ExampleDO:agent-1", "do", {
-      callerId: "do:workers/example:ExampleDO:agent-1",
-      callerKind: "do",
-      repoPath: "workers/example",
-      executionDigest: "a".repeat(64),
-      requested: [
-        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
-        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
-      ],
-    });
-
-  it("requests approval for DO opens", async () => {
-    const eventService = new EventService();
-    const approvalQueue = createApprovalQueueMock();
-    const service = createExternalOpenService({
-      eventService,
-      approvalQueue,
-      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-    });
-
-    await expect(
-      service.handler({ caller: doCaller() }, "openExternal", ["https://example.com/path"])
-    ).resolves.toEqual({ approvalDecision: "session" });
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        callerId: "do:workers/example:ExampleDO:agent-1",
-        callerKind: "do",
-        repoPath: "workers/example",
-      })
-    );
-  });
-
-  it("requests approval for panel opens and emits approved browser events", async () => {
+  it("emits the approved browser event and reports the dispatcher-owned decision", async () => {
     const eventService = new EventService();
     const emit = vi.spyOn(eventService, "emit");
-    const approvalQueue = createApprovalQueueMock();
-    const grantStore = new CapabilityGrantStore({ statePath: tempStatePath() });
-    const service = createExternalOpenService({
-      eventService,
-      approvalQueue,
-      grantStore,
-    });
+    const service = createExternalOpenService({ eventService });
 
-    const result = await service.handler({ caller: panelCaller() }, "openExternal", [
-      "https://example.com/path?q=1#fragment",
-    ]);
-
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "capability",
-        capability: "external-browser-open",
-        resource: {
-          type: "url-origin",
-          label: "Origin",
-          value: "https://example.com",
+    await expect(
+      service.handler(
+        {
+          caller: panelCaller(),
+          authorityDecisions: new Map([["external-browser-open", "session"]]),
         },
-      })
-    );
+        "openExternal",
+        ["https://example.com/path?q=1#fragment"]
+      )
+    ).resolves.toEqual({ approvalDecision: "session" });
     expect(emit).toHaveBeenCalledWith("external-open:open", {
       url: "https://example.com/path?q=1",
       callerId: "panel-1",
       callerKind: "panel",
     });
-    expect(result).toEqual({ approvalDecision: "session" });
   });
 
-  it("defers the open for a deferrable DO caller and opens only after approval", async () => {
+  it("attributes an eval-authorized open to the initiating caller", async () => {
     const eventService = new EventService();
     const emit = vi.spyOn(eventService, "emit");
-    const approvalQueue = createApprovalQueueMock();
-    const grantStore = new CapabilityGrantStore({ statePath: tempStatePath() });
-    const service = createExternalOpenService({ eventService, approvalQueue, grantStore });
+    const service = createExternalOpenService({ eventService });
+    const evalCaller = createVerifiedCaller("do:product/eval:EvalDO:scope", "do");
+    const initiator = createVerifiedCaller("panel-initiator", "panel");
 
-    let capturedWork: ((signal: AbortSignal) => Promise<unknown>) | null = null;
-    const ctx = {
-      caller: doCaller(),
-      requestId: "req-open-1",
-      deferral: {
-        canDefer: true,
-        run: (work: (signal: AbortSignal) => Promise<unknown>) => {
-          capturedWork = work;
-          return { [DEFERRED_RESULT]: true as const, requestId: "req-open-1" };
-        },
-      },
-    };
-
-    const outcome = await service.handler(ctx, "openExternal", ["https://example.com/x"]);
-    // Acked as deferred; no approval prompt and no browser open happened inline.
-    expect(isDeferredResult(outcome)).toBe(true);
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(emit).not.toHaveBeenCalledWith("external-open:open", expect.anything());
-    expect(capturedWork).toBeTypeOf("function");
-
-    // Running the deferred work approves, then opens the browser.
-    const result = await capturedWork!(new AbortController().signal);
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    await service.handler({ caller: evalCaller, authorizingCaller: initiator }, "openExternal", [
+      "mailto:hello@example.com",
+    ]);
     expect(emit).toHaveBeenCalledWith(
       "external-open:open",
-      expect.objectContaining({ url: "https://example.com/x" })
+      expect.objectContaining({ callerId: "panel-initiator", callerKind: "panel" })
     );
-    expect(result).toEqual({ approvalDecision: "session" });
-  });
-
-  it("runs inline (no deferral) when a grant already exists for a deferrable caller", async () => {
-    const eventService = new EventService();
-    const approvalQueue = createApprovalQueueMock();
-    const grantStore = new CapabilityGrantStore({ statePath: tempStatePath() });
-    const service = createExternalOpenService({ eventService, approvalQueue, grantStore });
-
-    // First open establishes a session grant for this DO caller.
-    await service.handler({ caller: doCaller() }, "openExternal", ["https://example.com/a"]);
-    approvalQueue.request = vi.fn(async () => "session" as const) as never;
-
-    const run = vi.fn();
-    const ctx = {
-      caller: doCaller(),
-      requestId: "req-open-2",
-      deferral: { canDefer: true, run },
-    };
-    // Same origin is already granted → fast path runs inline, never defers.
-    const result = await service.handler(ctx, "openExternal", ["https://example.com/b"]);
-    expect(run).not.toHaveBeenCalled();
-    expect(isDeferredResult(result)).toBe(false);
-  });
-
-  it("reuses grants for the same origin", async () => {
-    const eventService = new EventService();
-    const approvalQueue = createApprovalQueueMock();
-    const service = createExternalOpenService({
-      eventService,
-      approvalQueue,
-      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-    });
-
-    await service.handler({ caller: workerCaller() }, "openExternal", ["https://example.com/a"]);
-    await service.handler({ caller: workerCaller() }, "openExternal", ["https://example.com/b"]);
-
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not reuse allow-once browser approvals", async () => {
-    const eventService = new EventService();
-    const approvalQueue = createApprovalQueueMock();
-    vi.mocked(approvalQueue.request).mockResolvedValue("once");
-    const service = createExternalOpenService({
-      eventService,
-      approvalQueue,
-      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-    });
-
-    await service.handler({ caller: workerCaller() }, "openExternal", ["https://example.com/a"]);
-    await service.handler({ caller: workerCaller() }, "openExternal", ["https://example.com/b"]);
-
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
   });
 
   it("rejects non-browser schemes", async () => {
     const service = createExternalOpenService({ eventService: new EventService() });
-
     await expect(
       service.handler({ caller: panelCaller() }, "openExternal", ["file:///etc/passwd"])
     ).rejects.toThrow("openExternal only supports http(s) and mailto URLs");
   });
 
-  it("validates OAuth authorize URLs when an expected redirect URI is supplied", async () => {
+  it("validates OAuth redirect URIs before emitting the open", async () => {
     const eventService = new EventService();
-    const approvalQueue = createApprovalQueueMock();
-    const service = createExternalOpenService({
-      eventService,
-      approvalQueue,
-      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-    });
+    const emit = vi.spyOn(eventService, "emit");
+    const service = createExternalOpenService({ eventService });
     const authorizeUrl = new URL("https://login.example.com/oauth/authorize");
     authorizeUrl.searchParams.set("response_type", "code");
     authorizeUrl.searchParams.set("client_id", "client-1");
@@ -254,12 +69,12 @@ describe("externalOpenService", () => {
         { expectedRedirectUri: "http://localhost:1456/auth/callback" },
       ])
     ).rejects.toThrow("redirect_uri does not match");
+    expect(emit).not.toHaveBeenCalled();
 
     await service.handler({ caller: panelCaller() }, "openExternal", [
       authorizeUrl.toString(),
       { expectedRedirectUri: "http://localhost:1455/auth/callback" },
     ]);
-
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,471 +1,137 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
   createVerifiedCaller,
   type ServiceContext,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
-import { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
+import { contextBoundaryResourceKey } from "./contextBoundary.js";
 import {
-  requirePanelAccessPermission,
+  preparePanelAccessAuthority,
   type PanelAccessPermissionDeps,
 } from "./panelAccessPermission.js";
-import type { ApprovalQueue } from "./approvalQueue.js";
 
-function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-access-"));
-}
-
-function approvalQueueMock(
-  decision: Awaited<ReturnType<ApprovalQueue["request"]>> = "session"
-): ApprovalQueue {
-  return {
-    request: vi.fn(async () => decision),
-    requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
-    requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
-    requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
-    requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
-    presentDeviceCode: vi.fn(() => ({
-      approvalId: "device-code-test",
-      cancelled: new AbortController().signal,
-      dispose: vi.fn(),
-    })),
-    resolve: vi.fn(),
-    resolveUserland: vi.fn(),
-    requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
-    resolveExternalAgent: vi.fn(),
-    settleExternalAgent: vi.fn(() => 0),
-    resolveExternalAgentByRequest: vi.fn(async () => 0),
-    submitClientConfig: vi.fn(),
-    submitSecretInput: vi.fn(),
-    submitCredentialInput: vi.fn(),
-    listPending: vi.fn(() => []),
-    cancelForCaller: vi.fn(),
-  };
-}
-
-/** A code-identity panel caller (carries `.code`, so it is its own subject). */
-function panelCaller(entityId: string, repoPath = "panels/requester"): VerifiedCaller {
-  return createVerifiedCaller(entityId, "panel", {
-    callerId: entityId,
+function panelCaller(id: string, repoPath = "panels/requester"): VerifiedCaller {
+  return createVerifiedCaller(id, "panel", {
+    callerId: id,
     callerKind: "panel",
     repoPath,
     executionDigest: "a".repeat(64),
-    requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
+    delegations: [],
+    requested: [],
   });
 }
 
-function panelCtx(entityId = "panel:requester"): ServiceContext {
-  return authorityCtx(panelCaller(entityId), false);
-}
-
-function authorityCtx(caller: VerifiedCaller, panelHosting: boolean): ServiceContext {
+function ctx(caller: VerifiedCaller, panelHosting = false): ServiceContext {
   return {
     caller,
     authority: {
       allows: vi.fn(async ({ capability }) => capability === "panel-hosting" && panelHosting),
-      assert: vi.fn(async () => undefined),
+      assert: vi.fn(),
     },
   };
 }
 
-/**
- * Build the context-boundary deps for the panel gate. Defaults model a caller in
- * `ctx-caller` acting on a target in `ctx-target` that already exists — i.e. a
- * cross-context op that prompts. Override `resolveCallerContext`/`contextExists`
- * (or the target's `contextId`) to exercise the same-context / fresh branches.
- */
-function accessDeps(overrides: Partial<PanelAccessPermissionDeps> = {}): PanelAccessPermissionDeps {
+function deps(overrides: Partial<PanelAccessPermissionDeps> = {}): PanelAccessPermissionDeps {
   return {
-    approvalQueue: approvalQueueMock(),
-    grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
     contextExists: vi.fn(() => true),
     resolveContextOwnerLabel: vi.fn(() => "owner"),
     resolveCallerContext: vi.fn(async () => "ctx-caller"),
     resolveEntityContext: vi.fn(() => "ctx-target"),
-    resolveSubjectCaller: vi.fn((id: string) =>
-      createVerifiedCaller(id, "panel", {
-        callerId: id,
-        callerKind: "panel",
-        repoPath: "panels/anchor",
-        executionDigest: "a".repeat(64),
-        requested: [
-          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
-          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
-        ],
-      })
-    ),
+    resolveSubjectCaller: vi.fn((id: string) => panelCaller(id, "panels/anchor")),
     ...overrides,
   };
 }
 
-describe("panelAccessPermission", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("allows open operations without prompting", async () => {
-    const approvalQueue = approvalQueueMock();
-    const deps = accessDeps({ approvalQueue });
-
-    const result = await requirePanelAccessPermission(deps, panelCtx(), "read", {
-      id: "target",
-      title: "Target",
-      contextId: "ctx-target",
-    });
-
-    expect(result).toEqual({ allowed: true });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-  });
-
-  it("allows acting on a panel in the caller's own context without prompting", async () => {
-    const approvalQueue = approvalQueueMock();
-    const deps = accessDeps({
-      approvalQueue,
-      resolveCallerContext: vi.fn(async () => "ctx-shared"),
-    });
-
-    const result = await requirePanelAccessPermission(deps, panelCtx("panel:one"), "cdp", {
-      id: "target",
-      title: "Target",
-      contextId: "ctx-shared",
-    });
-
-    expect(result).toEqual({ allowed: true });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-  });
-
-  it("allows a panel to act on itself (same context) without prompting", async () => {
-    const approvalQueue = approvalQueueMock("deny");
-    const deps = accessDeps({
-      approvalQueue,
-      resolveCallerContext: vi.fn(async () => "ctx-self"),
-      resolveEntityContext: vi.fn(() => "ctx-self"),
-    });
-
-    const result = await requirePanelAccessPermission(
-      deps,
-      panelCtx("panel:entity-a"),
-      "stateArgs.set",
-      { id: "slot-a", runtimeEntityId: "panel:entity-a" }
-    );
-
-    expect(result).toEqual({ allowed: true });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-  });
-
-  it("allows replacing a panel with no context change without prompting", async () => {
-    const approvalQueue = approvalQueueMock("deny");
-    const deps = accessDeps({ approvalQueue });
-
-    const result = await requirePanelAccessPermission(
-      deps,
-      panelCtx("panel:entity-a"),
-      "replacePanel",
-      { id: "slot-a", runtimeEntityId: "panel:entity-a" }
-    );
-
-    expect(result).toEqual({ allowed: true });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-  });
-
-  it("prompts once when acting on a panel in another, already-existing context", async () => {
-    const approvalQueue = approvalQueueMock("session");
-    const contextExists = vi.fn(() => true);
-    const deps = accessDeps({
-      approvalQueue,
-      contextExists,
-      resolveCallerContext: vi.fn(async () => "ctx-caller"),
-    });
-
-    const result = await requirePanelAccessPermission(deps, panelCtx("panel:one"), "cdp", {
-      id: "target",
-      title: "Target",
-      contextId: "ctx-target",
-    });
-
-    expect(result).toEqual({ allowed: true, prompted: true });
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability: CONTEXT_BOUNDARY_CAPABILITY,
-        grantResourceKey: contextBoundaryResourceKey("ctx-target", "panel:one"),
-      })
-    );
-    expect(contextExists).toHaveBeenCalledWith("ctx-target");
-  });
-
-  it("allows acting on a brand-new (non-existent) foreign context without prompting", async () => {
-    const approvalQueue = approvalQueueMock("session");
-    const deps = accessDeps({
-      approvalQueue,
-      contextExists: vi.fn(() => false),
-      resolveCallerContext: vi.fn(async () => "ctx-caller"),
-    });
-
-    const result = await requirePanelAccessPermission(deps, panelCtx("panel:one"), "cdp", {
-      id: "target",
-      title: "Target",
-      contextId: "ctx-fresh",
-    });
-
-    expect(result).toEqual({ allowed: true });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-  });
-
-  it("remembers a cross-context grant per (target context, subject)", async () => {
-    const approvalQueue = approvalQueueMock("version");
-    const deps = accessDeps({
-      approvalQueue,
-      contextExists: vi.fn(() => true),
-      resolveCallerContext: vi.fn(async () => "ctx-caller"),
-    });
-    const target = { id: "target", title: "Target", contextId: "ctx-target" };
-
-    await requirePanelAccessPermission(deps, panelCtx("panel:one"), "cdp", target);
-    await requirePanelAccessPermission(deps, panelCtx("panel:one"), "cdp", target);
-    await requirePanelAccessPermission(deps, panelCtx("panel:two"), "cdp", target);
-
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        capability: CONTEXT_BOUNDARY_CAPABILITY,
-        grantResourceKey: contextBoundaryResourceKey("ctx-target", "panel:one"),
-      })
-    );
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        capability: CONTEXT_BOUNDARY_CAPABILITY,
-        grantResourceKey: contextBoundaryResourceKey("ctx-target", "panel:two"),
-      })
-    );
-  });
-
-  it("attributes a host-mediated (server) op to the anchor entity, not the host", async () => {
-    const approvalQueue = approvalQueueMock("session");
-    const anchorCaller = panelCaller("panel:anchor", "panels/anchor");
-    const resolveSubjectCaller = vi.fn(() => anchorCaller);
-    const resolveCallerContext = vi.fn(async () => "ctx-anchor");
-    const deps = accessDeps({
-      approvalQueue,
-      resolveSubjectCaller,
-      resolveCallerContext,
-      contextExists: vi.fn(() => true),
-    });
-    const serverCtx = authorityCtx(createVerifiedCaller("server", "server"), false);
-
-    const result = await requirePanelAccessPermission(deps, serverCtx, "cdp", {
-      id: "target",
-      title: "Target",
-      contextId: "ctx-target",
-      runtimeEntityId: "panel:anchor",
-    });
-
-    expect(result).toEqual({ allowed: true, prompted: true });
-    // The anchor is resolved from the host-set runtime entity id.
-    expect(resolveSubjectCaller).toHaveBeenCalledWith("panel:anchor");
-    // Origin context is resolved for the ANCHOR, not the host "server" principal.
-    expect(resolveCallerContext).toHaveBeenCalledWith("panel:anchor");
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability: CONTEXT_BOUNDARY_CAPABILITY,
-        // Prompt/grant attributed to the anchor's code identity, never "server".
-        callerId: "panel:anchor",
-        grantResourceKey: contextBoundaryResourceKey("ctx-target", "panel:anchor"),
-      })
-    );
-  });
-
-  it("allows a host-mediated op cleanly when the anchor has no resolvable code identity", async () => {
-    const approvalQueue = approvalQueueMock("session");
-    const resolveSubjectCaller = vi.fn(() => null);
-    const deps = accessDeps({ approvalQueue, resolveSubjectCaller });
-    const serverCtx = authorityCtx(createVerifiedCaller("server", "server"), false);
-
-    const result = await requirePanelAccessPermission(deps, serverCtx, "cdp", {
-      id: "target",
-      title: "Target",
-      contextId: "ctx-target",
-      runtimeEntityId: "panel:anchor",
-    });
-
-    expect(result).toEqual({ allowed: true });
-    expect(resolveSubjectCaller).toHaveBeenCalledWith("panel:anchor");
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-  });
-
-  it("treats host-mediated calls with no anchor entity as free (genuine system action)", async () => {
-    const approvalQueue = approvalQueueMock("once");
-    const resolveSubjectCaller = vi.fn(() => null);
-    const deps = accessDeps({ approvalQueue, resolveSubjectCaller });
-
-    for (const kind of ["shell", "server"] as const) {
-      await expect(
-        requirePanelAccessPermission(
-          deps,
-          authorityCtx(createVerifiedCaller(kind, kind), false),
-          "close",
-          {
-            id: "target",
-          }
-        )
-      ).resolves.toEqual({ allowed: true });
-    }
-
-    // No `runtimeEntityId` anchor on the target ⇒ never even tries to resolve one.
-    expect(resolveSubjectCaller).not.toHaveBeenCalled();
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-  });
-
-  it("forwards severe severity for privileged targets", async () => {
-    const approvalQueue = approvalQueueMock("once");
-    const deps = accessDeps({
-      approvalQueue,
-      contextExists: vi.fn(() => true),
-      resolveCallerContext: vi.fn(async () => "ctx-caller"),
-    });
-
-    await requirePanelAccessPermission(deps, panelCtx(), "cdp", {
-      id: "shell-target",
-      title: "Shell",
-      privileged: true,
-      contextId: "ctx-target",
-    });
-
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability: CONTEXT_BOUNDARY_CAPABILITY,
-        severity: "severe",
-      })
-    );
-  });
-
-  it("gates a non-host app caller acting on another existing context", async () => {
-    const approvalQueue = approvalQueueMock("session");
-    const deps = accessDeps({
-      approvalQueue,
-      contextExists: vi.fn(() => true),
-      resolveCallerContext: vi.fn(async () => "ctx-app"),
-    });
-    const appCaller = createVerifiedCaller("app:apps/field-mobile:device-1", "app", {
-      callerId: "app:apps/field-mobile:device-1",
-      callerKind: "app",
-      repoPath: "apps/field-mobile",
-      executionDigest: "a".repeat(64),
-      requested: [
-        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
-        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
-      ],
-    });
-
-    const result = await requirePanelAccessPermission(
-      deps,
-      authorityCtx(appCaller, false),
-      "close",
-      {
-        id: "target",
-        contextId: "ctx-target",
-      }
-    );
-
-    expect(result).toMatchObject({ allowed: true, prompted: true });
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
-    );
-  });
-
-  it("allows panel-hosting app callers without a context-boundary prompt", async () => {
-    const approvalQueue = approvalQueueMock("deny");
-    const resolveSubjectCaller = vi.fn();
-    const deps = accessDeps({
-      approvalQueue,
-      resolveSubjectCaller,
-    });
-    const appCaller = createVerifiedCaller("@workspace-apps/shell", "app", {
-      callerId: "@workspace-apps/shell",
-      callerKind: "app",
-      repoPath: "apps/shell",
-      executionDigest: "a".repeat(64),
-      requested: [
-        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
-        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
-      ],
-    });
-
-    const result = await requirePanelAccessPermission(
-      deps,
-      authorityCtx(appCaller, true),
-      "close",
-      {
-        id: "target",
-        runtimeEntityId: "panel:target",
-        contextId: "ctx-target",
-      }
-    );
-
-    expect(result).toEqual({ allowed: true });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(resolveSubjectCaller).not.toHaveBeenCalled();
-  });
-
-  it("does not add a timeout signal to context-boundary prompts", async () => {
-    const approvalQueue = approvalQueueMock("session");
-    const deps = accessDeps({
-      approvalQueue,
-      contextExists: vi.fn(() => true),
-      resolveCallerContext: vi.fn(async () => "ctx-caller"),
-    });
-
+describe("preparePanelAccessAuthority", () => {
+  it("selects no leaf for open, same-context, fresh-context, or panel-hosting actions", async () => {
+    const target = { id: "target", contextId: "ctx-target" };
     await expect(
-      requirePanelAccessPermission(deps, panelCtx(), "cdp", {
-        id: "target",
-        title: "Target",
-        contextId: "ctx-target",
-      })
-    ).resolves.toEqual({ allowed: true, prompted: true });
-
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.not.objectContaining({ signal: expect.anything() })
-    );
+      preparePanelAccessAuthority(deps(), ctx(panelCaller("panel:one")), "read", target)
+    ).resolves.toEqual([]);
+    await expect(
+      preparePanelAccessAuthority(
+        deps({ resolveCallerContext: vi.fn(async () => "ctx-target") }),
+        ctx(panelCaller("panel:one")),
+        "cdp",
+        target
+      )
+    ).resolves.toEqual([]);
+    await expect(
+      preparePanelAccessAuthority(
+        deps({ contextExists: vi.fn(() => false) }),
+        ctx(panelCaller("panel:one")),
+        "cdp",
+        target
+      )
+    ).resolves.toEqual([]);
+    await expect(
+      preparePanelAccessAuthority(deps(), ctx(panelCaller("panel:one"), true), "cdp", target)
+    ).resolves.toEqual([]);
   });
 
-  it("leaves pending cross-context prompts open until the queue resolves them", async () => {
-    vi.useFakeTimers();
-    const approvalQueue = approvalQueueMock("session");
-    let resolveApproval!: (decision: "deny") => void;
-    vi.mocked(approvalQueue.request).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveApproval = resolve;
-        })
+  it("selects an exact subject/context leaf for a foreign existing target", async () => {
+    const [selection] = await preparePanelAccessAuthority(
+      deps(),
+      ctx(panelCaller("panel:one")),
+      "cdp",
+      { id: "target", title: "Target", contextId: "ctx-target" }
     );
-    const deps = accessDeps({
-      approvalQueue,
-      contextExists: vi.fn(() => true),
-      resolveCallerContext: vi.fn(async () => "ctx-caller"),
+    expect(selection).toMatchObject({
+      capability: "context.boundary",
+      resourceKey: contextBoundaryResourceKey("ctx-target", "panel:one"),
+      authorizingCaller: { runtime: { id: "panel:one", kind: "panel" } },
+      challenge: {
+        operation: { kind: "panel", verb: "Automate panel in" },
+      },
     });
+  });
 
-    const promise = requirePanelAccessPermission(deps, panelCtx(), "cdp", {
-      id: "target",
-      title: "Target",
-      contextId: "ctx-target",
+  it("attributes host-mediated work to its anchor entity", async () => {
+    const resolveSubjectCaller = vi.fn(() => panelCaller("panel:anchor", "panels/anchor"));
+    const resolveCallerContext = vi.fn(async () => "ctx-anchor");
+    const [selection] = await preparePanelAccessAuthority(
+      deps({ resolveSubjectCaller, resolveCallerContext }),
+      ctx(createVerifiedCaller("server", "server")),
+      "close",
+      { id: "target", contextId: "ctx-target", runtimeEntityId: "panel:anchor" }
+    );
+    expect(resolveSubjectCaller).toHaveBeenCalledWith("panel:anchor");
+    expect(resolveCallerContext).toHaveBeenCalledWith("panel:anchor");
+    expect(selection?.authorizingCaller?.runtime.id).toBe("panel:anchor");
+  });
+
+  it("treats unanchored host work as a genuine system action", async () => {
+    await expect(
+      preparePanelAccessAuthority(deps(), ctx(createVerifiedCaller("server", "server")), "close", {
+        id: "target",
+        contextId: "ctx-target",
+      })
+    ).resolves.toEqual([]);
+  });
+
+  it("denies a bound agent crossing out of its own existing context", async () => {
+    const agent = createVerifiedCaller("agent:one", "agent", null, {
+      entityId: "entity:one",
+      contextId: "ctx-agent",
+      channelId: "channel:one",
+      agentId: "agent:one",
+      userId: "user:one",
     });
+    await expect(
+      preparePanelAccessAuthority(deps(), ctx(agent), "cdp", {
+        id: "target",
+        contextId: "ctx-target",
+      })
+    ).rejects.toMatchObject({ code: "EACCES" });
+  });
 
-    await vi.advanceTimersByTimeAsync(60_000);
-    const sentinel = Symbol("still pending");
-    await expect(Promise.race([promise, Promise.resolve(sentinel)])).resolves.toBe(sentinel);
-
-    resolveApproval("deny");
-    await expect(promise).resolves.toEqual({
-      allowed: false,
-      reason: "Automate panel in denied: owner is another agent or panel's existing state",
-    });
+  it("carries severe review copy for privileged targets", async () => {
+    const [selection] = await preparePanelAccessAuthority(
+      deps(),
+      ctx(panelCaller("panel:one")),
+      "cdp",
+      { id: "shell", contextId: "ctx-target", privileged: true }
+    );
+    expect(selection?.challenge?.severity).toBe("severe");
   });
 });

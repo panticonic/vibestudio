@@ -310,4 +310,24 @@ describe("createServicesProxy", () => {
     const services = createServicesProxy(createHostedRuntime(host)) as Record<string, unknown>;
     expect(services["someUnknownService"]).toBe(services["someUnknownService"]);
   });
+
+  it("reflects canonical service names without closing the dynamic namespace", () => {
+    const { host } = recordingHost();
+    const services = createServicesProxy(createHostedRuntime(host), ["workspace", "fs", "audit"]);
+
+    expect(Object.keys(services)).toEqual(["audit", "fs", "workspace"]);
+    expect(Reflect.ownKeys(services)).toEqual(["audit", "fs", "workspace"]);
+    expect("unlistedFutureService" in services).toBe(true);
+    expect(services["unlistedFutureService"]).toBeDefined();
+  });
+
+  it("can receive a service catalog lazily without replacing the proxy", () => {
+    const { host } = recordingHost();
+    const names: string[] = [];
+    const services = createServicesProxy(createHostedRuntime(host), names);
+
+    expect(Object.keys(services)).toEqual([]);
+    names.push("workspace", "audit");
+    expect(Object.keys(services)).toEqual(["audit", "workspace"]);
+  });
 });

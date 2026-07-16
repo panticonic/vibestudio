@@ -1,6 +1,18 @@
 import type { RpcCaller } from "@vibestudio/rpc";
-import type { UserlandApprovalChoice, UserlandApprovalGrant, UserlandApprovalRequest, } from "@vibestudio/shared/approvals";
-export type { UserlandApprovalChoice, UserlandApprovalGrant, UserlandApprovalOption, UserlandApprovalRequest, UserlandApprovalSubject, } from "@vibestudio/shared/approvals";
+import type {
+  UserlandApprovalChoice,
+  UserlandApprovalGrant,
+  UserlandApprovalRequest,
+  UserlandQuestion,
+} from "@vibestudio/shared/approvals";
+export type {
+  UserlandApprovalChoice,
+  UserlandApprovalGrant,
+  UserlandApprovalOption,
+  UserlandApprovalRequest,
+  UserlandApprovalSubject,
+  UserlandQuestion,
+} from "@vibestudio/shared/approvals";
 /**
  * Consumer contract: use this only for custom userland services that expose a
  * shared resource to other userland callers and need a user decision that
@@ -35,20 +47,31 @@ export type { UserlandApprovalChoice, UserlandApprovalGrant, UserlandApprovalOpt
  * `options` for the same in-flight subject will receive a `choice` value taken
  * from the first caller's options.
  */
-export function requestUserlandApproval(rpc: RpcCaller, req: UserlandApprovalRequest): Promise<UserlandApprovalChoice> {
-    return rpc.call<UserlandApprovalChoice>("main", "userlandApproval.request", [req]);
+export function requestUserlandApproval(
+  rpc: RpcCaller,
+  req: UserlandApprovalRequest
+): Promise<UserlandApprovalChoice> {
+  return rpc.call<UserlandApprovalChoice>("main", "userlandApproval.request", [req]);
+}
+/** Ask a one-shot typed userland question. Its answer is never persisted as a
+ * capability grant and the next call always asks again. */
+export function askUserlandQuestion(
+  rpc: RpcCaller,
+  req: UserlandQuestion
+): Promise<UserlandApprovalChoice> {
+  return rpc.call<UserlandApprovalChoice>("main", "userlandApproval.ask", [req]);
 }
 /**
  * Forget the user's stored decision for `subjectId`. The next
  * `requestUserlandApproval` for that subject will prompt again. Idempotent.
  */
 export function revokeUserlandApproval(rpc: RpcCaller, subjectId: string): Promise<boolean> {
-    return rpc.call<boolean>("main", "userlandApproval.revoke", [subjectId]);
+  return rpc.call<boolean>("main", "userlandApproval.revoke", [subjectId]);
 }
 /**
  * List grants currently stored for the calling issuer. Other issuers' grants
  * are not visible.
  */
 export function listUserlandApprovals(rpc: RpcCaller): Promise<UserlandApprovalGrant[]> {
-    return rpc.call<UserlandApprovalGrant[]>("main", "userlandApproval.list", []);
+  return rpc.call<UserlandApprovalGrant[]>("main", "userlandApproval.list", []);
 }

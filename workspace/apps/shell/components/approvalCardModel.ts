@@ -10,7 +10,11 @@ import type {
   ApprovalRequesterKind,
   PendingApproval,
 } from "@vibestudio/shared/approvals";
-import { getApprovalRiskTone, getRequesterCategoryLabel } from "@vibestudio/shared/approvalCopy";
+import {
+  getApprovalRiskTone,
+  getRequesterCategoryLabel,
+  getStandardActionCopy,
+} from "@vibestudio/shared/approvalCopy";
 import type { DiffChangedFile, DiffReviewEntry } from "@workspace/ui";
 
 export interface CallerInfo {
@@ -65,6 +69,39 @@ export type ApprovalCardIntentBody =
   // as a quiet secondary action on normal file headers.
   | { type: "open-in-gad-browser"; target: GadBrowserTarget };
 export type ApprovalCardIntent = { approvalId: string } & ApprovalCardIntentBody;
+
+const DURABLE_PRIMARY_APPROVAL_DECISIONS = ["version", "session", "run", "once"] as const;
+const CAUTIOUS_PRIMARY_APPROVAL_DECISIONS = ["once", "run", "session", "version"] as const;
+
+/** Keyboard decisions use the same capability decision set as visible actions. */
+export function approvalAllowsDecision(
+  approval: PendingApproval,
+  decision: ApprovalDecision
+): boolean {
+  return (
+    approval.kind !== "capability" ||
+    !approval.allowedDecisions ||
+    approval.allowedDecisions.includes(decision)
+  );
+}
+
+export function primaryApprovalDecision(approval: PendingApproval): ApprovalDecision | null {
+  if (approval.kind === "unit-batch") return "once";
+  if (approval.kind !== "credential" && approval.kind !== "capability") return null;
+  const copy = getStandardActionCopy(approval);
+  const isVisible = (decision: (typeof DURABLE_PRIMARY_APPROVAL_DECISIONS)[number]) => {
+    if (!approvalAllowsDecision(approval, decision)) return false;
+    if (decision === "once") return true;
+    if (decision === "session") return copy.session !== null;
+    if (decision === "version") return copy.version !== null;
+    return approval.kind === "capability" && approval.allowedDecisions?.includes("run") === true;
+  };
+  const decisions =
+    approval.kind === "capability" && approval.severity === "severe"
+      ? CAUTIOUS_PRIMARY_APPROVAL_DECISIONS
+      : DURABLE_PRIMARY_APPROVAL_DECISIONS;
+  return decisions.find(isVisible) ?? null;
+}
 
 /**
  * Deep-link target for the "open in gad-browser" escape hatch. Carries the
@@ -135,7 +172,7 @@ export function diffReviewPayloadHashes(entries: DiffReviewEntry[]): Set<string>
   return hashes;
 }
 
-export function basename(path: string): string {
+export function basename(path: string | undefined): string {
   if (!path) return "";
   const trimmed = path.replace(/\/+$/, "");
   const idx = trimmed.lastIndexOf("/");
@@ -225,6 +262,24 @@ export function resolveCallerInfo(approval: PendingApproval): CallerInfo {
     return {
       label: serverTitle ?? "Workspace",
       kindLabel: "Workspace",
+      kind: "system",
+      shortId,
+    };
+  }
+  if (
+    approval.callerKind === "shell" ||
+    approval.callerKind === "server" ||
+    approval.callerKind === "agent"
+  ) {
+    const kindLabel =
+      approval.callerKind === "shell"
+        ? "Shell"
+        : approval.callerKind === "agent"
+          ? "Agent"
+          : "Server";
+    return {
+      label: serverTitle ?? prettifyId(approval.callerId),
+      kindLabel,
       kind: "system",
       shortId,
     };

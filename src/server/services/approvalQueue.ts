@@ -48,8 +48,29 @@ import type {
   ResolvedVia,
 } from "@vibestudio/shared/governance/types";
 
-/** Terminal decision surfaced back to queue waiters (dismiss collapses to deny). */
+/** Capability decisions preserve dismissal so eval can reject only the exact
+ * suspended call without installing a run-local denial. */
 export type GrantedDecision = "once" | "session" | "version" | "deny";
+export type CapabilityGrantedDecision = GrantedDecision | "run" | "dismiss";
+
+export class ApprovalExpiredError extends Error {
+  readonly code = "APPROVAL_EXPIRED";
+
+  constructor(approvalId: string) {
+    super(`Approval ${approvalId} expired before a decision was made`);
+    this.name = "ApprovalExpiredError";
+  }
+}
+
+export function isApprovalExpiredError(error: unknown): error is ApprovalExpiredError {
+  return (
+    error instanceof ApprovalExpiredError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "APPROVAL_EXPIRED")
+  );
+}
 
 /**
  * The resolver's verified identity + surface (WP5 §4/§5), threaded from the
@@ -68,9 +89,20 @@ export interface ApprovalResolver {
 
 interface ApprovalQueueRequestBase {
   callerId: string;
-  callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
-  repoPath: string;
-  executionDigest: string;
+  callerKind:
+    | "panel"
+    | "app"
+    | "worker"
+    | "do"
+    | "extension"
+    | "shell"
+    | "server"
+    | "agent"
+    | "system";
+  authoritySubject?: import("@vibestudio/rpc").Principal;
+  authoritySessionId?: string;
+  repoPath?: string;
+  executionDigest?: string;
   /**
    * The REQUESTING user's `subject.userId` (WP5 §5.1), stamped by the enqueuing
    * service so a resolution record can name both parties. Attribution only.
@@ -122,6 +154,7 @@ export interface CapabilityApprovalQueueRequest extends ApprovalQueueRequestBase
   resourceScope?: PendingCapabilityApproval["resourceScope"];
   grantResourceKey?: string;
   details?: PendingCapabilityApproval["details"];
+  allowedDecisions?: PendingCapabilityApproval["allowedDecisions"];
 }
 
 export interface UnitBatchApprovalQueueRequest extends ApprovalQueueRequestBase {
@@ -239,19 +272,22 @@ export type FieldInputApprovalResult = ClientConfigApprovalResult;
 export type UserlandApprovalResult = UserlandApprovalChoice;
 
 interface QueueWaiter {
-  resolve: (decision: GrantedDecision) => void;
+  resolve: (decision: CapabilityGrantedDecision) => void;
+  reject: (error: unknown) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
 
 interface FieldInputQueueWaiter {
   resolve: (result: FieldInputApprovalResult) => void;
+  reject: (error: unknown) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
 
 interface UserlandQueueWaiter {
   resolve: (result: UserlandApprovalResult) => void;
+  reject: (error: unknown) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
@@ -262,6 +298,7 @@ interface DeviceCodeQueueWaiter {
 
 interface ExternalAgentQueueWaiter {
   resolve: (result: ExternalAgentApprovalResult) => void;
+  reject: (error: unknown) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
@@ -277,12 +314,14 @@ interface QueueEntry {
   deviceCodeWaiters: Map<number, DeviceCodeQueueWaiter>;
   externalAgentWaiters: Map<number, ExternalAgentQueueWaiter>;
   nextWaiterId: number;
+  deadlineTimer?: { cancel(): void };
   /** The single in-flight human settlement; competing verdicts are rejected. */
   settlement?: Promise<void>;
 }
 
 export interface ApprovalQueue {
   request(req: DecisionApprovalQueueRequest): Promise<GrantedDecision>;
+  requestCapability(req: CapabilityApprovalQueueRequest): Promise<CapabilityGrantedDecision>;
   requestClientConfig(req: ClientConfigApprovalQueueRequest): Promise<ClientConfigApprovalResult>;
   requestCredentialInput(
     req: CredentialInputApprovalQueueRequest
@@ -389,6 +428,10 @@ export function createApprovalQueue(deps: {
     requesterCategory?: ApprovalRequesterCategory;
   }) => ApprovalRequesterIdentity;
   autoApprove?: ApprovalQueueAutoApproveOptions | boolean;
+  /** Long, host-owned decision window. Downstream callers must not add another approval timer. */
+  decisionTtlMs?: number;
+  now?: () => number;
+  setTimer?: (fn: () => void, ms: number) => { cancel(): void };
   /**
    * Host governance writer (WP5 §6 step 4). The single `settle` coordinator
    * hands it the same workspace-neutral snapshot it broadcasts on
@@ -406,6 +449,18 @@ export function createApprovalQueue(deps: {
   const entriesById = new Map<string, QueueEntry>();
   const entriesByDedupKey = new Map<string, QueueEntry>();
   const pendingListeners = new Set<(pending: PendingApproval[]) => void>();
+  const now = deps.now ?? (() => Date.now());
+  const decisionTtlMs = deps.decisionTtlMs ?? 30 * 60_000;
+  if (!Number.isFinite(decisionTtlMs) || decisionTtlMs <= 0) {
+    throw new Error("approval decisionTtlMs must be a positive finite duration");
+  }
+  const setTimer =
+    deps.setTimer ??
+    ((fn: () => void, ms: number) => {
+      const timer = setTimeout(fn, ms);
+      timer.unref?.();
+      return { cancel: () => clearTimeout(timer) };
+    });
 
   function emitPendingChanged(): void {
     const pending = Array.from(entriesById.values()).map((e) => e.approval);
@@ -420,8 +475,59 @@ export function createApprovalQueue(deps: {
   }
 
   function removeEntry(entry: QueueEntry): void {
+    entry.deadlineTimer?.cancel();
+    entry.deadlineTimer = undefined;
     entriesById.delete(entry.approval.approvalId);
     entriesByDedupKey.delete(entry.dedupKey);
+  }
+
+  function registerEntry(entry: QueueEntry): void {
+    entriesById.set(entry.approval.approvalId, entry);
+    entriesByDedupKey.set(entry.dedupKey, entry);
+    const remaining = Math.max(0, entry.approval.decisionDeadlineAt - now());
+    entry.deadlineTimer = setTimer(() => {
+      const current = entriesById.get(entry.approval.approvalId);
+      if (current !== entry || entry.settlement) return;
+      expireEntry(entry);
+      emitPendingChanged();
+    }, remaining);
+  }
+
+  function expireEntry(entry: QueueEntry): void {
+    removeEntry(entry);
+    const error = new ApprovalExpiredError(entry.approval.approvalId);
+    for (const waiter of entry.waiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.reject(error);
+    }
+    entry.waiters.clear();
+    for (const waiter of entry.fieldInputWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.reject(error);
+    }
+    entry.fieldInputWaiters.clear();
+    for (const waiter of entry.userlandWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.reject(error);
+    }
+    entry.userlandWaiters.clear();
+    for (const waiter of entry.deviceCodeWaiters.values()) {
+      waiter.cancel();
+    }
+    entry.deviceCodeWaiters.clear();
+    for (const waiter of entry.externalAgentWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.reject(error);
+    }
+    entry.externalAgentWaiters.clear();
   }
 
   /**
@@ -570,20 +676,22 @@ export function createApprovalQueue(deps: {
   }
 
   /** Grant scope the server persisted for a decision (null for once/deny/dismiss). */
-  function grantScopeFor(decision: GrantedDecision): GrantScopeStored {
+  function grantScopeFor(decision: CapabilityGrantedDecision): GrantScopeStored {
     return decision === "session" || decision === "version" ? decision : null;
   }
 
   function dedupKeyFor(req: ApprovalQueueRequest): string {
+    const decisionPolicy =
+      req.kind === "capability" ? JSON.stringify([...(req.allowedDecisions ?? [])].sort()) : "";
     if (req.operation?.groupKey) {
-      return canonicalKey(["operation", req.callerId, req.operation.groupKey]);
+      return canonicalKey(["operation", req.callerId, req.operation.groupKey, decisionPolicy]);
     }
     if (req.kind === "capability") {
       if (req.dedupKey === null) {
         return canonicalKey(["capability-isolated", randomUUID()]);
       }
       if (req.dedupKey) {
-        return canonicalKey(["capability-custom", req.callerId, req.dedupKey]);
+        return canonicalKey(["capability-custom", req.callerId, req.dedupKey, decisionPolicy]);
       }
       return canonicalKey([
         "capability",
@@ -592,6 +700,7 @@ export function createApprovalQueue(deps: {
         req.executionDigest,
         req.capability,
         req.resource?.value ?? "",
+        decisionPolicy,
       ]);
     }
     if (req.kind === "unit-batch") {
@@ -684,9 +793,25 @@ export function createApprovalQueue(deps: {
   function resolveRequesterFor(
     req: Pick<
       ApprovalQueueRequestBase,
-      "callerId" | "callerKind" | "repoPath" | "executionDigest" | "requesterCategory"
+      | "callerId"
+      | "callerKind"
+      | "authoritySubject"
+      | "repoPath"
+      | "executionDigest"
+      | "requesterCategory"
     >
   ): ApprovalRequesterIdentity | undefined {
+    if (!req.repoPath || !req.executionDigest) return undefined;
+    if (
+      req.callerKind !== "panel" &&
+      req.callerKind !== "app" &&
+      req.callerKind !== "worker" &&
+      req.callerKind !== "do" &&
+      req.callerKind !== "extension" &&
+      req.callerKind !== "system"
+    ) {
+      return undefined;
+    }
     return deps.resolveRequester?.({
       callerId: req.callerId,
       callerKind: req.callerKind,
@@ -771,13 +896,20 @@ export function createApprovalQueue(deps: {
     const requester = resolveRequesterFor(req);
     const callerTitle = requester?.title ?? resolveTitle(req.callerId);
     const operation = req.operation ?? defaultOperationFor(req);
+    const requestedAt = now();
     const base = {
       approvalId: randomUUID(),
       callerId: req.callerId,
       callerKind: req.callerKind,
-      repoPath: req.repoPath,
-      executionDigest: req.executionDigest,
-      requestedAt: Date.now(),
+      ...(req.authoritySubject ? { authoritySubject: req.authoritySubject } : {}),
+      ...(req.authoritySessionId ? { authoritySessionId: req.authoritySessionId } : {}),
+      ...(req.repoPath ? { repoPath: req.repoPath } : {}),
+      ...(req.executionDigest ? { executionDigest: req.executionDigest } : {}),
+      requestedAt,
+      decisionDeadlineAt:
+        req.kind === "device-code"
+          ? Math.min(req.expiresAt, requestedAt + decisionTtlMs)
+          : requestedAt + decisionTtlMs,
       ...(callerTitle !== undefined ? { callerTitle } : {}),
       ...(requester ? { requester } : {}),
       operation,
@@ -795,6 +927,7 @@ export function createApprovalQueue(deps: {
         resource: req.resource,
         resourceScope: req.resourceScope,
         details: req.details,
+        allowedDecisions: req.allowedDecisions,
       } satisfies PendingCapabilityApproval;
     }
     if (req.kind === "unit-batch") {
@@ -902,8 +1035,7 @@ export function createApprovalQueue(deps: {
         externalAgentWaiters: new Map(),
         nextWaiterId: 0,
       };
-      entriesById.set(approval.approvalId, entry);
-      entriesByDedupKey.set(dedupKey, entry);
+      registerEntry(entry);
       newEntry = true;
     }
 
@@ -912,9 +1044,9 @@ export function createApprovalQueue(deps: {
     }
 
     const bound = entry;
-    return new Promise<FieldInputApprovalResult>((resolve) => {
+    return new Promise<FieldInputApprovalResult>((resolve, reject) => {
       const waiterId = bound.nextWaiterId++;
-      const waiter: FieldInputQueueWaiter = { resolve, signal: req.signal };
+      const waiter: FieldInputQueueWaiter = { resolve, reject, signal: req.signal };
 
       if (req.signal) {
         const onAbort = () => {
@@ -1001,7 +1133,7 @@ export function createApprovalQueue(deps: {
     );
   }
 
-  function settleDecisionEntry(entry: QueueEntry, decision: GrantedDecision): void {
+  function settleDecisionEntry(entry: QueueEntry, decision: CapabilityGrantedDecision): void {
     removeEntry(entry);
     for (const waiter of entry.waiters.values()) {
       if (waiter.signal && waiter.onAbort) {
@@ -1095,71 +1227,66 @@ export function createApprovalQueue(deps: {
     return selected.value;
   }
 
+  function enqueueDecision(req: DecisionApprovalQueueRequest): Promise<CapabilityGrantedDecision> {
+    if (autoApproveDecision) return Promise.resolve(autoApproveDecision);
+    const dedupKey = dedupKeyFor(req);
+    let entry = entriesByDedupKey.get(dedupKey);
+    let newEntry = false;
+    if (!entry) {
+      const approval = createPendingApproval(req);
+      entry = {
+        approval,
+        dedupKey,
+        requestedByUserId: req.requestedByUserId,
+        waiters: new Map(),
+        fieldInputWaiters: new Map(),
+        userlandWaiters: new Map(),
+        deviceCodeWaiters: new Map(),
+        externalAgentWaiters: new Map(),
+        nextWaiterId: 0,
+      };
+      registerEntry(entry);
+      newEntry = true;
+    }
+    const bound = entry;
+    return new Promise<CapabilityGrantedDecision>((resolve, reject) => {
+      const waiterId = bound.nextWaiterId++;
+      const waiter: QueueWaiter = { resolve, reject, signal: req.signal };
+      if (req.signal) {
+        const onAbort = () => {
+          const current = entriesById.get(bound.approval.approvalId);
+          if (!current) {
+            resolve("deny");
+            return;
+          }
+          if (current.settlement) return;
+          current.waiters.delete(waiterId);
+          if (
+            current.waiters.size === 0 &&
+            current.fieldInputWaiters.size === 0 &&
+            current.userlandWaiters.size === 0
+          ) {
+            removeEntry(current);
+            emitPendingChanged();
+          }
+          resolve("deny");
+        };
+        waiter.onAbort = onAbort;
+        if (req.signal.aborted) queueMicrotask(onAbort);
+        else req.signal.addEventListener("abort", onAbort, { once: true });
+      }
+      bound.waiters.set(waiterId, waiter);
+      if (newEntry) emitPendingChanged();
+    });
+  }
+
   return {
     request(req) {
-      if (autoApproveDecision) {
-        return Promise.resolve(autoApproveDecision);
-      }
+      return enqueueDecision(req) as Promise<GrantedDecision>;
+    },
 
-      const dedupKey = dedupKeyFor(req);
-      let entry = entriesByDedupKey.get(dedupKey);
-      let newEntry = false;
-      if (!entry) {
-        const approval = createPendingApproval(req);
-        entry = {
-          approval,
-          dedupKey,
-          requestedByUserId: req.requestedByUserId,
-          waiters: new Map(),
-          fieldInputWaiters: new Map(),
-          userlandWaiters: new Map(),
-          deviceCodeWaiters: new Map(),
-          externalAgentWaiters: new Map(),
-          nextWaiterId: 0,
-        };
-        entriesById.set(approval.approvalId, entry);
-        entriesByDedupKey.set(dedupKey, entry);
-        newEntry = true;
-      }
-
-      const bound = entry;
-      return new Promise<GrantedDecision>((resolve) => {
-        const waiterId = bound.nextWaiterId++;
-        const waiter: QueueWaiter = { resolve, signal: req.signal };
-
-        if (req.signal) {
-          const onAbort = () => {
-            const e = entriesById.get(bound.approval.approvalId);
-            if (!e) {
-              resolve("deny");
-              return;
-            }
-            if (e.settlement) return;
-            e.waiters.delete(waiterId);
-            if (
-              e.waiters.size === 0 &&
-              e.fieldInputWaiters.size === 0 &&
-              e.userlandWaiters.size === 0
-            ) {
-              removeEntry(e);
-              emitPendingChanged();
-            }
-            resolve("deny");
-          };
-          waiter.onAbort = onAbort;
-          if (req.signal.aborted) {
-            queueMicrotask(onAbort);
-          } else {
-            req.signal.addEventListener("abort", onAbort, { once: true });
-          }
-        }
-
-        bound.waiters.set(waiterId, waiter);
-
-        if (newEntry) {
-          emitPendingChanged();
-        }
-      });
+    requestCapability(req) {
+      return enqueueDecision(req);
     },
 
     requestClientConfig(req) {
@@ -1208,8 +1335,7 @@ export function createApprovalQueue(deps: {
         externalAgentWaiters: new Map(),
         nextWaiterId: 0,
       };
-      entriesById.set(approval.approvalId, entry);
-      entriesByDedupKey.set(dedupKey, entry);
+      registerEntry(entry);
 
       const controller = new AbortController();
       const waiterId = entry.nextWaiterId++;
@@ -1273,13 +1399,15 @@ export function createApprovalQueue(deps: {
                 : {}),
             }
           : undefined;
+        const requestedAt = now();
         const approval = {
           approvalId: randomUUID(),
           callerId: req.principal.callerId,
           callerKind: req.principal.callerKind,
           repoPath: req.principal.repoPath,
           executionDigest: req.principal.executionDigest,
-          requestedAt: Date.now(),
+          requestedAt,
+          decisionDeadlineAt: requestedAt + decisionTtlMs,
           ...(callerTitle !== undefined ? { callerTitle } : {}),
           ...(requester ? { requester } : {}),
           operation: {
@@ -1315,8 +1443,7 @@ export function createApprovalQueue(deps: {
           externalAgentWaiters: new Map(),
           nextWaiterId: 0,
         };
-        entriesById.set(approval.approvalId, entry);
-        entriesByDedupKey.set(dedupKey, entry);
+        registerEntry(entry);
         newEntry = true;
       }
 
@@ -1325,9 +1452,9 @@ export function createApprovalQueue(deps: {
       }
 
       const bound = entry;
-      return new Promise<UserlandApprovalResult>((resolve) => {
+      return new Promise<UserlandApprovalResult>((resolve, reject) => {
         const waiterId = bound.nextWaiterId++;
-        const waiter: UserlandQueueWaiter = { resolve, signal: req.signal };
+        const waiter: UserlandQueueWaiter = { resolve, reject, signal: req.signal };
 
         if (req.signal) {
           const onAbort = () => {
@@ -1386,13 +1513,15 @@ export function createApprovalQueue(deps: {
         verb: `run ${req.operationName}`,
         object: { type: "tool", label: "Tool", value: req.operationName },
       };
+      const requestedAt = now();
       const approval: PendingExternalAgentApproval = {
         approvalId: randomUUID(),
         callerId: req.callerId,
         callerKind: req.callerKind,
         repoPath: req.repoPath,
         executionDigest: req.executionDigest,
-        requestedAt: Date.now(),
+        requestedAt,
+        decisionDeadlineAt: requestedAt + decisionTtlMs,
         ...(callerTitle !== undefined ? { callerTitle } : {}),
         ...(requester ? { requester } : {}),
         operation: descriptor,
@@ -1418,12 +1547,11 @@ export function createApprovalQueue(deps: {
         externalAgentWaiters: new Map(),
         nextWaiterId: 0,
       };
-      entriesById.set(approval.approvalId, entry);
-      entriesByDedupKey.set(dedupKey, entry);
+      registerEntry(entry);
 
-      return new Promise<ExternalAgentApprovalResult>((resolve) => {
+      return new Promise<ExternalAgentApprovalResult>((resolve, reject) => {
         const waiterId = entry.nextWaiterId++;
-        const waiter: ExternalAgentQueueWaiter = { resolve, signal: req.signal };
+        const waiter: ExternalAgentQueueWaiter = { resolve, reject, signal: req.signal };
 
         if (req.signal) {
           // Auto-deny on expiry (the service currently arms a ten-minute timeout) or caller
@@ -1466,12 +1594,20 @@ export function createApprovalQueue(deps: {
       const entry = entriesById.get(approvalId);
       if (!entry) return;
 
-      const granted: GrantedDecision = decision === "dismiss" ? "deny" : decision;
+      if (
+        entry.approval.kind === "capability" &&
+        entry.approval.allowedDecisions &&
+        !entry.approval.allowedDecisions.includes(decision)
+      ) {
+        throw new Error(`Decision ${decision} is not available for approval ${approvalId}`);
+      }
+
+      const granted: CapabilityGrantedDecision = decision;
       await settle(
         entry,
         {
           decision,
-          granted: granted !== "deny",
+          granted: granted !== "deny" && granted !== "dismiss",
           grantScopeStored: grantScopeFor(granted),
           resolver,
         },

@@ -12,14 +12,15 @@ export {
   getAsyncRequire,
   getPreloadModules,
 } from "./execute.js";
-export type { ExecuteOptions, ExecuteResult, ValidateRequiresResult, PreloadRequiresResult } from "./execute.js";
+export type {
+  ExecuteOptions,
+  ExecuteResult,
+  ValidateRequiresResult,
+  PreloadRequiresResult,
+} from "./execute.js";
 
 // Console capture for streaming
-export {
-  createConsoleCapture,
-  formatConsoleEntry,
-  formatConsoleOutput,
-} from "./consoleCapture.js";
+export { createConsoleCapture, formatConsoleEntry, formatConsoleOutput } from "./consoleCapture.js";
 export type { ConsoleCapture, ConsoleEntry } from "./consoleCapture.js";
 
 // Async tracking (unified API for panels and workers)
@@ -29,17 +30,10 @@ export {
   getAsyncTrackingOrFallback,
   createFallbackAsyncTracking,
 } from "./asyncTracking.js";
-export type {
-  TrackingContext,
-  AsyncTrackingAPI,
-} from "./asyncTracking.js";
+export type { TrackingContext, AsyncTrackingAPI } from "./asyncTracking.js";
 
 // Unified sandbox execution engine
-export {
-  executeSandbox,
-  compileComponent,
-  compileModule,
-} from "./sandbox.js";
+export { executeSandbox, compileComponent, compileModule } from "./sandbox.js";
 export type {
   SandboxOptions,
   SandboxResult,
@@ -49,6 +43,8 @@ export type {
 } from "./sandbox.js";
 
 export {
+  findStaticSpecifiers,
+  inferImportsFromPackageJson,
   loadSourceFileBundle,
   normalizeSourcePath,
   prepareSourceCode,
@@ -67,10 +63,12 @@ export { SqlScopePersistence, SqlScopeRowBackend, SCOPE_TABLE } from "./sqlScope
 export type { SqlLike } from "./sqlScopePersistence.js";
 export { ScopePersistenceAdapter } from "./scopePersistenceAdapter.js";
 export type { ScopeBlobBackend, ScopeRowBackend } from "./scopePersistenceAdapter.js";
-export type {
-  ScopePersistence,
-  ScopeEntry,
-  ScopeListEntry,
-} from "./scopePersistence.js";
+export type { ScopePersistence, ScopeEntry, ScopeListEntry } from "./scopePersistence.js";
 export { serializeScope, deserializeScope } from "./scopeSerialize.js";
-export type { SerializedScope } from "./scopeSerialize.js";
+export type {
+  ScopeExecutableCodec,
+  SerializedScope,
+  SerializedScopeExecutable,
+} from "./scopeSerialize.js";
+export { analyzeRetainedFunctionSource } from "./retainedFunction.js";
+export type { RetainedFunctionAnalysis } from "./retainedFunction.js";

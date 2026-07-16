@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import {
+  childEvalContinuationDecision,
   createDevHostService,
   DevHostSourceWatcher,
   type DevHostProvider,
@@ -17,16 +19,58 @@ function context(id = "panel:owner"): ServiceContext {
       callerKind: "panel",
       repoPath: "panels/agent",
       executionDigest: "a".repeat(64),
+      delegations: [],
       requested: [
         { capability: "service:devHost.launch", resource: { kind: "prefix", prefix: "" } },
         { capability: "service:devHost.status", resource: { kind: "prefix", prefix: "" } },
-        { capability: "service:devHost.eval", resource: { kind: "prefix", prefix: "" } },
+        { capability: "service:devHost.eval.start", resource: { kind: "prefix", prefix: "" } },
+        { capability: "service:devHost.eval.get", resource: { kind: "prefix", prefix: "" } },
+        { capability: "service:devHost.eval.events", resource: { kind: "prefix", prefix: "" } },
+        { capability: "service:devHost.eval.cancel", resource: { kind: "prefix", prefix: "" } },
       ],
     }),
   };
 }
 
+describe("childEvalContinuationDecision", () => {
+  it("preserves an explicit run-scoped approval", () => {
+    expect(
+      childEvalContinuationDecision({ allowed: true, decision: "run" }, [
+        "once",
+        "run",
+        "deny",
+        "dismiss",
+      ])
+    ).toBe("run");
+  });
+
+  it("uses run scope for a reusable parent grant and preserves an explicit once", () => {
+    expect(
+      childEvalContinuationDecision({ allowed: true, decision: "session" }, ["once", "run"])
+    ).toBe("run");
+    expect(
+      childEvalContinuationDecision({ allowed: true, decision: "once" }, ["once", "run"])
+    ).toBe("once");
+  });
+});
+
+function devHostExtensionContext(): ServiceContext {
+  return {
+    caller: createVerifiedCaller("@workspace-extensions/dev-host", "extension", {
+      callerId: "@workspace-extensions/dev-host",
+      callerKind: "extension",
+      repoPath: "extensions/dev-host",
+      executionDigest: "d".repeat(64),
+      requested: [],
+      delegations: [],
+    }),
+  };
+}
+
 function fixture() {
+  const recipientKey = generateKeyPairSync("x25519")
+    .publicKey.export({ type: "spki", format: "der" })
+    .toString("base64url");
   const records: DevLaunchStatus[] = [];
   const launch = vi.fn(async (input: DevHostProviderLaunchInput) => {
     const existing = records.find((item) => item.launchId === input.launchId);
@@ -54,6 +98,7 @@ function fixture() {
         hostBuildId: "host-build-1",
         serverId: "child-1",
         endpoint: "http://127.0.0.1:9999",
+        evalAuthorityRecipientKey: recipientKey,
       },
       childWorkspaceId: "child-workspace",
       childContextId: "child-context",
@@ -107,6 +152,18 @@ function fixture() {
     async (input: Parameters<DevHostProvider["failPreparation"]>[0]) =>
       (await prepare(input)).status
   );
+  const evalStart = vi.fn(
+    async (
+      _launchId: string,
+      _input: import("@vibestudio/service-schemas/eval").EvalStartInput,
+      _authority: import("@vibestudio/service-schemas/eval").EvalParentAuthorityEnvelope
+    ) => ({
+      runId: "run-1",
+      status: "accepted" as const,
+      acceptedAt: 1,
+      startIntentDigest: "a".repeat(64),
+    })
+  );
   const provider: DevHostProvider = {
     prepare,
     failPreparation,
@@ -120,7 +177,25 @@ function fixture() {
       state: "ready" as const,
     })),
     stop: vi.fn(async (launchId) => ({ launchId, stopped: true })),
-    eval: vi.fn(async (_launchId, code) => ({ observed: code })),
+    evalStart,
+    evalGet: vi.fn(async () => ({
+      runId: "run-1",
+      status: "running" as const,
+      acceptedAt: 1,
+      startedAt: 2,
+      endedAt: null,
+      deadlineAt: null,
+      startIntentDigest: "a".repeat(64),
+      sourceDigest: "b".repeat(64),
+      executionProvenanceDigest: "c".repeat(64),
+      scopeInputRevision: "scope-1",
+      runDigest: "d".repeat(64),
+      sourceBundleDigest: "e".repeat(64),
+      manifestDigest: "f".repeat(64),
+      terminalReason: null,
+    })),
+    evalEvents: vi.fn(async () => ({ events: [], next: 0 })),
+    evalCancel: vi.fn(async () => ({ status: "requested" as const })),
     logs: vi.fn(async () => new Response("logs")),
     watch: vi.fn(async () => new Response("watch")),
   };
@@ -145,14 +220,17 @@ function fixture() {
     expectedHost: { serverId: "current-server", workspaceId: "ws-1" },
     rpcContractVersion: 1,
   }));
+  const resolveChildChallenge = vi.fn(async () => "once" as const);
   const definition = createDevHostService({
     workspaceId: "ws-1",
+    parentHostId: "parent-server:boot-1",
     resolveCallerContext: (id) => (id === "panel:owner" ? "ctx-owner" : "ctx-other"),
     resolveSource: vi.fn(async () => ({ stateHash: "e".repeat(64), dirtyCount: 3 })),
     createSnapshot,
     releaseSnapshot,
     prepareCurrentHostClient,
     authorize,
+    resolveChildChallenge,
     provider: () => provider,
     now: () => 10,
   });
@@ -167,6 +245,8 @@ function fixture() {
     prepare,
     failPreparation,
     prepareCurrentHostClient,
+    resolveChildChallenge,
+    evalStart,
   };
 }
 
@@ -275,7 +355,7 @@ describe("devHost service", () => {
     );
   });
 
-  it("direct eval addresses only the verified active generation", async () => {
+  it("child eval start addresses only the verified active generation", async () => {
     const f = fixture();
     const launch = (await f.definition.handler(context(), "launch", [
       {
@@ -284,13 +364,107 @@ describe("devHost service", () => {
       },
     ])) as DevLaunchStatus;
     await expect(
-      f.definition.handler(context(), "eval", [{ launchId: launch.launchId, code: "return 42" }])
+      f.definition.handler(context(), "eval.start", [
+        {
+          launchId: launch.launchId,
+          input: { source: { kind: "inline", code: "return 42" } },
+        },
+      ])
     ).resolves.toEqual({
       launchId: launch.launchId,
       hostBuildId: "host-build-1",
       sourceStateHash: "e".repeat(64),
-      result: { observed: "return 42" },
+      handle: {
+        runId: "run-1",
+        status: "accepted",
+        acceptedAt: 1,
+        startIntentDigest: "a".repeat(64),
+      },
     });
+    expect(f.evalStart).toHaveBeenCalledWith(
+      launch.launchId,
+      { source: { kind: "inline", code: "return 42" } },
+      {
+        payload: expect.any(String),
+        signature: expect.any(String),
+      }
+    );
+  });
+
+  it("relays a child challenge only for its signed live run and active generation", async () => {
+    const f = fixture();
+    const launch = (await f.definition.handler(context(), "launch", [
+      {
+        target: { kind: "isolated-host", client: "none", persistence: "retained" },
+        idempotencyKey: "eval-bridge",
+      },
+    ])) as DevLaunchStatus;
+    await f.definition.handler(context(), "eval.start", [
+      {
+        launchId: launch.launchId,
+        input: { source: { kind: "inline", code: "return 42" } },
+      },
+    ]);
+    const authority = f.evalStart.mock.calls[0]![2];
+    await expect(
+      f.definition.handler(devHostExtensionContext(), "eval.confirmChildRoute", [
+        {
+          launchId: launch.launchId,
+          hostBuildId: "host-build-1",
+          processIdentity: "123:boot",
+          authority,
+        },
+      ])
+    ).resolves.toEqual({
+      proof: { payload: expect.any(String), signature: expect.any(String) },
+    });
+    const challenge = {
+      launchId: launch.launchId,
+      hostBuildId: "host-build-1",
+      processIdentity: "123:boot",
+      runId: "run-1",
+      challengeId: "approval-1",
+      capability: "service:externalOpen.open",
+      resource: {
+        type: "url",
+        label: "URL",
+        value: "https://example.com",
+        key: "https://example.com",
+      },
+      allowedDecisions: ["once", "run", "deny", "dismiss"],
+      authority,
+    } as const;
+    await expect(
+      f.definition.handler(devHostExtensionContext(), "eval.resolveChildChallenge", [challenge])
+    ).resolves.toEqual({ decision: "once" });
+    expect(f.resolveChildChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        challengeId: "approval-1",
+        launch: expect.objectContaining({ activeHostBuildId: "host-build-1" }),
+      })
+    );
+
+    await expect(
+      f.definition.handler(devHostExtensionContext(), "eval.resolveChildChallenge", [
+        { ...challenge, processIdentity: "999:stale" },
+      ])
+    ).rejects.toMatchObject({ code: "EVAL_INVOCATION_INVALID" });
+
+    await expect(
+      f.definition.handler(devHostExtensionContext(), "eval.completeChildRun", [
+        {
+          launchId: challenge.launchId,
+          hostBuildId: challenge.hostBuildId,
+          processIdentity: challenge.processIdentity,
+          runId: challenge.runId,
+          authority,
+        },
+      ])
+    ).resolves.toEqual({ released: true });
+    await expect(
+      f.definition.handler(devHostExtensionContext(), "eval.resolveChildChallenge", [challenge])
+    ).rejects.toMatchObject({ code: "EVAL_INVOCATION_INVALID" });
   });
 
   it("coalesces canonical context advances into an approval-pending exact candidate", async () => {

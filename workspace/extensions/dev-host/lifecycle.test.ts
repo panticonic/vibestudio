@@ -4,7 +4,20 @@ import type {
   DevHostProviderPreparationInput,
   DevLaunchStatus,
 } from "@vibestudio/service-schemas/devHost";
+import type {
+  EvalParentAuthorityEnvelope,
+  EvalStartInput,
+} from "@vibestudio/service-schemas/eval";
 import { DevHostLifecycle, type DevGeneration, type DevHostExecutor } from "./lifecycle.js";
+
+const EVAL_AUTHORITY: EvalParentAuthorityEnvelope = {
+  payload: "p".repeat(32),
+  signature: "s".repeat(64),
+};
+
+function evalInput(code: string): EvalStartInput {
+  return { source: { kind: "inline", code } };
+}
 
 const input = (state = "a".repeat(64)): DevHostProviderLaunchInput => ({
   launchId: "dev_launch",
@@ -24,6 +37,7 @@ const input = (state = "a".repeat(64)): DevHostProviderLaunchInput => ({
     createdAt: 1,
   },
   executionGrant: { resource: `repo/execution:${state}`, authorizedAt: 1 },
+  evalAuthorityBridge: { parentHostId: "parent-host", publicKeySpki: "public-key" },
 });
 
 function generation(launchId: string, build: string): DevGeneration {
@@ -34,6 +48,7 @@ function generation(launchId: string, build: string): DevGeneration {
       hostBuildId: build,
       serverId: `server-${build}`,
       endpoint: "http://127.0.0.1:1",
+      evalAuthorityRecipientKey: null,
     },
     childWorkspaceId: "child-ws",
     childContextId: null,
@@ -85,7 +100,17 @@ function fixture() {
     rollbackCandidate: vi.fn(async (_candidate, previous) => previous),
     commitPromotion: vi.fn(async () => undefined),
     discard: vi.fn(async () => undefined),
-    eval: vi.fn(async (active, code) => ({ build: active.hostBuildId, code })),
+    evalStart: vi.fn(async (active) => ({
+      runId: `run-${active.hostBuildId}`,
+      status: "accepted" as const,
+      acceptedAt: 1,
+      startIntentDigest: "d".repeat(64),
+    })),
+    evalGet: vi.fn(async () => {
+      throw new Error("evalGet is not used by this fixture");
+    }),
+    evalEvents: vi.fn(async () => ({ events: [], next: 0 })),
+    evalCancel: vi.fn(async () => ({ status: "terminal" as const })),
     logs: vi.fn(() => []),
     onLog: vi.fn((listener) => {
       logListeners.add(listener);
@@ -177,19 +202,17 @@ describe("DevHostLifecycle", () => {
         candidateSourceStateHash: "c".repeat(64),
       },
     });
-    await expect(f.lifecycle.eval(active.launchId, "return old")).resolves.toEqual({
-      build: "build-1",
-      code: "return old",
-    });
+    await expect(
+      f.lifecycle.evalStart(active.launchId, evalInput("return old"), EVAL_AUTHORITY)
+    ).resolves.toMatchObject({ runId: "run-build-1" });
     await f.lifecycle.failPreparation(preparation, {
       phase: "approval",
       code: "EACCES",
       message: "denied",
     });
-    await expect(f.lifecycle.eval(active.launchId, "return old")).resolves.toEqual({
-      build: "build-1",
-      code: "return old",
-    });
+    await expect(
+      f.lifecycle.evalStart(active.launchId, evalInput("return old"), EVAL_AUTHORITY)
+    ).resolves.toMatchObject({ runId: "run-build-1" });
   });
 
   it("supersedes a pending candidate with the latest state and resumes its exact snapshot", async () => {
@@ -303,10 +326,9 @@ describe("DevHostLifecycle", () => {
       candidateHostBuildId: null,
       lastError: { code: "PROBE_FAILED" },
     });
-    await expect(f.lifecycle.eval(status.launchId, "return 42")).resolves.toEqual({
-      build: "build-1",
-      code: "return 42",
-    });
+    await expect(
+      f.lifecycle.evalStart(status.launchId, evalInput("return 42"), EVAL_AUTHORITY)
+    ).resolves.toMatchObject({ runId: "run-build-1" });
     expect(f.executor.stop).not.toHaveBeenCalled();
     expect(f.executor.discard).toHaveBeenCalledWith(
       expect.objectContaining({ sourceStateHash: "c".repeat(64) }),
@@ -337,10 +359,9 @@ describe("DevHostLifecycle", () => {
       ,
       expect.objectContaining({ hostBuildId: "build-1" })
     );
-    await expect(f.lifecycle.eval(active.launchId, "return old")).resolves.toEqual({
-      build: "build-1",
-      code: "return old",
-    });
+    await expect(
+      f.lifecycle.evalStart(active.launchId, evalInput("return old"), EVAL_AUTHORITY)
+    ).resolves.toMatchObject({ runId: "run-build-1" });
   });
 
   it("records actionable recovery state when candidate rollback itself fails", async () => {
@@ -416,10 +437,9 @@ describe("DevHostLifecycle", () => {
       processIdentity: recovered.processIdentity,
       lastError: null,
     });
-    await expect(restarted.eval(active.launchId, "return 1")).resolves.toEqual({
-      build: "build-1",
-      code: "return 1",
-    });
+    await expect(
+      restarted.evalStart(active.launchId, evalInput("return 1"), EVAL_AUTHORITY)
+    ).resolves.toMatchObject({ runId: "run-build-1" });
   });
 
   it("restarts the exact active build after an unexpected managed-process exit", async () => {

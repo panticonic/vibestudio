@@ -41,6 +41,40 @@ function unitBatchRequest(
 }
 
 describe("approvalQueue", () => {
+  it("owns the bounded decision deadline and expires without fabricating a denial", async () => {
+    let fireDeadline!: () => void;
+    const now = 10_000;
+    const { queue } = createQueue({
+      now: () => now,
+      decisionTtlMs: 30 * 60_000,
+      setTimer: (fn, ms) => {
+        expect(ms).toBe(30 * 60_000);
+        fireDeadline = fn;
+        return { cancel: vi.fn() };
+      },
+    });
+    const decision = queue.request({
+      kind: "capability",
+      callerId: "worker:deadline",
+      callerKind: "worker",
+      repoPath: "workers/deadline",
+      executionDigest: "hash-deadline",
+      capability: "external-browser-open",
+      title: "Open external browser",
+    });
+
+    expect(queue.listPending()).toEqual([
+      expect.objectContaining({
+        requestedAt: now,
+        decisionDeadlineAt: now + 30 * 60_000,
+      }),
+    ]);
+    fireDeadline();
+
+    await expect(decision).rejects.toMatchObject({ code: "APPROVAL_EXPIRED" });
+    expect(queue.listPending()).toEqual([]);
+  });
+
   it("settles aborted requests as deny", async () => {
     const { queue } = createQueue();
     const ac = new AbortController();
@@ -207,6 +241,38 @@ describe("approvalQueue", () => {
     queue.resolve(queue.listPending()[0]!.approvalId, "once");
     await expect(first).resolves.toBe("once");
     await expect(second).resolves.toBe("once");
+  });
+
+  it("keeps incompatible decision policies in separate operation prompts", async () => {
+    const { queue } = createQueue();
+    const operation = {
+      kind: "runtime" as const,
+      verb: "destroy",
+      groupKey: "context-boundary:ctx-1",
+    };
+    const ordinary = queue.request({
+      kind: "capability",
+      callerId: "panel-1",
+      callerKind: "panel",
+      capability: "context.boundary",
+      title: "Use context",
+      operation,
+      allowedDecisions: ["once", "run", "deny", "dismiss"],
+    });
+    const severe = queue.request({
+      kind: "capability",
+      callerId: "panel-1",
+      callerKind: "panel",
+      capability: "context.boundary",
+      title: "Destroy context",
+      operation,
+      allowedDecisions: ["once", "deny", "dismiss"],
+    });
+
+    expect(queue.listPending()).toHaveLength(2);
+    for (const approval of queue.listPending()) queue.resolve(approval.approvalId, "deny");
+    await expect(ordinary).resolves.toBe("deny");
+    await expect(severe).resolves.toBe("deny");
   });
 
   it("auto-approves decision prompts without surfacing pending UI", async () => {

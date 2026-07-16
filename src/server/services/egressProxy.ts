@@ -76,6 +76,7 @@ const DEFAULT_RETRY_MAX_DELAY_MS = 1_000;
 const CIRCUIT_FAILURE_THRESHOLD = 5;
 const CIRCUIT_OPEN_MS = 30_000;
 const WEBSOCKET_DIAGNOSTIC_BODY_LIMIT = 512;
+const WEBSOCKET_DEFERRED_RESPONSE_BODY_LIMIT = 1024 * 1024;
 
 interface GitIntentMetadata {
   force: boolean;
@@ -117,6 +118,16 @@ interface ForwardResult {
   statusCode: number;
   bytesIn: number;
   bytesOut: number;
+}
+
+interface DeferredWebSocketResponse {
+  statusCode: number;
+  headers: IncomingHttpHeaders;
+  body: Buffer;
+}
+
+interface WebSocketForwardResult extends ForwardResult {
+  deferredResponse?: DeferredWebSocketResponse;
 }
 
 interface RequestExecutionResult<T> extends ForwardResult {
@@ -1530,29 +1541,40 @@ export class EgressProxy {
     }
 
     try {
-      await this.executeAuthorizedRequest({
-        caller,
-        method: "GET",
-        targetUrl: policyUrl,
-        inputHeaders,
-        credentialUse: "fetch",
-        replaySafe: false,
-        maxRetries: DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS,
-        retryStatuses: false,
-        shouldRetryError: shouldRetryWebSocketUpgradeError,
-        execute: async (preparedPolicyUrl, headers) => {
-          const upstreamUrl = websocketUpstreamUrlFor(preparedPolicyUrl, targetUrl.protocol);
-          const forwardHeaders = this.prepareWebSocketForwardHeaders(inputHeaders, headers);
-          const result = await this.forwardWebSocketUpgrade(
-            req,
-            socket,
-            head,
-            upstreamUrl,
-            forwardHeaders
-          );
-          return { ...result, payload: undefined };
-        },
-      });
+      const deferredResponse =
+        await this.executeAuthorizedRequest<DeferredWebSocketResponse | null>({
+          caller,
+          method: "GET",
+          targetUrl: policyUrl,
+          inputHeaders,
+          credentialUse: "fetch",
+          replaySafe: false,
+          maxRetries: DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS,
+          retryStatuses: false,
+          shouldRetryError: shouldRetryWebSocketUpgradeError,
+          execute: async (preparedPolicyUrl, headers) => {
+            const upstreamUrl = websocketUpstreamUrlFor(preparedPolicyUrl, targetUrl.protocol);
+            const forwardHeaders = this.prepareWebSocketForwardHeaders(inputHeaders, headers);
+            const result = await this.forwardWebSocketUpgrade(
+              req,
+              socket,
+              head,
+              upstreamUrl,
+              forwardHeaders
+            );
+            return { ...result, payload: result.deferredResponse ?? null };
+          },
+        });
+      if (deferredResponse && !socket.destroyed) {
+        socket.write(
+          serializeRawHttpResponseHead(
+            deferredResponse.statusCode,
+            websocketNonUpgradeResponseHeaders(deferredResponse.headers)
+          )
+        );
+        if (deferredResponse.body.length > 0) socket.write(deferredResponse.body);
+        socket.end();
+      }
     } catch (error) {
       if (!socket.destroyed) {
         const status = error instanceof ForwardRejection ? error.statusCode : 502;
@@ -1607,8 +1629,8 @@ export class EgressProxy {
     head: Buffer,
     targetUrl: URL,
     headers: OutgoingHttpHeaders
-  ): Promise<ForwardResult> {
-    return new Promise<ForwardResult>((resolve, reject) => {
+  ): Promise<WebSocketForwardResult> {
+    return new Promise<WebSocketForwardResult>((resolve, reject) => {
       const requestUrl = websocketHttpUrlFor(targetUrl);
       const requestFn = requestUrl.protocol === "https:" ? httpsRequest : httpRequest;
       const defaultPort = requestUrl.protocol === "https:" ? 443 : 80;
@@ -1678,14 +1700,23 @@ export class EgressProxy {
 
         upstreamRequest.on("response", (upstreamResponse) => {
           const statusCode = upstreamResponse.statusCode ?? 502;
+          // A 401 can be repaired by executeAuthorizedRequest's one forced
+          // OAuth refresh. Do not commit its response head to the downstream
+          // WebSocket until that decision has been made; once a head is sent,
+          // a refreshed upgrade cannot reuse the client connection.
+          const deferResponse = statusCode === 401;
+          let deferredBodyBytes = 0;
+          const deferredBodyChunks: Buffer[] = [];
           let diagnosticBodyBytes = 0;
           const diagnosticBodyChunks: Buffer[] = [];
-          socket.write(
-            serializeRawHttpResponseHead(
-              statusCode,
-              websocketNonUpgradeResponseHeaders(upstreamResponse.headers)
-            )
-          );
+          if (!deferResponse) {
+            socket.write(
+              serializeRawHttpResponseHead(
+                statusCode,
+                websocketNonUpgradeResponseHeaders(upstreamResponse.headers)
+              )
+            );
+          }
           upstreamResponse.on("data", (chunk: Buffer | string) => {
             const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
             if (diagnosticBodyBytes < WEBSOCKET_DIAGNOSTIC_BODY_LIMIT) {
@@ -1693,7 +1724,18 @@ export class EgressProxy {
               diagnosticBodyChunks.push(buffer.subarray(0, remaining));
               diagnosticBodyBytes += Math.min(buffer.byteLength, remaining);
             }
-            socket.write(chunk);
+            if (deferResponse) {
+              deferredBodyBytes += buffer.byteLength;
+              if (deferredBodyBytes > WEBSOCKET_DEFERRED_RESPONSE_BODY_LIMIT) {
+                upstreamResponse.destroy(
+                  new Error("WebSocket upgrade rejection exceeded the buffered response limit")
+                );
+                return;
+              }
+              deferredBodyChunks.push(buffer);
+            } else {
+              socket.write(chunk);
+            }
           });
           upstreamResponse.on("end", () => {
             this.logWebSocketUpgradeDiagnostic("upstream_response", {
@@ -1704,8 +1746,21 @@ export class EgressProxy {
               responseHeaders: diagnosticResponseHeaders(upstreamResponse.headers),
               body: Buffer.concat(diagnosticBodyChunks).toString("utf8"),
             });
-            socket.end();
-            settle({ statusCode, bytesIn: 0, bytesOut: 0 });
+            if (!deferResponse) socket.end();
+            settle({
+              statusCode,
+              bytesIn: deferredBodyBytes,
+              bytesOut: 0,
+              ...(deferResponse
+                ? {
+                    deferredResponse: {
+                      statusCode,
+                      headers: upstreamResponse.headers,
+                      body: Buffer.concat(deferredBodyChunks),
+                    },
+                  }
+                : {}),
+            });
           });
           upstreamResponse.on("error", reject);
         });

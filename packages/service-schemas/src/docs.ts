@@ -20,6 +20,30 @@ export type CatalogSurface = z.infer<typeof catalogSurfaceSchema>;
 /** Serialized access descriptor (loose; typed home is MethodAccessDescriptor). */
 const catalogAccessSchema = z.record(z.unknown());
 
+export const evalCatalogLeafSchema = z
+  .object({
+    capability: z.string(),
+    rpcPlane: z.enum(["host-service", "workspace-do"]),
+    sensitivity: z.enum(["read", "write", "admin", "destructive"]),
+    resourceDerivation: z.record(z.unknown()),
+    acquisition: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("baseline") }).strict(),
+      z
+        .object({
+          kind: z.literal("approval"),
+          title: z.string(),
+          description: z.string(),
+          operation: z.object({ kind: z.string(), verb: z.string() }).strict(),
+          severity: z.enum(["standard", "severe"]).optional(),
+          grantScopes: z.array(z.enum(["run", "session", "version"])),
+        })
+        .strict(),
+      z.object({ kind: z.literal("closed"), reason: z.string() }).strict(),
+    ]),
+  })
+  .strict();
+export type EvalCatalogLeaf = z.infer<typeof evalCatalogLeafSchema>;
+
 /** One catalog entry. A `service` parent + one child per method, plus `runtime` exports. */
 export const catalogEntrySchema = z.object({
   /** `${surface}:${qualifiedName}` — stable id used by describe/getSchema. */
@@ -37,6 +61,8 @@ export const catalogEntrySchema = z.object({
   /** Namespace member names (runtime surface entries). */
   members: z.array(z.string()).optional(),
   examples: z.array(z.unknown()).optional(),
+  /** Reviewed evaluated-code acquisition for each normalized capability leaf. */
+  evalAuthority: z.array(evalCatalogLeafSchema).optional(),
 });
 export type CatalogEntry = z.infer<typeof catalogEntrySchema>;
 
@@ -85,7 +111,11 @@ const serializedRequirementSchema: z.ZodType<unknown> = z.lazy(() =>
         .optional(),
     }),
     z.object({ kind: z.literal("relationship"), name: z.string(), value: z.string().optional() }),
-    z.object({ kind: z.literal("session"), audience: z.string().optional(), minVersion: z.string().optional() }),
+    z.object({
+      kind: z.literal("session"),
+      audience: z.string().optional(),
+      minVersion: z.string().optional(),
+    }),
     z.object({ kind: z.enum(["all", "any"]), requirements: z.array(serializedRequirementSchema) }),
   ])
 );
@@ -115,6 +145,7 @@ export const serializedServiceMethodSchema = z.object({
   seeAlso: z.array(z.string()).optional(),
   argsSchema: z.record(z.unknown()),
   returnsSchema: z.record(z.unknown()).optional(),
+  evalAuthority: z.array(evalCatalogLeafSchema).optional(),
 });
 
 export const serializedServiceSchema = z.object({
@@ -173,5 +204,21 @@ export const docsMethods = defineServiceMethods({
     returns: serializedServiceSchema.nullable(),
     access: READONLY_ACCESS,
     examples: [{ args: ["blobstore"] }],
+  },
+  evalCapabilityCensus: {
+    description:
+      "Return a bounded live proof that every eval-exposed capability leaf is classified, the exposure catalog contains no wildcard, and an injected unclassified fixture is rejected closed.",
+    args: z.union([z.tuple([]), z.tuple([z.object({}).strict()])]),
+    returns: z
+      .object({
+        closedByDefault: z.boolean(),
+        classifiedLeaves: z.number().int().nonnegative(),
+        unclassifiedIds: z.array(z.string()),
+        wildcardCapabilities: z.array(z.string()),
+        fixtureRejected: z.boolean(),
+        fixtureError: z.string(),
+      })
+      .strict(),
+    access: READONLY_ACCESS,
   },
 });

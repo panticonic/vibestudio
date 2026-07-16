@@ -10,6 +10,16 @@ import type {
   PendingUnitBatchApproval,
 } from "./approvals.js";
 
+/** Compact, deterministic copy for the host-owned approval decision deadline. */
+export function formatApprovalDecisionDeadline(deadlineAt: number, now = Date.now()): string {
+  const remainingMs = deadlineAt - now;
+  if (remainingMs <= 0) return "Decision window expired";
+  const minutes = Math.ceil(remainingMs / 60_000);
+  if (minutes < 60) return `Decision expires in ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.ceil(minutes / 60);
+  return `Decision expires in ${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
 /** Both git transports carry `gitOperation` metadata from the egress proxy. */
 function isGitCredentialUse(use: unknown): boolean {
   return use === "git-http" || use === "git-ssh";
@@ -203,6 +213,7 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
 
 export interface ApprovalActionCopy {
   once: { label: string; description: string };
+  run?: { label: string; description: string };
   /** Null when the decision is not offered (e.g. force pushes are once-only). */
   session: { label: string; description: string } | null;
   version: { label: string; description: string } | null;
@@ -774,7 +785,16 @@ export function getApprovalCopy(approval: PendingApproval): {
 }
 
 function userlandCallerKindLabel(
-  kind: "panel" | "app" | "worker" | "do" | "extension" | "system"
+  kind:
+    | "panel"
+    | "app"
+    | "worker"
+    | "do"
+    | "extension"
+    | "shell"
+    | "server"
+    | "agent"
+    | "system"
 ): string {
   switch (kind) {
     case "panel":
@@ -787,6 +807,12 @@ function userlandCallerKindLabel(
       return "DO";
     case "extension":
       return "Extension";
+    case "shell":
+      return "Shell";
+    case "server":
+      return "Host";
+    case "agent":
+      return "Agent";
     case "system":
       return "Workspace";
   }

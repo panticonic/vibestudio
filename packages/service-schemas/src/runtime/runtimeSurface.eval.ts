@@ -8,9 +8,8 @@
  * surface including `callMain` and `parent`/`getParent`/`getParentWithContract`.
  *
  * `EVAL_AMBIENT_ONLY` are the eval-only ambient globals injected as free
- * variables. EvalDO also mirrors available ones onto its owner-local runtime
- * module as an import compatibility form. It is the single source of truth for
- * import validation and mirroring. `rpc` is intentionally absent here:
+ * variables. They are deliberately not importable. This is the single source
+ * of truth for import validation. `rpc` is intentionally absent here:
  * imported `rpc` and ambient `rpc` are the same portable client.
  */
 
@@ -18,8 +17,8 @@ import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
 import { portableExports } from "./runtimeSurface.portable.js";
 
 /**
- * Eval-only ambient globals (free variables; owner-local compatibility imports
- * resolve to the same references). Order is not significant.
+ * Eval-only ambient globals (free variables, not runtime exports). Order is not
+ * significant.
  */
 export const EVAL_AMBIENT_ONLY = [
   "services",

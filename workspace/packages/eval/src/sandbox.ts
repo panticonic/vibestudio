@@ -90,6 +90,8 @@ export interface SandboxResult {
   exports?: Record<string, unknown>;
   /** Error message (if failed) */
   error?: string;
+  /** Stable structured code preserved from RPC/authority failures. */
+  errorCode?: string;
   /** Agent-facing panel operation summary, when panel runtime journaling was active. */
   panelJournalFooter?: string;
 }
@@ -980,13 +982,7 @@ export async function executeSandbox(
     throwIfAborted(signal);
     let normalizedCode = normalizeAgentEvalCode(code);
     // (#1) Fail loudly if pre-injected globals are imported from the runtime.
-    const ambientCompatModule = moduleMap["@workspace/runtime"];
-    assertNoPreInjectedImports(
-      normalizedCode,
-      ambientCompatModule && typeof ambientCompatModule === "object"
-        ? (ambientCompatModule as Record<string, unknown>)
-        : null
-    );
+    assertNoPreInjectedImports(normalizedCode);
     restoreLazyImportLoader = installLazyImportLoader(options.loadImport, moduleMap, requireFn);
 
     // Load on-demand imports
@@ -1191,6 +1187,9 @@ export async function executeSandbox(
       success: false,
       consoleOutput: formatConsoleOutput(consoleEntries) + debugInfo,
       error: errorMessage,
+      ...(err instanceof Error && typeof (err as Error & { code?: unknown }).code === "string"
+        ? { errorCode: (err as Error & { code: string }).code }
+        : {}),
     };
   } finally {
     restoreLazyImportLoader?.();

@@ -267,6 +267,74 @@ describe("createReadTool", () => {
     warn.mockRestore();
   });
 
+  it("does not require the optional image extension to read ordinary text", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/guide.md`]: "# Guide\n" } });
+    const rpc = {
+      call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
+        if (method === "extensions.invoke") {
+          const [extensionName] = args;
+          if (extensionName === "@workspace-extensions/file-tools") {
+            return Promise.reject(
+              Object.assign(new Error("Extension is not running"), { code: "ENOTREADY" })
+            );
+          }
+          throw new Error(`optional extension must not be called: ${String(extensionName)}`);
+        }
+        return Promise.resolve([]);
+      }),
+      stream: vi.fn(async () => new Response()),
+    };
+    const tool = createReadTool(CWD, fs, { rpc: rpc as never });
+
+    const result = await tool.execute("call-1", { path: "guide.md", provenance: "none" });
+
+    expect(result.content[0]).toMatchObject({ type: "text", text: "# Guide\n" });
+    expect(rpc.call).not.toHaveBeenCalledWith(
+      "main",
+      "extensions.invoke",
+      expect.arrayContaining(["@workspace-extensions/image-service"]),
+      expect.anything()
+    );
+  });
+
+  it("recognizes an extensionless image from magic bytes", async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const fs = new StubFs({ files: { [`${CWD}/attachment`]: pngBytes } });
+    const rpc = {
+      call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
+        if (method === "extensions.invoke") {
+          const [extensionName, extensionMethod] = args;
+          if (extensionName === "@workspace-extensions/file-tools") {
+            return Promise.reject(
+              Object.assign(new Error("Image reads are handled by the image service path"), {
+                code: "EIMAGE",
+              })
+            );
+          }
+          if (extensionMethod === "detectMimeType") return Promise.resolve("image/png");
+          if (extensionMethod === "resize") {
+            return Promise.resolve({
+              data: Buffer.from(pngBytes).toString("base64"),
+              mimeType: "image/png",
+              width: 8,
+              height: 8,
+              originalWidth: 8,
+              originalHeight: 8,
+              wasResized: false,
+            });
+          }
+        }
+        return Promise.resolve([]);
+      }),
+      stream: vi.fn(async () => new Response()),
+    };
+    const tool = createReadTool(CWD, fs, { rpc: rpc as never });
+
+    const result = await tool.execute("call-1", { path: "attachment", provenance: "none" });
+
+    expect(result.content.some((item) => item.type === "image")).toBe(true);
+  });
+
   it("keeps image reads on the image-service path", async () => {
     const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const fs = new StubFs({ files: { [`${CWD}/pic.png`]: pngBytes } });

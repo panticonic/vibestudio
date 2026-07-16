@@ -411,7 +411,12 @@ export function createReadTool(
         }
         throw err;
       }
-      if (raw instanceof Uint8Array && imageService && !skipImageExtensionDetection) {
+      if (
+        raw instanceof Uint8Array &&
+        imageService &&
+        !skipImageExtensionDetection &&
+        (isLikelyImagePath(path) || hasLikelyImageMagic(raw))
+      ) {
         const mimeType = await imageService.detectMimeType(raw);
         if (mimeType?.startsWith("image/")) {
           const resized = await imageService.resize(raw, mimeType, {
@@ -548,6 +553,22 @@ function createAbortError(signal: AbortSignal): Error {
 }
 function isLikelyImagePath(filePath: string): boolean {
   return /\.(?:png|jpe?g|gif|webp)$/iu.test(filePath);
+}
+function hasLikelyImageMagic(bytes: Uint8Array): boolean {
+  const ascii = (start: number, end: number): string =>
+    String.fromCharCode(...bytes.subarray(start, end));
+  return (
+    (bytes.length >= 8 &&
+      bytes[0] === 0x89 &&
+      ascii(1, 4) === "PNG" &&
+      bytes[4] === 0x0d &&
+      bytes[5] === 0x0a &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0x0a) ||
+    (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) ||
+    (bytes.length >= 6 && (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a")) ||
+    (bytes.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP")
+  );
 }
 function isFileToolsExtensionFallback(err: unknown): boolean {
   const code =

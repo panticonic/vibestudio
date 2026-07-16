@@ -659,7 +659,7 @@ describe("AgentLoopDriver", () => {
       script: { model: [toolCallReply("tc-1"), textReply("done")], tool: [] },
       executorOverride: (descriptor) => {
         if (descriptor.kind !== "local_tool") return null;
-        // Mirror the agent's eval gate: a local tool that DEFERS (eval.startRun kicked off; the
+        // Mirror the agent's eval gate: a local tool that DEFERS (eval.start accepted a handle; the
         // result arrives out-of-band via onEvalComplete → deliverEffectOutcome).
         return {
           kind: "local_tool",
@@ -732,7 +732,7 @@ describe("AgentLoopDriver", () => {
     await settle(harness.driver);
     const kindsAfterFirst = await logKinds(harness.gad);
 
-    // Second delivery (the getRun poll backstop racing the onEvalComplete push) — idempotent no-op.
+    // Second delivery (the get poll backstop racing the onEvalComplete push) — idempotent no-op.
     await expect(
       harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, {
         channelId: CHANNEL,
@@ -1456,6 +1456,62 @@ describe("AgentLoopDriver", () => {
       "message.completed",
       "turn.opened",
       "message.started",
+      "message.completed",
+      "turn.closed",
+    ]);
+    expect(harness.driver.outbox.all()).toHaveLength(0);
+  });
+
+  it("publishes and clears a durable waiting lifecycle around deferred credential approval", async () => {
+    let dispatches = 0;
+    let requestId = "";
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) => {
+        if (descriptor.kind !== "model_call") return null;
+        return {
+          kind: "model_call",
+          async execute() {
+            dispatches += 1;
+            requestId = descriptor.effectId;
+            if (dispatches === 1) {
+              return {
+                deferred: true,
+                waiting: {
+                  kind: "model-suspended",
+                  reason: "credential",
+                  providerId: "openai-codex",
+                  waitReason: "model_credential_required",
+                },
+              };
+            }
+            return textReply("approved");
+          },
+        } satisfies EffectExecutor;
+      },
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await harness.driver.alarm();
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "turn.waiting",
+    ]);
+    expect(harness.driver.outbox.all()).toEqual([
+      expect.objectContaining({ kind: "model_call", leaseExpiresAt: null }),
+    ]);
+
+    await harness.driver.deliverDeferredResult(requestId, { approved: true }, false);
+    await harness.driver.alarm();
+
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "turn.waiting",
+      "system.event",
       "message.completed",
       "turn.closed",
     ]);

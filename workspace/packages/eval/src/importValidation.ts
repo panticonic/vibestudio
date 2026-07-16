@@ -237,15 +237,10 @@ export function parseStaticImports(code: string): ParsedImport[] {
  * Throw if eval code imports a pre-injected global from `@workspace/runtime`.
  * (#1) These are ambient — importing them shadows the binding with `undefined`.
  */
-export function assertNoPreInjectedImports(
-  code: string,
-  runtimeModule?: Record<string, unknown> | null
-): void {
+export function assertNoPreInjectedImports(code: string): void {
   for (const imp of parseStaticImports(code)) {
     if (imp.specifier !== RUNTIME_SPECIFIER) continue;
-    const offenders = imp.named.filter(
-      (name) => PRE_INJECTED.has(name) && !(runtimeModule && name in runtimeModule)
-    );
+    const offenders = imp.named.filter((name) => PRE_INJECTED.has(name));
     if (offenders.length === 0) continue;
     const plural = offenders.length > 1;
     throw new Error(

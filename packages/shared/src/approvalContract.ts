@@ -1,4 +1,4 @@
-export const APPROVAL_DECISIONS = ["once", "session", "version", "deny", "dismiss"] as const;
+export const APPROVAL_DECISIONS = ["once", "run", "session", "version", "deny", "dismiss"] as const;
 export type ApprovalDecisionId = (typeof APPROVAL_DECISIONS)[number];
 
 // Notification action ids (subset of decisions + "open"). Order matters for iOS:

@@ -124,6 +124,16 @@ export const userlandApprovalRequestSchema = z
     }
   });
 
+/** A one-shot typed userland question carried by the shared challenge queue.
+ * Unlike a userland approval, its answer is never interpreted or persisted as
+ * a capability grant. */
+export const userlandQuestionSchema = userlandApprovalRequestSchema.refine(
+  (request) => request.promptOptions === "choices" && Boolean(request.options?.length),
+  {
+    message: "ephemeral userland questions require promptOptions=choices and explicit options",
+  }
+);
+
 export type ApprovalRequesterKind = "panel" | "app" | "worker" | "do" | "extension" | "system";
 
 export type ApprovalRequesterCategory =
@@ -391,15 +401,31 @@ export interface DiffReviewEntry {
 }
 
 export interface PendingApprovalBase {
-  // principal == { callerId, callerKind, repoPath, executionDigest }
+  // Runtime attribution is always present. Exact artifact attribution is
+  // present only for code principals; interactive user/device challenges are
+  // first-class and must never invent a fake repository or digest.
   approvalId: string;
   callerId: string;
   // "system" is a host-initiated principal (e.g. workspace-startup extension
   // reconciliation), not a userland caller pretending to be one.
-  callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
-  repoPath: string;
-  executionDigest: string;
+  callerKind:
+    | "panel"
+    | "app"
+    | "worker"
+    | "do"
+    | "extension"
+    | "shell"
+    | "server"
+    | "agent"
+    | "system";
+  /** Principal whose grant/denial is being requested. */
+  authoritySubject?: import("@vibestudio/rpc").Principal;
+  authoritySessionId?: string;
+  repoPath?: string;
+  executionDigest?: string;
   requestedAt: number;
+  /** Host-owned deadline after which the unresolved request is denied/dismissed. */
+  decisionDeadlineAt: number;
   /**
    * Server-resolved display title for the caller, if known. Surfaced by the
    * shell instead of the opaque `callerId`. The id remains available for
@@ -473,6 +499,8 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
     value: string;
     format?: ApprovalDetailFormat;
   }>;
+  /** Exact decisions accepted by this live challenge. */
+  allowedDecisions?: ApprovalDecision[];
 }
 
 export interface UnitApprovalDiffStat {
@@ -718,6 +746,8 @@ export type UserlandApprovalChoice =
   | { kind: "choice"; choice: string }
   | { kind: "dismissed" }
   | { kind: "uncallable"; reason: "no-user-context" };
+
+export type UserlandQuestion = z.infer<typeof userlandQuestionSchema>;
 
 export type SecretInputResult =
   | { decision: "submit"; values: Record<string, string> }

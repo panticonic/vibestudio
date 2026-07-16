@@ -116,7 +116,7 @@ export interface LocalToolPort {
     onProgress?(chunk: unknown): void;
   }): Promise<
     | { result: unknown; summary?: string; isError: boolean }
-    // A long-running local tool (the agent's `eval`) defers: it kicks off the work (eval.startRun)
+    // A long-running local tool (the agent's `eval`) defers: it accepts a run handle
     // and the result arrives out-of-band via `deliverEffectOutcome` (onEvalComplete). The driver
     // parks the leased row (deferRedrive backstop), exactly like channel_call/http_call.
     | { deferred: true }
@@ -178,6 +178,17 @@ export type ModelExecutionAttemptEvent =
       error?: string;
     };
 
+/**
+ * A deferred effect keeps its outbox row until an out-of-band result arrives.
+ * Deferred work that is waiting on a human may additionally publish a durable
+ * lifecycle outcome. The continuation remains the original effect id while
+ * renderers gain an honest explanation for the pause.
+ */
+export type DeferredEffectOutcome = {
+  deferred: true;
+  waiting?: Extract<EffectOutcome, { kind: "model-suspended" }>;
+};
+
 export interface EffectExecutor<D extends EffectDescriptor = EffectDescriptor> {
   kind: EffectKind;
   execute(args: {
@@ -189,5 +200,5 @@ export interface EffectExecutor<D extends EffectDescriptor = EffectDescriptor> {
     /** Synchronous local durability hook. A thrown `started` write prevents
      * the provider call; a thrown terminal write surfaces as a system error. */
     onModelExecutionAttempt?(event: ModelExecutionAttemptEvent): void;
-  }): Promise<EffectOutcome | { deferred: true }>;
+  }): Promise<EffectOutcome | DeferredEffectOutcome>;
 }

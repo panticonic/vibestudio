@@ -27,6 +27,7 @@ import { buildRawThinkingOptions, type RawThinkingModel } from "./pi-raw-thinkin
 import {
   CredentialApprovalDeferredError,
   CredentialPendingError,
+  type DeferredEffectOutcome,
   type EffectExecutor,
   type EphemeralEmit,
 } from "./types.js";
@@ -672,7 +673,7 @@ async function executeModelCall(
     onModelExecutionAttempt,
   }: Parameters<EffectExecutor<ModelCallEffect>["execute"]>[0],
   progress: ModelCallProgress
-): Promise<EffectOutcome | { deferred: true }> {
+): Promise<EffectOutcome | DeferredEffectOutcome> {
   const request = descriptor.request;
   const trace = (stage: string, extra?: Record<string, unknown>) => {
     progress.stage = stage;
@@ -769,7 +770,18 @@ async function executeModelCall(
       });
     } catch (err) {
       if (err instanceof CredentialApprovalDeferredError) {
-        return { deferred: true };
+        return {
+          deferred: true,
+          waiting: {
+            kind: "model-suspended",
+            reason: "credential",
+            providerId: err.providerId,
+            ...(err.modelBaseUrl ? { modelBaseUrl: err.modelBaseUrl } : {}),
+            waitReason: "model_credential_required",
+            diagnosticReason:
+              "The model credential exists, but this agent version is waiting for credential-use approval.",
+          },
+        };
       }
       if (err instanceof CredentialPendingError) {
         trace("credential.pending", {

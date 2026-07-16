@@ -134,6 +134,7 @@ function candidatePaths(specifier: string, importerPath?: string): string[] {
 export function findRelativeSpecifiers(code: string): string[] {
   const patterns = [
     /\b(?:import|export)\s+(?:[^"'`]*?\s+from\s+)?["'](\.{1,2}\/[^"']+)["']/g,
+    /\bimport\s*\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g,
     /\brequire\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g,
   ];
   const specifiers: string[] = [];
@@ -370,6 +371,11 @@ export function findStaticSpecifiers(code: string): string[] {
     // `export type ... from`) — they are erased by the transform and must not
     // be fetched. Inline `import { type X, Y }` still matches (module is loaded).
     /\b(?:import|export)\s+(?!type[\s{])(?:[^"'`]*?\s+from\s+)?["']([^"']+)["']/g,
+    // A dynamic import with a literal argument is still statically resolvable.
+    // Freeze it with the rest of the source graph so execution never falls
+    // back to mutable host state. Computed imports remain intentionally absent:
+    // they cannot be known, authorized, or content-addressed at preparation.
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
     /\brequire\(\s*["']([^"']+)["']\s*\)/g,
   ];
   const specifiers: string[] = [];
@@ -503,6 +509,11 @@ function rewriteRelativeSpecifiers(
   return code
     .replace(
       /(\b(?:import|export)\s+(?:[^"'`]*?\s+from\s+)?["'])([^"']+)(["'])/g,
+      (_match, prefix: string, specifier: string, suffix: string) =>
+        `${prefix}${resolve(specifier)}${suffix}`
+    )
+    .replace(
+      /(\bimport\s*\(\s*["'])([^"']+)(["']\s*\))/g,
       (_match, prefix: string, specifier: string, suffix: string) =>
         `${prefix}${resolve(specifier)}${suffix}`
     )

@@ -1,13 +1,24 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { evalMethods, type EvalRunArgs } from "@vibestudio/service-schemas/eval";
+import {
+  evalMethods,
+  type EvalPreauthorizationIntent,
+  type EvalStartInput,
+  type EvalTarget,
+} from "@vibestudio/service-schemas/eval";
 import { EVAL_DO_SOURCE, productSeedExecutionDigest } from "../internalDOs/productBootManifest.js";
 import type { HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
-import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createHash, randomUUID } from "node:crypto";
+import type { EvalInvocationCoordinator } from "./evalInvocationCoordinator.js";
+import { evalStartIntentDigest } from "./evalStartIdentity.js";
+import {
+  verifyDevHostEvalApprovalRoute,
+  verifyDevHostEvalAuthority,
+  type DevEvalGenerationIdentity,
+} from "./devHostEvalAuthority.js";
 
 /** Parse a `do:<source>:<className>:<objectKey>` runtime id into a DO ref (source may contain '/'). */
 function parseDoRef(
@@ -27,11 +38,56 @@ function parseDoRef(
   return { source, className, objectKey };
 }
 
+type EvalTerminalStatus = "failed" | "expired" | "interrupted";
+
+const TRANSPORT_FAILURE_CODES = new Set([
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+function errorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const code = (error as Error & { code?: unknown }).code;
+  if (typeof code === "string") return code;
+  return errorCode((error as Error & { cause?: unknown }).cause);
+}
+
+function isTransportFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = errorCode(error);
+  if (code && TRANSPORT_FAILURE_CODES.has(code)) return true;
+  if (error.name === "TypeError" && /\bfetch failed\b/i.test(error.message)) return true;
+  const cause = (error as Error & { cause?: unknown }).cause;
+  return cause !== undefined && isTransportFailure(cause);
+}
+
+function classifyTerminalFailure(error: unknown): {
+  status: EvalTerminalStatus;
+  error: string;
+  errorCode?: string;
+} {
+  const code = errorCode(error);
+  const message = error instanceof Error ? error.message : String(error);
+  if (code === "EVAL_INVOCATION_EXPIRED") {
+    return { status: "expired", error: message, errorCode: code };
+  }
+  if (code === "EVAL_INTERRUPTED" || isTransportFailure(error)) {
+    return { status: "interrupted", error: message, errorCode: "EVAL_INTERRUPTED" };
+  }
+  return { status: "failed", error: message, ...(code ? { errorCode: code } : {}) };
+}
+
 /**
  * Hold the EvalDO's `executeRun` on a background Node task (no request-scoped limit), then push the
  * result to the owning agent DO (`onEvalComplete`, server-stamped). The held dispatch uses the
  * no-`headersTimeout` dispatcher (`dispatchHeld`). On failure (e.g. a server restart dropped the
- * connection) the EvalDO's boot reconciliation marks the run interrupted and the agent's `getRun`
+ * connection) the EvalDO's boot reconciliation marks the run interrupted and the agent's `get`
  * poll backstop surfaces it — so this is fire-and-forget.
  */
 async function pushEvalComplete(
@@ -39,18 +95,20 @@ async function pushEvalComplete(
   agentRef: string | undefined,
   channelId: string | undefined,
   runId: string,
+  invocationId: string | undefined,
   result: unknown
 ): Promise<void> {
-  if (!agentRef) return;
+  if (!agentRef || !invocationId) return;
   const agentDoRef = parseDoRef(agentRef);
   if (!agentDoRef) return;
-  // `channelId` lets the agent route the resume (deliverEffectOutcome needs the channel
-  // address); `runId` is the invocationId → effect id.
+  // `channelId` routes the parked effect while `invocationId` correlates the
+  // agent-loop tool invocation. `runId` remains the independent durable eval
+  // handle and is retained for diagnostics/audit.
   await doDispatch
-    .dispatch(agentDoRef, "onEvalComplete", { runId, result, channelId })
+    .dispatch(agentDoRef, "onEvalComplete", { runId, invocationId, result, channelId })
     .catch((err) => {
       console.warn(
-        `[eval] onEvalComplete push to ${agentRef} failed (getRun poll backstop covers it):`,
+        `[eval] onEvalComplete push to ${agentRef} failed (get poll backstop covers it):`,
         err instanceof Error ? err.message : err
       );
     });
@@ -60,16 +118,127 @@ async function runHeldAndDeliver(
   doDispatch: HeldDoDispatcher,
   evalDoRef: { source: string; className: string; objectKey: string },
   runId: string,
+  startIntentDigest: string,
+  invocationCoordinator: EvalInvocationCoordinator,
   agentRef: string | undefined,
-  channelId: string | undefined
+  channelId: string | undefined,
+  agentInvocationId: string | undefined,
+  maxEndsAt: number | null,
+  preparation: {
+    assembledArgs: Record<string, unknown>;
+    contextId: string;
+    executor: `code:${string}@${string}`;
+    initiator: ServiceContext["caller"];
+    authority: EvalStartInput["authority"];
+  },
+  preauthorize?: (credential: string, readOnly: boolean, signal: AbortSignal) => Promise<void>
 ): Promise<void> {
   try {
-    const result = await doDispatch.dispatchHeld(evalDoRef, "executeRun", runId);
-    await pushEvalComplete(doDispatch, agentRef, channelId, runId, result);
+    // A preparation credential is intentionally minted only after this run owns
+    // the per-scope queue. Queued predecessors may run or await approval without
+    // consuming this run's short-lived invocation lease.
+    const preparationLease = invocationCoordinator.issuePreparation({
+      runId,
+      startIntentDigest,
+      objectKey: evalDoRef.objectKey,
+      contextId: preparation.contextId,
+      executor: preparation.executor,
+      initiator: preparation.initiator,
+      authority: preparation.authority,
+      maxEndsAt,
+    });
+    await doDispatch.dispatch(evalDoRef, "begin", {
+      ...preparation.assembledArgs,
+      runId,
+      startIntentDigest,
+      invocationCredential: preparationLease.credential,
+      authorityPolicy: preparationLease.policy,
+    });
+    const prepared = (await doDispatch.dispatchHeld(evalDoRef, "prepare", runId)) as {
+      sourceDigest: string;
+      executionProvenanceDigest: string;
+      scopeInputRevision: string;
+    };
+    const lease = invocationCoordinator.finalize({
+      runId,
+      startIntentDigest,
+      ...prepared,
+    });
+    if (preauthorize) {
+      await doDispatch.dispatch(evalDoRef, "awaitPreauthorization", runId);
+      const preauthorizationAbort = new AbortController();
+      let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+      if (maxEndsAt !== null) {
+        const deadlineError = Object.assign(new Error("Eval preauthorization deadline expired"), {
+          code: "EVAL_INVOCATION_EXPIRED",
+        });
+        const remaining = maxEndsAt - Date.now();
+        if (remaining <= 0) preauthorizationAbort.abort(deadlineError);
+        else {
+          deadlineTimer = setTimeout(() => preauthorizationAbort.abort(deadlineError), remaining);
+          deadlineTimer.unref?.();
+        }
+      }
+      const renewal = setInterval(() => {
+        try {
+          invocationCoordinator.renew({
+            runId,
+            credential: lease.credential,
+            objectKey: evalDoRef.objectKey,
+          });
+        } catch (error) {
+          preauthorizationAbort.abort(error);
+        }
+      }, 10_000);
+      renewal.unref?.();
+      const aborted = new Promise<never>((_resolve, reject) => {
+        const rejectFromSignal = () =>
+          reject(
+            preauthorizationAbort.signal.reason ??
+              Object.assign(new Error("Eval preauthorization was aborted"), {
+                code: "EVAL_INVOCATION_EXPIRED",
+              })
+          );
+        if (preauthorizationAbort.signal.aborted) rejectFromSignal();
+        else
+          preauthorizationAbort.signal.addEventListener("abort", rejectFromSignal, { once: true });
+      });
+      try {
+        await Promise.race([
+          preauthorize(
+            lease.credential,
+            lease.policy.effects === "read-only",
+            preauthorizationAbort.signal
+          ),
+          aborted,
+        ]);
+      } finally {
+        clearInterval(renewal);
+        if (deadlineTimer) clearTimeout(deadlineTimer);
+      }
+    }
+    await doDispatch.dispatch(evalDoRef, "activate", {
+      runId,
+      runDigest: lease.runDigest,
+      manifestDigest: lease.manifestDigest,
+      invocationCredential: lease.credential,
+      authorityPolicy: lease.policy,
+    });
+    let result = await doDispatch.dispatchHeld(evalDoRef, "execute", runId);
+    const authority = invocationCoordinator.authoritySummary(runId);
+    result = await doDispatch.dispatch(evalDoRef, "attachAuthoritySummary", runId, authority);
+    await pushEvalComplete(doDispatch, agentRef, channelId, runId, agentInvocationId, result);
   } catch (err) {
     console.warn(`[eval] held run ${runId} failed:`, err instanceof Error ? err.message : err);
+    const terminal = classifyTerminalFailure(err);
+    await doDispatch
+      .dispatch(evalDoRef, "terminate", {
+        runId,
+        ...terminal,
+      })
+      .catch(() => undefined);
     // F2: the held dispatch died (e.g. a server restart dropped the connection). The agent's own
-    // `getRun` poll backstop MAY re-fire, but if its `deferRedrive` never re-runs the eval gate the
+    // `get` poll backstop MAY re-fire, but if its `deferRedrive` never re-runs the eval gate the
     // parked invocation hangs forever. So reconcile the run's TERMINAL state from the EvalDO and push
     // an `onEvalComplete` ourselves — but ONLY when the run is actually terminal. A `done`/`cancelled`
     // run (boot reconciliation marks an interrupted run with a failed result) settles the agent's
@@ -77,28 +246,44 @@ async function runHeldAndDeliver(
     // never cut a legitimately long-running eval short — its own completion push covers it.
     if (!agentRef) return;
     try {
-      const reconciled = (await doDispatch.dispatch(evalDoRef, "getRun", runId)) as {
+      const reconciled = (await doDispatch.dispatch(evalDoRef, "get", runId)) as {
         status?: string;
         result?: unknown;
       };
       const status = String(reconciled?.status ?? "unknown");
-      if (status === "done" && reconciled.result != null) {
-        await pushEvalComplete(doDispatch, agentRef, channelId, runId, reconciled.result);
-      } else if (status === "cancelled" || status === "unknown") {
+      if (
+        ["succeeded", "failed", "cancelled", "expired", "interrupted"].includes(status) &&
+        reconciled.result != null
+      ) {
+        await pushEvalComplete(
+          doDispatch,
+          agentRef,
+          channelId,
+          runId,
+          agentInvocationId,
+          reconciled.result
+        );
+      } else if (status === "cancelled" || status === "expired" || status === "interrupted") {
         // No durable result to deliver — synthesize a terminal failure so the parked invocation
         // settles instead of hanging. (`pending`/`running` deliberately fall through: do not bound.)
-        await pushEvalComplete(doDispatch, agentRef, channelId, runId, {
+        await pushEvalComplete(doDispatch, agentRef, channelId, runId, agentInvocationId, {
           success: false,
           console: "",
           error:
             reconciled?.result != null
               ? String((reconciled.result as { error?: unknown })?.error ?? "eval run interrupted")
               : "eval run interrupted",
+          errorCode:
+            status === "expired"
+              ? "EVAL_INVOCATION_EXPIRED"
+              : status === "interrupted"
+                ? "EVAL_INTERRUPTED"
+                : "EVAL_CANCELLED",
         });
       }
     } catch (reconcileErr) {
       console.warn(
-        `[eval] reconcile getRun for ${runId} after held failure also failed:`,
+        `[eval] reconcile get for ${runId} after held failure also failed:`,
         reconcileErr instanceof Error ? reconcileErr.message : reconcileErr
       );
     }
@@ -122,8 +307,8 @@ interface EvalParentMeta {
 }
 
 /**
- * Owner-scoped sandbox eval service — replaces the `scope` service. Any entity-principal
- * (panel/app/worker/do/shell) calls `eval.run`/`eval.reset`; the owner is the verified
+ * Owner-scoped sandbox eval service. Any entity principal (panel/app/worker/do/shell) uses the
+ * handle-based `eval.start` lifecycle; the owner is the verified
  * `ctx.caller` unless a privileged shell/server caller selects a session owner. The EvalDO
  * `objectKey` is derived (hashed) from the owner id + subKey, so unprivileged callers can
  * only address their own EvalDO. The EvalDO entity is registered with the owner's context so
@@ -140,15 +325,41 @@ export function createEvalService(deps: {
    * kind" — the cache never learned the EvalDO's identity.
    */
   entityStore: WorkspaceEntityStore;
-  tokenManager: TokenManager;
   /**
    * Host-wide background-work registry (idle-exit monitor). Every held eval
    * execution reports begin/end so a detached server won't idle-exit while
    * background eval work is still running.
    */
   activity?: import("./activityRegistry.js").ActivityRegistry;
+  invocationCoordinator: EvalInvocationCoordinator;
+  preauthorize?: (input: {
+    ctx: ServiceContext;
+    runId: string;
+    credential: string;
+    objectKey: string;
+    intents: readonly EvalPreauthorizationIntent[];
+    readOnly: boolean;
+    signal: AbortSignal;
+  }) => Promise<void>;
+  delegatedAuthority?: {
+    parentHostId: string;
+    publicKeySpki: string;
+    generation: DevEvalGenerationIdentity;
+    recipientPrivateKey: string;
+  };
 }): ServiceDefinition {
   const store = deps.entityStore;
+  const scopeQueues = new Map<string, Promise<void>>();
+
+  const enqueueScopeRun = (objectKey: string, work: () => Promise<void>): void => {
+    const predecessor = scopeQueues.get(objectKey) ?? Promise.resolve();
+    const scheduled = predecessor.then(work, work);
+    scopeQueues.set(objectKey, scheduled);
+    const cleanup = () => {
+      if (scopeQueues.get(objectKey) === scheduled) scopeQueues.delete(objectKey);
+    };
+    void scheduled.then(cleanup, cleanup);
+  };
 
   const evalDoKey = (ownerId: string, subKey: string): string =>
     createHash("sha256")
@@ -163,20 +374,6 @@ export function createEvalService(deps: {
    */
   const evalDoEntityId = (objectKey: string): string =>
     `do:${EVAL_DO_SOURCE}:${EVAL_DO_CLASS}:${objectKey}`;
-
-  /**
-   * Owner-scoped gateway token for THIS EvalDO. Pinned to the concrete
-   * `do:vibestudio/internal:EvalDO:<objectKey>` identity (kind `do`), NOT the
-   * shared `do-service:*` bearer — so the kernel's `gatewayFetch` resolves the
-   * owner's context and a leak's blast radius is the owner alone (eval code can
-   * read `gatewayConfig.token`, but it IS the owner's own authority). Minted
-   * here (server-internal, owner already verified) and handed to `EvalDO.run`
-   * over the authenticated server→DO dispatch — no new callable token-issuing
-   * surface, so nothing rides the worker→do policy fallthrough. `ensureToken`
-   * is idempotent per callerId, so it's a stable per-owner token.
-   */
-  const mintGatewayToken = (objectKey: string): string =>
-    deps.tokenManager.ensureToken(evalDoEntityId(objectKey), "do");
 
   async function resolveRegisteredContext(ownerId: string): Promise<string | null> {
     return store.resolveContext(ownerId);
@@ -303,15 +500,16 @@ export function createEvalService(deps: {
     return { objectKey };
   }
 
-  function assertRunSource(args: { code?: string; path?: string; sourcePath?: string }): void {
-    const hasCode = args.code !== undefined;
-    const hasPath = args.path !== undefined;
-    if (hasCode === hasPath) {
-      throw new Error("eval: provide exactly one of code or path");
-    }
-  }
+  type EvalRoute = { target?: EvalTarget; scope?: { key: string } };
 
-  type EvalRoute = { ownerId?: string; contextId?: string; subKey?: string };
+  function attachedOwnerRoute(target: EvalTarget | undefined): {
+    ownerId?: string;
+    contextId?: string;
+  } {
+    return target?.kind === "attached-session"
+      ? { ownerId: target.ownerId, contextId: target.contextId }
+      : {};
+  }
 
   async function resolveOwnerForCaller(
     ctx: ServiceContext,
@@ -320,7 +518,7 @@ export function createEvalService(deps: {
     return await resolveOwner(
       ctx.caller.runtime.kind,
       ctx.caller.runtime.id,
-      requested,
+      attachedOwnerRoute(requested.target),
       ctx.caller.agentBinding
     );
   }
@@ -332,7 +530,7 @@ export function createEvalService(deps: {
     const owner = await resolveOwnerForCaller(ctx, route);
     const { objectKey } = await ensureEvalDO(
       owner,
-      route.subKey ?? "default",
+      route.scope?.key ?? "default",
       ctx.caller.subject?.userId
     );
     return { source: EVAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
@@ -340,42 +538,157 @@ export function createEvalService(deps: {
 
   async function prepareRun(
     ctx: ServiceContext,
-    runArgs: EvalRunArgs
+    runArgs: EvalStartInput
   ): Promise<{
     evalDoRef: { source: string; className: string; objectKey: string };
     assembledArgs: Record<string, unknown>;
     agentRef: string | undefined;
+    agentInvocationId: string | undefined;
+    owner: EvalOwner;
+    objectKey: string;
   }> {
-    assertRunSource(runArgs);
     const ownerId = ctx.caller.runtime.id;
     const owner = await resolveOwnerForCaller(ctx, runArgs);
     const { objectKey } = await ensureEvalDO(
       owner,
-      runArgs.subKey ?? "default",
+      runArgs.scope?.key ?? "default",
       ctx.caller.subject?.userId
     );
     const isAgent = ctx.caller.runtime.kind === "do" && Boolean(runArgs.channelId);
-    const chatBinding = isAgent ? { channelId: runArgs.channelId, agentRef: ownerId } : {};
+    if (isAgent && !ctx.idempotencyKey) {
+      throw Object.assign(new Error("Agent-owned eval requires RPC delivery correlation"), {
+        code: "EVAL_INVOCATION_INVALID",
+      });
+    }
+    // The RPC delivery idempotency key identifies the parked agent tool call.
+    // `runArgs.idempotencyKey` independently identifies the logical eval run
+    // and may deliberately be reused by a later tool call.
+    const agentInvocationId = isAgent ? ctx.idempotencyKey : undefined;
+    const chatBinding = isAgent
+      ? {
+          channelId: runArgs.channelId,
+          agentRef: ownerId,
+          agentInvocationId,
+        }
+      : {};
     const parent = (await resolveParentPanel(ownerId)) ?? undefined;
     return {
       evalDoRef: { source: EVAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
       assembledArgs: {
-        code: runArgs.code,
-        path: runArgs.path,
-        sourcePath: runArgs.sourcePath,
-        reset: runArgs.reset,
-        syntax: runArgs.syntax,
+        ...(runArgs.source.kind === "inline"
+          ? { code: runArgs.source.code, sourcePath: runArgs.source.pathHint }
+          : { path: runArgs.source.path }),
+        reset: runArgs.scope?.reset,
+        syntax: runArgs.source.syntax,
         imports: runArgs.imports,
         contextId: owner.contextId,
-        gatewayToken: mintGatewayToken(objectKey),
         parent,
-        timeoutMs: runArgs.timeoutMs,
-        readOnly: runArgs.readOnly,
+        timeoutMs: runArgs.deadlineMs,
         ...chatBinding,
       },
       agentRef: isAgent ? ownerId : undefined,
+      agentInvocationId,
+      owner,
+      objectKey,
     };
   }
+
+  function runIdFor(
+    ctx: ServiceContext,
+    owner: EvalOwner,
+    input: EvalStartInput,
+    delegatedNonce?: string
+  ): string {
+    const idempotencyKey = delegatedNonce ? `delegated:${delegatedNonce}` : input.idempotencyKey;
+    if (!idempotencyKey) return randomUUID();
+    return createHash("sha256")
+      .update(
+        [
+          ctx.caller.code?.repoPath ?? ctx.caller.runtime.id,
+          ctx.caller.code?.executionDigest ?? ctx.caller.subject?.userId ?? "interactive",
+          owner.ownerId,
+          owner.contextId,
+          input.scope?.key ?? "default",
+          idempotencyKey,
+        ].join("\0")
+      )
+      .digest("hex");
+  }
+
+  const startEval = async (
+    ctx: ServiceContext,
+    runArgs: EvalStartInput,
+    initiator: ServiceContext["caller"],
+    delegatedNonce?: string
+  ) => {
+    const prepared = await prepareRun(ctx, runArgs);
+    const runId = runIdFor(ctx, prepared.owner, runArgs, delegatedNonce);
+    const startIntentDigest = evalStartIntentDigest(runArgs);
+    const maxEndsAt = runArgs.deadlineMs ? Date.now() + runArgs.deadlineMs : null;
+    const accepted = (await deps.doDispatch.dispatch(prepared.evalDoRef, "accept", {
+      runId,
+      startIntentDigest,
+      deadlineAt: maxEndsAt,
+    })) as {
+      runId: string;
+      status: string;
+      acceptedAt: number;
+      startIntentDigest: string;
+      needsStart?: boolean;
+    };
+    if (accepted.needsStart === true) {
+      deps.activity?.begin(`eval:${runId}`);
+      enqueueScopeRun(prepared.objectKey, async () => {
+        try {
+          await runHeldAndDeliver(
+            deps.doDispatch,
+            prepared.evalDoRef,
+            runId,
+            startIntentDigest,
+            deps.invocationCoordinator,
+            prepared.agentRef,
+            runArgs.channelId,
+            prepared.agentInvocationId,
+            maxEndsAt,
+            {
+              assembledArgs: prepared.assembledArgs,
+              contextId: prepared.owner.contextId,
+              executor: `code:${EVAL_DO_SOURCE}@${EVAL_DO_EXECUTION_DIGEST}`,
+              initiator,
+              authority: runArgs.authority,
+            },
+            runArgs.authority?.preauthorize?.length
+              ? (credential, readOnly, signal) =>
+                  deps.preauthorize
+                    ? deps.preauthorize({
+                        ctx,
+                        runId,
+                        credential,
+                        objectKey: prepared.objectKey,
+                        intents: runArgs.authority!.preauthorize!,
+                        readOnly,
+                        signal,
+                      })
+                    : Promise.reject(
+                        Object.assign(new Error("Eval preauthorization broker is unavailable"), {
+                          code: "EVAL_INVOCATION_INVALID",
+                        })
+                      )
+              : undefined
+          );
+        } finally {
+          deps.invocationCoordinator.invalidate(runId, prepared.objectKey);
+          deps.activity?.end(`eval:${runId}`);
+        }
+      });
+    }
+    return {
+      runId: accepted.runId,
+      status: accepted.status,
+      acceptedAt: accepted.acceptedAt,
+      startIntentDigest: accepted.startIntentDigest,
+    };
+  };
 
   return {
     name: "eval",
@@ -383,49 +696,69 @@ export function createEvalService(deps: {
     authority: { principals: ["code", "user", "host", "entity"] },
     methods: evalMethods,
     handler: defineServiceHandler("eval", evalMethods, {
-      run: async (ctx, [runArgs]) => {
-        // Held synchronous run for connection-holding callers (panels over WS, CLI). The EvalDO
-        // runs in a held handler; the caller holds its own leg. One request, one result.
-        const { evalDoRef, assembledArgs } = await prepareRun(ctx, runArgs);
-        const activityId = `eval:held:${randomUUID()}`;
-        deps.activity?.begin(activityId);
-        try {
-          return await deps.doDispatch.dispatchHeld(evalDoRef, "run", assembledArgs);
-        } finally {
-          deps.activity?.end(activityId);
+      start: (ctx, [runArgs]) => startEval(ctx, runArgs, ctx.caller),
+      delegatedStart: (ctx, [request]) => {
+        if (!deps.delegatedAuthority) {
+          throw Object.assign(new Error("This host is not a managed development generation"), {
+            code: "EVAL_APPROVAL_ROUTE_LOST",
+          });
         }
-      },
-      startRun: async (ctx, [runArgs]) => {
-        // Async run for a caller that can't hold a connection (an agent). Insert the row (so getRun
-        // works immediately), kick off the held execution + completion push on a background Node
-        // task, and return the runId at once.
-        const runId = runArgs.runId ?? randomUUID();
-        const { evalDoRef, assembledArgs, agentRef } = await prepareRun(ctx, runArgs);
-        const started = await deps.doDispatch.dispatch(evalDoRef, "startRun", {
-          ...assembledArgs,
-          runId,
+        const verified = verifyDevHostEvalAuthority({
+          envelope: request.authority,
+          publicKeySpki: deps.delegatedAuthority.publicKeySpki,
+          parentHostId: deps.delegatedAuthority.parentHostId,
+          generation: deps.delegatedAuthority.generation,
+          recipientPrivateKey: deps.delegatedAuthority.recipientPrivateKey,
+          start: request.input,
         });
-        const status =
-          started && typeof started === "object" && "status" in started
-            ? String(started.status)
-            : "unknown";
-        // Kick the held execution ONLY for a FRESH (pending) row. A deferRedrive re-issue of an
-        // already-`running`/`done` run must NOT spawn a second held executeRun (idempotent startRun
-        // returns the existing status). A stuck `pending` (held task died pre-dispatch) is re-kicked.
-        if (status === "pending") {
-          deps.activity?.begin(`eval:${runId}`);
-          void runHeldAndDeliver(
-            deps.doDispatch,
-            evalDoRef,
-            runId,
-            agentRef,
-            runArgs.channelId
-          ).finally(() => deps.activity?.end(`eval:${runId}`));
+        if (request.input.authority?.approvals !== "pregranted-only") {
+          if (!request.approvalRoute) {
+            throw Object.assign(
+              new Error("Prompt-capable child eval requires a live parent approval route"),
+              { code: "EVAL_APPROVAL_ROUTE_LOST" }
+            );
+          }
+          verifyDevHostEvalApprovalRoute({
+            proof: request.approvalRoute,
+            authority: request.authority,
+            publicKeySpki: deps.delegatedAuthority.publicKeySpki,
+            parentHostId: deps.delegatedAuthority.parentHostId,
+            generation: deps.delegatedAuthority.generation,
+          });
         }
-        return { runId };
+        return startEval(ctx, request.input, verified.initiator, verified.payload.nonce);
       },
-      getRun: async (ctx, [getArgs]) =>
-        deps.doDispatch.dispatch(await evalDoRefFor(ctx, getArgs), "getRun", getArgs.runId),
+      renew: async (ctx, [input]) => {
+        const prefix = `do:${EVAL_DO_SOURCE}:${EVAL_DO_CLASS}:`;
+        if (ctx.caller.runtime.kind !== "do" || !ctx.caller.runtime.id.startsWith(prefix)) {
+          throw new Error("eval.renew is restricted to the active EvalDO kernel");
+        }
+        return deps.invocationCoordinator.renew({
+          runId: input.runId,
+          credential: input.credential,
+          objectKey: ctx.caller.runtime.id.slice(prefix.length),
+        });
+      },
+      beginCleanup: async (ctx, [input]) => {
+        const prefix = `do:${EVAL_DO_SOURCE}:${EVAL_DO_CLASS}:`;
+        if (ctx.caller.runtime.kind !== "do" || !ctx.caller.runtime.id.startsWith(prefix)) {
+          throw new Error("eval.beginCleanup is restricted to the active EvalDO kernel");
+        }
+        return deps.invocationCoordinator.beginCleanup({
+          runId: input.runId,
+          credential: input.credential,
+          objectKey: ctx.caller.runtime.id.slice(prefix.length),
+        });
+      },
+      get: async (ctx, [getArgs]) =>
+        deps.doDispatch.dispatch(await evalDoRefFor(ctx, getArgs), "get", getArgs.runId),
+      events: async (ctx, [eventArgs]) =>
+        deps.doDispatch.dispatch(
+          await evalDoRefFor(ctx, eventArgs),
+          "events",
+          eventArgs.runId,
+          eventArgs.after ?? 0
+        ),
       readScopeTextPage: async (ctx, [pageArgs]) =>
         deps.doDispatch.dispatch(
           await evalDoRefFor(ctx, pageArgs),
@@ -440,12 +773,30 @@ export function createEvalService(deps: {
           "deleteScopeValue",
           deleteArgs.key
         ),
-      reset: async (ctx, [resetArgs = {}]) =>
-        deps.doDispatch.dispatch(await evalDoRefFor(ctx, resetArgs), "reset"),
-      cancel: async (ctx, [cancelArgs]) =>
-        deps.doDispatch.dispatch(await evalDoRefFor(ctx, cancelArgs), "cancel", cancelArgs.runId),
-      forceReset: async (ctx, [forceArgs = {}]) =>
-        deps.doDispatch.dispatch(await evalDoRefFor(ctx, forceArgs), "forceReset"),
+      reset: async (ctx, [resetArgs = {}]) => {
+        const ref = await evalDoRefFor(ctx, resetArgs);
+        try {
+          return await deps.doDispatch.dispatch(ref, "reset");
+        } finally {
+          deps.invocationCoordinator.invalidateObject(ref.objectKey);
+        }
+      },
+      cancel: async (ctx, [cancelArgs]) => {
+        const ref = await evalDoRefFor(ctx, cancelArgs);
+        try {
+          return await deps.doDispatch.dispatch(ref, "cancel", cancelArgs.runId);
+        } finally {
+          deps.invocationCoordinator.invalidate(cancelArgs.runId, ref.objectKey);
+        }
+      },
+      forceReset: async (ctx, [forceArgs = {}]) => {
+        const ref = await evalDoRefFor(ctx, forceArgs);
+        try {
+          return await deps.doDispatch.dispatch(ref, "forceReset");
+        } finally {
+          deps.invocationCoordinator.invalidateObject(ref.objectKey);
+        }
+      },
     }),
   };
 }

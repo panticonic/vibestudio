@@ -12,10 +12,13 @@ import {
   deserializeScopeValue,
   isScopeBlobRef,
   SCOPE_BLOB_REF,
+  type ScopeExecutableCodec,
+  type SerializedScope,
 } from "./scopeSerialize.js";
 
 /** Sentinel: a referenced spill blob could not be read (missing/corrupt). Surfaced as a lost key. */
 const BLOB_RESOLVE_FAILED = Symbol("blobResolveFailed");
+const MAX_SCOPE_KEYS = 10_000;
 
 // ---------------------------------------------------------------------------
 // Public API types
@@ -66,15 +69,18 @@ export class ScopeManager {
   private evalInProgress = false;
   private dirty = false;
   private disposed = false;
+  private executableCodec: ScopeExecutableCodec | undefined;
 
   constructor(opts: {
     channelId: string;
     panelId: string;
     persistence: ScopePersistence;
+    executableCodec?: ScopeExecutableCodec;
   }) {
     this.channelId = opts.channelId;
     this.panelId = opts.panelId;
     this.persistence = opts.persistence;
+    this.executableCodec = opts.executableCodec;
     this.currentScopeId = crypto.randomUUID();
     this.currentCreatedAt = Date.now();
     this.backing = new Map();
@@ -90,6 +96,14 @@ export class ScopeManager {
     return new Proxy({} as Record<string, unknown>, {
       get: (_target, prop: string) => mgr.backing.get(prop),
       set: (_target, prop: string, value) => {
+        if (!mgr.backing.has(prop) && mgr.backing.size >= MAX_SCOPE_KEYS) {
+          throw Object.assign(
+            new Error(`Persistent scope key limit (${MAX_SCOPE_KEYS}) exceeded`),
+            {
+              code: "EVAL_RESOURCE_LIMIT",
+            }
+          );
+        }
         mgr.backing.set(prop, value);
         mgr.dirty = true;
         if (!mgr.evalInProgress) {
@@ -162,7 +176,7 @@ export class ScopeManager {
     this.currentScopeId = entry.id;
     this.currentCreatedAt = entry.createdAt;
 
-    const restoredMap = deserializeScope(entry.data);
+    const restoredMap = deserializeScope(entry.data, this.executableCodec);
     const validDigests = new Set(entry.blobRefs ?? []);
     const blobFailures: string[] = [];
     for (const [key, value] of restoredMap) {
@@ -183,7 +197,7 @@ export class ScopeManager {
       ...new Set(
         entry.droppedPaths
           .map((d) => topLevelKey(d.path))
-          .filter((key) => !allPersistedKeys.has(key)),
+          .filter((key) => !allPersistedKeys.has(key))
       ),
     ];
 
@@ -205,7 +219,8 @@ export class ScopeManager {
     // upsert, dirty will be re-set to true and we must not clear it.
     this.dirty = false;
     const { serialized, spills, serializedKeys, droppedPaths, partialKeys } = serializeScope(
-      this.backing
+      this.backing,
+      this.executableCodec
     );
     const p = this.persistence;
     const blobRefs: string[] = [];
@@ -230,6 +245,23 @@ export class ScopeManager {
       blobRefs,
       createdAt: this.currentCreatedAt,
     });
+    // Keep warm-instance semantics byte-identical to a cold hydrate. In
+    // particular, executable functions become run-neutral codec wrappers now,
+    // so no callable can retain a previous run's lexical authority. Values
+    // that the durable format rejects disappear here rather than surviving
+    // only until the next process eviction.
+    if (!this.dirty) {
+      const normalized = new Map<string, unknown>();
+      const spillByKey = new Map(spills.map((spill) => [spill.key, spill.valueJson]));
+      for (const [key, value] of Object.entries(serialized)) {
+        const spillJson = spillByKey.get(key);
+        normalized.set(
+          key,
+          deserializeScopeValue(spillJson ?? JSON.stringify(value), this.executableCodec)
+        );
+      }
+      this.backing = normalized;
+    }
     // Backends that own blob lifecycle may clean up overwritten/cleared spills here. The shared
     // workspace blobstore leaves this as a no-op and relies on its admin/prune path.
     if (p.sweepBlobs) await p.sweepBlobs();
@@ -272,7 +304,7 @@ export class ScopeManager {
   private async getScope(id: string): Promise<Record<string, unknown> | null> {
     const entry = await this.persistence.get(id);
     if (!entry) return null;
-    const map = deserializeScope(entry.data);
+    const map = deserializeScope(entry.data, this.executableCodec);
     const validDigests = new Set(entry.blobRefs ?? []);
     const obj: Record<string, unknown> = {};
     for (const [key, value] of map) {
@@ -304,10 +336,15 @@ export class ScopeManager {
     }
     if (blobJson == null) return BLOB_RESOLVE_FAILED; // referenced blob missing
     try {
-      return deserializeScopeValue(blobJson);
+      return deserializeScopeValue(blobJson, this.executableCodec);
     } catch {
       return BLOB_RESOLVE_FAILED; // corrupt blob content
     }
+  }
+
+  /** Stable, persistence-shaped snapshot used to bind execution provenance. */
+  snapshotForProvenance(): SerializedScope {
+    return serializeScope(this.backing, this.executableCodec);
   }
 
   private async listScopes(): Promise<ScopeListEntry[]> {

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { clearShellTokenCache } from "@vibestudio/direct-client";
 
 /**
- * `vibestudio eval` drives the server-side `eval` service (eval.run / eval.reset)
+ * `vibestudio eval` drives the server-side asynchronous eval lifecycle
  * over the paired CLI transport. These tests keep strict v2 WebRTC credentials
  * and replace only the signaling/data-channel boundary with an in-process RPC
  * server, then assert the calls, output, and exit codes.
@@ -124,6 +124,57 @@ const OK_RESULT: RunResult = {
   scopeKeys: ["x"],
 };
 
+const DIGEST = "a".repeat(64);
+const HANDLE = {
+  runId: "run-1",
+  status: "accepted",
+  acceptedAt: 10,
+  startIntentDigest: DIGEST,
+};
+
+function terminalSnapshot(result: RunResult) {
+  const terminalReason = result.error ?? null;
+  const publicResult = {
+    ...result,
+    provenance: {
+      startIntentDigest: DIGEST,
+      sourceDigest: DIGEST,
+      executionProvenanceDigest: DIGEST,
+      scopeInputRevision: null,
+      runDigest: DIGEST,
+      sourceBundleDigest: DIGEST,
+      manifestDigest: DIGEST,
+      terminalReason,
+    },
+  };
+  return {
+    runId: HANDLE.runId,
+    status: result.success ? "succeeded" : "failed",
+    acceptedAt: HANDLE.acceptedAt,
+    startedAt: 11,
+    endedAt: 12,
+    deadlineAt: null,
+    startIntentDigest: DIGEST,
+    sourceDigest: DIGEST,
+    executionProvenanceDigest: DIGEST,
+    scopeInputRevision: null,
+    runDigest: DIGEST,
+    sourceBundleDigest: DIGEST,
+    manifestDigest: DIGEST,
+    result: publicResult,
+    terminalReason,
+  };
+}
+
+function completedServer(result: RunResult = OK_RESULT): (body: RpcRequest) => unknown {
+  return (body) => {
+    if (body.method === "eval.start") return HANDLE;
+    if (body.method === "eval.events") return { events: [], next: 0 };
+    if (body.method === "eval.get") return terminalSnapshot(result);
+    throw new Error(`Unexpected eval method ${body.method}`);
+  };
+}
+
 function jsonOutput(): Record<string, unknown> {
   const lines = vi.mocked(console.log).mock.calls.map((call) => String(call[0]));
   return JSON.parse(lines[lines.length - 1]!) as Record<string, unknown>;
@@ -160,23 +211,20 @@ describe("vibestudio eval commands", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("eval run calls eval.run with the session subKey and exits 0", async () => {
+  it("eval run composes start/events/get with the session scope and exits 0", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer((body) => (body.method === "eval.run" ? OK_RESULT : null));
+    const { rpcBodies } = stubServer(completedServer());
 
     const { main } = await import("../client.js");
     await expect(main(["eval", "run", "-e", "return 42;", "--json"])).resolves.toBe(0);
 
-    expect(rpcBodies.map((b) => b.method)).toEqual(["eval.run"]);
+    expect(rpcBodies.map((b) => b.method)).toEqual(["eval.start", "eval.events", "eval.get"]);
     expect(rpcBodies[0]!.args[0]).toEqual({
-      ownerId: "session:default",
-      contextId: "ctx_1",
-      subKey: "default",
-      code: "return 42;",
-      path: undefined,
-      syntax: undefined,
-      imports: undefined,
+      target: { kind: "attached-session", ownerId: "session:default", contextId: "ctx_1" },
+      scope: { key: "default" },
+      source: { kind: "inline", code: "return 42;" },
+      authority: {},
     });
 
     const output = jsonOutput();
@@ -189,30 +237,24 @@ describe("vibestudio eval commands", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it("eval run --fresh-scope resets before running", async () => {
+  it("eval run --fresh-scope atomically requests a reset on start", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer((body) =>
-      body.method === "eval.reset" ? { ok: true } : OK_RESULT
-    );
+    const { rpcBodies } = stubServer(completedServer());
 
     const { main } = await import("../client.js");
     await expect(main(["eval", "run", "-e", "return 1;", "--fresh-scope", "--json"])).resolves.toBe(
       0
     );
 
-    expect(rpcBodies.map((b) => b.method)).toEqual(["eval.reset", "eval.run"]);
-    expect(rpcBodies[0]!.args[0]).toEqual({
-      ownerId: "session:default",
-      contextId: "ctx_1",
-      subKey: "default",
-    });
+    expect(rpcBodies.map((b) => b.method)).toEqual(["eval.start", "eval.events", "eval.get"]);
+    expect(rpcBodies[0]!.args[0]).toMatchObject({ scope: { key: "default", reset: true } });
   });
 
   it("eval run forwards syntax + imports", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => OK_RESULT);
+    const { rpcBodies } = stubServer(completedServer());
 
     const { main } = await import("../client.js");
     await expect(
@@ -230,7 +272,7 @@ describe("vibestudio eval commands", () => {
     ).resolves.toBe(0);
 
     expect(rpcBodies[0]!.args[0]).toMatchObject({
-      syntax: "typescript",
+      source: { kind: "inline", code: "return 1;", syntax: "typescript" },
       imports: { lodash: "npm:4" },
     });
   });
@@ -238,39 +280,38 @@ describe("vibestudio eval commands", () => {
   it("eval run --path lets the server read the file (no inline code)", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => OK_RESULT);
+    const { rpcBodies } = stubServer(completedServer());
 
     const { main } = await import("../client.js");
     await expect(main(["eval", "run", "--path", "/snippets/a.ts", "--json"])).resolves.toBe(0);
 
-    // `code` is undefined → dropped by JSON serialization; only `path` is sent.
     expect(rpcBodies[0]!.args[0]).toEqual({
-      ownerId: "session:default",
-      contextId: "ctx_1",
-      subKey: "default",
-      path: "/snippets/a.ts",
-      syntax: undefined,
-      imports: undefined,
+      target: { kind: "attached-session", ownerId: "session:default", contextId: "ctx_1" },
+      scope: { key: "default" },
+      source: { kind: "context-file", path: "/snippets/a.ts" },
+      authority: {},
     });
   });
 
   it("eval run reads code from a local FILE positional", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => OK_RESULT);
+    const { rpcBodies } = stubServer(completedServer());
     const codeFile = path.join(tmpDir, "snippet.ts");
     fs.writeFileSync(codeFile, "return 42;");
 
     const { main } = await import("../client.js");
     await expect(main(["eval", "run", codeFile, "--json"])).resolves.toBe(0);
 
-    expect(rpcBodies[0]!.args[0]).toMatchObject({ code: "return 42;" });
+    expect(rpcBodies[0]!.args[0]).toMatchObject({
+      source: { kind: "inline", code: "return 42;" },
+    });
   });
 
   it("eval run maps a failed result to exit 1", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    stubServer(() => ({ success: false, console: "", error: "boom" }) satisfies RunResult);
+    stubServer(completedServer({ success: false, console: "", error: "boom" }));
 
     const { main } = await import("../client.js");
     await expect(main(["eval", "run", "-e", "throw 1;", "--json"])).resolves.toBe(1);
@@ -283,9 +324,12 @@ describe("vibestudio eval commands", () => {
   it("eval run maps a slow server call to a timeout (exit 4)", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    // The in-process WebRTC server never resolves eval.run, so the command's
-    // client-side timeout remains deterministic without signaling or network.
-    stubServer(() => new Promise<never>(() => {}));
+    const { rpcBodies } = stubServer((body) => {
+      if (body.method === "eval.start") return HANDLE;
+      if (body.method === "eval.events") return new Promise<never>(() => {});
+      if (body.method === "eval.cancel") return { status: "requested" };
+      throw new Error(`Unexpected eval method ${body.method}`);
+    });
 
     const { main } = await import("../client.js");
     await expect(
@@ -295,6 +339,7 @@ describe("vibestudio eval commands", () => {
     const output = jsonErrorOutput();
     expect(String(output["error"])).toContain("timed out");
     expect(output["exitCode"]).toBe(4);
+    expect(rpcBodies.map((body) => body.method)).toContain("eval.cancel");
   });
 
   it("eval run usage errors exit 2", async () => {
@@ -316,7 +361,7 @@ describe("vibestudio eval commands", () => {
   it("eval repl-reset calls eval.reset with the session subKey", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => ({ ok: true }));
+    const { rpcBodies } = stubServer(() => ({ status: "reset" }));
 
     const { main } = await import("../client.js");
     await expect(main(["eval", "repl-reset", "--json"])).resolves.toBe(0);
@@ -324,10 +369,9 @@ describe("vibestudio eval commands", () => {
     expect(rpcBodies).toHaveLength(1);
     expect(rpcBodies[0]!.method).toBe("eval.reset");
     expect(rpcBodies[0]!.args[0]).toEqual({
-      ownerId: "session:default",
-      contextId: "ctx_1",
-      subKey: "default",
+      target: { kind: "attached-session", ownerId: "session:default", contextId: "ctx_1" },
+      scope: { key: "default" },
     });
-    expect(jsonOutput()).toMatchObject({ ok: true });
+    expect(jsonOutput()).toMatchObject({ status: "reset" });
   });
 });

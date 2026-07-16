@@ -5,26 +5,21 @@ import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { ApprovalQueue } from "./approvalQueue.js";
-import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import { withCapability } from "./capabilityPermission.js";
-import type { DeferredResult } from "@vibestudio/shared/serviceDispatcher";
 
 const CAPABILITY = "external-browser-open";
 const OPEN_EXTERNAL_ALLOWED_SCHEMES = new Set(["http:", "https:", "mailto:"]);
 
 export interface ExternalOpenServiceDeps {
   eventService: EventService;
-  approvalQueue?: ApprovalQueue;
-  grantStore?: CapabilityGrantStore;
 }
 
 export function createExternalOpenService(deps: ExternalOpenServiceDeps): ServiceDefinition {
   function emitOpen(ctx: ServiceContext, url: URL): void {
+    const caller = ctx.authorizingCaller ?? ctx.caller;
     deps.eventService.emit("external-open:open", {
       url: url.toString(),
-      callerId: ctx.caller.runtime.id,
-      callerKind: ctx.caller.runtime.kind,
+      callerId: caller.runtime.id,
+      callerKind: caller.runtime.kind,
     });
   }
 
@@ -32,56 +27,14 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
     ctx: ServiceContext,
     rawUrl: string,
     options?: OpenExternalOptions
-  ): Promise<OpenExternalResult> | DeferredResult {
+  ): Promise<OpenExternalResult> {
     const url = normalizeExternalUrl(rawUrl);
     if (options?.expectedRedirectUri) {
       assertAllowedOAuthExternalUrl(url.toString(), options.expectedRedirectUri);
     }
-    const resource = resourceForExternalUrl(url);
-
-    const gated =
-      ctx.caller.runtime.kind === "panel" ||
-      ctx.caller.runtime.kind === "app" ||
-      ctx.caller.runtime.kind === "worker" ||
-      ctx.caller.runtime.kind === "do";
-    if (!gated) {
-      emitOpen(ctx, url);
-      return Promise.resolve({});
-    }
-    if (!deps.grantStore || !deps.approvalQueue) {
-      throw new Error("External browser open approval is unavailable");
-    }
-    // The open itself happens only after approval, inside the continuation — so
-    // when deferred, the browser opens once the user approves (UX unchanged).
-    return withCapability(
-      { approvalQueue: deps.approvalQueue, grantStore: deps.grantStore },
-      ctx,
-      {
-        capability: CAPABILITY,
-        resource,
-        operation: {
-          kind: "browser",
-          verb: "Open external browser",
-          object: {
-            type: resource.type,
-            label: resource.label,
-            value: url.toString(),
-          },
-          groupKey: `external-browser-open:${ctx.caller.runtime.id}:${resource.key}`,
-        },
-        title: "Open external browser",
-        description: "Allow this code to open URLs in the system browser.",
-        details: externalOpenDetails(url, options),
-        deniedReason: "External browser open denied",
-      },
-      async (authorization) => {
-        if (!authorization.allowed) {
-          throw new Error(authorization.reason ?? "External browser open denied");
-        }
-        emitOpen(ctx, url);
-        return authorization.decision ? { approvalDecision: authorization.decision } : {};
-      }
-    );
+    emitOpen(ctx, url);
+    const decision = ctx.authorityDecisions?.get(CAPABILITY);
+    return Promise.resolve(decision ? { approvalDecision: decision } : {});
   }
 
   return {
@@ -109,27 +62,4 @@ function normalizeExternalUrl(rawUrl: string): URL {
     url.hash = "";
   }
   return url;
-}
-
-function resourceForExternalUrl(url: URL): {
-  key: string;
-  type: string;
-  label: string;
-  value: string;
-} {
-  if (url.protocol === "mailto:") {
-    return { key: "mailto:", type: "url-origin", label: "Scheme", value: "mailto:" };
-  }
-  return { key: url.origin, type: "url-origin", label: "Origin", value: url.origin };
-}
-
-function externalOpenDetails(
-  url: URL,
-  options: OpenExternalOptions | undefined
-): Array<{ label: string; value: string }> {
-  const details = [{ label: "URL", value: url.toString() }];
-  if (options?.expectedRedirectUri) {
-    details.push({ label: "OAuth callback", value: options.expectedRedirectUri });
-  }
-  return details;
 }

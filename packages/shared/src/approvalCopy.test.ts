@@ -1,6 +1,7 @@
 import type { PendingApproval } from "./approvals.js";
 import {
   formatAccount,
+  formatApprovalDecisionDeadline,
   formatGitRemoteSummary,
   formatInjection,
   formatNetworkDestination,
@@ -23,9 +24,16 @@ const base = {
   repoPath: "/projects/foo",
   executionDigest: "v1",
   requestedAt: 1,
+  decisionDeadlineAt: 60_001,
 } as const;
 
 describe("approvalCopy", () => {
+  it("formats the queue-owned approval decision deadline", () => {
+    expect(formatApprovalDecisionDeadline(61_000, 1_000)).toBe("Decision expires in 1 minute");
+    expect(formatApprovalDecisionDeadline(7_201_000, 1_000)).toBe("Decision expires in 2 hours");
+    expect(formatApprovalDecisionDeadline(999, 1_000)).toBe("Decision window expired");
+  });
+
   const fixtures: Array<{
     name: string;
     approval: PendingApproval;

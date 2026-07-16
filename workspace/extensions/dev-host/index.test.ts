@@ -8,13 +8,53 @@ import type {
   DevHostProviderLaunchInput,
   DevLaunchStatus,
 } from "@vibestudio/service-schemas/devHost";
+import { DEV_HOST_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/devHost";
 import { sha256 } from "@vibestudio/shared/execution/identity";
-import { NativeDevHostExecutor } from "./index.js";
+import { isEvalRunChallenge, NativeDevHostExecutor } from "./index.js";
+import type { PendingCapabilityApproval } from "@vibestudio/shared/approvals";
 import type { DevGeneration } from "./lifecycle.js";
 
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+describe("dev-host provider contract", () => {
+  it("declares exactly the host schema methods", async () => {
+    const manifest = JSON.parse(
+      await readFile(new URL("./package.json", import.meta.url), "utf8")
+    ) as {
+      vibestudio: { extension: { providerContracts: { devHost: { methods: string[] } } } };
+    };
+    expect(manifest.vibestudio.extension.providerContracts.devHost.methods).toEqual(
+      DEV_HOST_PROVIDER_METHOD_NAMES
+    );
+  });
+});
+
+describe("child eval challenge correlation", () => {
+  it("uses the canonical operation group when presentation details are service-specific", () => {
+    const challenge = {
+      approvalId: "approval-1",
+      callerId: "worker:agent",
+      callerKind: "worker",
+      requestedAt: 1,
+      decisionDeadlineAt: 2,
+      operation: {
+        kind: "inspection",
+        verb: "Inspect workerd",
+        object: { type: "workerd-inspector", label: "Target", value: "worker:one" },
+        groupKey: "run-1:workerd-inspector:worker:one",
+      },
+      kind: "capability",
+      capability: "workerd-inspector",
+      title: "Inspect worker:one",
+      details: [{ label: "Target", value: "worker:one" }],
+    } satisfies PendingCapabilityApproval;
+
+    expect(isEvalRunChallenge(challenge, "run-1")).toBe(true);
+    expect(isEvalRunChallenge(challenge, "run-2")).toBe(false);
+  });
 });
 
 function devGeneration(launchId: string, hostBuildId: string): DevGeneration {
@@ -25,6 +65,7 @@ function devGeneration(launchId: string, hostBuildId: string): DevGeneration {
       hostBuildId,
       serverId: `server-${hostBuildId}`,
       endpoint: "http://127.0.0.1:1",
+      evalAuthorityRecipientKey: null,
     },
     childWorkspaceId: "child",
     childContextId: null,
@@ -52,6 +93,7 @@ function retainedInput(root: string): DevHostProviderLaunchInput {
       createdAt: 1,
     },
     executionGrant: { resource: `repo/execution:${"c".repeat(64)}`, authorizedAt: 1 },
+    evalAuthorityBridge: { parentHostId: "parent-host", publicKeySpki: "public-key" },
   };
 }
 
@@ -79,6 +121,7 @@ function statusOf(input: DevHostProviderLaunchInput, hostBuildId: string): DevLa
       hostBuildId,
       serverId: "old-server",
       endpoint: "http://127.0.0.1:1",
+      evalAuthorityRecipientKey: null,
     },
     childWorkspaceId: "child",
     childContextId: null,
@@ -238,12 +281,7 @@ describe("NativeDevHostExecutor retained recovery", () => {
     roots.push(root);
     const input = retainedInput(root);
     const hostBuildId = "e".repeat(64);
-    const retainedFile = path.join(
-      root,
-      "retained",
-      sha256(input.launchId),
-      `${hostBuildId}.json`
-    );
+    const retainedFile = path.join(root, "retained", sha256(input.launchId), `${hostBuildId}.json`);
     await mkdir(path.dirname(retainedFile), { recursive: true });
     await writeFile(
       retainedFile,
@@ -262,6 +300,7 @@ describe("NativeDevHostExecutor retained recovery", () => {
         hostBuildId,
         serverId: "recovered-server",
         endpoint: "http://127.0.0.1:2",
+        evalAuthorityRecipientKey: null,
       },
       childWorkspaceId: "child",
       childContextId: null,
@@ -374,7 +413,10 @@ describe("NativeDevHostExecutor retained recovery", () => {
     const startPrepared = vi
       .spyOn(
         executor as unknown as {
-          startPrepared(input: DevHostProviderLaunchInput, hostBuildId: string): Promise<DevGeneration>;
+          startPrepared(
+            input: DevHostProviderLaunchInput,
+            hostBuildId: string
+          ): Promise<DevGeneration>;
         },
         "startPrepared"
       )

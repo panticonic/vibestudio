@@ -10,8 +10,9 @@
  * (which revives a hibernated DO).
  *
  * This registry owns the detached work: it dedups reissued calls (so a DO
- * re-driving after a missed push doesn't double-prompt), enforces a TTL, and
- * isolates delivery failures. Correctness across a *server* restart still comes
+ * re-driving after a missed push doesn't double-prompt), optionally enforces a
+ * domain-provided TTL, and isolates delivery failures. Human-decision deadlines
+ * belong to the approval queue. Correctness across a *server* restart still comes
  * from DO-side re-drive against durable state (grant stores); this registry is
  * the in-memory fast path, deliberately not durable.
  */
@@ -21,8 +22,6 @@ import {
   type DeferralApi,
   type DeferredResult,
 } from "@vibestudio/shared/serviceDispatcher";
-
-const DEFAULT_TTL_MS = 10 * 60 * 1000;
 
 /** Identity of a single deferrable call, used to build the dedup key. */
 export interface DeferralCallInfo {
@@ -67,7 +66,7 @@ interface PendingEntry {
   /** All requestIds awaiting this single `work` run (dedup collapses them here). */
   requestIds: Set<string>;
   abort: AbortController;
-  timer: TimerHandle;
+  timer?: TimerHandle;
 }
 
 function defaultTimer(fn: () => void, ms: number): TimerHandle {
@@ -86,13 +85,17 @@ function errorPayload(err: unknown): { message: string; code?: string } {
 
 export class DeferralRegistry {
   private pending = new Map<string, PendingEntry>();
-  private readonly ttlMs: number;
+  private readonly ttlMs: number | null;
   private readonly setTimer: (fn: () => void, ms: number) => TimerHandle;
   private readonly deliveryRetries: number;
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly deps: DeferralRegistryDeps) {
-    this.ttlMs = deps.ttlMs ?? DEFAULT_TTL_MS;
+    // Human-decision deadlines belong to ApprovalQueue, which can remove the
+    // prompt and settle every coalesced waiter coherently. A generic deferred
+    // RPC has no independent timeout; callers with other bounded work own that
+    // deadline in their domain service.
+    this.ttlMs = deps.ttlMs ?? null;
     this.setTimer = deps.setTimer ?? defaultTimer;
     this.deliveryRetries = deps.deliveryRetries ?? 4;
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -126,14 +129,13 @@ export class DeferralRegistry {
           callerId: info.callerId,
           requestIds: new Set([info.requestId]),
           abort,
-          timer: this.setTimer(() => {
-            // Abort the in-flight work (e.g. the human approval waiter) BEFORE
-            // settling, so a slow approval is cancelled cleanly instead of
-            // leaking a pending waiter (P1-3).
+        };
+        if (this.ttlMs !== null) {
+          entry.timer = this.setTimer(() => {
             abort.abort(new Error("Deferred call timed out"));
             this.settle(key, new Error("Deferred call timed out"), true);
-          }, this.ttlMs),
-        };
+          }, this.ttlMs);
+        }
         this.pending.set(key, entry);
         void (async () => {
           try {
@@ -151,7 +153,7 @@ export class DeferralRegistry {
     const entry = this.pending.get(key);
     if (!entry) return; // already settled (e.g. TTL fired then work resolved)
     this.pending.delete(key);
-    entry.timer.cancel();
+    entry.timer?.cancel();
     const value = isError ? errorPayload(payload) : payload;
     for (const requestId of entry.requestIds) {
       void this.deliverWithRetry(entry.callerId, requestId, value, isError);
@@ -201,11 +203,28 @@ export class DeferralRegistry {
     return this.pending.size;
   }
 
+  /**
+   * Retiring a runtime is terminal for every detached call it owns. Abort the
+   * underlying work and drop delivery state before the entity disappears; a
+   * late provider result must not retry against a dead DO/worker.
+   */
+  cancelForCaller(callerId: string): number {
+    let cancelled = 0;
+    for (const [key, entry] of this.pending) {
+      if (entry.callerId !== callerId) continue;
+      this.pending.delete(key);
+      entry.timer?.cancel();
+      entry.abort.abort(new Error(`Deferred caller ${callerId} retired`));
+      cancelled += 1;
+    }
+    return cancelled;
+  }
+
   /** Abort and drop all in-flight deferrals (shutdown). */
   cancelAll(): void {
     for (const entry of this.pending.values()) {
       entry.abort.abort();
-      entry.timer.cancel();
+      entry.timer?.cancel();
     }
     this.pending.clear();
   }

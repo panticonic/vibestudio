@@ -1,9 +1,9 @@
 /**
  * scopeSerialize — Recursive per-property serializer for REPL scope.
  *
- * Keeps data leaves, drops function leaves, reports full dotted paths
- * of dropped values. Handles type-tagged values (Date, Map, Set, RegExp),
- * circular references, and max depth.
+ * Keeps data leaves and, when the host supplies an executable codec, stores
+ * source-reconstructible functions as run-neutral records. Handles type-tagged
+ * values (Date, Map, Set, RegExp), circular references, and max depth.
  */
 
 // Depth is a safety/perf bound only — circular refs are handled separately by `seen`, so it can be
@@ -16,6 +16,8 @@ const SPILL_THRESHOLD_CHARS = 128 * 1024;
 const MAX_INLINE_TOTAL_CHARS = 256 * 1024;
 /** Diagnostic cap: bounds the `dropped_paths` record so a pathological value can't overflow it. */
 const MAX_DROPPED_ENTRIES = 200;
+const MAX_EXECUTABLES = 256;
+const MAX_EXECUTABLE_SOURCE_CHARS = 4 * 1024 * 1024;
 
 /**
  * Marker for a spilled top-level value: `{ [SCOPE_BLOB_REF]: <digest>, bytes }`. On hydrate, the
@@ -43,6 +45,22 @@ export interface SerializedScope {
   droppedPaths: Array<{ path: string; reason: string }>;
   /** Top-level keys that were only partially serialized. */
   partialKeys: string[];
+}
+
+/**
+ * Durable identity for a source-reconstructible function. The host, rather
+ * than the generic scope package, owns compilation and invocation so a
+ * restored function can be rebound to the CURRENT run's authority.
+ */
+export interface SerializedScopeExecutable {
+  source: string;
+  definitionSourceDigest: string;
+  definitionRunDigest: string;
+}
+
+export interface ScopeExecutableCodec {
+  serialize(value: (...args: unknown[]) => unknown, path: string): SerializedScopeExecutable | null;
+  deserialize(value: SerializedScopeExecutable, path: string): (...args: unknown[]) => unknown;
 }
 
 /** A spilled-value placeholder produced by `serializeScope` (top-level only). */
@@ -82,6 +100,7 @@ type SerializedTopLevelEntry = {
   value: unknown;
   jsonChars: number;
 };
+type SerializationBudget = { executables: number; executableSourceChars: number };
 
 function isPlainObject(val: unknown): val is Record<string, unknown> {
   if (typeof val !== "object" || val === null) return false;
@@ -95,6 +114,8 @@ function serializeValue(
   dropped: DroppedEntry[],
   seen: Set<unknown>,
   depth: number,
+  executableCodec?: ScopeExecutableCodec,
+  budget?: SerializationBudget
 ): unknown {
   // Max depth
   if (depth > MAX_DEPTH) {
@@ -108,8 +129,24 @@ function serializeValue(
   if (t === "string" || t === "number" || t === "boolean") return val;
   if (t === "bigint") return { __t: "BigInt", v: val.toString() };
 
-  // Drop functions and symbols
+  // Executable values are host-owned. A codec serializes only functions it can
+  // reconstruct without retaining a prior run's closures or credentials.
   if (t === "function") {
+    const executable = executableCodec?.serialize(val as (...args: unknown[]) => unknown, path);
+    if (executable) {
+      const current = budget ?? { executables: 0, executableSourceChars: 0 };
+      current.executables += 1;
+      current.executableSourceChars += executable.source.length;
+      if (
+        current.executables > MAX_EXECUTABLES ||
+        current.executableSourceChars > MAX_EXECUTABLE_SOURCE_CHARS
+      ) {
+        throw Object.assign(new Error("Persistent scope executable budget exceeded"), {
+          code: "EVAL_RESOURCE_LIMIT",
+        });
+      }
+      return { __t: "ExecutableFunctionV1", v: executable };
+    }
     dropped.push({ path, reason: "function" });
     return undefined;
   }
@@ -139,8 +176,24 @@ function serializeValue(
       const entries: [unknown, unknown][] = [];
       let i = 0;
       for (const [k, v] of val) {
-        const kSer = serializeValue(k, `${path}[Map key ${i}]`, dropped, seen, depth + 1);
-        const vSer = serializeValue(v, `${path}[Map value ${i}]`, dropped, seen, depth + 1);
+        const kSer = serializeValue(
+          k,
+          `${path}[Map key ${i}]`,
+          dropped,
+          seen,
+          depth + 1,
+          executableCodec,
+          budget
+        );
+        const vSer = serializeValue(
+          v,
+          `${path}[Map value ${i}]`,
+          dropped,
+          seen,
+          depth + 1,
+          executableCodec,
+          budget
+        );
         entries.push([kSer, vSer]);
         i++;
       }
@@ -150,7 +203,15 @@ function serializeValue(
       const items: unknown[] = [];
       let i = 0;
       for (const item of val) {
-        const ser = serializeValue(item, `${path}[Set ${i}]`, dropped, seen, depth + 1);
+        const ser = serializeValue(
+          item,
+          `${path}[Set ${i}]`,
+          dropped,
+          seen,
+          depth + 1,
+          executableCodec,
+          budget
+        );
         items.push(ser);
         i++;
       }
@@ -173,7 +234,15 @@ function serializeValue(
       const result: unknown[] = [];
       for (let i = 0; i < val.length; i++) {
         const elemPath = `${path}[${i}]`;
-        const ser = serializeValue(val[i], elemPath, dropped, seen, depth + 1);
+        const ser = serializeValue(
+          val[i],
+          elemPath,
+          dropped,
+          seen,
+          depth + 1,
+          executableCodec,
+          budget
+        );
         result.push(ser !== undefined ? ser : null);
       }
       return result;
@@ -184,7 +253,15 @@ function serializeValue(
       const result: Record<string, unknown> = {};
       for (const key of Object.keys(val)) {
         const childPath = path ? `${path}.${key}` : key;
-        const ser = serializeValue(val[key], childPath, dropped, seen, depth + 1);
+        const ser = serializeValue(
+          val[key],
+          childPath,
+          dropped,
+          seen,
+          depth + 1,
+          executableCodec,
+          budget
+        );
         if (ser !== undefined) {
           result[key] = ser;
         }
@@ -202,12 +279,16 @@ function serializeValue(
   }
 }
 
-export function serializeScope(scope: Map<string, unknown>): SerializedScope {
+export function serializeScope(
+  scope: Map<string, unknown>,
+  executableCodec?: ScopeExecutableCodec
+): SerializedScope {
   const dropped: DroppedEntry[] = [];
   const entries: SerializedTopLevelEntry[] = [];
+  const budget: SerializationBudget = { executables: 0, executableSourceChars: 0 };
 
   for (const [key, value] of scope) {
-    const ser = serializeValue(value, key, dropped, new Set(), 0);
+    const ser = serializeValue(value, key, dropped, new Set(), 0, executableCodec, budget);
     if (ser !== undefined) {
       entries.push({ key, value: ser, jsonChars: serializedJsonChars(ser) });
     }
@@ -237,7 +318,12 @@ export function serializeScope(scope: Map<string, unknown>): SerializedScope {
     if (spillKeys.has(e.key)) {
       const placeholder: Record<string, unknown> = { [SCOPE_BLOB_REF]: "", bytes: e.jsonChars };
       serialized[e.key] = placeholder;
-      spills.push({ placeholder, valueJson: JSON.stringify(e.value), bytes: e.jsonChars, key: e.key });
+      spills.push({
+        placeholder,
+        valueJson: JSON.stringify(e.value),
+        bytes: e.jsonChars,
+        key: e.key,
+      });
     } else {
       serialized[e.key] = e.value;
     }
@@ -257,7 +343,7 @@ export function serializeScope(scope: Map<string, unknown>): SerializedScope {
   for (const key of scope.keys()) {
     if (!(key in serialized)) continue; // not serializable at all (already in droppedPaths)
     const hasDrops = dropped.some(
-      (d) => d.path === key || d.path.startsWith(key + ".") || d.path.startsWith(key + "["),
+      (d) => d.path === key || d.path.startsWith(key + ".") || d.path.startsWith(key + "[")
     );
     (hasDrops ? partialKeys : serializedKeys).push(key);
   }
@@ -277,13 +363,17 @@ function serializedJsonChars(value: unknown): number {
 // Deserialization
 // ---------------------------------------------------------------------------
 
-function deserializeValue(val: unknown): unknown {
+function deserializeValue(
+  val: unknown,
+  executableCodec?: ScopeExecutableCodec,
+  path = ""
+): unknown {
   if (val === null || val === undefined) return val;
   const t = typeof val;
   if (t === "string" || t === "number" || t === "boolean") return val;
 
   if (Array.isArray(val)) {
-    return val.map(deserializeValue);
+    return val.map((item, index) => deserializeValue(item, executableCodec, `${path}[${index}]`));
   }
 
   if (typeof val === "object" && val !== null) {
@@ -298,21 +388,36 @@ function deserializeValue(val: unknown): unknown {
         }
         case "Map": {
           const entries = val.v as [unknown, unknown][];
-          return new Map(entries.map(([k, v]) => [deserializeValue(k), deserializeValue(v)]));
+          return new Map(
+            entries.map(([k, v], index) => [
+              deserializeValue(k, executableCodec, `${path}[Map key ${index}]`),
+              deserializeValue(v, executableCodec, `${path}[Map value ${index}]`),
+            ])
+          );
         }
         case "Set": {
           const items = val.v as unknown[];
-          return new Set(items.map(deserializeValue));
+          return new Set(
+            items.map((item, index) =>
+              deserializeValue(item, executableCodec, `${path}[Set ${index}]`)
+            )
+          );
         }
         case "BigInt":
           return BigInt(val.v as string);
+        case "ExecutableFunctionV1":
+          if (!executableCodec) {
+            throw new Error(`Scope executable at ${path || "<root>"} requires an executable codec`);
+          }
+          return executableCodec.deserialize(val.v as SerializedScopeExecutable, path);
       }
     }
 
     // Plain object
     const result: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(val)) {
-      result[key] = deserializeValue(child);
+      const childPath = path ? `${path}.${key}` : key;
+      result[key] = deserializeValue(child, executableCodec, childPath);
     }
     return result;
   }
@@ -320,16 +425,22 @@ function deserializeValue(val: unknown): unknown {
   return val;
 }
 
-export function deserializeScope(json: string): Map<string, unknown> {
+export function deserializeScope(
+  json: string,
+  executableCodec?: ScopeExecutableCodec
+): Map<string, unknown> {
   const parsed = JSON.parse(json) as Record<string, unknown>;
   const map = new Map<string, unknown>();
   for (const [key, value] of Object.entries(parsed)) {
-    map.set(key, deserializeValue(value));
+    map.set(key, deserializeValue(value, executableCodec, key));
   }
   return map;
 }
 
 /** Deserialize a single spilled value's JSON (the content stored in the blob store). */
-export function deserializeScopeValue(json: string): unknown {
-  return deserializeValue(JSON.parse(json));
+export function deserializeScopeValue(
+  json: string,
+  executableCodec?: ScopeExecutableCodec
+): unknown {
+  return deserializeValue(JSON.parse(json), executableCodec);
 }
