@@ -109,6 +109,7 @@ interface BrowserHandoffResolution {
 
 type BrowserHandoffDeliveryAttempt =
   | "event-service-missing"
+  | "panel-tree"
   | "emit-to-caller"
   | "emit-to-connection"
   | "emit-to-connection-fallback";
@@ -274,6 +275,11 @@ export interface CredentialConnectionCoordinatorDeps {
   };
   sessionCredentialCapture?: SessionCredentialCapture;
   runtimeInspector?: CredentialRuntimeInspector;
+  openInternalBrowser?: (params: {
+    ctx: ServiceContext;
+    url: string;
+    parentPanelId: string;
+  }) => Promise<void>;
   relayOAuthRegistrar?: {
     register(transactionId: string, platform: "mobile" | "desktop"): void;
   };
@@ -354,6 +360,7 @@ export function createCredentialConnectionCoordinator(
     eventService,
     findReplacementCandidate,
     loadActiveCredential,
+    openInternalBrowser,
     requestCredentialApproval,
     resolveApprovalIdentity,
     runtimeInspector,
@@ -2205,12 +2212,18 @@ export function createCredentialConnectionCoordinator(
             "Internal OAuth handoff requires a panel target"
           );
         }
-        browserDelivery = emitToBrowserTarget(browserTarget, "browser-panel:open", {
+        if (!openInternalBrowser) {
+          throw new OAuthConnectionError(
+            "browser_unavailable",
+            "Internal OAuth browser creation is unavailable"
+          );
+        }
+        await openInternalBrowser({
+          ctx,
           url: started.authorizeUrl,
           parentPanelId: browserTarget.parentPanelId,
-          callerId: ctx.caller.runtime.id,
-          callerKind: ctx.caller.runtime.kind,
         });
+        browserDelivery = { delivered: true, attempt: "panel-tree" };
       } else {
         browserDelivery = emitToBrowserTarget(browserTarget, "external-open:open", openPayload);
       }

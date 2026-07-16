@@ -107,6 +107,11 @@ export type { AckBadgeProps, ReceiptState, ReceiptAggregate } from "./components
 export { ChatDirtyRepoWarnings } from "./components/ChatDirtyRepoWarnings";
 export { ChatDebugConsole } from "./components/ChatDebugConsole";
 export { ChatActionBar } from "./components/ChatActionBar";
+export {
+  CredentialConnectOptions,
+  type CredentialBrowserMode,
+  type CredentialConnectOptionsProps,
+} from "./components/CredentialConnectOptions";
 
 // --- Primitive components ---
 export { MessageList } from "./components/MessageList";
@@ -136,7 +141,11 @@ export { ChatConnectionErrorBanner } from "./components/ChatConnectionErrorBanne
 export { ContextUsageRing } from "./components/ContextUsageRing";
 export { JsonSchemaForm } from "./components/JsonSchemaForm";
 export { ErrorBoundary } from "./components/ErrorBoundary";
-export { markdownComponents, mdxComponents, streamingMarkdownComponents } from "./components/markdownComponents";
+export {
+  markdownComponents,
+  mdxComponents,
+  streamingMarkdownComponents,
+} from "./components/markdownComponents";
 export { MermaidDiagram, Diagram } from "./components/MermaidDiagram";
 
 // --- Utilities ---

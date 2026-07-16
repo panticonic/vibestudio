@@ -50,7 +50,6 @@ export type EventName =
   | "navigate-about"
   | "navigate-to-panel"
   | "external-open:open"
-  | "browser-panel:open"
   | "browser-import-progress"
   | "browser-data-changed"
   | "autofill:save-prompt"
@@ -195,12 +194,6 @@ export interface EventPayloads {
       prefersEphemeral?: boolean;
     };
   };
-  "browser-panel:open": {
-    url: string;
-    parentPanelId: string;
-    callerId: string;
-    callerKind: CallerKind;
-  };
   "browser-import-progress": {
     requestId: string;
     dataType: string;
@@ -330,7 +323,6 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "navigate-about",
   "navigate-to-panel",
   "external-open:open",
-  "browser-panel:open",
   "browser-import-progress",
   "browser-data-changed",
   "autofill:save-prompt",

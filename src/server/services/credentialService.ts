@@ -84,6 +84,7 @@ import {
 } from "./credentialRuntimeContext.js";
 import {
   createCredentialConnectionCoordinator,
+  type CredentialConnectionCoordinatorDeps,
   type SessionCredentialCapture,
 } from "./credentialConnectionCoordinator.js";
 import {
@@ -135,6 +136,8 @@ export interface CredentialServiceDeps {
    */
   completeCapture?: (captureId: string, response: Record<string, unknown>) => void;
   runtimeInspector?: CredentialRuntimeInspector;
+  /** Open an internal OAuth URL through the authenticated panel-tree service. */
+  openInternalBrowser?: CredentialConnectionCoordinatorDeps["openInternalBrowser"];
   /**
    * Announce a pending relay-routed OAuth transaction to the apex relay over the
    * backhaul so the callback can be handed back to this server (§7). `desktop`
@@ -197,6 +200,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     connectionLookup,
     sessionCredentialCapture: deps.sessionCredentialCapture,
     runtimeInspector,
+    openInternalBrowser: deps.openInternalBrowser,
     relayOAuthRegistrar: deps.relayOAuthRegistrar,
     storeCredential,
     resolveApprovalIdentity,
@@ -581,7 +585,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   ): Promise<ManagedCredentialSummary> {
     const bindings = credentialBindings(credential);
     const grants = await Promise.all(
-      (credential.grants ?? []).map((grant) =>
+      persistentCredentialUseGrants(credential).map((grant) =>
         summarizeCredentialGrant(bindings, grant, runtimeIndex)
       )
     );

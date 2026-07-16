@@ -87,6 +87,12 @@ export function wireCredentialService(
           [null]
         )) as CredentialRuntimePanelInfo[],
     },
+    openInternalBrowser: async ({ ctx, url, parentPanelId }) => {
+      await deps.dispatcher.dispatch(ctx, "panelTree", "create", [
+        url,
+        { parentId: parentPanelId, focus: true },
+      ]);
+    },
     sessionCredentialCapture: {
       captureCookies: async (params) => {
         const response = await captureSessionCredential<{

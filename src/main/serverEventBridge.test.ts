@@ -200,21 +200,6 @@ describe("createServerEventBridge", () => {
     expect(eventService.emit).not.toHaveBeenCalled();
   });
 
-  it("rejects browser-panel open events instead of proxying panel creation", async () => {
-    const { handle, eventService, warn } = createHarness();
-
-    handle("event:browser-panel:open", {
-      url: "https://example.com/",
-      parentPanelId: "panel:tree/slot-a",
-    });
-    await Promise.resolve();
-
-    expect(warn).toHaveBeenCalledWith(
-      "[browserPanel] Ignoring browser-panel:open; panel creation must go through authenticated panelTree RPC"
-    );
-    expect(eventService.emit).not.toHaveBeenCalled();
-  });
-
   it("applies app availability locally and still forwards the app event to shell UI", async () => {
     const { handle, eventService, appOrchestrator, onAppHostTargetChanged } = createHarness();
     const payload = {

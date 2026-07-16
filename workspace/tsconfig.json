@@ -102,6 +102,9 @@
       "@workspace-workers/test-agent": ["workspace/workers/test-agent/index.ts"],
       "@workspace/about-shared/types": ["workspace/packages/about-shared/types.ts"],
       "@workspace/agentic-chat": ["workspace/packages/agentic-chat/index.ts"],
+      "@workspace/agentic-chat/credential-connect-options": [
+        "workspace/packages/agentic-chat/components/CredentialConnectOptions.tsx"
+      ],
       "@workspace/agentic-core": ["workspace/packages/agentic-core/src/index.ts"],
       "@workspace/agentic-session": ["workspace/packages/agentic-session/src/index.ts"],
       "@workspace/agentic-chat/styles.css": ["workspace/packages/agentic-chat/styles.css"],

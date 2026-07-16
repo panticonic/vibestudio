@@ -54,6 +54,13 @@ import {
   sanitizeHandle,
 } from "./bootstrap.js";
 import { createAndSubscribeAgent } from "./agentLifecycle.js";
+import { ProviderSetupGate } from "./ProviderSetupGate.js";
+import {
+  completeProviderSetup,
+  localModelChoice,
+  providerSetupOptions,
+  requiresModelSetupChoice,
+} from "./modelSetup.js";
 
 function detectHostPlatform(): "mobile" | "electron" {
   const explicitPlatform = (globalThis as { __vibestudioHostPlatform?: unknown })
@@ -212,10 +219,10 @@ export default function ChatPanel() {
   const [workspaceDefaultAgentConfig, setWorkspaceDefaultAgentConfig] =
     useState<DefaultAgentConfig | null>(null);
   const catalogRef = useRef<ModelCatalog | null>(null);
-  // "using the local fallback model" banner (design §8) — the ref it fell to,
-  // or null; dismissible per session.
-  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
-  const [fallbackNoticeDismissed, setFallbackNoticeDismissed] = useState(false);
+  const [modelSettingsSnapshot, setModelSettingsSnapshot] = useState<ModelSettingsSnapshot | null>(
+    null
+  );
+  const [modelSettingsError, setModelSettingsError] = useState<string | null>(null);
 
   const getModelSettingsService = useCallback(() => {
     modelSettingsServiceRef.current ??= createDurableObjectServiceClient(
@@ -225,19 +232,19 @@ export default function ChatPanel() {
   }, []);
 
   const loadModelSettings = useCallback(async (): Promise<ModelSettingsSnapshot> => {
-    const settings = await getModelSettingsService().call<ModelSettingsSnapshot>("getSettings");
-    catalogRef.current = settings.catalog;
-    setModelCatalog(settings.catalog);
-    setWorkspaceDefaultModelRef(settings.defaultModel);
-    setWorkspaceDefaultAgentConfig(settings.defaultAgentConfig);
-    // Honest expectation-setting (design §8): when the default resolved to the
-    // local floor because nothing else is usable, say so above the chat.
-    setFallbackNotice(
-      settings.defaultModelSource === "fallback" && settings.defaultModel.startsWith("local:")
-        ? settings.defaultModel
-        : null
-    );
-    return settings;
+    try {
+      const settings = await getModelSettingsService().call<ModelSettingsSnapshot>("getSettings");
+      catalogRef.current = settings.catalog;
+      setModelCatalog(settings.catalog);
+      setWorkspaceDefaultModelRef(settings.defaultModel);
+      setWorkspaceDefaultAgentConfig(settings.defaultAgentConfig);
+      setModelSettingsSnapshot(settings);
+      setModelSettingsError(null);
+      return settings;
+    } catch (error) {
+      setModelSettingsError(error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }, [getModelSettingsService]);
 
   const resolveWorkspaceDefaultAgentConfig = useCallback(async (): Promise<DefaultAgentConfig> => {
@@ -622,8 +629,9 @@ export default function ChatPanel() {
     [stateArgs.systemPrompt, stateArgs.systemPromptMode]
   );
 
-  // The ONLY path that writes the workspace default agent config (model +
-  // behavior). Driven by the explicit "Save as defaults" control.
+  // The single path that writes the workspace default agent config (model +
+  // behavior). Driven only by explicit choices: "Save as defaults" or the
+  // first-run provider/local-model gate.
   const saveDefaultAgentConfig = useCallback(
     async (config: DefaultAgentConfig): Promise<void> => {
       const settings = await getModelSettingsService().call<ModelSettingsSnapshot>(
@@ -634,8 +642,20 @@ export default function ChatPanel() {
       setModelCatalog(settings.catalog);
       setWorkspaceDefaultModelRef(settings.defaultModel);
       setWorkspaceDefaultAgentConfig(settings.defaultAgentConfig);
+      setModelSettingsSnapshot(settings);
+      setModelSettingsError(null);
     },
     [getModelSettingsService]
+  );
+
+  const handleUseLocalModel = useCallback(
+    async (modelRef: string): Promise<void> => {
+      await saveDefaultAgentConfig({
+        ...(effectiveDefaultAgentConfig ?? {}),
+        model: modelRef,
+      });
+    },
+    [effectiveDefaultAgentConfig, saveDefaultAgentConfig]
   );
 
   const handleAddAgent = useCallback(
@@ -787,7 +807,7 @@ export default function ChatPanel() {
     [availableAgents, buildSubscribeConfig, resolveWorkspaceDefaultAgentConfig]
   );
 
-  const handleConnectProvider = useCallback(
+  const connectProviderCredential = useCallback(
     async (
       providerId: string,
       modelBaseUrl: string,
@@ -799,15 +819,45 @@ export default function ChatPanel() {
       }
       try {
         await rpc.call("main", "credentials.connect", [request]);
-        // Refetch the snapshot — availability is worker-computed, so the new
-        // credential shows up as `ready` entries in the next catalog.
-        await loadModelSettings();
         return { ok: true };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     },
-    [loadModelSettings]
+    []
+  );
+
+  const handleConnectProvider = useCallback(
+    async (
+      providerId: string,
+      modelBaseUrl: string,
+      opts?: { browser?: "internal" | "external" }
+    ): Promise<ConnectProviderResult> => {
+      const result = await connectProviderCredential(providerId, modelBaseUrl, opts);
+      if (!result.ok) return result;
+      // Availability is worker-computed, so refresh the catalog after the
+      // credential exists. This is the general model-picker path; the first-run
+      // gate below additionally persists its exact selected model atomically.
+      await loadModelSettings();
+      return result;
+    },
+    [connectProviderCredential, loadModelSettings]
+  );
+
+  const handleSetupProvider = useCallback(
+    (
+      option: Parameters<typeof completeProviderSetup>[0],
+      opts: { browser: "internal" | "external" }
+    ): Promise<ConnectProviderResult> =>
+      completeProviderSetup(
+        option,
+        effectiveDefaultAgentConfig,
+        (selected, connectOpts) =>
+          connectProviderCredential(selected.providerId, selected.modelBaseUrl, connectOpts),
+        opts,
+        saveDefaultAgentConfig
+      ),
+    [connectProviderCredential, effectiveDefaultAgentConfig, saveDefaultAgentConfig]
   );
 
   const handlePersistAgentModel = useCallback(
@@ -1033,11 +1083,67 @@ export default function ChatPanel() {
       </ErrorBoundary>
     );
   }
-  const fallbackModelName = fallbackNotice
-    ? (modelCatalog?.models.find((model) => model.ref === fallbackNotice)?.name ??
-      fallbackNotice.replace(/^local:/, ""))
+  const isUnstartedConversation = (stateArgs.installedAgents?.length ?? 0) === 0;
+  const setupRequired = modelSettingsSnapshot
+    ? requiresModelSetupChoice(modelSettingsSnapshot)
+    : false;
+  const setupProviders = modelSettingsSnapshot
+    ? providerSetupOptions(modelSettingsSnapshot.catalog)
+    : [];
+  const setupLocalModel = modelSettingsSnapshot
+    ? localModelChoice(modelSettingsSnapshot.catalog, modelSettingsSnapshot.defaultModel)
     : null;
-  const fallbackConsentRequired = Boolean(fallbackNotice && !fallbackNoticeDismissed);
+
+  if (isUnstartedConversation && !modelSettingsSnapshot) {
+    return (
+      <ErrorBoundary surfaceName="chat panel">
+        <Theme appearance={theme} {...appTheme}>
+          <Flex
+            align="center"
+            justify="center"
+            direction="column"
+            gap="3"
+            style={{ minHeight: "100dvh", padding: 24, boxSizing: "border-box" }}
+          >
+            {modelSettingsError ? (
+              <>
+                <Callout.Root color="red" size="1" style={{ maxWidth: 560 }}>
+                  <Callout.Text>Couldn't load model providers: {modelSettingsError}</Callout.Text>
+                </Callout.Root>
+                <Button size="1" variant="soft" onClick={() => void loadModelSettings()}>
+                  Retry
+                </Button>
+              </>
+            ) : (
+              <Flex align="center" gap="2">
+                <Spinner size="1" />
+                <Text size="2" color="gray">
+                  Checking model providers…
+                </Text>
+              </Flex>
+            )}
+          </Flex>
+        </Theme>
+      </ErrorBoundary>
+    );
+  }
+
+  if (isUnstartedConversation && setupRequired) {
+    return (
+      <ErrorBoundary surfaceName="chat panel">
+        <Theme appearance={theme} {...appTheme}>
+          <ProviderSetupGate
+            providers={setupProviders}
+            localModelName={setupLocalModel?.name}
+            onConnectProvider={handleSetupProvider}
+            onUseLocalModel={
+              setupLocalModel ? () => handleUseLocalModel(setupLocalModel.ref) : undefined
+            }
+          />
+        </Theme>
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <>
@@ -1071,29 +1177,6 @@ export default function ChatPanel() {
           </Callout.Root>
         </Theme>
       ) : null}
-      {fallbackNotice && !fallbackNoticeDismissed && (
-        <Theme appearance={theme} {...appTheme}>
-          <Callout.Root
-            color="amber"
-            size="1"
-            style={{ borderRadius: 0, paddingTop: 6, paddingBottom: 6 }}
-          >
-            <Flex align="center" justify="between" gap="3" style={{ width: "100%" }}>
-              <Callout.Text>
-                No cloud provider is connected. Before sending a first message, choose whether to
-                use <Text weight="medium">{fallbackModelName}</Text> on this device. This downloads
-                roughly 700 MB; progress is available in Local Models, and answers will be simpler
-                than a frontier model's.
-              </Callout.Text>
-              <Flex gap="2" align="center" style={{ flexShrink: 0 }}>
-                <Button size="1" variant="solid" onClick={() => setFallbackNoticeDismissed(true)}>
-                  Use local model (~700 MB)
-                </Button>
-              </Flex>
-            </Flex>
-          </Callout.Root>
-        </Theme>
-      )}
       <AgenticChat
         config={config}
         channelName={channelName}

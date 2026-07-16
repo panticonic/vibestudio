@@ -2,6 +2,7 @@ import type { Credential } from "@vibestudio/credential-client/types";
 import type { CredentialStore } from "@vibestudio/credential-client/store";
 import type { ClientConfigStore } from "@vibestudio/credential-client/clientConfigStore";
 import type { OAuthConnectionErrorCode } from "@vibestudio/credential-client/types";
+import { getProviderConnectPreset } from "@vibestudio/shared/providerConnect";
 import { createSign, randomUUID } from "node:crypto";
 
 export class CredentialLifecycleError extends Error {
@@ -44,22 +45,25 @@ export class CredentialLifecycle {
     const configId = credential.metadata?.["clientConfigId"];
     const configVersion = credential.metadata?.["clientConfigVersion"];
     const refreshToken = credential.refreshToken;
-    if (!configId || !refreshToken) {
+    if (!refreshToken) {
       throw new CredentialLifecycleError("client_not_authorized");
     }
 
-    const config = configVersion
-      ? await this.deps.clientConfigStore.loadVersion(configId, configVersion)
-      : await this.deps.clientConfigStore.load(configId);
-    if (!config) {
+    const config = configId
+      ? configVersion
+        ? await this.deps.clientConfigStore.loadVersion(configId, configVersion)
+        : await this.deps.clientConfigStore.load(configId)
+      : null;
+    if (configId && !config) {
       throw new CredentialLifecycleError(
         "client_not_authorized",
         "client config version is unavailable"
       );
     }
     if (
-      config.status === "deleted" ||
-      (config.status === "disabled" && !config.allowRefreshWhenDisabled)
+      config &&
+      (config.status === "deleted" ||
+        (config.status === "disabled" && !config.allowRefreshWhenDisabled))
     ) {
       throw new CredentialLifecycleError(
         "client_config_unavailable",
@@ -67,13 +71,26 @@ export class CredentialLifecycle {
       );
     }
 
-    const clientId = config.fields["clientId"]?.value;
-    const clientSecret = config.fields["clientSecret"]?.value;
-    const privateKeyPem = config.fields["privateKeyPem"]?.value;
+    const providerId =
+      credential.metadata?.["providerId"] ??
+      credential.metadata?.["modelProviderId"] ??
+      credential.providerId;
+    const preset = !configId && providerId ? getProviderConnectPreset(providerId) : null;
+    const presetFlow = preset?.flow.type === "oauth2-auth-code-pkce" ? preset.flow : null;
+    const tokenUrl = config?.tokenUrl ?? presetFlow?.tokenUrl;
+    const clientId = config?.fields["clientId"]?.value ?? presetFlow?.clientId;
+    const clientSecret = config?.fields["clientSecret"]?.value;
+    const privateKeyPem = config?.fields["privateKeyPem"]?.value;
     const tokenAuth =
       credential.metadata?.["oauthTokenAuth"] ?? (clientSecret ? "client_secret_post" : "none");
-    if (!clientId) {
+    if (!clientId || !tokenUrl) {
       throw new CredentialLifecycleError("client_not_authorized");
+    }
+    if (!config && tokenAuth !== "none") {
+      throw new CredentialLifecycleError(
+        "client_config_unavailable",
+        "provider presets can refresh only public OAuth clients"
+      );
     }
     if (tokenAuth === "private_key_jwt" && !privateKeyPem) {
       throw new CredentialLifecycleError(
@@ -92,10 +109,10 @@ export class CredentialLifecycle {
         "client_assertion",
         signJwtAssertion({
           clientId,
-          tokenUrl: config.tokenUrl,
+          tokenUrl,
           privateKeyPem,
-          keyId: config.fields["keyId"]?.value,
-          keyAlgorithm: config.fields["algorithm"]?.value,
+          keyId: config?.fields["keyId"]?.value,
+          keyAlgorithm: config?.fields["algorithm"]?.value,
         })
       );
     } else if (tokenAuth === "client_secret_basic" && clientSecret) {
@@ -108,7 +125,7 @@ export class CredentialLifecycle {
       headers["authorization"] = basicAuthHeader(clientId, clientSecret);
     }
 
-    const response = await fetch(config.tokenUrl, {
+    const response = await fetch(tokenUrl, {
       method: "POST",
       headers,
       body,

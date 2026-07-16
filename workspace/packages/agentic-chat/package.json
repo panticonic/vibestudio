@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
+    "./credential-connect-options": "./components/CredentialConnectOptions.tsx",
     "./types": "./types.ts",
     "./styles.css": "./styles.css"
   },

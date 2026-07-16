@@ -177,13 +177,6 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       return;
     }
 
-    if (bareEvent === "browser-panel:open") {
-      deps.warn(
-        "[browserPanel] Ignoring browser-panel:open; panel creation must go through authenticated panelTree RPC"
-      );
-      return;
-    }
-
     if (bareEvent === "panel:runtimeLeaseChanged") {
       const leaseEvent = payload as PanelRuntimeLeaseChangedEvent;
       void panelOrchestrator?.handleRuntimeLeaseChanged(leaseEvent).catch((err: unknown) => {

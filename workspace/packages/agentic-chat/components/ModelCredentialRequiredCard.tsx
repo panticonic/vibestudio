@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Box, Button, Callout, Card, Code, Flex, Spinner, Text } from "@radix-ui/themes";
+import { Box, Button, Callout, Card, Code, Flex, Text } from "@radix-ui/themes";
+import { CredentialConnectOptions } from "./CredentialConnectOptions";
 
 interface CredentialFlow {
   type?: string;
@@ -36,9 +37,13 @@ interface ChatApi {
   callMethod: (participantId: string, method: string, args: unknown) => Promise<unknown>;
 }
 
-function resolveBrowserHandoffPlatform(props: ModelCredentialRequiredCardProps): string | undefined {
+function resolveBrowserHandoffPlatform(
+  props: ModelCredentialRequiredCardProps
+): string | undefined {
   if (props.browserHandoffPlatform) return props.browserHandoffPlatform;
-  if ((globalThis as { __vibestudioHostPlatform?: unknown }).__vibestudioHostPlatform === "mobile") {
+  if (
+    (globalThis as { __vibestudioHostPlatform?: unknown }).__vibestudioHostPlatform === "mobile"
+  ) {
     return "mobile";
   }
   if (typeof navigator !== "undefined" && /\bVibestudio-Mobile\//.test(navigator.userAgent)) {
@@ -82,7 +87,8 @@ export default function ModelCredentialRequiredCard({
   const selectedProviderId = selectedOption.providerId || providerId;
   const selectedModelBaseUrl = selectedOption.modelBaseUrl || props.modelBaseUrl;
   const selectedFlow = selectedOption.flow || props.flow;
-  const reconnectReason = typeof props.reason === "string" && props.reason.trim() ? props.reason : "";
+  const reconnectReason =
+    typeof props.reason === "string" && props.reason.trim() ? props.reason : "";
   const diagnosticReason =
     typeof props.diagnosticReason === "string" && props.diagnosticReason.trim()
       ? props.diagnosticReason
@@ -147,22 +153,6 @@ export default function ModelCredentialRequiredCard({
 
   const busy = status === "starting" || status === "waiting";
   const unsupported = !selectedFlow || !selectedModelBaseUrl;
-  const apiKeyFlow = selectedFlow?.type === "api-key";
-  const browserChoicePrompt = reconnectReason
-    ? "Choose the browser that is signed in to the account you want to reconnect. If neither is signed in, pick the one you want to use."
-    : "Choose the browser that is already signed in to the account you want to connect. If neither is signed in, pick the one you want to use.";
-  const internalBrowserLabel = reconnectReason
-    ? "Refresh in workspace browser"
-    : "Use workspace browser";
-  const externalBrowserLabel = reconnectReason ? "Refresh in system browser" : "Use system browser";
-  const apiKeyButtonLabel =
-    status === "done"
-      ? "Connected"
-      : status === "error"
-        ? "Try Again"
-        : reconnectReason
-          ? "Update API Key"
-          : "Enter API Key";
 
   return (
     <Card variant="surface" size="2">
@@ -243,75 +233,14 @@ export default function ModelCredentialRequiredCard({
             <Callout.Text>{error}</Callout.Text>
           </Callout.Root>
         ) : null}
-        {apiKeyFlow ? (
-          <Flex gap="2" wrap="wrap">
-            <Button
-              size="1"
-              onClick={() => void startCredential("internal")}
-              disabled={busy || unsupported || status === "done"}
-            >
-              {busy ? <Spinner size="1" /> : null}
-              {apiKeyButtonLabel}
-            </Button>
-          </Flex>
-        ) : (
-          <Flex direction="column" gap="2">
-            <Text as="div" size="1" color="gray">
-              {browserChoicePrompt}
-            </Text>
-            <Flex direction="column" gap="2">
-              <Button
-                size="1"
-                onClick={() => void startCredential("internal")}
-                disabled={busy || unsupported || status === "done"}
-                style={{
-                  alignItems: "flex-start",
-                  height: "auto",
-                  justifyContent: "flex-start",
-                  paddingBottom: 8,
-                  paddingTop: 8,
-                  textAlign: "left",
-                  whiteSpace: "normal",
-                }}
-              >
-                {busy && activeOpenMode === "internal" ? <Spinner size="1" /> : null}
-                <Flex direction="column" gap="1" align="start">
-                  <Text as="span" size="1" weight="medium">
-                    {internalBrowserLabel}
-                  </Text>
-                  <Text as="span" size="1">
-                    Choose this when the account is signed in inside this workspace.
-                  </Text>
-                </Flex>
-              </Button>
-              <Button
-                size="1"
-                variant="soft"
-                onClick={() => void startCredential("external")}
-                disabled={busy || unsupported || status === "done"}
-                style={{
-                  alignItems: "flex-start",
-                  height: "auto",
-                  justifyContent: "flex-start",
-                  paddingBottom: 8,
-                  paddingTop: 8,
-                  textAlign: "left",
-                  whiteSpace: "normal",
-                }}
-              >
-                {busy && activeOpenMode === "external" ? <Spinner size="1" /> : null}
-                <Flex direction="column" gap="1" align="start">
-                  <Text as="span" size="1" weight="medium">
-                    {externalBrowserLabel}
-                  </Text>
-                  <Text as="span" size="1" color="gray">
-                    Choose this when your regular browser already has the right account.
-                  </Text>
-                </Flex>
-              </Button>
-            </Flex>
-          </Flex>
-        )}
+        <CredentialConnectOptions
+          flowType={selectedFlow?.type}
+          busy={busy || unsupported}
+          connected={status === "done"}
+          activeMode={activeOpenMode}
+          reconnect={Boolean(reconnectReason)}
+          onConnect={(mode) => void startCredential(mode)}
+        />
       </Flex>
     </Card>
   );

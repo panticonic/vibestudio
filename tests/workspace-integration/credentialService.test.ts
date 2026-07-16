@@ -36,9 +36,8 @@ import { CredentialSessionGrantStore } from "../../src/server/services/credentia
 import { createApprovalQueue } from "../../src/server/services/approvalQueue.js";
 import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.js";
 
-const createCredentialService = (
-  ...args: Parameters<typeof createCredentialServiceDefinition>
-) => withTestServiceAuthority(createCredentialServiceDefinition(...args));
+const createCredentialService = (...args: Parameters<typeof createCredentialServiceDefinition>) =>
+  withTestServiceAuthority(createCredentialServiceDefinition(...args));
 
 function verifiedTestCaller(
   callerId: string,
@@ -73,6 +72,7 @@ function verifiedTestCaller(
     repoPath,
     executionDigest,
     requested: [],
+    delegations: [],
   });
 }
 
@@ -411,6 +411,7 @@ describe("credentialService", () => {
 
   it("inspects persisted credential grants with focusable panel and worker subjects", async () => {
     const store = new MemoryCredentialStore();
+    const grantStore = new MemoryCredentialUseGrantStore();
     const grantedAt = Date.now();
     await store.saveUrlBound({
       id: "cred-1",
@@ -438,17 +439,28 @@ describe("credentialService", () => {
           action: "use",
           scope: "version",
           repoPath: "/owner",
-          executionDigest: "hash-1",
           grantedAt,
           grantedBy: "version",
-        },
-      ],
+        } as CredentialUseGrant,
+      ], // Obsolete embedded grants are not an authority source.
+    });
+    grantStore.upsert("cred-1", {
+      bindingId: "fetch",
+      use: "fetch",
+      resource: "https://api.example.test/",
+      action: "use",
+      scope: "version",
+      repoPath: "/owner",
+      executionDigest: "hash-1",
+      grantedAt,
+      grantedBy: "version",
     });
     const resolvePanelSlotByEntity = vi.fn(async (entityId: string) =>
       entityId === "panel:owner" ? "panel:tree/owner" : null
     );
     const service = createCredentialService({
       credentialStore: store as never,
+      credentialUseGrantStore: grantStore,
       runtimeInspector: {
         listActiveEntities: () => [
           {
@@ -1318,6 +1330,7 @@ describe("credentialService", () => {
       repoPath: "/consumer",
       executionDigest: "hash-1",
       requested: [],
+      delegations: [],
     });
     const callerB = createVerifiedCaller("worker:consumer-b", "worker", {
       callerId: "worker:consumer-b",
@@ -1325,6 +1338,7 @@ describe("credentialService", () => {
       repoPath: "/consumer",
       executionDigest: "hash-1",
       requested: [],
+      delegations: [],
     });
 
     const first = service.handler({ caller: callerA }, "resolveCredential", [
@@ -2109,11 +2123,15 @@ describe("credentialService", () => {
   it("credentials.connect can open OAuth in an internal browser panel for a worker-requested panel handoff", async () => {
     const emit = vi.fn();
     const eventService = targetedOpenEventService(emit);
+    const openInternalBrowser = vi.fn(
+      async (_request: { ctx: ServiceContext; url: string; parentPanelId: string }) => undefined
+    );
     const service = createCredentialService({
       credentialStore: new MemoryCredentialStore() as never,
       eventService: eventService as never,
       connectionLookup: authorizingShellLookup(),
       approvalQueue: approvingQueue() as never,
+      openInternalBrowser,
     });
     vi.stubGlobal(
       "fetch",
@@ -2157,19 +2175,17 @@ describe("credentialService", () => {
       ]
     ) as Promise<StoredCredentialSummary>;
 
-    await vi.waitFor(() =>
-      expect(eventService.emitToConnection).toHaveBeenCalledWith(
-        "shell:owner",
-        "owner-conn",
-        "browser-panel:open",
-        expect.objectContaining({
-          parentPanelId: "panel-test",
-          callerId: "worker:test",
-          callerKind: "worker",
-        })
-      )
-    );
-    const authorizeUrl = new URL(emit.mock.calls[0]![1].url);
+    await vi.waitFor(() => expect(openInternalBrowser).toHaveBeenCalledOnce());
+    expect(openInternalBrowser).toHaveBeenCalledWith({
+      ctx: expect.objectContaining({
+        caller: expect.objectContaining({
+          runtime: expect.objectContaining({ id: "worker:test", kind: "worker" }),
+        }),
+      }),
+      parentPanelId: "panel-test",
+      url: expect.stringMatching(/^https:\/\/auth\.example\.test\/oauth\/authorize\?/),
+    });
+    const authorizeUrl = new URL(openInternalBrowser.mock.calls[0]![0].url);
     await deliverOAuthCallback(
       authorizeUrl.searchParams.get("redirect_uri")!,
       new URLSearchParams({
@@ -2178,6 +2194,64 @@ describe("credentialService", () => {
       })
     );
     await pending;
+  });
+
+  it("credentials.connect opens internal OAuth through panel-tree for a direct panel caller", async () => {
+    const openInternalBrowser = vi.fn(
+      async (_request: { ctx: ServiceContext; url: string; parentPanelId: string }) => undefined
+    );
+    const service = createCredentialService({
+      credentialStore: new MemoryCredentialStore() as never,
+      eventService: targetedOpenEventService(vi.fn()) as never,
+      connectionLookup: authorizingShellLookup(),
+      approvalQueue: approvingQueue() as never,
+      openInternalBrowser,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+      )
+    );
+
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
+    const pending = service.handler(ctx, "connect", [
+      {
+        flow: {
+          type: "oauth2-auth-code-pkce",
+          authorizeUrl: "https://auth.example.test/oauth/authorize",
+          tokenUrl: "https://auth.example.test/oauth/token",
+          clientId: "client-1",
+        },
+        credential: {
+          label: "Example OAuth",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+        },
+        browser: "internal",
+        redirect: { type: "loopback" },
+      },
+    ]) as Promise<StoredCredentialSummary>;
+
+    await vi.waitFor(() => expect(openInternalBrowser).toHaveBeenCalledOnce());
+    const request = openInternalBrowser.mock.calls[0]![0];
+    expect(request.ctx).toMatchObject({
+      caller: { runtime: { id: "panel-test", kind: "panel" } },
+    });
+    expect(request.parentPanelId).toBe("panel-test");
+    const authorizeUrl = new URL(request.url);
+    await deliverOAuthCallback(
+      authorizeUrl.searchParams.get("redirect_uri")!,
+      new URLSearchParams({
+        code: "code-1",
+        state: authorizeUrl.searchParams.get("state")!,
+      })
+    );
+    await expect(pending).resolves.toMatchObject({ label: "Example OAuth" });
   });
 
   it("fails immediately when the OAuth browser handoff target is not connected", async () => {
