@@ -17,7 +17,6 @@ export interface HeadlessHostServerConnection {
   rpc: Pick<RpcClient, "call" | "stream">;
   /** Current auth token, when the transport has one. */
   getToken(): string;
-  onServerEvent(listener: (event: string, payload: unknown) => void): void;
   onResubscribe(handler: () => void | Promise<void>): void;
   close(): Promise<void>;
 }

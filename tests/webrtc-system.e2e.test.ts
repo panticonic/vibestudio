@@ -20,7 +20,7 @@
  * shared bootstrap (`createPairedConnection`), parsing the invite's real
  * `vibestudio://connect` (v=2) deep link.
  *
- * Scenarios: invite → pairing → RPC dispatch; one-shot code replay rejection;
+ * Scenarios: invite → pairing → RPC dispatch; consumed-code rejection;
  * pairing → refresh-credential reconnect; TWO concurrent clients on two invite
  * rooms with independent sessions (plan §9.5); same-device reconnect on the
  * SAME room → deterministic takeover.
@@ -53,9 +53,10 @@ import {
   type DeviceCredential,
   type PairedConnection,
 } from "@vibestudio/rpc/transports/pairedConnection";
+import type { PairedDeviceCredential } from "../src/server/hostCore/deviceAuthStore.js";
 import { RpcServer } from "../src/server/rpcServer.js";
 import { DeviceAuthStore } from "../src/server/hostCore/deviceAuthStore.js";
-import { createPairingRedeemer } from "../src/server/services/authService.js";
+import { createHubCredentialRedeemer } from "../src/server/services/authService.js";
 import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngress.js";
 import { createNodeDatachannelProvider } from "../src/node/webrtc/nodeDatachannelPeer.js";
 import { ensurePersistentCert } from "../src/node/webrtc/cert.js";
@@ -94,7 +95,7 @@ async function startSignaling(): Promise<void> {
 /** Minimal real RpcServer whose dispatcher echoes the call (proves the dispatch path). */
 function makeServer(
   databasePath: string,
-  onRedeemed: (code: string, credential: DeviceCredential) => Promise<void>
+  onRedeemed: (credential: PairedDeviceCredential) => Promise<void>
 ): {
   server: RpcServer;
   tokenManager: TokenManager;
@@ -132,16 +133,15 @@ function makeServer(
     tokenManager,
     dispatcher,
     entityCache: new EntityCache(),
-    redeemPairingCredential: createPairingRedeemer({
+    redeemPairingCredential: createHubCredentialRedeemer({
       deviceAuthStore,
       tokenManager,
       redeemPairingCode: async (code, input) => {
         const credential = deviceAuthStore.completePairing({
           code,
-          expectedWorkspaceId: workspaceId,
           ...input,
         });
-        await onRedeemed(code, credential);
+        await onRedeemed(credential);
         return credential;
       },
       resolveUser: (userId) => userStore.getUser(userId),
@@ -202,8 +202,10 @@ async function dial(
 
 /** RPC round-trip over a paired connection's main session (real dispatch path). */
 async function rpcEcho(conn: PairedConnection, marker: string): Promise<void> {
+  const callerId = conn.mainSession.callerId();
+  if (!callerId) throw new Error("paired connection has no authenticated caller id");
   const rpc = createRpcClient({
-    selfId: conn.mainSession.callerId() ?? "shell:e2e",
+    selfId: callerId,
     callerKind: "shell",
     transport: conn.mainSession,
   });
@@ -227,28 +229,25 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
   let dispatched: Array<{ service: string; method: string; args: unknown[] }> = [];
   let ingress: WebRtcIngress;
   const openConnections = new Set<PairedConnection>();
-  const inviteRooms = new Map<string, string>();
 
   const mintInvite = async (): Promise<MintedPairingInvite> => {
     const root = userStore.getByHandle("root");
     if (!root) throw new Error("test root user is missing");
-    const code = deviceAuthStore.createPairingCode(undefined, {
+    const invite = deviceAuthStore.createPairingInvite(undefined, {
       workspaceId,
       userId: root.id,
     });
-    const room = randomUUID();
-    inviteRooms.set(code, room);
-    await ingress.armRoom(room, {});
+    await ingress.armRoom(invite.room, {});
     const deepLink = createConnectDeepLink({
-      room,
+      room: invite.room,
       fp: cert.fingerprint,
-      code,
+      code: invite.code,
       sig: SIG,
       v: PAIRING_PROTOCOL_VERSION,
       ice: "all",
     });
     expect(deepLink).toContain("v=2");
-    return { room, code, deepLink };
+    return { room: invite.room, code: invite.code, deepLink };
   };
 
   const track = (conn: PairedConnection): PairedConnection => {
@@ -256,17 +255,32 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
     return conn;
   };
 
-  // State threaded across the ordered scenarios below.
-  let inviteA: MintedPairingInvite;
-  let credentialA: DeviceCredential;
-  let connA: PairedConnection;
+  const pairFresh = async (): Promise<{
+    invite: MintedPairingInvite;
+    credential: DeviceCredential;
+    connection: PairedConnection;
+  }> => {
+    const invite = await mintInvite();
+    let credential: DeviceCredential | null = null;
+    const connection = track(
+      await dial(invite, {
+        onPaired: (issued) => {
+          credential = issued;
+        },
+      })
+    );
+    if (!credential) {
+      await connection.close();
+      openConnections.delete(connection);
+      throw new Error("fresh pairing completed without returning its device credential");
+    }
+    return { invite, credential, connection };
+  };
 
   beforeAll(async () => {
     await startSignaling();
-    const s = makeServer(path.join(tmp, "identity.db"), async (code, credential) => {
-      const room = inviteRooms.get(code);
-      if (!room) throw new Error("redeemed test invite has no routed room");
-      await ingress.armRoom(room, { deviceId: credential.deviceId });
+    const s = makeServer(path.join(tmp, "identity.db"), async (credential) => {
+      await ingress.armRoom(credential.controlRoom, { deviceId: credential.deviceId });
     });
     dispatched = s.dispatched;
     deviceAuthStore = s.deviceAuthStore;
@@ -280,7 +294,6 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
       signalUrl: SIG,
       certificatePemFile: cert.certificatePemFile,
       keyPemFile: cert.keyPemFile,
-      fingerprint: cert.fingerprint,
     });
   }, 120_000);
 
@@ -293,67 +306,69 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
   });
 
   it("pairs a fresh device via a minted invite (per-invite room) and round-trips a real RPC dispatch", async () => {
-    inviteA = await mintInvite();
-    let paired: DeviceCredential | null = null;
-    connA = track(
-      await dial(inviteA, {
-        onPaired: (credential) => {
-          paired = credential;
-        },
-      }),
-    );
+    const { invite, credential, connection } = await pairFresh();
 
     // The server redeemed the code → issued a device credential (delivered back
     // on the auth-result) and bound the session to the device's shell principal.
-    expect(paired).not.toBeNull();
-    credentialA = paired!;
-    expect(credentialA.deviceId).toMatch(/^dev_/);
-    expect(credentialA.refreshToken.length).toBeGreaterThan(16);
-    expect(connA.mainSession.callerId()).toBe(`shell:${credentialA.deviceId}`);
+    expect(credential.deviceId).toMatch(/^dev_/);
+    expect(credential.refreshToken.length).toBeGreaterThan(16);
+    expect(connection.mainSession.callerId()).toBe(`shell:${credential.deviceId}`);
 
-    await rpcEcho(connA, "hello-A");
+    await rpcEcho(connection, "hello-A");
     expect(dispatched.some((d) => d.service === "demo" && d.method === "echo")).toBe(true);
 
     // Redemption persisted the invite's room onto the device record (§2.1) and
     // the pool's status surfaces the connected pipe with its selected path.
-    const device = deviceAuthStore.listDevices().find((d) => d.deviceId === credentialA.deviceId);
+    const device = deviceAuthStore.listDevices().find((d) => d.deviceId === credential.deviceId);
     expect(device?.userId).toBe(userStore.getByHandle("root")?.id);
-    const room = ingress.status().find((r) => r.room === inviteA.room);
-    expect(room).toMatchObject({ status: "connected", deviceId: credentialA.deviceId });
+    const room = ingress.status().find((r) => r.room === invite.room);
+    expect(room).toMatchObject({ status: "connected", deviceId: credential.deviceId });
     expect(["host", "srflx", "prflx"]).toContain(room!.candidateType); // loopback: never TURN
+
+    await connection.close();
+    openConnections.delete(connection);
   }, 60_000);
 
-  it("rejects a replayed one-shot invite code (terminal auth fail over the pipe)", async () => {
-    const replay = connA.openSession({
+  it("rejects a consumed one-shot invite without issuing another device", async () => {
+    const { invite, connection } = await pairFresh();
+    const devicesBeforeRetry = deviceAuthStore.listDevices();
+    const replay = connection.openSession({
       connectionId: "replay-1",
       callerKind: "shell",
-      getToken: () => inviteA.code,
+      getToken: () => invite.code,
     });
     await expect(replay.ready!()).rejects.toThrow();
+    expect(deviceAuthStore.listDevices()).toEqual(devicesBeforeRetry);
     replay.close();
+    await connection.close();
+    openConnections.delete(connection);
   }, 30_000);
 
   it("reconnects the paired device with its refresh credential (pairing → refresh lifecycle)", async () => {
-    await connA.close();
-    openConnections.delete(connA);
+    const { invite, credential, connection } = await pairFresh();
+    await connection.close();
+    openConnections.delete(connection);
 
     // The returning device authenticates with `refresh:<deviceId>:<refreshToken>`
     // on its persisted room — no re-pairing, no new credential issued.
     let secondCredential: DeviceCredential | null = null;
-    connA = track(
-      await dial(inviteA, {
-        getToken: () => `refresh:${credentialA.deviceId}:${credentialA.refreshToken}`,
+    const reconnected = track(
+      await dial(invite, {
+        getToken: () => `refresh:${credential.deviceId}:${credential.refreshToken}`,
         onPaired: (credential) => {
           secondCredential = credential;
         },
       }),
     );
-    expect(connA.mainSession.callerId()).toBe(`shell:${credentialA.deviceId}`);
+    expect(reconnected.mainSession.callerId()).toBe(`shell:${credential.deviceId}`);
     expect(secondCredential).toBeNull();
-    await rpcEcho(connA, "back-again");
+    await rpcEcho(reconnected, "back-again");
+    await reconnected.close();
+    openConnections.delete(reconnected);
   }, 60_000);
 
   it("runs TWO clients concurrently on two invite rooms with independent sessions (§9.5)", async () => {
+    const { connection: existing } = await pairFresh();
     const [inviteB, inviteC] = await Promise.all([mintInvite(), mintInvite()]);
     expect(inviteB.room).not.toBe(inviteC.room);
 
@@ -369,11 +384,12 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
     expect(connC.mainSession.callerId()).toBe(`shell:${credentials["c"]!.deviceId}`);
     await Promise.all([rpcEcho(connB, "from-B"), rpcEcho(connC, "from-C")]);
 
-    // Neither client evicted the other — and connA (its own room) is untouched.
+    // Neither client evicted the other — and the existing device (its own room)
+    // is untouched.
     expect(connB.transport.status()).toBe("connected");
     expect(connC.transport.status()).toBe("connected");
-    expect(connA.transport.status()).toBe("connected");
-    await rpcEcho(connA, "A-still-alive");
+    expect(existing.transport.status()).toBe("connected");
+    await rpcEcho(existing, "A-still-alive");
 
     const byRoom = new Map(ingress.status().map((r) => [r.room, r]));
     expect(byRoom.get(inviteB.room!)?.status).toBe("connected");
@@ -381,34 +397,38 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
 
     await connB.close();
     await connC.close();
+    await existing.close();
     openConnections.delete(connB);
     openConnections.delete(connC);
+    openConnections.delete(existing);
   }, 90_000);
 
   it("same-device reconnect on the SAME room performs a deterministic takeover", async () => {
-    expect(connA.transport.status()).toBe("connected");
+    const { invite, credential, connection } = await pairFresh();
+    expect(connection.transport.status()).toBe("connected");
 
     // A second connect for the SAME device on the SAME room (app relaunch /
     // ghost self-replacement): the new offer re-pairs the answerer's pipe and
     // the signaling DO evicts the old same-role socket.
     const takeover = track(
-      await dial(inviteA, {
-        getToken: () => `refresh:${credentialA.deviceId}:${credentialA.refreshToken}`,
+      await dial(invite, {
+        getToken: () => `refresh:${credential.deviceId}:${credential.refreshToken}`,
       }),
     );
-    expect(takeover.mainSession.callerId()).toBe(`shell:${credentialA.deviceId}`);
+    expect(takeover.mainSession.callerId()).toBe(`shell:${credential.deviceId}`);
     await rpcEcho(takeover, "takeover");
 
     // The OLD connection lost the pipe (deterministically — the takeover owns
     // the room now). Close it before its recovery loop can fight back.
-    await waitFor(() => connA.transport.status() !== "connected", 20_000);
-    await connA.close();
-    openConnections.delete(connA);
+    await waitFor(() => connection.transport.status() !== "connected", 20_000);
+    await connection.close();
+    openConnections.delete(connection);
 
     // With the loser gone, the takeover (re)settles as THE connection.
     await waitFor(() => takeover.transport.status() === "connected", 20_000);
     await rpcEcho(takeover, "takeover-still-owns-the-room");
-    connA = takeover; // afterAll closes it
+    await takeover.close();
+    openConnections.delete(takeover);
   }, 90_000);
 });
 

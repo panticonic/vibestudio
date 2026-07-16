@@ -10,7 +10,7 @@ export const WORKSPACE_ROUTE_PREFIX = "/_workspace/";
 export const PAIRING_ROOM_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 /** DTLS SHA-256 fingerprint after stripping colons: 32 bytes = 64 hex chars. */
 const FINGERPRINT_HEX_PATTERN = /^[0-9A-Fa-f]{64}$/;
-const CONNECT_PARAMETER_KEYS = new Set(["room", "fp", "code", "sig", "v", "ice", "srv", "exp"]);
+const CONNECT_PARAMETER_KEYS = new Set(["room", "fp", "code", "sig", "v", "ice", "exp"]);
 /**
  * Current room-per-invite pairing protocol. Parsers require this exact version.
  */
@@ -37,8 +37,6 @@ export interface ConnectPairing {
   v: typeof PAIRING_PROTOCOL_VERSION;
   /** TURN policy — `relay` forces TURN-over-TLS:443 validation. */
   ice: TurnPolicy;
-  /** Optional server/workspace label to disambiguate servers. */
-  srv?: string;
   /** Invite expiry in epoch milliseconds; clients reject stale QR links immediately. */
   exp?: number;
 }
@@ -84,7 +82,6 @@ function encodeConnectParams(pairing: ConnectPairing): string {
     `v=${encodeURIComponent(String(pairing.v))}`,
     `ice=${encodeURIComponent(pairing.ice)}`,
   ];
-  if (pairing.srv) params.push(`srv=${encodeURIComponent(pairing.srv)}`);
   if (pairing.exp) params.push(`exp=${encodeURIComponent(String(pairing.exp))}`);
   return params.join("&");
 }
@@ -278,7 +275,6 @@ export function parseConnectLink(raw: string): ConnectLink {
     sig: sigParsed.url,
     v: PAIRING_PROTOCOL_VERSION,
     ice,
-    srv: params.values.get("srv") || undefined,
     ...(exp !== undefined ? { exp } : {}),
   };
 }

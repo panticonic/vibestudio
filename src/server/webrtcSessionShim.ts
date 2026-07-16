@@ -9,11 +9,10 @@
  * the `ws` object rpcServer expects. Inbound `SessionControlFrame`s are
  * translated into the `ws:*` client messages rpcServer parses; the `ws:*` server
  * messages rpcServer emits via `ws.send()` are translated back into
- * `SessionControlFrame`s on the control channel. Stream frames never ride
- * `ws.send()`: rpcServer duck-types the shim's `sendStreamFrame` (plan §2.3),
- * hands it RAW payload bytes for the BULK channel, and awaits the write, so the
- * pipe's bounded bulk queue is the end-to-end backpressure signal and the
- * base64→JSON→parse→base64 quadruple copy is gone.
+ * `SessionControlFrame`s on the control channel. Streams opened on the bulk
+ * surface use `sendStreamFrame` (plan §2.3), while body-less streams forwarded
+ * by a panel's envelope bridge return on that same envelope lane. The bulk path
+ * hands RAW payload bytes to the bounded pipe queue and awaits each write.
  * One shim per session ⇒ per-session bridge ⇒ independent close-time failure
  * synthesis for free.
  *
@@ -27,7 +26,6 @@ import { isTerminalCloseCode } from "@vibestudio/rpc/protocol/closeCodes";
 import {
   encodeControlFrame,
   SESSION_CLOSED,
-  SESSION_EVENT,
   SESSION_OPEN_RESULT,
   SESSION_ROUTED,
   SESSION_ROUTED_EVENT_ERROR,
@@ -197,17 +195,32 @@ export class SessionWebSocketShim {
   }
 
   close(code?: number, reason?: string): void {
-    if (this.state === WS_CLOSED) return;
+    if (this.state !== WS_OPEN) return;
+    this.state = this.CLOSING;
     // Server-initiated close (lease revoke/retire, auth fail) → terminate the
     // session on the client. Terminal codes mean "do not auto-reopen" — the set
     // is shared with the WS transport (see closeCodes.ts) so both classify alike.
     const terminal = code !== undefined && isTerminalCloseCode(code);
-    this.writeFrame({ t: SESSION_CLOSED, sid: this.sid, code, reason, terminal });
-    this.fireClosed(code, reason);
+    // A real WebSocket emits `close` only after previously queued application
+    // frames and its close frame have drained. Preserve that contract here:
+    // callers may use the close event as the exact point at which the owning
+    // WebRTC room can be torn down without cutting off an RPC response.
+    void this.writeFrame({ t: SESSION_CLOSED, sid: this.sid, code, reason, terminal }).then(
+      () => this.fireClosed(code, reason),
+      () => this.fireClosed(code, reason)
+    );
   }
 
   terminate(): void {
-    this.close(1006, "terminated");
+    if (this.state !== WS_OPEN) return;
+    void this.writeFrame({
+      t: SESSION_CLOSED,
+      sid: this.sid,
+      code: 1006,
+      reason: "terminated",
+      terminal: true,
+    });
+    this.fireClosed(1006, "terminated");
   }
 
   // --- driven by the pipe demux (rpcServer.attachWebRtcPipe) ---------------
@@ -229,6 +242,11 @@ export class SessionWebSocketShim {
   registerStream(requestId: string, streamId: number): void {
     this.streams.idByRequest.set(requestId, streamId);
     this.streams.requestByStream.set(streamId, requestId);
+  }
+
+  /** Whether this request arrived through `stream-open` and owns a bulk id. */
+  hasBulkStream(requestId: string): boolean {
+    return this.streams.idByRequest.has(requestId);
   }
 
   /**
@@ -314,7 +332,7 @@ export class SessionWebSocketShim {
     this.onClosed(this.sid);
   }
 
-  private writeFrame(frame: SessionControlFrame): void {
+  private writeFrame(frame: SessionControlFrame): Promise<void> {
     const bytes = encoder.encode(encodeControlFrame(frame));
     // Meter this session's un-drained control bytes: writeControl resolves once
     // these have drained off the control channel, so bufferedAmount reflects THIS
@@ -324,7 +342,7 @@ export class SessionWebSocketShim {
     const settle = (): void => {
       this.pendingControlBytes -= bytes.byteLength;
     };
-    void Promise.resolve(this.pipe.writeControl(bytes, this.sid)).then(settle, settle);
+    return Promise.resolve(this.pipe.writeControl(bytes, this.sid)).then(settle, settle);
   }
 
   /**
@@ -362,6 +380,7 @@ export class SessionWebSocketShim {
             serverBootId: msg.serverBootId,
             sessionDirty: msg.sessionDirty,
             deviceCredential: msg.deviceCredential,
+            pairingContext: msg.pairingContext,
           });
         } else {
           // An auth failure is terminal for this session (invalid grant / lease
@@ -379,23 +398,10 @@ export class SessionWebSocketShim {
       case "ws:routed":
         this.writeFrame({ t: SESSION_ROUTED, sid: this.sid, envelope: msg.envelope });
         return;
-      case "ws:event":
-        this.writeFrame({
-          t: SESSION_EVENT,
-          sid: this.sid,
-          event: msg.event,
-          payload: msg.payload,
-        });
-        return;
       case "ws:rpc":
-        // Always a plain RPC frame (request/response/event from the server→client
-        // bridge, or a response from the server dispatcher). A `stream-frame`
-        // can never arrive here: rpcServer's only JSON stream-frame producer is
-        // handleWsStreamRequest's plain-WS fallback, which is unreachable for a
-        // shim (it duck-types `sendStreamFrame`, which every shim has), and the
-        // per-client bridge never emits stream-frames (rpcServer delivers only
-        // response/event/stream-frame INTO a bridge, so its serving path never
-        // runs). Routed caller↔caller stream frames travel as `ws:routed`.
+        // Ordinary RPC and body-less panel-bridge stream frames share this
+        // envelope lane. `stream-open` requests use sendStreamFrame instead;
+        // routed caller↔caller stream frames travel as `ws:routed`.
         this.writeFrame({ t: SESSION_RPC, sid: this.sid, envelope: msg.envelope as never });
         return;
       case "ws:routed-response-error":

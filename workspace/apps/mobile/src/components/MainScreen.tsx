@@ -48,13 +48,10 @@ import { clearShellCredential } from "../services/mobileCredentials";
 import {
   buildPanelChromeState,
   buildAddressAutocompleteItems,
-  formatRepoChip,
   isBrowserPanelSource,
   parseAddressInput,
   type AddressAction,
   type AddressAutocompleteItem,
-  type PanelAddressOptions,
-  type PanelRepoState,
 } from "@vibestudio/shared/panelChrome";
 import {
   applySearchTemplate,
@@ -70,7 +67,6 @@ import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 import {
   createApprovalStateController,
-  SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
   type ApprovalStateController,
 } from "@vibestudio/shell-core/approvalState";
@@ -180,13 +176,11 @@ export function MainScreen() {
   const [addressBarVisible, setAddressBarVisible] = useState(false);
   const [addressQuery, setAddressQuery] = useState("");
   const [addressSuggestions, setAddressSuggestions] = useState<AddressAutocompleteItem[]>([]);
-  const [panelAddressOptions, setPanelAddressOptions] = useState<PanelAddressOptions | null>(null);
   const [selectedMobileApp, setSelectedMobileApp] = useState<{
     source: string | null;
     appId: string | null;
   }>({ source: null, appId: null });
   const [webViewNavigation, setWebViewNavigation] = useState<Record<string, WebViewNavigation>>({});
-  const [activeRepoState, setActiveRepoState] = useState<PanelRepoState | undefined>();
   const webViewStackRef = useRef<WebViewEntry[]>([]);
   const webViewRefsMap = useRef<Map<string, PanelWebViewHandle | null>>(new Map());
   const pendingPanelLoads = useRef<Set<string>>(new Set());
@@ -213,8 +207,8 @@ export function MainScreen() {
     void refresh().catch((error: unknown) => {
       if (!disposed) console.warn("[MainScreen] Failed to load user notifications:", error);
     });
-    const unsubscribeEvent = shellClient.transport.on(
-      "event:user-notifications-changed",
+    const unsubscribeEvent = shellClient.onDirectEvent(
+      "user-notifications-changed",
       () => void refresh().catch(() => {})
     );
     const unsubscribeResubscribe = shellClient.recovery.registerResubscribeHandler(
@@ -331,13 +325,8 @@ export function MainScreen() {
             }
           : activePanel.navigation,
       },
-      repo: activeRepoState,
     });
-  }, [activePanel, activePanelId, activeRepoState, webViewNavigation]);
-  const activePanelSnapshot = useMemo(() => {
-    if (!activePanel) return null;
-    return getCurrentSnapshot(activePanel);
-  }, [activePanel]);
+  }, [activePanel, activePanelId, webViewNavigation]);
   useEffect(() => {
     if (!addressBarVisible || !activeChromeState || !shellClient) {
       setAddressSuggestions([]);
@@ -356,8 +345,7 @@ export function MainScreen() {
                 limit: 8,
               })
             )
-          : shellClient.panels.getAddressOptions(query, activeChromeState.ref).then((options) => {
-              setPanelAddressOptions(options);
+          : shellClient.panels.getAddressOptions(query).then((options) => {
               return buildAddressAutocompleteItems({
                 kind: "panel",
                 input: query,
@@ -378,34 +366,6 @@ export function MainScreen() {
       clearTimeout(timer);
     };
   }, [activeChromeState, addressBarVisible, addressQuery, shellClient]);
-  useEffect(() => {
-    if (
-      !activePanel ||
-      !activePanelSnapshot ||
-      !shellClient ||
-      isBrowserPanelSource(activePanelSnapshot.source) ||
-      activePanelSnapshot.source.startsWith("about/")
-    ) {
-      setActiveRepoState(undefined);
-      setPanelAddressOptions(null);
-      return;
-    }
-    let cancelled = false;
-    const source = activePanelSnapshot.source;
-    void shellClient.panels
-      .getAddressOptions(source, activeChromeState?.ref)
-      .then((options) => {
-        if (cancelled) return;
-        setPanelAddressOptions(options);
-        setActiveRepoState(options.repo);
-      })
-      .catch(() => {
-        if (!cancelled) setActiveRepoState({ unitPath: source });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeChromeState?.ref, activePanel, activePanelSnapshot, shellClient]);
   useEffect(() => {
     if (!shellClient) {
       setPendingApprovals([]);
@@ -721,9 +681,7 @@ export function MainScreen() {
       unsubscribePendingChanged: () =>
         shellClient.events.unsubscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT),
       onPendingChanged: (listener) =>
-        shellClient.transport.on(SHELL_APPROVAL_PENDING_CHANGED_CHANNEL, (event) =>
-          listener(event.payload)
-        ),
+        shellClient.events.on(SHELL_APPROVAL_PENDING_CHANGED_EVENT, listener),
       filter: filterRuntimeApprovals,
       onChange: (pending) => {
         pendingApprovalsRefreshSeq.current++;
@@ -755,14 +713,11 @@ export function MainScreen() {
       refreshTree();
       activatePanel(panelId);
     });
-    const unsubNav = shellClient.transport.on("event:navigate-to-panel", (event) => {
-      const { panelId } = event.payload as {
-        panelId: string;
-      };
+    const unsubNav = shellClient.events.on("navigate-to-panel", ({ panelId }) => {
       if (panelId) activatePanel(panelId);
     });
-    const unsubExternal = shellClient.transport.on("event:external-open:open", (event) => {
-      void handleExternalOpen(shellClient, event.payload as ExternalOpenPayload).catch(
+    const unsubExternal = shellClient.events.on("external-open:open", (payload) => {
+      void handleExternalOpen(shellClient, payload as ExternalOpenPayload).catch(
         (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
           console.warn("[MainScreen] Failed to open external URL:", error);
@@ -775,8 +730,8 @@ export function MainScreen() {
         }
       );
     });
-    const unsubNotification = shellClient.transport.on("event:notification:show", (event) => {
-      const notif = event.payload as {
+    const handleNotification = (payload: unknown) => {
+      const notif = payload as {
         id?: string;
         title?: string;
         message?: string;
@@ -803,9 +758,14 @@ export function MainScreen() {
           tone: "info",
         });
       }
-    });
-    const unsubAppLifecycle = shellClient.transport.on("event:apps:lifecycle", (event) => {
-      handleMobileAppLifecycleEvent(event.payload as AppLifecyclePayload, {
+    };
+    const unsubNotification = shellClient.events.on("notification:show", handleNotification);
+    const unsubDirectNotification = shellClient.onDirectEvent(
+      "notification:show",
+      handleNotification
+    );
+    const unsubAppLifecycle = shellClient.events.on("apps:lifecycle", (payload) => {
+      handleMobileAppLifecycleEvent(payload as AppLifecyclePayload, {
         shellClient,
         pushToast,
         prompted: promptedAppUpdatesRef.current,
@@ -813,15 +773,12 @@ export function MainScreen() {
         selectedAppId: selectedMobileApp.appId,
       });
     });
-    const unsubWorkspaceRevision = shellClient.transport.on(
-      "event:workspace:revision-bumped",
-      () => {
-        void shellClient.panels
-          .refresh()
-          .then(refreshTree)
-          .catch(() => refreshTree());
-      }
-    );
+    const unsubWorkspaceRevision = shellClient.events.on("workspace:revision-bumped", () => {
+      void shellClient.panels
+        .refresh()
+        .then(refreshTree)
+        .catch(() => refreshTree());
+    });
     const treeTimer = setInterval(refreshTree, 60000);
     return () => {
       disposed = true;
@@ -831,6 +788,7 @@ export function MainScreen() {
       unsubNav();
       unsubExternal();
       unsubNotification();
+      unsubDirectNotification();
       unsubAppLifecycle();
       approvalStateController.stop();
       if (approvalStateControllerRef.current === approvalStateController) {
@@ -1631,9 +1589,6 @@ export function MainScreen() {
         onPanelCreated={handlePanelCreated}
         addressBarVisible={addressBarVisible}
         address={activeChromeState?.editableAddress ?? ""}
-        metadata={
-          activeChromeState?.kind === "panel" ? formatRepoChip(activeChromeState.repo) : null
-        }
         isLoading={activeChromeState?.isLoading}
         canGoBack={activeChromeState?.canGoBack}
         canGoForward={activeChromeState?.canGoForward}
@@ -1646,8 +1601,6 @@ export function MainScreen() {
         addressSuggestions={addressSuggestions}
         onAddressQueryChange={setAddressQuery}
         onSelectAddressSuggestion={(item) => executeAddressAction(item.action)}
-        chromeKind={activeChromeState?.kind}
-        dirty={Boolean(panelAddressOptions?.repo?.dirty ?? activeChromeState?.repo?.dirty)}
         onShowActions={() => showPanelActions()}
       />
 

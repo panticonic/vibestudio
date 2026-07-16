@@ -78,7 +78,7 @@ describe("remote-deploy CLI", () => {
     expect(service).toContain("Timed out waiting for the hub and default workspace identity");
     expect(postStart).toContain("journalctl --user -u vibestudio-server.service -n 100 --no-pager");
     expect(postStart).toContain(
-      '"$node_bin" "$vibestudio_entry" remote doctor --signal-url \'wss://signal.example.test\' --identity $HOME/.config/vibestudio/workspaces/default/state/webrtc/identity.pem'
+      '"$node_bin" "$vibestudio_entry" remote doctor --signal-url \'wss://signal.example.test\' --identity $HOME/.config/vibestudio/workspaces/default/reach/webrtc/identity.pem'
     );
   });
 
@@ -122,6 +122,24 @@ describe("remote-deploy CLI", () => {
         options: { input: "systemctl --user --no-pager status vibestudio-server.service" },
       },
     ]);
+  });
+
+  it("purges only workspace reaches and preserves the stable hub identity epoch", async () => {
+    const calls: RunCall[] = [];
+
+    await main(["remove", "deploy@example.test", "--purge"], {
+      run: async (command: string, args: string[], options?: { input?: string }) => {
+        calls.push({ command, args, options });
+      },
+    });
+
+    const [script] = sshScripts(calls);
+    expect(script).toContain("workspaces -maxdepth 4 -type d -path '*/reach/webrtc'");
+    expect(script).not.toContain("server-auth/webrtc");
+    expect(script).not.toContain("server-auth/identity.db");
+    expect(script).toContain("hub pairing remains valid");
+    expect(script).toContain("re-route workspaces");
+    expect(script).not.toContain("must re-pair");
   });
 
   it("returns a non-zero process status when the direct CLI has no target", () => {

@@ -7,6 +7,8 @@ interface FakePipe {
   pipe: WebRtcAnswererPipe;
   room: string;
   closed: boolean;
+  closeCalls: number;
+  connectPending: boolean;
   setStatus(status: "connected" | "connecting" | "disconnected"): void;
   /** Simulate a pipe-up (hello complete) with the given selected path, or a
    * down (`null`) — the feed the pool's relay alarm rides. */
@@ -21,6 +23,8 @@ function makeFakePipe(room: string): FakePipe {
   const fake: FakePipe = {
     room,
     closed: false,
+    closeCalls: 0,
+    connectPending: false,
     setStatus(next) {
       status = next;
     },
@@ -32,13 +36,18 @@ function makeFakePipe(room: string): FakePipe {
     pipe: {
       // connect() resolves when a client completes hello and rejects only on
       // close() — the fake mirrors that: pending until close.
-      connect: () =>
-        new Promise<void>((_resolve, reject) => {
+      connect: () => {
+        fake.connectPending = true;
+        return new Promise<void>((_resolve, reject) => {
           rejectConnect = reject;
-        }),
+        }).finally(() => {
+          fake.connectPending = false;
+        });
+      },
       status: () => status,
       close: async () => {
         fake.closed = true;
+        fake.closeCalls += 1;
         rejectConnect?.(new Error("pipe closed"));
       },
       writeControl: async () => {},
@@ -75,7 +84,6 @@ function makeHarness(overrides?: { createPipe?: (room: string) => Promise<WebRtc
     signalUrl: "ws://127.0.0.1:8787",
     certificatePemFile: "/nonexistent/server.pem",
     keyPemFile: "/nonexistent/server.key",
-    fingerprint: "AA".repeat(32),
     log: (m) => logs.push(m),
     warn: (m) => warns.push(m),
     createPipe:
@@ -93,9 +101,9 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
   it("arms one pipe per room and attaches each to the rpc server", async () => {
     const { ingress, attached, pipes } = makeHarness();
     await Promise.all([
-      ingress.armRoom("room-a", { inviteCode: "code-a" }),
+      ingress.armRoom("room-a", {}),
       ingress.armRoom("room-b", { deviceId: "dev_b" }),
-      ingress.armRoom("room-c", { inviteCode: "code-c" }),
+      ingress.armRoom("room-c", {}),
     ]);
 
     expect(pipes.size).toBe(3);
@@ -116,7 +124,7 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
 
   it("armRoom is idempotent: re-arming only merges meta (invite → device re-tag)", async () => {
     const { ingress, attached, pipes } = makeHarness();
-    await ingress.armRoom("room-a", { inviteCode: "code-a" });
+    await ingress.armRoom("room-a", {});
     // Redemption re-tags the SAME room with the device id — no new pipe.
     await ingress.armRoom("room-a", { deviceId: "dev_1" });
     await ingress.armRoom("room-a", { deviceId: "dev_1" });
@@ -131,16 +139,16 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
   it("refuses to arm rooms past the armed-room cap (DoS backstop), keeping existing rooms", async () => {
     const { ingress, warns } = makeHarness();
     const CAP = 4096; // matches MAX_ARMED_ROOMS
-    for (let i = 0; i < CAP; i++) ingress.armRoom(`room-${i}`, { inviteCode: `c-${i}` });
+    await Promise.all(Array.from({ length: CAP }, (_, i) => ingress.armRoom(`room-${i}`, {})));
     expect(ingress.status()).toHaveLength(CAP);
 
-    ingress.armRoom("one-too-many", { inviteCode: "c-x" });
+    await expect(ingress.armRoom("one-too-many", {})).rejects.toThrow("armed-room cap");
     expect(ingress.status()).toHaveLength(CAP);
     expect(ingress.status().some((s) => s.room === "one-too-many")).toBe(false);
     expect(warns.some((w) => w.includes("armed-room cap"))).toBe(true);
 
     // Re-arming an ALREADY-armed room at the cap is still allowed (meta merge).
-    ingress.armRoom("room-0", { deviceId: "dev_0" });
+    await ingress.armRoom("room-0", { deviceId: "dev_0" });
     expect(ingress.status().find((s) => s.room === "room-0")?.deviceId).toBe("dev_0");
 
     await ingress.close();
@@ -149,7 +157,7 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
   it("disarmRoom closes the pipe and removes the room", async () => {
     const { ingress, attached, pipes } = makeHarness();
     await Promise.all([
-      ingress.armRoom("room-a", { inviteCode: "code-a" }),
+      ingress.armRoom("room-a", {}),
       ingress.armRoom("room-b", { deviceId: "dev_b" }),
     ]);
 
@@ -172,10 +180,10 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
           releasePipe = resolve;
         }),
     });
-    const armed = ingress.armRoom("room-slow", { inviteCode: "code" });
+    const armed = ingress.armRoom("room-slow", {});
     const disarmed = ingress.disarmRoom("room-slow");
     releasePipe!(fake.pipe);
-    await armed;
+    await expect(armed).rejects.toThrow("room was disarmed");
     await disarmed;
 
     expect(fake.closed).toBe(true);
@@ -183,20 +191,40 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
     expect(ingress.status()).toEqual([]);
   });
 
-  it("close() closes every pipe and refuses later arms", async () => {
-    const { ingress, pipes, logs } = makeHarness();
+  it("close() closes every pipe, drains connect work, and refuses later arms", async () => {
+    const { ingress, pipes } = makeHarness();
     await Promise.all([
-      ingress.armRoom("room-a", { inviteCode: "a" }),
+      ingress.armRoom("room-a", {}),
       ingress.armRoom("room-b", { deviceId: "dev_b" }),
     ]);
 
-    await ingress.close();
+    const firstClose = ingress.close();
+    expect(ingress.close()).toBe(firstClose);
+    await firstClose;
     expect([...pipes.values()].every((p) => p.closed)).toBe(true);
+    expect([...pipes.values()].every((p) => !p.connectPending)).toBe(true);
+    expect([...pipes.values()].every((p) => p.closeCalls === 1)).toBe(true);
     expect(ingress.status()).toEqual([]);
 
-    await ingress.armRoom("room-c", { inviteCode: "c" });
+    await expect(ingress.armRoom("room-c", {})).rejects.toThrow("ingress is closed");
     expect(ingress.status()).toEqual([]);
-    expect(logs.some((line) => line.includes("ingress is closed"))).toBe(true);
+  });
+
+  it("disarmRoom drains signaling and detaches ingress telemetry", async () => {
+    const { ingress, pipes } = makeHarness();
+    await ingress.armRoom("room-a", { deviceId: "dev_a" });
+    const pipe = pipes.get("room-a")!;
+    pipe.emitCandidateType("host");
+    expect(ingress.stats()).toEqual({ connects: 1, relayConnects: 0 });
+
+    const firstDisarm = ingress.disarmRoom("room-a");
+    expect(ingress.disarmRoom("room-a")).toBe(firstDisarm);
+    await firstDisarm;
+    expect(pipe.connectPending).toBe(false);
+    expect(pipe.closeCalls).toBe(1);
+
+    pipe.emitCandidateType("relay");
+    expect(ingress.stats()).toEqual({ connects: 1, relayConnects: 0 });
   });
 
   it("a pipe-factory failure fails loud and leaves no ghost room", async () => {
@@ -205,9 +233,7 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
         throw new Error("node-datachannel is not built");
       },
     });
-    await expect(ingress.armRoom("room-a", { inviteCode: "a" })).rejects.toThrow(
-      "node-datachannel is not built"
-    );
+    await expect(ingress.armRoom("room-a", {})).rejects.toThrow("node-datachannel is not built");
     expect(logs.some((line) => line.includes("failed to arm room room-a"))).toBe(true);
     expect(attached).toHaveLength(0);
     expect(ingress.status()).toEqual([]);
@@ -228,7 +254,7 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
       },
     });
 
-    const staleArm = ingress.armRoom("room-a", { inviteCode: "a" });
+    const staleArm = ingress.armRoom("room-a", {});
     const disarmed = ingress.disarmRoom("room-a");
     const freshArm = ingress.armRoom("room-a", { deviceId: "dev-a" });
 
@@ -268,7 +294,7 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
     const { ingress, pipes, logs, warns } = makeHarness();
     await Promise.all([
       ingress.armRoom("room-a", { deviceId: "dev_a" }),
-      ingress.armRoom("room-b", { inviteCode: "code-b" }),
+      ingress.armRoom("room-b", {}),
     ]);
 
     pipes.get("room-a")!.emitCandidateType("host");

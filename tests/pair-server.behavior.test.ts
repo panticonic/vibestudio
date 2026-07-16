@@ -33,10 +33,8 @@ const config = {
 
 const fixedCode = (label: string) => label.padEnd(32, "_").slice(0, 32);
 const READY_CODE = fixedCode("PAIRING_READY_CODE");
-const READY_QR_CODE = fixedCode("PAIRING_READY_QR_CODE");
 const CUSTOM_CODE = fixedCode("PAIRING_CUSTOM_CODE");
 const REMOTE_CODE = fixedCode("PAIRING_REMOTE_CODE");
-const REMOTE_QR_CODE = fixedCode("PAIRING_REMOTE_QR_CODE");
 const SERVER_ID = `srv_${"S".repeat(24)}`;
 const SERVER_BOOT_ID = `boot_${"B".repeat(24)}`;
 
@@ -60,14 +58,11 @@ function invite(room: string, fp: string, sig: string, code: string) {
   };
 }
 
-function hubReady(
-  rootInvites: { desktop: ReturnType<typeof invite>; mobile: ReturnType<typeof invite> } | null
-) {
+function hubReady(rootInvite: ReturnType<typeof invite> | null) {
   return {
     mode: "hub",
     gatewayUrl: "http://127.0.0.1:3456",
-    connectUrl: "http://127.0.0.1:3456",
-    rootInvites,
+    rootInvite,
     serverId: SERVER_ID,
     serverBootId: SERVER_BOOT_ID,
     gatewayPort: 3456,
@@ -102,20 +97,7 @@ describe("pair-server runner", () => {
           fs.writeFileSync(
             readyFile,
             JSON.stringify(
-              hubReady({
-                desktop: invite(
-                  "room-ready-7f3a9c2b",
-                  fp,
-                  "wss://signal.vibestudio.dev",
-                  READY_CODE
-                ),
-                mobile: invite(
-                  "room-mobile-7f3a9c2b",
-                  fp,
-                  "wss://signal.vibestudio.dev",
-                  READY_QR_CODE
-                ),
-              })
+              hubReady(invite("room-ready-7f3a9c2b", fp, "wss://signal.vibestudio.dev", READY_CODE))
             )
           );
         }, 10);
@@ -134,12 +116,9 @@ describe("pair-server runner", () => {
     expect(output).toContain("Signaling:");
     expect(output).toContain("wss://signal.vibestudio.dev");
     expect(output).toMatch(new RegExp(`Pair code:\\s+${READY_CODE}`));
-    expect(output).toMatch(new RegExp(`QR code:\\s+${READY_QR_CODE}`));
     expect(output).toContain(
       `https://vibestudio.app/pair#room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=${READY_CODE}&sig=wss%3A%2F%2Fsignal.vibestudio.dev&v=2&ice=all`
     );
-    expect(output).toContain("room-mobile-7f3a9c2b");
-    expect(output).toContain(READY_QR_CODE);
     expect(output).toContain("Pair from test.");
 
     child.emit("exit", 0, null);
@@ -167,10 +146,7 @@ describe("pair-server runner", () => {
               "ws://127.0.0.1:8787",
               CUSTOM_CODE
             );
-            fs.writeFileSync(
-              readyFile,
-              JSON.stringify(hubReady({ desktop: rootInvite, mobile: rootInvite }))
-            );
+            fs.writeFileSync(readyFile, JSON.stringify(hubReady(rootInvite)));
           }, 10);
           return child;
         },
@@ -198,7 +174,10 @@ describe("pair-server runner", () => {
     let readyFile = "";
     let injectedMissingRead = false;
 
-    vi.spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+    vi.spyOn(fs, "readFileSync").mockImplementation(((
+      file: fs.PathOrFileDescriptor,
+      ...args: unknown[]
+    ) => {
       if (String(file) === readyFile && !injectedMissingRead) {
         injectedMissingRead = true;
         const error = new Error("ready file replaced during open") as NodeJS.ErrnoException;
@@ -218,10 +197,7 @@ describe("pair-server runner", () => {
             "wss://signal.test",
             READY_CODE
           );
-          fs.writeFileSync(
-            readyFile,
-            JSON.stringify(hubReady({ desktop: current, mobile: current }))
-          );
+          fs.writeFileSync(readyFile, JSON.stringify(hubReady(current)));
         }, 10);
         return child;
       },
@@ -259,20 +235,9 @@ describe("pair-server runner", () => {
             fs.writeFileSync(
               readyFile,
               JSON.stringify(
-                hubReady({
-                  desktop: invite(
-                    "room-remote-9z8y7x6w",
-                    fp,
-                    "wss://signal.example.org",
-                    REMOTE_CODE
-                  ),
-                  mobile: invite(
-                    "room-remote-mobile",
-                    fp,
-                    "wss://signal.example.org",
-                    REMOTE_QR_CODE
-                  ),
-                })
+                hubReady(
+                  invite("room-remote-9z8y7x6w", fp, "wss://signal.example.org", REMOTE_CODE)
+                )
               )
             );
           }, 10);
@@ -290,8 +255,6 @@ describe("pair-server runner", () => {
     expect(output).toContain(
       `https://vibestudio.app/pair#room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=${REMOTE_CODE}&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all`
     );
-    expect(output).toContain("room-remote-mobile");
-    expect(output).toContain(REMOTE_QR_CODE);
 
     child.emit("exit", 0, null);
   });
@@ -436,24 +399,27 @@ describe("pair-server runner", () => {
       "wss://signal.test",
       READY_CODE
     );
-    const valid = hubReady({ desktop: current, mobile: current });
+    const valid = hubReady(current);
     expect(parseHubReadyPayload(valid)).toEqual(valid);
+    expect(() =>
+      parseHubReadyPayload({ ...valid, connectUrl: valid.gatewayUrl })
+    ).toThrow(/unsupported fields/);
     expect(() =>
       parseHubReadyPayload({
         ...valid,
-        rootInvites: {
-          ...valid.rootInvites,
-          desktop: { ...current, serverUrl: "https://legacy.example" },
-        },
+        rootInvite: { ...current, serverUrl: "https://legacy.example" },
       })
     ).toThrow(/unsupported fields/);
     expect(() =>
       parseHubReadyPayload({
         ...valid,
-        rootInvites: {
-          ...valid.rootInvites,
-          desktop: { ...current, room: "room-different" },
-        },
+        rootInvite: { ...current, srv: "removed-transport-label" },
+      })
+    ).toThrow(/unsupported fields/);
+    expect(() =>
+      parseHubReadyPayload({
+        ...valid,
+        rootInvite: { ...current, room: "room-different" },
       })
     ).toThrow(/does not match the invite coordinates/);
   });

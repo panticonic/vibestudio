@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import type { DeviceCredentialEntry, StoredRemote } from "./deviceCredentialStore.js";
 
 const mocks = vi.hoisted(() => ({
@@ -80,6 +79,14 @@ describe("remoteCredService", () => {
     vi.unstubAllEnvs();
   });
 
+  it("contains only desktop-local credential and connection operations", async () => {
+    const { createRemoteCredService } = await import("./remoteCredService.js");
+    const methods = createRemoteCredService({}).methods;
+    expect(methods).not.toHaveProperty("pairDevice");
+    expect(methods).not.toHaveProperty("listDevices");
+    expect(methods).not.toHaveProperty("revokeDevice");
+  });
+
   it("reports live connectivity independently from a stored remote pairing", async () => {
     const { createRemoteCredService } = await import("./remoteCredService.js");
     await expect(
@@ -129,7 +136,7 @@ describe("remoteCredService", () => {
     });
   });
 
-  it("atomically persists exact returning-device reaches before a workspace relaunch", async () => {
+  it("persists the exact workspace reach while retaining the stable control pairing", async () => {
     mocks.store.value = sampleStored;
     const { persistStoredRemoteWorkspaceRoute } = await import("./remoteCredService.js");
     const persisted = persistStoredRemoteWorkspaceRoute({
@@ -137,13 +144,6 @@ describe("remoteCredService", () => {
       workspaceId: "ws_second",
       running: true,
       serverUrl: "https://hub.example.test/w/second",
-      controlReach: {
-        room: `room_${"c".repeat(24)}`,
-        fp: "BB".repeat(32),
-        sig: "wss://sig.example/",
-        v: 2,
-        ice: "relay",
-      },
       workspaceReach: {
         room: `room_${"w".repeat(24)}`,
         fp: "CC".repeat(32),
@@ -158,7 +158,7 @@ describe("remoteCredService", () => {
     expect(persisted).toBe(true);
     expect(mocks.store.value).toMatchObject({
       workspaceName: "second",
-      controlPairing: { room: `room_${"c".repeat(24)}`, fp: "BB".repeat(32), ice: "relay" },
+      controlPairing: sampleStored.controlPairing,
       workspacePairing: { room: `room_${"w".repeat(24)}`, fp: "CC".repeat(32), ice: "all" },
     });
   });
@@ -173,13 +173,6 @@ describe("remoteCredService", () => {
         workspaceId: "ws_second",
         running: true,
         serverUrl: "https://hub.example.test/w/second",
-        controlReach: {
-          room: `room_${"c".repeat(24)}`,
-          fp: "BB".repeat(32),
-          sig: "wss://sig.example/",
-          v: 2,
-          ice: "all",
-        },
         workspaceReach: {
           room: `room_${"w".repeat(24)}`,
           fp: "CC".repeat(32),
@@ -240,68 +233,6 @@ describe("remoteCredService", () => {
       args: expect.arrayContaining([expect.stringMatching(/^vibestudio:\/\/connect\?/)]),
     });
     expect(mocks.app.exit).toHaveBeenCalledWith(0);
-  });
-
-  it("creates same-account device invites through hubControl", async () => {
-    const coordinates = {
-      room: `room_${"i".repeat(24)}`,
-      fp: "AA".repeat(32),
-      code: "C".repeat(32),
-      sig: "wss://sig.example/",
-      v: 2 as const,
-      ice: "all" as const,
-    };
-    const pairing = {
-      ...coordinates,
-      deepLink: createConnectDeepLink(coordinates),
-      pairUrl: createConnectPairUrl(coordinates),
-      expiresAt: Date.now() + 60_000,
-      expiresInMs: 60_000,
-      serverId: sampleStored.serverId,
-      serverBootId: `boot_${"b".repeat(24)}`,
-    };
-    const call = vi.fn(async (service: string, method: string, args: unknown[]) => {
-      expect([service, method, args]).toEqual([
-        "hubControl",
-        "pairDevice",
-        [{ workspace: "main", ttlMs: 60_000 }],
-      ]);
-      return { userId: "usr_1", handle: "alice", workspace: "main", pairing };
-    });
-    const { createRemoteCredService } = await import("./remoteCredService.js");
-    const service = createRemoteCredService({ getServerClient: () => serverClient(call) });
-    await expect(
-      service.handler(shellCtx, "pairDevice", [{ workspace: "main", ttlMs: 60_000 }])
-    ).resolves.toMatchObject({ pairing });
-  });
-
-  it("lists devices through hubControl and fails truthfully while disconnected", async () => {
-    const devices = [
-      { deviceId: SELF_DEVICE_ID, userId: "usr_1", label: "This device", createdAt: 1 },
-    ];
-    const call = vi.fn(async () => ({ serverId: "srv", devices }));
-    const { createRemoteCredService } = await import("./remoteCredService.js");
-    const connected = createRemoteCredService({ getServerClient: () => serverClient(call) });
-    await expect(connected.handler(shellCtx, "listDevices", [])).resolves.toEqual(devices);
-    expect(call).toHaveBeenCalledWith("hubControl", "listDevices", []);
-
-    await expect(createRemoteCredService({}).handler(shellCtx, "listDevices", [])).rejects.toThrow(
-      /not connected/i
-    );
-  });
-
-  it("revokes through hubControl and clears the credential when revoking this device", async () => {
-    mocks.store.value = sampleStored;
-    const call = vi.fn(async () => ({ revoked: true, closedSessions: 3 }));
-    const { createRemoteCredService } = await import("./remoteCredService.js");
-    const service = createRemoteCredService({ getServerClient: () => serverClient(call) });
-    await expect(service.handler(shellCtx, "revokeDevice", [SELF_DEVICE_ID])).resolves.toEqual({
-      revoked: true,
-      closedSessions: 3,
-      currentDevice: true,
-    });
-    expect(call).toHaveBeenCalledWith("hubControl", "revokeDevice", [SELF_DEVICE_ID]);
-    expect(mocks.store.value).toBeNull();
   });
 
   it("clears the persisted pairing explicitly", async () => {

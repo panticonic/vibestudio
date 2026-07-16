@@ -1,19 +1,7 @@
 import * as http from "node:http";
+import type { EventPayloads } from "@vibestudio/shared/events";
 
-export interface OAuthLoopbackHandoff {
-  transactionId: string;
-  redirectUri: string;
-  host: "localhost" | "127.0.0.1";
-  port: number;
-  callbackPath: string;
-  state: string;
-  timeoutMs: number;
-}
-
-export interface ExternalOpenPayload {
-  url?: string;
-  oauthLoopback?: OAuthLoopbackHandoff;
-}
+export type ExternalOpenPayload = EventPayloads["external-open:open"];
 
 export async function handleExternalOpenPayload(
   payload: ExternalOpenPayload,
@@ -24,6 +12,7 @@ export async function handleExternalOpenPayload(
       url: string;
       state?: string;
     }): Promise<unknown>;
+    cancelOAuth(transactionId: string): Promise<unknown>;
   }
 ): Promise<void> {
   if (!payload.url) return;
@@ -32,27 +21,38 @@ export async function handleExternalOpenPayload(
     return;
   }
 
-  const callback = await startOAuthLoopbackCallback(payload.oauthLoopback);
   try {
-    await deps.openExternal(payload.url);
-    const received = await callback.wait;
+    const callback = await startOAuthLoopbackCallback(payload.oauthLoopback);
     try {
-      await deps.forwardOAuthCallback({
-        transactionId: payload.oauthLoopback.transactionId,
-        url: received.url,
-        state: received.state,
-      });
-      received.respond(true);
-    } catch (error) {
-      received.respond(false, error instanceof Error ? error.message : String(error));
-      throw error;
+      const opening = deps.openExternal(payload.url);
+      // Some launch adapters resolve when the browser process exits rather
+      // than when it is spawned. Accept the callback as proof that opening
+      // succeeded, while still surfacing a launch rejection that arrives
+      // before the callback.
+      const received = await Promise.race([callback.wait, opening.then(() => callback.wait)]);
+      try {
+        await deps.forwardOAuthCallback({
+          transactionId: payload.oauthLoopback.transactionId,
+          url: received.url,
+          state: received.state,
+        });
+        received.respond(true);
+      } catch (error) {
+        received.respond(false, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+    } finally {
+      callback.close();
     }
-  } finally {
-    callback.close();
+  } catch (error) {
+    await deps.cancelOAuth(payload.oauthLoopback.transactionId).catch(() => undefined);
+    throw error;
   }
 }
 
-async function startOAuthLoopbackCallback(loopback: OAuthLoopbackHandoff): Promise<{
+async function startOAuthLoopbackCallback(
+  loopback: NonNullable<ExternalOpenPayload["oauthLoopback"]>
+): Promise<{
   wait: Promise<{
     url: string;
     state?: string;

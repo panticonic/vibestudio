@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
 import { DEFAULT_SIGNAL_URL, resolveSignalingUrl } from "./lib/connect-grammar.generated.mjs";
-import { cliCredentialPath, workspaceIdentityPath } from "./lib/config-paths.mjs";
+import { cliCredentialPath, hubIdentityPath, workspaceIdentityPath } from "./lib/config-paths.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -17,8 +18,9 @@ export function parseArgs(argv) {
   const options = {
     signalUrl: null,
     workspace: null,
-    identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? null,
-    identityExplicit: Boolean(process.env.VIBESTUDIO_WEBRTC_IDENTITY),
+    identity: null,
+    identityScope: "hub",
+    identityExplicit: false,
     json: false,
     help: false,
   };
@@ -30,9 +32,12 @@ export function parseArgs(argv) {
       options.signalUrl = argv[++i] ?? "";
     } else if (arg === "--workspace") {
       options.workspace = argv[++i] ?? "";
+      options.identityScope = "workspace";
+      options.identityExplicit = true;
       workspaceExplicit = true;
     } else if (arg === "--identity") {
       options.identity = path.resolve(argv[++i] ?? "");
+      options.identityScope = "explicit";
       options.identityExplicit = true;
       identityExplicit = true;
     } else if (arg === "--json") {
@@ -49,7 +54,10 @@ export function parseArgs(argv) {
   if (options.workspace !== null && !/^[A-Za-z0-9_-]{1,64}$/.test(options.workspace)) {
     throw new Error("--workspace must contain only letters, numbers, hyphens, and underscores");
   }
-  options.identity ??= identityDefaultPath(options.workspace ?? "default");
+  options.identity ??=
+    options.identityScope === "workspace"
+      ? workspaceIdentityPath(options.workspace)
+      : identityDefaultPath();
   return options;
 }
 
@@ -61,19 +69,21 @@ Usage:
     [--workspace <name> | --identity <identity.pem>] [--json]
 
 Checks:
-  node-datachannel native addon, deleted legacy WebRTC cert/key env vars, the
-  identity.pem layout (present, 0600, cert+key), signaling reachability, and —
-  when a deployed systemd unit is present — the unit's active state and gateway
-  port. Server-only checks are skipped (not failed) off the deployed host. If
-  paired, signaling defaults to the endpoint in the active CLI credential;
-  --signal-url and VIBESTUDIO_WEBRTC_SIGNAL_URL still take precedence.
+  node-datachannel native addon, the selected identity.pem layout (present,
+  0600, cert+key), signaling reachability, and — when a deployed systemd unit
+  is present — the unit's active state and gateway port. The default identity
+  is the stable hub control ingress. --workspace selects one child's workspace
+  ingress; --identity inspects an explicit endpoint. Server-only checks are
+  skipped (not failed) off the deployed host. If paired, signaling defaults to
+  the hub control reach in the active CLI credential; --signal-url and
+  VIBESTUDIO_WEBRTC_SIGNAL_URL still take precedence.
 `);
 }
 
 export function pairedSignalingUrl(credentialFile = cliCredentialFile()) {
   try {
     const parsed = JSON.parse(fs.readFileSync(credentialFile, "utf8"));
-    const sig = parsed?.workspacePairing?.sig;
+    const sig = parsed?.controlPairing?.sig;
     return typeof sig === "string" && sig.length > 0 ? sig : null;
   } catch {
     return null;
@@ -92,26 +102,12 @@ export function skip(name, message, meta = {}) {
   return { name, ok: true, skipped: true, message, ...meta };
 }
 
-export function identityDefaultPath(workspace = "default") {
-  return workspaceIdentityPath(workspace);
+export function identityDefaultPath() {
+  return hubIdentityPath();
 }
 
 export function inspectIdentity(identityPath) {
   if (!identityPath) identityPath = identityDefaultPath();
-  const dir = path.dirname(identityPath);
-  const legacy = ["server.pem", "server.key"].filter((name) => fs.existsSync(path.join(dir, name)));
-  if (legacy.length > 0) {
-    return check(
-      false,
-      "identity",
-      "",
-      `legacy WebRTC identity remnants found (run: vibestudio remote repair-identity --yes): ${legacy.join(", ")}`,
-      {
-        path: identityPath,
-        legacy,
-      }
-    );
-  }
   let stat;
   try {
     stat = fs.statSync(identityPath);
@@ -283,14 +279,6 @@ export async function runDoctor(options, deps = {}) {
       check(false, "node-datachannel", "", `native addon failed to load: ${error.message}`)
     );
   }
-  checks.push(
-    check(
-      !process.env.VIBESTUDIO_WEBRTC_CERT && !process.env.VIBESTUDIO_WEBRTC_KEY,
-      "legacy-env",
-      "legacy VIBESTUDIO_WEBRTC_CERT/KEY env vars are absent",
-      "remove VIBESTUDIO_WEBRTC_CERT and VIBESTUDIO_WEBRTC_KEY; use VIBESTUDIO_WEBRTC_IDENTITY"
-    )
-  );
   const { unit, port } = await checkDeployedUnit(deps.spawnImpl, deps.unitPath);
   checks.push(unit);
   if (port !== null) {

@@ -257,6 +257,7 @@ interface ServerOpts {
   serverBootId?: string;
   sessionDirty?: boolean;
   deviceCredential?: { deviceId: string; refreshToken: string };
+  pairingContext?: { workspaceId: string };
   /** Reply open-result success to `open` frames (default true). */
   respondToOpen?: boolean;
   /** Reply pong to pings (default true). */
@@ -379,6 +380,7 @@ class Fabric {
           serverBootId: this.opts.serverBootId ?? "boot-1",
           sessionDirty: this.opts.sessionDirty ?? false,
           deviceCredential: this.opts.deviceCredential,
+          pairingContext: this.opts.pairingContext,
         });
         return;
       case "ping":
@@ -411,7 +413,7 @@ class Fabric {
     const hello: SessionHelloFrame = {
       t: "hello",
       proto: 2,
-      contractVersion: 1,
+      contractVersion: 2,
       maxMsg: 256 * 1024,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
@@ -1047,20 +1049,31 @@ describe("WebRTC transport — session lifecycle", () => {
     await transport.close();
   });
 
-  it("fires onPaired with the device credential delivered on the open-result", async () => {
-    const fabric = new Fabric({ deviceCredential: { deviceId: "dev_42", refreshToken: "rt-secret" } });
+  it("fires onPaired with the credential and one-time pairing context", async () => {
+    const fabric = new Fabric({
+      deviceCredential: { deviceId: "dev_42", refreshToken: "rt-secret" },
+      pairingContext: { workspaceId: "workspace-42" },
+    });
     const transport = makeTransport(fabric);
     await transport.connect();
-    const paired: Array<{ deviceId: string; refreshToken: string }> = [];
+    const paired: Array<{
+      credential: { deviceId: string; refreshToken: string };
+      context?: { workspaceId: string };
+    }> = [];
     const session = transport.openSession({
       connectionId: "c1",
       getToken: () => "pairing-code",
-      onPaired: (cred) => {
-        paired.push(cred);
+      onPaired: (credential, context) => {
+        paired.push({ credential, context });
       },
     });
     await session.ready!();
-    expect(paired).toEqual([{ deviceId: "dev_42", refreshToken: "rt-secret" }]);
+    expect(paired).toEqual([
+      {
+        credential: { deviceId: "dev_42", refreshToken: "rt-secret" },
+        context: { workspaceId: "workspace-42" },
+      },
+    ]);
     await transport.close();
   });
 

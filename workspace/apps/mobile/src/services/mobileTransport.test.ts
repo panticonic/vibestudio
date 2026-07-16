@@ -3,7 +3,8 @@ import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator"
 import type { ReconnectProgress, WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
 import {
   loadShellCredential,
-  reconnectViaWebRtc,
+  MobileConnectionAggregateError,
+  reconnectMobileSession,
   type StoredShellCredential,
   type WebRtcConnection,
 } from "@vibestudio/mobile-webrtc";
@@ -11,13 +12,22 @@ import { MobileRpcClient } from "./mobileTransport";
 
 jest.mock("@vibestudio/mobile-webrtc", () => ({
   loadShellCredential: jest.fn(),
-  reconnectViaWebRtc: jest.fn(),
+  MobileConnectionAggregateError: class MobileConnectionAggregateError extends Error {
+    errors: readonly unknown[];
+    constructor(errors: readonly unknown[], message: string) {
+      super(message);
+      this.errors = errors;
+    }
+  },
+  reconnectMobileSession: jest.fn(),
 }));
 
 const mockLoadShellCredential = loadShellCredential as jest.MockedFunction<
   typeof loadShellCredential
 >;
-const mockReconnectViaWebRtc = reconnectViaWebRtc as jest.MockedFunction<typeof reconnectViaWebRtc>;
+const mockReconnectMobileSession = reconnectMobileSession as jest.MockedFunction<
+  typeof reconnectMobileSession
+>;
 const DEVICE_ID = `dev_${"d".repeat(24)}`;
 const REFRESH_TOKEN = "r".repeat(43);
 
@@ -31,7 +41,6 @@ const storedCredential: StoredShellCredential = {
     sig: "ws://127.0.0.1:8798",
     v: 2,
     ice: "all",
-    srv: "Test server",
   },
   workspacePairing: {
     room: "room-123",
@@ -39,7 +48,6 @@ const storedCredential: StoredShellCredential = {
     sig: "ws://127.0.0.1:8798",
     v: 2,
     ice: "all",
-    srv: "Test server",
   },
   pairedAt: 123,
 };
@@ -79,6 +87,7 @@ function makeConnection(overrides: Partial<WebRtcConnection> = {}): WebRtcConnec
     callerId: `shell:${DEVICE_ID}`,
     deviceId: DEVICE_ID,
     rpc: overrides.rpc ?? makeRpc(),
+    hubControlRpc: overrides.hubControlRpc ?? makeRpc(),
     session,
     transport:
       overrides.transport ??
@@ -101,23 +110,46 @@ describe("MobileRpcClient WebRTC transport", () => {
       call: jest.fn(async () => ({ ok: true })),
     });
     const connection = makeConnection({ rpc });
-    mockReconnectViaWebRtc.mockResolvedValue(connection);
+    mockReconnectMobileSession.mockResolvedValue(connection);
     const client = new MobileRpcClient({});
 
     await client.connectAndWait();
 
     expect(mockLoadShellCredential).toHaveBeenCalledTimes(1);
-    expect(mockReconnectViaWebRtc).toHaveBeenCalledWith(storedCredential, expect.any(Function));
+    expect(mockReconnectMobileSession).toHaveBeenCalledWith(storedCredential, expect.any(Function));
     expect(client.selfId).toBe(`shell:${DEVICE_ID}`);
     expect(client.status).toBe("connected");
     await expect(client.call("main", "demo.hello", ["world"])).resolves.toEqual({ ok: true });
     expect(rpc.call).toHaveBeenCalledWith("main", "demo.hello", ["world"], undefined);
   });
 
+  it("routes only hubControl calls over the retained stable hub pipe", async () => {
+    const workspaceCall = jest.fn(async () => ({ workspace: true }));
+    const hubCall = jest.fn(async () => ({ hub: true }));
+    mockReconnectMobileSession.mockResolvedValue(
+      makeConnection({
+        rpc: makeRpc({ call: workspaceCall }),
+        hubControlRpc: makeRpc({ call: hubCall }),
+      })
+    );
+    const client = new MobileRpcClient({});
+
+    await client.connectAndWait();
+
+    await expect(client.call("main", "workspace.getInfo", [])).resolves.toEqual({
+      workspace: true,
+    });
+    await expect(client.call("main", "hubControl.listWorkspaces", [])).resolves.toEqual({
+      hub: true,
+    });
+    expect(workspaceCall).toHaveBeenCalledWith("main", "workspace.getInfo", [], undefined);
+    expect(hubCall).toHaveBeenCalledWith("main", "hubControl.listWorkspaces", [], undefined);
+  });
+
   it("retries transient initial WebRTC reconnect failures", async () => {
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
     const connection = makeConnection();
-    mockReconnectViaWebRtc
+    mockReconnectMobileSession
       .mockRejectedValueOnce(new Error("signaling warming up"))
       .mockResolvedValueOnce(connection);
     const client = new MobileRpcClient({
@@ -130,7 +162,7 @@ describe("MobileRpcClient WebRTC transport", () => {
       warnSpy.mockRestore();
     }
 
-    expect(mockReconnectViaWebRtc).toHaveBeenCalledTimes(2);
+    expect(mockReconnectMobileSession).toHaveBeenCalledTimes(2);
     expect(client.status).toBe("connected");
   });
 
@@ -143,7 +175,7 @@ describe("MobileRpcClient WebRTC transport", () => {
         return jest.fn();
       }),
     } as unknown as WebRtcConnection["transport"];
-    mockReconnectViaWebRtc.mockResolvedValue(makeConnection({ transport }));
+    mockReconnectMobileSession.mockResolvedValue(makeConnection({ transport }));
     const client = new MobileRpcClient({});
     const listener = jest.fn();
     client.onReconnectProgress(listener);
@@ -168,13 +200,13 @@ describe("MobileRpcClient WebRTC transport", () => {
         return activeUnsub;
       }),
     });
-    mockReconnectViaWebRtc.mockResolvedValue(makeConnection({ rpc }));
+    mockReconnectMobileSession.mockResolvedValue(makeConnection({ rpc }));
     const client = new MobileRpcClient({});
     const listener = jest.fn();
 
-    const unsubscribe = client.on("event:shell-approval:pending-changed", listener);
+    const unsubscribe = client.on("shell-approval:pending-changed", listener);
     await client.connectAndWait();
-    eventCallbacks.get("event:shell-approval:pending-changed")!({
+    eventCallbacks.get("shell-approval:pending-changed")!({
       payload: { pending: ["approval-1"] },
     } as RpcEventContext);
 
@@ -200,7 +232,7 @@ describe("MobileRpcClient WebRTC transport", () => {
         return panelSession;
       }),
     } as unknown as WebRtcConnection["transport"];
-    mockReconnectViaWebRtc.mockResolvedValue(makeConnection({ rpc, transport }));
+    mockReconnectMobileSession.mockResolvedValue(makeConnection({ rpc, transport }));
     const client = new MobileRpcClient({});
 
     await expect(client.openPanelSession("panel:runtime-1", "panel-conn-1")).resolves.toBe(
@@ -222,14 +254,14 @@ describe("MobileRpcClient WebRTC transport", () => {
     // mid-connect (background / dispose-during-connect).
     let resolveConnect!: (connection: WebRtcConnection) => void;
     const connection = makeConnection();
-    mockReconnectViaWebRtc.mockImplementation(
+    mockReconnectMobileSession.mockImplementation(
       () => new Promise<WebRtcConnection>((resolve) => (resolveConnect = resolve))
     );
     const client = new MobileRpcClient({});
 
     client.connect(); // fire-and-forget; handshake now pending
     // Let establishConnection() await loadShellCredential and reach the
-    // (still-pending) reconnectViaWebRtc handshake.
+    // (still-pending) reconnectMobileSession handshake.
     await new Promise((r) => setTimeout(r, 0));
     client.disconnect(); // teardown lands before the handshake resolves
     resolveConnect(connection);
@@ -240,9 +272,42 @@ describe("MobileRpcClient WebRTC transport", () => {
     expect(client.status).not.toBe("connected");
   });
 
+  it("surfaces composed teardown failures through reconnect progress", async () => {
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    const connection = makeConnection({
+      close: jest.fn(async () => {
+        throw new MobileConnectionAggregateError(
+          [new Error("workspace close"), new Error("hub close")],
+          "connections failed to close"
+        );
+      }),
+    });
+    mockReconnectMobileSession.mockResolvedValue(connection);
+    const client = new MobileRpcClient({});
+    const progress = jest.fn();
+    client.onReconnectProgress(progress);
+
+    try {
+      await client.connectAndWait();
+      client.disconnect();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(progress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: 0,
+        phase: "failed",
+        reason: expect.stringContaining("Disconnect teardown failed"),
+      })
+    );
+    expect(client.status).toBe("disconnected");
+  });
+
   it("forwards WebRTC recovery notifications to registered listeners", async () => {
     let emitRecovery: ((kind: RecoveryKind) => void | Promise<void>) | undefined;
-    mockReconnectViaWebRtc.mockImplementation(async (_stored, onRecovery) => {
+    mockReconnectMobileSession.mockImplementation(async (_stored, onRecovery) => {
       emitRecovery = onRecovery;
       return makeConnection();
     });

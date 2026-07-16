@@ -36,7 +36,7 @@ describe("@workspace-extensions/mobile-debug", () => {
             id: "ws",
             name: "ws",
             path: root,
-            contextsPath: join(root, ".contexts"),
+            contextProjectionsPath: join(root, ".context-projections", "v5"),
           }),
         },
         health: { degraded, healthy: vi.fn(), unhealthy: vi.fn(), report: vi.fn() },

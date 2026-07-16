@@ -5,6 +5,7 @@ import { Appearance, Platform } from "react-native";
 import { WorkspaceClient } from "@vibestudio/service-schemas/clients/shellWorkspaceClient";
 import { SettingsClient } from "@vibestudio/service-schemas/clients/settingsClient";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
+import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import type { RecoveryCoordinator, RecoveryKind } from "@vibestudio/shell-core/recoveryCoordinator";
 import type { PanelManager } from "@vibestudio/shell-core/panelManager";
@@ -25,7 +26,6 @@ import {
   getSharedPanelAddressOptions,
   type BrowserAddressOptions,
   type PanelAddressOptions,
-  type PanelRepoState,
 } from "@vibestudio/shared/panelChrome";
 import {
   createBrowserDataClient,
@@ -44,12 +44,11 @@ import { panelRuntimeMethods } from "@vibestudio/service-schemas/panelRuntime";
 import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
 import { pushMethods } from "@vibestudio/service-schemas/push";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
-import { vcsMethods, type VcsPushInput, type VcsPushResult } from "@vibestudio/service-schemas/vcs";
+import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import {
   createDurableObjectServiceClient,
   createGadServiceClient,
-  createVcsUserlandClient,
-} from "@vibestudio/shared/userlandServiceRpc";
+} from "@vibestudio/shared/workspaceServiceRpc";
 import {
   type UserNotification,
   type UserNotificationAcknowledgementResult,
@@ -140,34 +139,10 @@ function createWorkspaceRpcClient(transport: MobileRpcClient) {
   );
 }
 
-function createVcsClient(transport: MobileRpcClient) {
-  const client = createTypedServiceClient("vcs", vcsMethods, (service, method, args) =>
+function createHubControlClient(transport: MobileRpcClient) {
+  return createTypedServiceClient("hubControl", hubControlMethods, (service, method, args) =>
     transport.call("main", `${service}.${method}`, args)
   );
-  // Push is USERLAND-dispatched (P3 flip): the build-gated main advance runs in
-  // the gad-store DO's `vcsPush`, reached via the `vcs` manifest service — NOT
-  // a public host `vcs.push` service. Mirror
-  // packages/runtime vcsClient.ts and route directly to the DO so the relay
-  // mints the on-behalf-of invocation token with the originating caller; a host
-  // forward would erase it. The mobile transport is `RpcCallerLike`
-  // (call(targetId, method, args)), so it can reach the DO dispatch. Mobile is a
-  // shell caller with no own ctx head default, so `sourceHead` comes from input.
-  const userland = createVcsUserlandClient(transport);
-  return {
-    ...client,
-    push(input: VcsPushInput): Promise<VcsPushResult> {
-      if (!input.sourceHead) {
-        throw new Error(
-          "vcs.push from the mobile shell requires sourceHead; mobile has no context head default."
-        );
-      }
-      return userland.call<VcsPushResult>("vcsPush", {
-        repoPaths: input.repoPaths,
-        sourceHead: input.sourceHead,
-        ...(input.message !== undefined ? { message: input.message } : {}),
-      });
-    },
-  };
 }
 
 type ShellApprovalClient = ReturnType<typeof createShellApprovalClient>;
@@ -175,7 +150,6 @@ type PanelRuntimeClient = ReturnType<typeof createPanelRuntimeClient>;
 type CredentialsClient = ReturnType<typeof createCredentialsClient>;
 type PushClient = ReturnType<typeof createPushClient>;
 type WorkspaceRpcClient = ReturnType<typeof createWorkspaceRpcClient>;
-type VcsClient = ReturnType<typeof createVcsClient>;
 type WorkspaceInfo = Awaited<ReturnType<WorkspaceClient["getInfo"]>>;
 
 export class MobileHostTargetApprovalRequiredError extends Error {
@@ -210,7 +184,6 @@ class MobilePanels implements PanelHost {
   private readonly panelRuntime: PanelRuntimeClient;
   private readonly browserData: BrowserDataClient;
   private readonly workspaceRpc: WorkspaceRpcClient;
-  private readonly vcs: VcsClient;
   private readonly runtimeConnectionBySlot = new Map<
     string,
     { runtimeEntityId: PanelEntityId; connectionId: string }
@@ -235,7 +208,6 @@ class MobilePanels implements PanelHost {
     });
     this.panelRuntime = createPanelRuntimeClient(this.deps.transport);
     this.workspaceRpc = createWorkspaceRpcClient(this.deps.transport);
-    this.vcs = createVcsClient(this.deps.transport);
     this.browserData = createBrowserDataClient({
       call: (service: string, method: string, args: unknown[]) =>
         this.deps.transport.call("main", `${service}.${method}`, args),
@@ -461,26 +433,11 @@ class MobilePanels implements PanelHost {
     ]);
     return { id: result?.id ?? panelId, title: result?.title ?? "" };
   }
-  async getAddressOptions(source: string, ref?: string): Promise<PanelAddressOptions> {
+  async getAddressOptions(source: string): Promise<PanelAddressOptions> {
     return getSharedPanelAddressOptions({
       source,
-      ref,
       repoProvider: {
         sourceTree: () => this.workspaceRpc.sourceTree(),
-        findUnitForPath: (path) => this.workspaceRpc.findUnitForPath(path),
-        unitStatus: async (unitPath) => {
-          // Per-repo VCS: `unitStatus` is replaced by repo-native `status(repoPath)`
-          // (the unit path IS the repo path). Address resolution uses the
-          // committed buildable state; uncommitted working content remains
-          // visible through the status dirty/working fields but is not a build ref.
-          const status = await this.vcs.status(unitPath);
-          return {
-            unitPath,
-            head: null,
-            stateHash: status.committedStateHash,
-            dirty: status.dirty,
-          } satisfies PanelRepoState & { unitPath: string };
-        },
       },
     });
   }
@@ -684,6 +641,7 @@ export class ShellClient {
   readonly transport: MobileRpcClient;
   readonly panels: MobilePanels;
   readonly workspaces: WorkspaceClient;
+  readonly hubControl: ReturnType<typeof createHubControlClient>;
   readonly settings: SettingsClient;
   readonly events: EventsClient;
   readonly shellApproval: ShellApprovalClient;
@@ -704,6 +662,14 @@ export class ShellClient {
   private facade: PanelAssetFacade | null = null;
   private statusUnsub: (() => void) | null = null;
   private navigationListeners = new Set<(panelId: string) => void>();
+
+  /** Listen to an event addressed directly to this authenticated mobile session. */
+  onDirectEvent<E extends EventName>(
+    event: E,
+    listener: (payload: EventPayloads[E]) => void
+  ): () => void {
+    return this.transport.on(event, ({ payload }) => listener(payload as EventPayloads[E]));
+  }
   private periodicSyncTimer: ReturnType<typeof setInterval> | null = null;
   private panelRecoveryUnsubs: Array<() => void> | null = null;
   private recoveryCompleteListeners = new Set<(kind: RecoveryKind) => void>();
@@ -789,19 +755,20 @@ export class ShellClient {
       },
     };
     this.workspaces = new WorkspaceClient(this.transport);
+    this.hubControl = createHubControlClient(this.transport);
     this.settings = new SettingsClient(this.transport);
     this.events = new EventsClient(this.transport, this.recovery);
     this.shellApproval = createShellApprovalClient(this.transport);
     this.panelRuntime = createPanelRuntimeClient(this.transport);
     this.credentialService = createCredentialsClient(this.transport);
     this.push = createPushClient(this.transport);
-    this.transport.on("event:panel:runtimeLeaseChanged", (event) => {
-      this.panels.handleRuntimeLeaseChanged(event.payload as PanelRuntimeLeaseChangedEvent);
+    this.events.on("panel:runtimeLeaseChanged", (event) => {
+      this.panels.handleRuntimeLeaseChanged(event as PanelRuntimeLeaseChangedEvent);
     });
     // Reflect tree mutations made by ANY client (desktop/terminal/other mobile):
     // the server broadcasts panel-tree-updated after every authoritative change
     // (including the Phase 0 self-heal), so mobile re-syncs its mirror to match.
-    this.transport.on("event:panel-tree-updated", () => {
+    this.events.on("panel-tree-updated", () => {
       void this.panels.refresh().catch(() => {});
     });
   }
@@ -953,8 +920,8 @@ export class ShellClient {
       };
       timer = setTimeout(() => finish(null), timeoutMs);
       unsubs = eventNames.map((name) =>
-        this.transport.on(`event:${name}`, (event) => {
-          if (isLaunchSessionEventFor(sessionId, name, event.payload)) finish(event.payload);
+        this.events.on(name, (event) => {
+          if (isLaunchSessionEventFor(sessionId, name, event)) finish(event);
         })
       );
     });

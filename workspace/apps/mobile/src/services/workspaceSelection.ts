@@ -1,9 +1,7 @@
 import {
-  connectMobileHubControl,
   createStoredShellCredential,
   loadShellCredential,
   persistStoredShellCredential,
-  type MobileHubControlConnection,
   type MobileHubWorkspace,
   type MobileHubWorkspaceRoute,
   type StoredShellCredential,
@@ -11,46 +9,35 @@ import {
 import { resetToNativeBootstrap } from "./auth";
 
 export interface MobileWorkspaceSelectionDependencies {
+  control: {
+    listWorkspaces(): Promise<MobileHubWorkspace[]>;
+    routeWorkspace(input: { workspaceId: string }): Promise<MobileHubWorkspaceRoute>;
+  };
   loadCredential(): Promise<StoredShellCredential | null>;
-  connectControl(stored: StoredShellCredential): Promise<MobileHubControlConnection>;
   persistCredential(stored: StoredShellCredential): Promise<void>;
   reloadBootstrap(): Promise<{ reloading: boolean }>;
 }
 
-const defaultDependencies: MobileWorkspaceSelectionDependencies = {
-  loadCredential: loadShellCredential,
-  connectControl: connectMobileHubControl,
-  persistCredential: persistStoredShellCredential,
-  reloadBootstrap: resetToNativeBootstrap,
-};
+export function mobileWorkspaceSelectionDependencies(
+  control: MobileWorkspaceSelectionDependencies["control"]
+): MobileWorkspaceSelectionDependencies {
+  return {
+    control,
+    loadCredential: loadShellCredential,
+    persistCredential: persistStoredShellCredential,
+    reloadBootstrap: resetToNativeBootstrap,
+  };
+}
 
 function missingCredentialError(): Error {
   return new Error("No current mobile device credential is stored. Pair this device again.");
 }
 
-async function closeControlConnection(control: MobileHubControlConnection): Promise<void> {
-  try {
-    await control.close();
-  } catch (error) {
-    // Cleanup happens after the user-visible operation has settled. Surface a
-    // close failure without replacing a successful reload or the real routing /
-    // rollback error with a secondary transport teardown error.
-    console.warn("[mobile-workspaces] control connection cleanup failed", error);
-  }
-}
-
-/** List account-visible workspaces through the durable control reach. */
+/** List account-visible workspaces through the already-retained hub session. */
 export async function listMobileWorkspaces(
-  dependencies: MobileWorkspaceSelectionDependencies = defaultDependencies
+  dependencies: MobileWorkspaceSelectionDependencies
 ): Promise<MobileHubWorkspace[]> {
-  const stored = await dependencies.loadCredential();
-  if (!stored) throw missingCredentialError();
-  const control = await dependencies.connectControl(stored);
-  try {
-    return await control.client.listWorkspaces();
-  } finally {
-    await closeControlConnection(control);
-  }
+  return dependencies.control.listWorkspaces();
 }
 
 /**
@@ -60,26 +47,22 @@ export async function listMobileWorkspaces(
  * the existing ShellClient remains active.
  */
 export async function selectMobileWorkspace(
-  workspace: string,
-  dependencies: MobileWorkspaceSelectionDependencies = defaultDependencies
+  workspaceId: string,
+  dependencies: MobileWorkspaceSelectionDependencies
 ): Promise<MobileHubWorkspaceRoute> {
-  if (!workspace.trim() || workspace !== workspace.trim()) {
-    throw new Error("Choose a valid workspace name.");
+  if (!workspaceId.trim() || workspaceId !== workspaceId.trim()) {
+    throw new Error("Choose a valid workspace.");
   }
   const initialStored = await dependencies.loadCredential();
   if (!initialStored) throw missingCredentialError();
 
-  const control = await dependencies.connectControl(initialStored);
-  let baseline = control.getStoredCredential();
+  const baseline = initialStored;
   let selectionWriteAttempted = false;
   try {
-    const route = await control.client.routeWorkspace({ workspace });
-    // A control-session authentication may rotate the refresh secret. Always
-    // base the selected record (and any rollback) on that latest durable value.
-    baseline = control.getStoredCredential();
+    const route = await dependencies.control.routeWorkspace({ workspaceId });
     const selected = createStoredShellCredential(
       { deviceId: baseline.deviceId, refreshToken: baseline.refreshToken },
-      route.controlReach,
+      baseline.controlPairing,
       route.workspaceReach,
       baseline.pairedAt
     );
@@ -105,7 +88,5 @@ export async function selectMobileWorkspace(
       }
     }
     throw error;
-  } finally {
-    await closeControlConnection(control);
   }
 }

@@ -272,10 +272,9 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   };
   const env = hooks.buildEnv ? hooks.buildEnv(baseEnv, { options, serverArgs }) : baseEnv;
 
-  // The hub ready file is the only pairing contract. Each complete invite owns
-  // its own room/code/link; the CLI never reconstructs or scrapes credentials.
-  let desktopInvite = null;
-  let mobileInvite = null;
+  // The hub ready file is the only pairing contract. One complete invite owns
+  // the room/code and both presentation links; the CLI never reconstructs it.
+  let rootInvite = null;
   let bannerPrinted = false;
   let readyPoll = null;
   let readyPollStartedAt = 0;
@@ -309,8 +308,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     buffer = "";
     stderrBuffer = "";
     if (hasSpawned) {
-      desktopInvite = null;
-      mobileInvite = null;
+      rootInvite = null;
       bannerPrinted = false;
       readinessWarningPrinted = false;
       if (ownedReadyDir) {
@@ -342,7 +340,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
 
   const applyReadyPayload = (payload) => {
     const ready = parseHubReadyPayload(payload);
-    if (ready.rootInvites === null) {
+    if (ready.rootInvite === null) {
       if (!bannerPrinted) {
         bannerPrinted = true;
         console.log(
@@ -351,8 +349,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       }
       return;
     }
-    desktopInvite = ready.rootInvites.desktop;
-    mobileInvite = ready.rootInvites.mobile;
+    rootInvite = ready.rootInvite;
     tryPrintBanner();
   };
 
@@ -364,8 +361,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
         readinessWarningPrinted = true;
         const missing = [
           !fs.existsSync(readyFile) && "hub ready file",
-          !desktopInvite && "desktop root invite",
-          !mobileInvite && "mobile root invite",
+          !rootInvite && "root invite",
         ].filter(Boolean);
         console.warn(
           `[${config.logPrefix}] Still waiting for pairing material (${missing.join(", ")}). Run \`vibestudio remote doctor\` to check signaling and native WebRTC support.`
@@ -401,11 +397,11 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
 
   const tryPrintBanner = () => {
     if (bannerPrinted) return;
-    if (!desktopInvite || !mobileInvite) return;
+    if (!rootInvite) return;
     printConnectBanner({
       title: config.bannerTitle,
-      invite: desktopInvite,
-      qrInvite: mobileInvite,
+      invite: rootInvite,
+      qrInvite: rootInvite,
       deepLinkLabel: config.deepLinkLabel,
       instructions: config.instructions,
     });

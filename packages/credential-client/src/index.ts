@@ -17,6 +17,7 @@ import type {
   ProxyGitHttpResponse,
   RequestCredentialInputRequest,
   ResolveUrlBoundCredentialRequest,
+  StoredCredentialLifecycle,
   StoredCredentialSummary,
   StoreUrlBoundCredentialRequest,
   UrlAudience,
@@ -40,10 +41,17 @@ export type {
   ProxyGitHttpResponse,
   RequestCredentialInputRequest,
   ResolveUrlBoundCredentialRequest,
+  StoredCredentialLifecycle,
   StoredCredentialSummary,
   StoreUrlBoundCredentialRequest,
   UrlAudience,
 } from "./types.js";
+
+export {
+  credentialLifecycle,
+  isOAuthRefreshRecipeComplete,
+  isStoredCredentialUsable,
+} from "./credentialStatus.js";
 
 export interface CredentialClient {
   store(input: StoreUrlBoundCredentialRequest): Promise<StoredCredentialSummary>;

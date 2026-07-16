@@ -32,6 +32,20 @@ describe("credential token helpers", () => {
     ).toEqual({ accessToken: "access", expiresAt: 61_000, scopes: ["read", "write"] });
   });
 
+  it("returns refresh material only when the OAuth flow explicitly persists it", () => {
+    expect(
+      parseBearerTokenResponse(
+        {
+          access_token: "access",
+          refresh_token: "refresh",
+          token_type: "Bearer",
+          expires_in: 60,
+        },
+        { persistRefreshToken: true }
+      )
+    ).toMatchObject({ accessToken: "access", refreshToken: "refresh" });
+  });
+
   it("rejects missing required bearer response fields", () => {
     expect(() => parseBearerTokenResponse({}, {})).toThrow(
       expect.objectContaining({ code: "invalid_token_response" })

@@ -91,7 +91,7 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
 
   useEffect(() => {
     if (!shellClient) return;
-    return shellClient.transport.onReconnectProgress?.((progress) => {
+    return shellClient.transport.onReconnectProgress((progress) => {
       setReconnectAttempt(progress.attempt);
     });
   }, [shellClient]);

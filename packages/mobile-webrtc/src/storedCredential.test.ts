@@ -72,7 +72,7 @@ describe("mobile stored shell credential", () => {
         ...current,
         workspacePairing: { ...current.workspacePairing, sig: "wss://signal.example" },
       },
-      { ...current, workspacePairing: { ...current.workspacePairing, srv: " server " } },
+      { ...current, workspacePairing: { ...current.workspacePairing, srv: "server" } },
     ]) {
       expect(parseStoredShellCredential(JSON.stringify(stale))).toBeNull();
     }

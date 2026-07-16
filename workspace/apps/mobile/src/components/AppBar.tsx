@@ -61,7 +61,6 @@ interface AppBarProps {
   onPanelCreated?: (panelId: string) => void;
   addressBarVisible?: boolean;
   address?: string;
-  metadata?: string | null;
   isLoading?: boolean;
   canGoBack?: boolean;
   canGoForward?: boolean;
@@ -74,8 +73,6 @@ interface AppBarProps {
   addressSuggestions?: AddressAutocompleteItem[];
   onAddressQueryChange?: (value: string) => void;
   onSelectAddressSuggestion?: (item: AddressAutocompleteItem) => void;
-  chromeKind?: "panel" | "browser";
-  dirty?: boolean;
   onShowActions?: () => void;
 }
 
@@ -85,7 +82,6 @@ export function AppBar({
   onPanelCreated,
   addressBarVisible = false,
   address = "",
-  metadata = null,
   isLoading = false,
   canGoBack = false,
   canGoForward = false,
@@ -98,8 +94,6 @@ export function AppBar({
   addressSuggestions = [],
   onAddressQueryChange,
   onSelectAddressSuggestion,
-  chromeKind,
-  dirty = false,
   onShowActions,
 }: AppBarProps) {
   const insets = useSafeAreaInsets();
@@ -167,13 +161,7 @@ export function AppBar({
     });
   }, [onPanelCreated, pushToast, shellClient, showActionSheet]);
 
-  const caption = useMemo(() => {
-    const parts: string[] = [];
-    if (address && address !== title) parts.push(address);
-    if (metadata) parts.push(metadata);
-    if (chromeKind === "panel" && dirty) parts.push("● uncommitted");
-    return parts.join("  ·  ");
-  }, [address, chromeKind, dirty, metadata, title]);
+  const caption = address && address !== title ? address : "";
 
   return (
     <View

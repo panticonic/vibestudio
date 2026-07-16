@@ -411,9 +411,9 @@ async function main() {
   const timeoutMs = options.timeoutMs;
   const readyStartedAt = Date.now();
   const ready = await waitForServerReady(options.readyFile, serverChild, readyStartedAt, timeoutMs);
-  const rootPairingLink = ready.rootInvites?.desktop?.deepLink;
+  const rootPairingLink = ready.rootInvite?.deepLink;
   if (typeof rootPairingLink !== "string" || rootPairingLink.length === 0) {
-    throw new Error("Fresh dev hub did not publish a complete desktop root invite");
+    throw new Error("Fresh dev hub did not publish a complete root invite");
   }
   const parsedPairing = parseConnectLink(rootPairingLink);
   if (parsedPairing.kind !== "ok") {

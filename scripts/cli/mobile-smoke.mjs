@@ -406,7 +406,6 @@ function buildConnectLinkFromLog(loggedLink) {
     sig: parsed.sig,
     v: parsed.v,
     ice: parsed.ice,
-    srv: parsed.srv,
   });
 }
 
@@ -1441,11 +1440,10 @@ async function startConnectIntent(device, packageName, _activityName, link) {
   if (device) args.push("--device", device);
   args.push("--package", packageName, "--pair", link, "--json");
   await new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      args,
-      { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] }
-    );
+    const child = spawn(process.execPath, args, {
+      cwd: repoRoot,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stderr = "";
     child.stderr.on("data", (chunk) => (stderr = (stderr + chunk.toString()).slice(-16_384)));
     child.once("error", reject);
@@ -1632,7 +1630,6 @@ async function main() {
 
     const invite = await waitForRootInvite({
       readyFile: readyFilePath,
-      kind: "mobile",
       timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
     });
 

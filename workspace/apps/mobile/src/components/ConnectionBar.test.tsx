@@ -25,7 +25,9 @@ describe("ConnectionBar", () => {
     const onRepair = jest.fn();
     const store = createStore();
     store.set(connectionStatusAtom, "disconnected");
-    store.set(shellClientAtom, { transport: { reconnect } } as never);
+    store.set(shellClientAtom, {
+      transport: { reconnect, onReconnectProgress: () => jest.fn() },
+    } as never);
 
     const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => undefined);
 

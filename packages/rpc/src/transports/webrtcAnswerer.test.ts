@@ -222,7 +222,7 @@ function offererHello(over: Record<string, unknown> = {}): Record<string, unknow
   return {
     t: "hello",
     proto: 2,
-    contractVersion: 1,
+    contractVersion: 2,
     maxMsg: 256 * 1024,
     platform: "desktop",
     keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
@@ -326,7 +326,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     expect(frames[0]).toEqual({
       t: "hello",
       proto: 2,
-      contractVersion: 1,
+      contractVersion: 2,
       maxMsg: 256 * 1024,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },

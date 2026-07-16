@@ -5,12 +5,11 @@
  * keyed by the server identifier emitted by the current credential issuer.
  */
 
-import { app, safeStorage } from "electron";
+import { safeStorage } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   normalizeFingerprint,
-  PAIRING_CODE_PATTERN,
   PAIRING_PROTOCOL_VERSION,
   PAIRING_ROOM_PATTERN,
   parseSignalingEndpoint,
@@ -18,7 +17,7 @@ import {
   type TurnPolicy,
 } from "@vibestudio/shared/connect";
 import { isDeviceId, isDeviceRefreshToken, isServerId } from "@vibestudio/shared/deviceCredentials";
-import { getCentralDataPath, getWorkspacesDir } from "@vibestudio/env-paths";
+import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
   createEncryptedJsonStore,
   type EncryptedJsonStore,
@@ -54,55 +53,19 @@ export type StoredRemote = DeviceCredentialBase & {
 
 export type DeviceCredentialEntry = LoopbackDeviceCredential | StoredRemote;
 
-export type PendingLoopbackPairing = {
-  serverId: string;
-  transport: "pending-loopback";
-  deviceId: string;
-  refreshToken: string;
-  inviteCode: string;
-  expiresAt: number;
-  preparedAt: number;
-  label: string;
-};
-
-export type DeviceCredentialStoreEntry = DeviceCredentialEntry | PendingLoopbackPairing;
-export type DeviceCredentialEntries = Record<string, DeviceCredentialStoreEntry>;
+export type DeviceCredentialEntries = Record<string, DeviceCredentialEntry>;
 export interface DeviceCredentialDocument {
   currentRemoteServerId?: string;
   entries: DeviceCredentialEntries;
 }
 export type DeviceCredentialStore = EncryptedJsonStore<DeviceCredentialDocument>;
 
-function isEntry(value: unknown): value is DeviceCredentialStoreEntry {
-  const v = value as DeviceCredentialStoreEntry | null | undefined;
+function isEntry(value: unknown): value is DeviceCredentialEntry {
+  const v = value as DeviceCredentialEntry | null | undefined;
   if (!v || typeof v !== "object" || Array.isArray(v)) return false;
   if (!isServerId(v.serverId)) return false;
   if (!isDeviceId(v.deviceId)) return false;
   if (!isDeviceRefreshToken(v.refreshToken)) return false;
-  if (v.transport === "pending-loopback") {
-    const allowedPending = new Set([
-      "serverId",
-      "transport",
-      "deviceId",
-      "refreshToken",
-      "inviteCode",
-      "expiresAt",
-      "preparedAt",
-      "label",
-    ]);
-    return (
-      Object.keys(v).every((key) => allowedPending.has(key)) &&
-      PAIRING_CODE_PATTERN.test(v.inviteCode) &&
-      Number.isSafeInteger(v.preparedAt) &&
-      v.preparedAt > 0 &&
-      Number.isSafeInteger(v.expiresAt) &&
-      v.expiresAt > v.preparedAt &&
-      typeof v.label === "string" &&
-      v.label.length > 0 &&
-      v.label.length <= 128 &&
-      v.label.trim() === v.label
-    );
-  }
   if (!Number.isSafeInteger(v.pairedAt) || v.pairedAt <= 0) {
     return false;
   }
@@ -152,7 +115,7 @@ function isEntry(value: unknown): value is DeviceCredentialStoreEntry {
 function isStoredPairing(value: unknown): value is StoredPairing {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pairing = value as Partial<StoredPairing>;
-  const allowedPairing = new Set(["room", "fp", "sig", "v", "ice", "srv"]);
+  const allowedPairing = new Set(["room", "fp", "sig", "v", "ice"]);
   if (Object.keys(value).some((key) => !allowedPairing.has(key))) return false;
   if (
     typeof pairing.room !== "string" ||
@@ -169,12 +132,7 @@ function isStoredPairing(value: unknown): value is StoredPairing {
     signaling.kind === "ok" &&
     signaling.url === pairing.sig &&
     pairing.v === PAIRING_PROTOCOL_VERSION &&
-    (pairing.ice === "all" || pairing.ice === "relay") &&
-    (pairing.srv === undefined ||
-      (typeof pairing.srv === "string" &&
-        pairing.srv.length > 0 &&
-        pairing.srv.length <= 128 &&
-        pairing.srv.trim() === pairing.srv))
+    (pairing.ice === "all" || pairing.ice === "relay")
   );
 }
 
@@ -190,41 +148,25 @@ function isEntries(value: unknown): value is DeviceCredentialEntries {
 export function parseDeviceCredentialDocument(value: unknown): DeviceCredentialDocument | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-
-  // Pre-document stores were a plain serverId -> credential map. Accept them as
-  // a migration input, but only after validating every entry.
-  if (!("entries" in record)) {
-    return isEntries(record) ? { entries: record } : null;
+  if (Object.keys(record).some((key) => key !== "entries" && key !== "currentRemoteServerId")) {
+    return null;
   }
-  if (!record["entries"] || typeof record["entries"] !== "object") return null;
-
-  // A single stale entry must not discard every valid pairing. Sanitize on
-  // read; save remains strict so new malformed state can never be persisted.
-  const entries: DeviceCredentialEntries = {};
-  for (const [serverId, entry] of Object.entries(record["entries"] as Record<string, unknown>)) {
-    if (isEntry(entry) && entry.serverId === serverId) entries[serverId] = entry;
+  if (!isEntries(record["entries"])) return null;
+  const current = record["currentRemoteServerId"];
+  if (
+    current !== undefined &&
+    (typeof current !== "string" || record["entries"][current]?.transport !== "webrtc")
+  ) {
+    return null;
   }
-  const requestedCurrent = record["currentRemoteServerId"];
-  const current =
-    typeof requestedCurrent === "string" && entries[requestedCurrent]?.transport === "webrtc"
-      ? requestedCurrent
-      : undefined;
-  return { ...(current ? { currentRemoteServerId: current } : {}), entries };
+  return {
+    ...(typeof current === "string" ? { currentRemoteServerId: current } : {}),
+    entries: record["entries"],
+  };
 }
 
 function isDocument(value: unknown): value is DeviceCredentialDocument {
-  const parsed = parseDeviceCredentialDocument(value);
-  if (!parsed || !value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => key !== "entries" && key !== "currentRemoteServerId")) {
-    return false;
-  }
-  if (!isEntries(record["entries"])) return false;
-  return (
-    record["currentRemoteServerId"] === undefined ||
-    (typeof record["currentRemoteServerId"] === "string" &&
-      parsed.currentRemoteServerId === record["currentRemoteServerId"])
-  );
+  return parseDeviceCredentialDocument(value) !== null;
 }
 
 export function selectCurrentRemote(
@@ -266,7 +208,15 @@ export function createDeviceCredentialStore(deps: {
     secretDescription: "the paired device refresh credential",
   });
   return {
-    load: () => encryptedStore.load(),
+    load: () => {
+      const document = encryptedStore.load();
+      if (document === null && encryptedStore.exists()) {
+        throw new Error(
+          "Stored device credentials are unreadable or do not match the current canonical schema"
+        );
+      }
+      return document;
+    },
     exists: () => encryptedStore.exists(),
     save: (document) => {
       if (!isDocument(document)) {
@@ -280,75 +230,8 @@ export function createDeviceCredentialStore(deps: {
 
 let storeSingleton: DeviceCredentialStore | null = null;
 
-function entryTimestamp(entry: DeviceCredentialStoreEntry): number {
-  return entry.transport === "pending-loopback"
-    ? entry.preparedAt
-    : (entry.rotatedAt ?? entry.pairedAt);
-}
-
-/** Merge valid legacy snapshots without reviving an older credential. */
-export function mergeDeviceCredentialEntries(
-  snapshots: Array<DeviceCredentialEntries | null>
-): DeviceCredentialEntries {
-  const candidates = new Map<string, DeviceCredentialStoreEntry[]>();
-  for (const snapshot of snapshots) {
-    if (!snapshot) continue;
-    for (const [serverId, entry] of Object.entries(snapshot)) {
-      const entries = candidates.get(serverId) ?? [];
-      entries.push(entry);
-      candidates.set(serverId, entries);
-    }
-  }
-
-  const merged: DeviceCredentialEntries = {};
-  for (const [serverId, entries] of candidates) {
-    merged[serverId] = entries.reduce((latest, entry) =>
-      entryTimestamp(entry) >= entryTimestamp(latest) ? entry : latest
-    );
-  }
-
-  const remotes = Object.entries(merged).filter(
-    (entry): entry is [string, StoredRemote] => entry[1].transport === "webrtc"
-  );
-  if (remotes.length > 1) {
-    const [keepServerId] = remotes.reduce((latest, entry) =>
-      entryTimestamp(entry[1]) >= entryTimestamp(latest[1]) ? entry : latest
-    );
-    for (const [serverId] of remotes) {
-      if (serverId === keepServerId) continue;
-      const fallback = candidates
-        .get(serverId)
-        ?.filter((entry) => entry.transport !== "webrtc")
-        .reduce<DeviceCredentialStoreEntry | null>(
-          (latest, entry) =>
-            latest === null || entryTimestamp(entry) >= entryTimestamp(latest) ? entry : latest,
-          null
-        );
-      if (fallback) merged[serverId] = fallback;
-      else Reflect.deleteProperty(merged, serverId);
-    }
-  }
-  return merged;
-}
-
-function legacyCredentialPaths(centralPath: string): string[] {
-  const paths = new Set<string>([
-    path.join(app.getPath("userData"), "device-credentials.json"),
-    path.join(centralPath, "bootstrap-state", "device-credentials.json"),
-  ]);
-  try {
-    for (const entry of fs.readdirSync(getWorkspacesDir(), { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      paths.add(path.join(getWorkspacesDir(), entry.name, "state", "device-credentials.json"));
-      paths.add(
-        path.join(getWorkspacesDir(), entry.name, "state-headless-host", "device-credentials.json")
-      );
-    }
-  } catch {
-    // A fresh install has no workspaces directory to migrate.
-  }
-  paths.delete(path.join(centralPath, "device-credentials.json"));
-  return [...paths];
+function entryTimestamp(entry: DeviceCredentialEntry): number {
+  return entry.rotatedAt ?? entry.pairedAt;
 }
 
 function getStore(): DeviceCredentialStore {
@@ -364,27 +247,12 @@ function getStore(): DeviceCredentialStore {
       cipher,
       fs,
     });
-    if (storeSingleton.load() === null) {
-      const migrated = mergeDeviceCredentialEntries(
-        legacyCredentialPaths(centralPath).map((filePath) => {
-          if (!fs.existsSync(filePath)) return null;
-          return createDeviceCredentialStore({ filePath, cipher, fs }).load()?.entries ?? null;
-        })
-      );
-      if (Object.keys(migrated).length > 0) storeSingleton.save({ entries: migrated });
-    }
   }
   return storeSingleton;
 }
 
 export function loadDeviceCredentialByServerId(serverId: string): DeviceCredentialEntry | null {
-  const entry = getStore().load()?.entries[serverId];
-  return entry && entry.transport !== "pending-loopback" ? entry : null;
-}
-
-export function loadPendingLoopbackPairing(serverId: string): PendingLoopbackPairing | null {
-  const entry = getStore().load()?.entries[serverId];
-  return entry?.transport === "pending-loopback" ? entry : null;
+  return getStore().load()?.entries[serverId] ?? null;
 }
 
 /** The CURRENT remote pairing (the active WebRTC server), if any. */
@@ -396,12 +264,6 @@ export function saveDeviceCredential(entry: DeviceCredentialEntry): void {
   const document = getStore().load() ?? { entries: {} };
   document.entries[entry.serverId] = entry;
   if (entry.transport === "webrtc") document.currentRemoteServerId = entry.serverId;
-  getStore().save(document);
-}
-
-export function savePendingLoopbackPairing(entry: PendingLoopbackPairing): void {
-  const document = getStore().load() ?? { entries: {} };
-  document.entries[entry.serverId] = entry;
   getStore().save(document);
 }
 

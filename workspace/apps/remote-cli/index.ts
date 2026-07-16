@@ -1,21 +1,10 @@
 import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
 import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
 import { createServerWsTransport } from "@vibestudio/shell-core/transport/serverWsTransport";
-import {
-  hubControlMethods,
-  type HubPairingInvite,
-} from "@vibestudio/service-schemas/hubControl";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import WebSocket from "ws";
-
-export function formatPairingInvite(invite: HubPairingInvite): string {
-  return [
-    `Pairing code: ${invite.code}`,
-    `Pair URL: ${invite.pairUrl}`,
-    `Expires: ${new Date(invite.expiresAt).toISOString()}`,
-  ].join("\n");
-}
 
 function printBootstrapSummary(): void {
   console.log(`App id: ${requiredEnv("VIBESTUDIO_TERMINAL_APP_ID")}`);
@@ -47,18 +36,6 @@ async function connect() {
       clientLabel: "Vibestudio Remote CLI",
       clientPlatform: "desktop",
     }),
-    translateEvent: (event, payload, deliver) => {
-      deliver({
-        type: "event",
-        fromId: "main",
-        event,
-        payload,
-      });
-      if (event === "event:apps:lifecycle" || event === "apps:lifecycle") {
-        console.log(`[apps:lifecycle] ${JSON.stringify(payload)}`);
-      }
-      return true;
-    },
     adapter: {
       now: () => Date.now(),
       getAuthToken: async () => token,
@@ -75,6 +52,11 @@ async function connect() {
     if (status === "disconnected") process.exit(0);
   });
   await transport.connectAndWait();
+  const events = new EventsClient(rpc);
+  events.on("apps:lifecycle", (payload) => {
+    console.log(`[apps:lifecycle] ${JSON.stringify(payload)}`);
+  });
+  await events.subscribe("apps:lifecycle");
   return { rpc, close: () => transport.close() };
 }
 
@@ -83,11 +65,6 @@ export async function main(): Promise<void> {
   const workspaceClient = createTypedServiceClient(
     "workspace",
     workspaceMethods,
-    (service, method, args) => rpc.call("main", `${service}.${method}`, args)
-  );
-  const hubControlClient = createTypedServiceClient(
-    "hubControl",
-    hubControlMethods,
     (service, method, args) => rpc.call("main", `${service}.${method}`, args)
   );
   printBootstrapSummary();
@@ -103,12 +80,8 @@ export async function main(): Promise<void> {
     );
   }
 
-  const command = process.env["VIBESTUDIO_TERMINAL_APP_COMMAND"] ?? "invite";
-  if (command === "status") return;
-  if (command === "invite") {
-    const result = await hubControlClient.pairDevice({ ttlMs: 10 * 60 * 1000 });
-    console.log(formatPairingInvite(result.pairing));
-  }
+  const command = process.env["VIBESTUDIO_TERMINAL_APP_COMMAND"] ?? "status";
+  if (command !== "status") throw new Error(`Unknown remote-cli command: ${command}`);
 
   process.on("message", (message) => {
     if ((message as { type?: string })?.type === "shutdown") {

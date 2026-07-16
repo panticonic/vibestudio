@@ -11,8 +11,8 @@ import { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } from "./deviceAuthStore.
 
 /**
  * Build a hub-side store over an in-memory identity DB with a seeded root user.
- * Devices/agent credentials FK to a user, so every device/pairing test needs an
- * owner. The store persists only the server id to `serverIdPath`; devices,
+ * Device credentials belong to a user; agent credentials authenticate only an
+ * entity. The store persists only the server id to `serverIdPath`; devices,
  * agent credentials, and pairing codes live in the DB. `db`/`serverIdPath` are
  * returned so a test can re-open a fresh store over the SAME durable state
  * (the store keeps no device state of its own).
@@ -42,19 +42,33 @@ describe("DeviceAuthStore", () => {
     let now = 1000;
     const { store, db, userId, workspaceId, serverIdPath } = makeStore(() => now);
 
-    const code = store.createPairingCode(undefined, { workspaceId, userId });
+    const invite = store.createPairingInvite(undefined, { workspaceId, userId });
+    expect(store.listControlRooms()).toEqual([
+      {
+        kind: "invite",
+        room: invite.room,
+        codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        expiresAt: invite.expiresAt,
+      },
+    ]);
     const credential = store.completePairing({
-      code,
+      code: invite.code,
       label: "Phone",
       platform: "mobile",
     });
     expect(credential.deviceId).toMatch(/^dev_/);
     expect(credential.refreshToken).toBeTruthy();
     expect(credential.userId).toBe(userId);
-    expect(store.completePairing.bind(store, { code })).toThrow(/invalid or expired/i);
+    expect(credential.controlRoom).toBe(invite.room);
+    expect(credential.workspaceId).toBe(workspaceId);
+    expect(store.listControlRooms()).toEqual([
+      { kind: "device", room: invite.room, deviceId: credential.deviceId },
+    ]);
+    expect(() => store.completePairing({ code: invite.code })).toThrow(/invalid or expired/i);
 
-    // The server id lives in the JSON sibling; the DB row keeps only the sha256
-    // hash of the refresh token — never the clear secret — bound to its owner.
+    // The server id lives in the JSON sibling. The durable device row keeps only
+    // the sha256 refresh-token hash; the clear token is returned once and is not
+    // retained by the server.
     expect(JSON.parse(fs.readFileSync(serverIdPath, "utf8")).serverId).toMatch(/^srv_/);
     const stored = db.getDevice(credential.deviceId);
     expect(stored?.userId).toBe(userId);
@@ -72,9 +86,12 @@ describe("DeviceAuthStore", () => {
     let now = 1000;
     const { store, userId, workspaceId } = makeStore(() => now);
 
-    const expiredCode = store.createPairingCode(10, { workspaceId, userId });
+    const expiredInvite = store.createPairingInvite(10, { workspaceId, userId });
     now = 1011;
-    expect(() => store.completePairing({ code: expiredCode })).toThrow(/invalid or expired/i);
+    expect(() => store.completePairing({ code: expiredInvite.code })).toThrow(
+      /invalid or expired/i
+    );
+    expect(store.listControlRooms()).toEqual([]);
 
     const credential = store.issueDevice({ userId, label: "Desktop", platform: "electron" });
     expect(() => store.validateRefresh(credential.deviceId, "wrong-refresh-token")).toThrow(
@@ -124,50 +141,60 @@ describe("DeviceAuthStore", () => {
     let now = 1000;
     const { store, userId, workspaceId } = makeStore(() => now);
 
-    const code = store.createPairingCode(undefined, { workspaceId, userId });
+    const invite = store.createPairingInvite(undefined, { workspaceId, userId });
     now += DEFAULT_PAIRING_CODE_TTL_MS - 1;
-    expect(store.completePairing({ code }).userId).toBe(userId);
+    expect(store.completePairing({ code: invite.code }).userId).toBe(userId);
 
-    const expiredCode = store.createPairingCode(undefined, { workspaceId, userId });
+    const expiredInvite = store.createPairingInvite(undefined, { workspaceId, userId });
     now += DEFAULT_PAIRING_CODE_TTL_MS + 1;
-    expect(() => store.completePairing({ code: expiredCode })).toThrow(/invalid or expired/i);
+    expect(() => store.completePairing({ code: expiredInvite.code })).toThrow(
+      /invalid or expired/i
+    );
   });
 
   it("keeps pending pairing codes and their absolute deadline across hub restart", () => {
     const { store, db, userId, workspaceId, serverIdPath } = makeStore(() => 1000);
-    const code = store.createPairingCode(60_000, { workspaceId, userId });
-    const expiresAt = store.pairingCodeExpiresAt(code);
+    const invite = store.createPairingInvite(60_000, { workspaceId, userId });
 
     const restarted = new DeviceAuthStore({ db, serverIdPath, now: () => 2000 });
-    expect(restarted.pairingCodeExpiresAt(code)).toBe(expiresAt);
-    expect(restarted.completePairing({ code }).userId).toBe(userId);
+    expect(restarted.listControlRooms()).toEqual([
+      {
+        kind: "invite",
+        room: invite.room,
+        codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        expiresAt: invite.expiresAt,
+      },
+    ]);
+    const credential = restarted.completePairing({ code: invite.code });
+    expect(credential.userId).toBe(userId);
+    expect(credential.controlRoom).toBe(invite.room);
+    expect(credential.workspaceId).toBe(workspaceId);
   });
 
-  it("durably replays one proposed issuance across the promotion crash window", () => {
-    let now = 1000;
+  it("rejects a consumed invite while preserving its device route and refresh credential", () => {
+    const now = 1000;
     const { store, db, userId, workspaceId, serverIdPath } = makeStore(() => now);
-    const code = store.createPairingCode(60_000, { workspaceId, userId });
-    const proposedCredential = {
-      deviceId: `dev_${"p".repeat(24)}`,
-      refreshToken: "q".repeat(43),
-    };
-    const first = store.completePairing({ code, proposedCredential, label: "Phone" });
+    const invite = store.createPairingInvite(60_000, { workspaceId, userId });
+    const first = store.completePairing({
+      code: invite.code,
+      label: "Phone",
+    });
 
     const restarted = new DeviceAuthStore({ db, serverIdPath, now: () => now });
-    expect(
-      restarted.completePairing({ code, proposedCredential, label: "Phone after retry" })
-    ).toEqual(first);
     expect(() =>
       restarted.completePairing({
-        code,
-        proposedCredential: { ...proposedCredential, refreshToken: "x".repeat(43) },
+        code: invite.code,
+        label: "Phone after retry",
       })
     ).toThrow(/invalid or expired/i);
+    expect(restarted.listDevices()).toHaveLength(1);
+    expect(first.controlRoom).toBe(invite.room);
+    expect(first.workspaceId).toBe(workspaceId);
 
-    now = 61_000;
-    expect(() => restarted.completePairing({ code, proposedCredential })).toThrow(
-      /invalid or expired/i
-    );
+    expect(restarted.listControlRooms()).toEqual([
+      { kind: "device", room: invite.room, deviceId: first.deviceId },
+    ]);
+    expect(restarted.validateRefresh(first.deviceId, first.refreshToken).userId).toBe(userId);
   });
 
   it("creates root only after consuming a live root-bootstrap code", () => {
@@ -191,20 +218,23 @@ describe("DeviceAuthStore", () => {
     expect(createCalls).toBe(0);
     expect(db.hasUsers()).toBe(false);
 
-    const wrongIntent = store.createPairingCode(60_000, {
+    const wrongIntent = store.createPairingInvite(60_000, {
       workspaceId,
       intent: "pair-device",
     });
-    expect(() => store.completePairing({ code: wrongIntent, createRootUser })).toThrow(
+    expect(() => store.completePairing({ code: wrongIntent.code, createRootUser })).toThrow(
       /not bound/i
     );
     expect(createCalls).toBe(0);
     expect(db.hasUsers()).toBe(false);
 
-    const code = store.createPairingCode(60_000, { workspaceId, intent: "root-bootstrap" });
+    const invite = store.createPairingInvite(60_000, {
+      workspaceId,
+      intent: "root-bootstrap",
+    });
     expect(() =>
       store.completePairing({
-        code,
+        code: invite.code,
         createRootUser: () => {
           users.createRoot({ handle: "root", displayName: "Root" });
           throw new Error("injected device-issuance boundary failure");
@@ -212,10 +242,28 @@ describe("DeviceAuthStore", () => {
       })
     ).toThrow("injected device-issuance boundary failure");
     expect(db.hasUsers()).toBe(false);
+    expect(store.listControlRooms()).toHaveLength(2);
+    expect(store.listControlRooms()).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "invite",
+          room: invite.room,
+          codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+          expiresAt: invite.expiresAt,
+        },
+        {
+          kind: "invite",
+          room: wrongIntent.room,
+          codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+          expiresAt: wrongIntent.expiresAt,
+        },
+      ])
+    );
 
-    const credential = store.completePairing({ code, createRootUser });
+    const credential = store.completePairing({ code: invite.code, createRootUser });
     expect(createCalls).toBe(1);
     expect(users.getUser(credential.userId)?.role).toBe("root");
+    expect(credential.controlRoom).toBe(invite.room);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -228,14 +276,20 @@ describe("DeviceAuthStore", () => {
       role: "member",
       createdBy: userId,
     });
-    const code = store.createPairingCode(60_000, {
+    const invite = store.createPairingInvite(60_000, {
       workspaceId,
       userId: invited.id,
       intent: "invite-user",
     });
 
-    expect(store.cancelPairingCode(code)).toBe(true);
-    expect(() => store.completePairing({ code })).toThrow(/invalid or expired/i);
+    expect(store.cancelPairingInvite(invite.code)).toEqual({
+      kind: "invite",
+      room: invite.room,
+      codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      expiresAt: invite.expiresAt,
+    });
+    expect(store.listControlRooms()).toEqual([]);
+    expect(() => store.completePairing({ code: invite.code })).toThrow(/invalid or expired/i);
     expect(users.rollbackInvite(invited.id)).toBe(true);
     expect(users.getByHandle("mara")).toBeNull();
     expect(
@@ -252,35 +306,34 @@ describe("DeviceAuthStore", () => {
 describe("DeviceAuthStore agent credentials (§3.2)", () => {
   it("mints an entity-scoped credential, persists only the token hash, and validates the secret", () => {
     let now = 1000;
-    const { store, db, userId, serverIdPath } = makeStore(() => now);
+    const { store, db, serverIdPath } = makeStore(() => now);
 
     const { agentId, agentToken } = store.mintAgentCredential({
       entityId: "session:s1",
-      contextId: "ctx-abc",
-      channelId: "chan-1",
-      userId,
     });
     expect(agentId).toMatch(/^agt_/);
     expect(agentToken).toBe(`agent:${agentId}:${agentToken.split(":")[2]}`);
     const secret = agentToken.split(":")[2]!;
 
-    // Only the sha256 hash is persisted — never the clear secret — plus the
-    // spawning user's id (inherited into the binding, WP0 §3.3).
+    // Only authentication identity and lifecycle are persisted. Semantic
+    // binding and ownership remain facts of the live runtime entity.
     const storedAgent = db.getAgentCredential(agentId);
     expect(storedAgent?.tokenHash).toMatch(/^[0-9a-f]{64}$/);
     expect(storedAgent?.tokenHash).not.toBe(secret);
-    expect(storedAgent?.userId).toBe(userId);
+    expect(storedAgent).toEqual({
+      agentId,
+      tokenHash: storedAgent?.tokenHash,
+      entityId: "session:s1",
+      createdAt: 1000,
+    });
 
-    // Validation returns the binding (no secret material) after reload.
+    // Validation returns only the authenticated entity after reload.
     now = 2000;
     const reloaded = new DeviceAuthStore({ db, serverIdPath, now: () => now });
     const binding = reloaded.validateAgentToken(agentId, secret);
     expect(binding).toEqual({
       agentId,
       entityId: "session:s1",
-      contextId: "ctx-abc",
-      channelId: "chan-1",
-      userId,
     });
     expect(reloaded.validateAgentToken(agentId, "wrong-secret")).toBeNull();
     expect(reloaded.validateAgentToken("agt_missing", secret)).toBeNull();
@@ -288,13 +341,10 @@ describe("DeviceAuthStore agent credentials (§3.2)", () => {
 
   it("honors expiry and revocation", () => {
     let now = 1000;
-    const { store, userId } = makeStore(() => now);
+    const { store } = makeStore(() => now);
 
     const expiring = store.mintAgentCredential({
       entityId: "e1",
-      contextId: "c1",
-      channelId: "ch1",
-      userId,
       ttlMs: 100,
     });
     const secret = expiring.agentToken.split(":")[2]!;
@@ -305,9 +355,6 @@ describe("DeviceAuthStore agent credentials (§3.2)", () => {
     now = 1000;
     const live = store.mintAgentCredential({
       entityId: "e2",
-      contextId: "c2",
-      channelId: "ch2",
-      userId,
     });
     const liveSecret = live.agentToken.split(":")[2]!;
     expect(store.revokeAgentCredential(live.agentId)).toBe(true);
@@ -315,30 +362,22 @@ describe("DeviceAuthStore agent credentials (§3.2)", () => {
     expect(store.validateAgentToken(live.agentId, liveSecret)).toBeNull();
   });
 
-  it("revokes every outstanding credential for a retired entity", () => {
-    const { store, userId } = makeStore(() => 1000);
+  it("rotates to one credential per entity and revokes it on retirement", () => {
+    const { store } = makeStore(() => 1000);
     const a = store.mintAgentCredential({
       entityId: "ent",
-      contextId: "c",
-      channelId: "ch",
-      userId,
     });
     const b = store.mintAgentCredential({
       entityId: "ent",
-      contextId: "c",
-      channelId: "ch",
-      userId,
     });
     const other = store.mintAgentCredential({
       entityId: "keep",
-      contextId: "c",
-      channelId: "ch",
-      userId,
     });
 
-    const revoked = store.revokeAgentCredentialsForEntity("ent");
-    expect(revoked.sort()).toEqual([a.agentId, b.agentId].sort());
     expect(store.validateAgentToken(a.agentId, a.agentToken.split(":")[2]!)).toBeNull();
+    expect(store.validateAgentToken(b.agentId, b.agentToken.split(":")[2]!)).not.toBeNull();
+    const revoked = store.revokeAgentCredentialsForEntity("ent");
+    expect(revoked).toEqual([b.agentId]);
     expect(store.validateAgentToken(b.agentId, b.agentToken.split(":")[2]!)).toBeNull();
     // The unrelated entity's credential is untouched.
     expect(store.validateAgentToken(other.agentId, other.agentToken.split(":")[2]!)).not.toBeNull();
@@ -393,9 +432,6 @@ describe("DeviceAuthStore hub/child ownership", () => {
     const device = hub.issueDevice({ userId, label: "Laptop" });
     const agent = hub.mintAgentCredential({
       entityId: "session:one",
-      contextId: "ctx",
-      channelId: "channel",
-      userId,
     });
 
     const childDb = new IdentityDb({ path: dbPath, readOnly: true });
@@ -403,17 +439,13 @@ describe("DeviceAuthStore hub/child ownership", () => {
     expect(child.validateRefresh(device.deviceId, device.refreshToken).userId).toBe(userId);
     const [, agentId, secret] = agent.agentToken.split(":");
     expect(child.validateAgentToken(agentId!, secret!)).toMatchObject({
-      userId,
       entityId: "session:one",
     });
 
-    expect(() => child.createPairingCode(60_000, { workspaceId, userId })).toThrow(/read-only/i);
+    expect(() => child.createPairingInvite(60_000, { workspaceId, userId })).toThrow(/read-only/i);
     expect(() =>
       child.mintAgentCredential({
         entityId: "session:two",
-        contextId: "ctx",
-        channelId: "channel",
-        userId,
       })
     ).toThrow(/read-only/i);
     expect(() => child.revokeDevice(device.deviceId)).toThrow(/read-only/i);

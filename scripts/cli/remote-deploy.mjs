@@ -81,7 +81,9 @@ tarball is copied to the host and installed with npm install -g. Without
 --artifact, the remote host installs the invoking CLI package/version with npm.
 The remote host must run Node.js ${pkg.engines.node}.
 Remove leaves workspace source intact. --purge also removes the installed npm
-package and WebRTC identity material, so every paired device must re-pair.
+package and every workspace child's WebRTC reach. Hub identity, accounts, and
+device pairing remain intact; clients obtain fresh workspace reaches through
+the stable hub control ingress after reinstall.
 `);
 }
 
@@ -245,7 +247,7 @@ systemctl --user enable vibestudio-server.service
 # restart (not just enable --now) so an UPDATE replaces the running old binary.
 systemctl --user restart vibestudio-server.service
 systemctl --user is-active --quiet vibestudio-server.service
-identity_path="$HOME/.config/vibestudio/workspaces/default/state/webrtc/identity.pem"
+identity_path="$HOME/.config/vibestudio/workspaces/default/reach/webrtc/identity.pem"
 deadline=$((SECONDS + 120))
 until "$node_bin" -e "fetch('http://127.0.0.1:${options.port}/healthz').then(r => r.json()).then(v => process.exit(v.ok && v.mode === 'hub' ? 0 : 1)).catch(() => process.exit(1))" && [ -s "$identity_path" ]; do
   if [ "$SECONDS" -ge "$deadline" ]; then
@@ -265,7 +267,7 @@ done
     `set -e
 ${RESOLVE_REMOTE_RUNTIME}
 journalctl --user -u vibestudio-server.service -n 100 --no-pager
-"$node_bin" "$vibestudio_entry" remote doctor${signalArg} --identity $HOME/.config/vibestudio/workspaces/default/state/webrtc/identity.pem
+"$node_bin" "$vibestudio_entry" remote doctor${signalArg} --identity $HOME/.config/vibestudio/workspaces/default/reach/webrtc/identity.pem
 `,
     hooks
   );
@@ -278,8 +280,8 @@ systemctl --user daemon-reload`;
   if (!purge) return base;
   return `${base}
 npm uninstall -g ${SERVER_PACKAGE_NAME} >/dev/null 2>&1 || true
-find $HOME/.config/vibestudio/workspaces -maxdepth 4 -type d -path '*/state/webrtc' -exec rm -rf {} + 2>/dev/null || true
-echo "Purged WebRTC identity material; every paired device must re-pair." >&2`;
+find $HOME/.config/vibestudio/workspaces -maxdepth 4 -type d -path '*/reach/webrtc' -exec rm -rf {} + 2>/dev/null || true
+echo "Purged workspace WebRTC reaches; hub pairing remains valid and clients must re-route workspaces after reinstall." >&2`;
 }
 
 export async function main(argv = process.argv.slice(2), hooks = {}) {

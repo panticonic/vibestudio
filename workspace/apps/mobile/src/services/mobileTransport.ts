@@ -23,7 +23,8 @@ import { authMethods } from "@vibestudio/service-schemas/auth";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   loadShellCredential,
-  reconnectViaWebRtc,
+  MobileConnectionAggregateError,
+  reconnectMobileSession,
   type WebRtcConnection,
 } from "@vibestudio/mobile-webrtc";
 
@@ -53,6 +54,7 @@ export class MobileRpcClient implements Pick<
   private config: MobileRpcClientConfig;
   private connection: WebRtcConnection | null = null;
   private rpc: RpcClient | null = null;
+  private controlRpc: RpcClient | null = null;
   // Dedupes concurrent connect attempts: the WebRTC handshake is eager + async,
   // so a stray call() racing connectAndWait() must not open a second pipe.
   private connecting: Promise<RpcClient> | null = null;
@@ -112,7 +114,9 @@ export class MobileRpcClient implements Pick<
   }
 
   reconnect(): void {
-    void this.teardown().finally(() => this.connect());
+    void this.teardown()
+      .then(() => this.connect())
+      .catch((error) => this.reportTransportFailure("Reconnect teardown failed", error));
   }
 
   onReconnectProgress(listener: (progress: ReconnectProgress) => void): () => void {
@@ -129,7 +133,9 @@ export class MobileRpcClient implements Pick<
       this.setStatus("disconnected");
       return;
     }
-    void this.teardown();
+    void this.teardown().catch((error) =>
+      this.reportTransportFailure("Disconnect teardown failed", error)
+    );
   }
 
   onStatusChange(callback: (status: ConnectionStatus) => void): () => void {
@@ -141,8 +147,9 @@ export class MobileRpcClient implements Pick<
 
   updateConfig(config: MobileRpcClientConfig): void {
     this.config = config;
-    void this.teardown();
-    this.setStatus("disconnected");
+    void this.teardown()
+      .then(() => this.setStatus("disconnected"))
+      .catch((error) => this.reportTransportFailure("Configuration teardown failed", error));
   }
 
   async call<T = unknown>(
@@ -151,7 +158,10 @@ export class MobileRpcClient implements Pick<
     args: unknown[],
     options?: RpcCallOptions
   ): Promise<T> {
-    return (await this.ensureRpc()).call<T>(targetId, method, args, options);
+    const workspaceRpc = await this.ensureRpc();
+    const selected = method.startsWith("hubControl.") ? this.controlRpc : workspaceRpc;
+    if (!selected) throw new Error("Stable hub control connection not established");
+    return selected.call<T>(targetId, method, args, options);
   }
 
   async stream(
@@ -276,18 +286,29 @@ export class MobileRpcClient implements Pick<
       room: stored.workspacePairing.room,
       ice: stored.workspacePairing.ice,
     });
-    const connection = await reconnectViaWebRtc(stored, (kind) => this.emitRecovery(kind));
+    const connection = await reconnectMobileSession(stored, (kind) => this.emitRecovery(kind));
     if (this.activeConnectToken !== token) {
       // A disconnect()/updateConfig()/reconnect() ran while this handshake was in
       // flight. Close the pipe we just produced (and its keepalive) rather than
       // adopting it, so a teardown-during-connect genuinely tears down.
-      await connection.close().catch(() => undefined);
-      throw new ConnectSupersededError();
+      return closeThenThrow(
+        connection,
+        new ConnectSupersededError(),
+        "Superseded mobile connection"
+      );
     }
     this.activeConnectToken = null;
     this.connection = connection;
     this.currentCallerId = connection.callerId;
     this.rpc = connection.rpc;
+    this.controlRpc = connection.hubControlRpc ?? null;
+    if (!this.controlRpc) {
+      return closeThenThrow(
+        connection,
+        new Error("Mobile session did not retain its stable hub control pipe"),
+        "Invalid mobile session"
+      );
+    }
     // The session reports keepalive/ICE state (hardened in Part A); surface it as
     // the client's connection status so the UI + the recovery hook react to drops.
     connection.session.onStatusChange?.((status) => this.setStatus(status));
@@ -347,7 +368,14 @@ export class MobileRpcClient implements Pick<
           reason: error instanceof Error ? error.message : String(error),
           layer: null,
         });
-        await this.teardown();
+        try {
+          await this.teardown();
+        } catch (cleanupError) {
+          throw new MobileConnectionAggregateError(
+            [error, cleanupError],
+            "Mobile connection failed and its resources could not all be closed"
+          );
+        }
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) break;
         const delayMs = Math.min(
@@ -389,9 +417,17 @@ export class MobileRpcClient implements Pick<
     const connection = this.connection;
     this.connection = null;
     this.rpc = null;
+    this.controlRpc = null;
     this.currentCallerId = null;
     this.activeEventUnsubs.clear();
-    await connection?.close().catch(() => undefined);
+    await connection?.close();
+  }
+
+  private reportTransportFailure(context: string, error: unknown): void {
+    const reason = `${context}: ${errorMessage(error)}`;
+    console.error(`[MobileRpcClient] ${reason}`, error);
+    this.emitReconnectProgress({ attempt: 0, phase: "failed", reason, layer: null });
+    this.setStatus("disconnected");
   }
 
   private attachEventSubscription(event: string): void {
@@ -433,4 +469,20 @@ function sleep(ms: number): Promise<void> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function closeThenThrow(
+  connection: WebRtcConnection,
+  failure: Error,
+  context: string
+): Promise<never> {
+  try {
+    await connection.close();
+  } catch (cleanupError) {
+    throw new MobileConnectionAggregateError(
+      [failure, cleanupError],
+      `${context} failed and its resources could not all be closed`
+    );
+  }
+  throw failure;
 }

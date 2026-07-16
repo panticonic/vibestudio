@@ -7,6 +7,7 @@ import {
   type ClientConfigRecord,
 } from "@vibestudio/credential-client/clientConfigStore";
 import { CredentialStore } from "@vibestudio/credential-client/store";
+import { credentialLifecycle } from "@vibestudio/credential-client/credentialStatus";
 import type {
   AccountIdentity,
   AuditEntry,
@@ -214,7 +215,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
 
   async function storeCredential(
     ctx: ServiceContext,
-    params: StoreUrlBoundCredentialParams,
+    params: StoreUrlBoundCredentialParams & Pick<Credential, "oauthRefresh" | "refreshToken">,
     opts: {
       approvalDecision?: Exclude<GrantedDecision, "deny">;
       preapprovedUseDecision?: Exclude<GrantedDecision, "deny">;
@@ -222,8 +223,15 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       replacementCredentialLabel?: string;
     } = {}
   ): Promise<StoredCredentialSummary> {
-    const request = params as StoreUrlBoundCredentialRequest;
-    const id = opts.replaceCredentialId ?? randomUUID();
+    const request = params as StoreUrlBoundCredentialRequest &
+      Pick<Credential, "oauthRefresh" | "refreshToken">;
+    const replaced = opts.replaceCredentialId
+      ? await credentialStore.loadUrlBound(opts.replaceCredentialId)
+      : null;
+    if (opts.replaceCredentialId && !replaced) {
+      throw new Error("Credential selected for replacement no longer exists; retry the connection");
+    }
+    const id = replaced?.id ?? randomUUID();
     const audience = normalizeUrlAudiences(request.audience);
     const injection = normalizeCredentialInjection(request.injection);
     const bindings = normalizeCredentialBindings(request.bindings, { audience, injection });
@@ -243,11 +251,13 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         replacementCredentialLabel: opts.replacementCredentialLabel,
       });
     }
-    const owner = {
-      sourceId: identity?.repoPath ?? ctx.caller.runtime.id,
-      sourceKind: identity ? ("workspace" as const) : ("user" as const),
-      label: identity?.repoPath ?? ctx.caller.runtime.id,
-    };
+    const owner =
+      replaced?.owner ??
+      ({
+        sourceId: identity?.repoPath ?? ctx.caller.runtime.id,
+        sourceKind: identity ? ("workspace" as const) : ("user" as const),
+        label: identity?.repoPath ?? ctx.caller.runtime.id,
+      } satisfies NonNullable<Credential["owner"]>);
     const accountIdentity = normalizeAccountIdentity(
       request.accountIdentity,
       ctx.caller.runtime.id
@@ -257,17 +267,22 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       label: request.label,
       owner,
       bindings,
-      grants: [],
+      // Re-authentication changes secret material, not the semantic credential
+      // identity. Stable id/owner/grants keep existing approved consumers
+      // working while the provider session is renewed from another UI surface.
+      grants: replaced?.grants ?? [],
       providerId: "url-bound",
       connectionId: id,
       connectionLabel: request.label,
       accountIdentity,
       accessToken: request.material.token,
+      refreshToken: request.refreshToken,
+      oauthRefresh: request.oauthRefresh,
       scopes: request.scopes ?? [],
       expiresAt: request.expiresAt,
       metadata: {
         ...(request.metadata ?? {}),
-        createdAt: String(now),
+        createdAt: replaced?.metadata?.["createdAt"] ?? String(now),
         updatedAt: String(now),
         materialType: request.material.type,
       },
@@ -285,9 +300,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
 
     await credentialStore.saveUrlBound(credential as Credential & { id: string });
     await appendAudit({
-      type: opts.replaceCredentialId
-        ? "connection_credential.replaced"
-        : "connection_credential.created",
+      type: replaced ? "connection_credential.replaced" : "connection_credential.created",
       ts: now,
       callerId: ctx.caller.runtime.id,
       providerId: "url-bound",
@@ -794,15 +807,21 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     body.set("token", token);
     body.set("token_type_hint", credential.refreshToken ? "refresh_token" : "access_token");
     const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded" };
-    const configId = credential.metadata?.["clientConfigId"];
-    const configVersion = credential.metadata?.["clientConfigVersion"];
-    if (configId) {
-      const config = configVersion
-        ? await clientConfigStore.loadVersion(configId, configVersion)
-        : await clientConfigStore.load(configId);
-      const clientId = config?.fields["clientId"]?.value;
+    const refresh = credential.oauthRefresh;
+    const configuredCredentialId = credential.metadata?.["clientConfigId"];
+    const configuredCredentialVersion = credential.metadata?.["clientConfigVersion"];
+    const configRef = refresh?.clientConfig;
+    if (configRef || configuredCredentialId) {
+      const config = configRef
+        ? await clientConfigStore.loadVersion(configRef.configId, configRef.configVersion)
+        : configuredCredentialId && configuredCredentialVersion
+          ? await clientConfigStore.loadVersion(configuredCredentialId, configuredCredentialVersion)
+          : configuredCredentialId
+            ? await clientConfigStore.load(configuredCredentialId)
+            : null;
+      const clientId = refresh?.clientId ?? config?.fields["clientId"]?.value;
       const clientSecret = config?.fields["clientSecret"]?.value;
-      const tokenAuth = credential.metadata?.["oauthTokenAuth"];
+      const tokenAuth = refresh?.tokenAuth ?? credential.metadata?.["oauthTokenAuth"];
       if (clientId) body.set("client_id", clientId);
       if (tokenAuth === "client_secret_basic" && clientId && clientSecret) {
         headers["authorization"] = basicAuthHeader(clientId, clientSecret);
@@ -1170,8 +1189,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (!account.providerUserId || account.providerUserId === ctx.caller.runtime.id) {
       return null;
     }
-    const identity = ctx.caller.code ?? null;
-    const ownerSourceId = identity?.repoPath ?? ctx.caller.runtime.id;
     const providerKey =
       candidate.metadata?.["providerId"] ??
       candidate.metadata?.["modelProviderId"] ??
@@ -1183,7 +1200,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         (credential): credential is Credential & { id: string } =>
           !!credential.id &&
           !credential.revokedAt &&
-          credential.owner?.sourceId === ownerSourceId &&
           credential.accountIdentity?.providerUserId === account.providerUserId &&
           (credential.metadata?.["providerId"] ??
             credential.metadata?.["modelProviderId"] ??
@@ -1199,9 +1215,13 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (record.currentVersion) keep.add(record.currentVersion);
     const credentials = await credentialStore.listUrlBound();
     for (const credential of credentials) {
-      if (credential.metadata?.["clientConfigId"] === record.configId) {
-        const version = credential.metadata["clientConfigVersion"];
-        if (version) keep.add(version);
+      const refreshConfig = credential.oauthRefresh?.clientConfig;
+      if (refreshConfig?.configId === record.configId) {
+        keep.add(refreshConfig.configVersion);
+      } else if (credential.metadata?.["clientConfigId"] === record.configId) {
+        // OAuth1 client material is not an OAuth2 refresh recipe.
+        const oauth1Version = credential.metadata["clientConfigVersion"];
+        if (oauth1Version) keep.add(oauth1Version);
       }
     }
     record.versions = Object.fromEntries(
@@ -1484,6 +1504,7 @@ function summarizeUrlBoundCredential(credential: Credential): StoredCredentialSu
     bindings,
     owner: credential.owner,
     scopes: credential.scopes,
+    lifecycle: credentialLifecycle(credential),
     expiresAt: credential.expiresAt,
     revokedAt: credential.revokedAt,
     metadata: credential.metadata,

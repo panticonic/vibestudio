@@ -1,8 +1,6 @@
 import * as os from "node:os";
 import {
-  normalizeFingerprint,
   parseConnectLink,
-  parseSignalingEndpoint,
   selectedWorkspacePath,
   type ConnectPairing,
 } from "@vibestudio/shared/connect";
@@ -12,8 +10,10 @@ import {
   type HubWorkspaceRoute,
 } from "@vibestudio/service-schemas/hubControl";
 import type { CliStoredPairing } from "./credentialStore.js";
+import { canonicalStoredPairing } from "./credentialStore.js";
 import { AuthError, UsageError } from "./output.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
+import { resolveLocalHubControlTransport } from "./localHubTransport.js";
 import { typedClient } from "./typedClients.js";
 
 export type { DeviceCredential } from "./rpcClient.js";
@@ -49,7 +49,13 @@ async function withControl<T>(
   creds: DeviceCredential,
   operation: (client: ReturnType<typeof controlClient>) => Promise<T>
 ): Promise<T> {
-  const rpc = new RpcClient({ ...creds, workspacePairing: creds.controlPairing });
+  const local = await resolveLocalHubControlTransport(creds);
+  const rpc = new RpcClient({
+    url: local?.serverUrl ?? creds.url,
+    deviceId: creds.deviceId,
+    refreshToken: creds.refreshToken,
+    ...(local ? {} : { pairing: creds.controlPairing }),
+  });
   try {
     return await operation(controlClient(rpc));
   } finally {
@@ -60,7 +66,12 @@ async function withControl<T>(
 export async function pairRemoteServer(options: PairOptions): Promise<DeviceCredential> {
   if (!options.link) throw new AuthError("pair requires a Vibestudio pairing link");
   const pairing = parsePairingLink(options.link);
-  const issuedRef: { current: { deviceId: string; refreshToken: string } | null } = {
+  const pairedRef: {
+    current: {
+      credential: { deviceId: string; refreshToken: string };
+      workspaceId: string;
+    } | null;
+  } = {
     current: null,
   };
   const { WebRtcRpcClient } = await import("./webrtcClient.js");
@@ -69,50 +80,60 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     callerId: "shell:pairing",
     getToken: () => pairing.code,
     clientLabel: options.label ?? `${os.userInfo().username}@${os.hostname()}`,
-    onPaired: (credential) => {
-      issuedRef.current = credential;
+    onPaired: (credential, context) => {
+      if (!context) throw new AuthError("pairing did not return its target workspace");
+      pairedRef.current = { credential, workspaceId: context.workspaceId };
     },
   });
+  let pairedCredential: DeviceCredential | null = null;
+  let pairingFailure: unknown = null;
   try {
     await client.ready();
-    const issued = issuedRef.current;
-    if (!issued) throw new AuthError("pairing did not return a device credential");
-    const workspaceName = await client.call<unknown>("workspace.getActive", []);
-    const connectionInfo = await client.call<Record<string, unknown>>("auth.getConnectionInfo", []);
-    if (typeof workspaceName !== "string" || !workspaceName) {
-      throw new AuthError("paired child did not report an active workspace");
-    }
-    if (typeof connectionInfo["serverId"] !== "string") {
-      throw new AuthError("paired child did not report its server identity");
-    }
+    const paired = pairedRef.current;
+    if (!paired) throw new AuthError("pairing did not return a device credential");
     const route = await client.call<HubWorkspaceRoute>("hubControl.routeWorkspace", [
-      { workspace: workspaceName },
+      { workspaceId: paired.workspaceId },
     ]);
-    if (route.serverId !== connectionInfo["serverId"]) {
-      throw new AuthError("workspace route changed server identity during pairing");
+    if (route.workspaceId !== paired.workspaceId) {
+      throw new AuthError("workspace route changed the pairing target");
     }
-    const controlPairing = storeReach(route.controlReach);
+    const { code: _code, ...stableHubReach } = pairing;
+    const controlPairing = storeReach(stableHubReach);
     const workspacePairing = storeReach(route.workspaceReach);
-    return {
-      schemaVersion: 3,
+    pairedCredential = {
+      schemaVersion: 4,
       kind: "device",
       url: selectedUrl(workspacePairing, route.workspace),
+      workspaceId: route.workspaceId,
       workspaceName: route.workspace,
       serverId: route.serverId,
-      deviceId: issued.deviceId,
-      refreshToken: issued.refreshToken,
+      deviceId: paired.credential.deviceId,
+      refreshToken: paired.credential.refreshToken,
       controlPairing,
       workspacePairing,
       pairedAt: Date.now(),
     };
   } catch (error) {
-    if (error instanceof AuthError) throw error;
-    throw new AuthError(
-      `pairing failed: ${error instanceof Error ? error.message : String(error)}`
-    );
-  } finally {
-    await client.close().catch(() => undefined);
+    pairingFailure =
+      error instanceof AuthError
+        ? error
+        : new AuthError(
+            `pairing failed: ${error instanceof Error ? error.message : String(error)}`
+          );
   }
+  const [closed] = await Promise.allSettled([client.close()]);
+  if (closed.status === "rejected") {
+    if (pairingFailure) {
+      throw new AggregateError(
+        [pairingFailure, closed.reason],
+        "Remote pairing failed and its WebRTC connection could not be closed"
+      );
+    }
+    throw closed.reason;
+  }
+  if (pairingFailure) throw pairingFailure;
+  if (!pairedCredential) throw new AuthError("pairing produced no device credential");
+  return pairedCredential;
 }
 
 export async function listRemoteWorkspaces(
@@ -125,20 +146,23 @@ export async function selectRemoteWorkspace(
   creds: DeviceCredential,
   name: string
 ): Promise<DeviceCredential> {
-  const route: HubWorkspaceRoute = await withControl(creds, (client) =>
-    client.routeWorkspace({ workspace: name })
-  );
+  const route: HubWorkspaceRoute = await withControl(creds, async (client) => {
+    const entries = await client.listWorkspaces();
+    const entry = entries.find((workspace) => workspace.name === name);
+    if (!entry) throw new AuthError(`workspace "${name}" is not visible to this account`);
+    return await client.routeWorkspace({ workspaceId: entry.workspaceId });
+  });
   if (route.serverId !== creds.serverId) {
     throw new AuthError("workspace route changed the paired server identity");
   }
-  const controlPairing = storeReach(route.controlReach);
   const workspacePairing = storeReach(route.workspaceReach);
   return {
     ...creds,
     url: selectedUrl(workspacePairing, route.workspace),
+    workspaceId: route.workspaceId,
     workspaceName: route.workspace,
     serverId: creds.serverId,
-    controlPairing,
+    controlPairing: creds.controlPairing,
     workspacePairing,
   };
 }
@@ -197,17 +221,12 @@ function parsePairingLink(link: string): ConnectPairing {
   return pairing;
 }
 
-function storeReach(reach: HubWorkspaceRoute["controlReach"]): CliStoredPairing {
-  const signaling = parseSignalingEndpoint(reach.sig);
-  if (signaling.kind === "error") throw new AuthError(signaling.reason);
-  return {
-    room: reach.room,
-    fp: normalizeFingerprint(reach.fp),
-    sig: signaling.url,
-    v: reach.v,
-    ice: reach.ice,
-    ...(reach.srv ? { srv: reach.srv } : {}),
-  };
+function storeReach(reach: HubWorkspaceRoute["workspaceReach"]): CliStoredPairing {
+  try {
+    return canonicalStoredPairing(reach);
+  } catch (error) {
+    throw new AuthError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 function selectedUrl(pairing: Pick<CliStoredPairing, "room">, workspaceName: string): string {

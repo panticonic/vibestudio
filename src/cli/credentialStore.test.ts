@@ -10,9 +10,10 @@ import {
 } from "./credentialStore.js";
 
 const CURRENT: CliCredentials = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   kind: "device",
   url: "webrtc://room-current/_workspace/dev",
+  workspaceId: "workspace-dev",
   workspaceName: "dev",
   serverId: `srv_${"s".repeat(24)}`,
   deviceId: `dev_${"d".repeat(24)}`,
@@ -61,6 +62,7 @@ describe("CLI persisted device credential", () => {
   });
 
   it("returns null for truncated, unreadable, old, ambiguous, or non-canonical records", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     const colonFingerprint = Array.from({ length: 32 }, () => "AA").join(":");
     for (const invalid of [
       "{truncated",
@@ -68,6 +70,8 @@ describe("CLI persisted device credential", () => {
       [],
       { ...CURRENT, schemaVersion: 1 },
       { ...CURRENT, unknown: true },
+      { ...CURRENT, workspaceId: "" },
+      { ...CURRENT, workspaceId: " workspace-dev " },
       { ...CURRENT, serverId: "srv_old" },
       { ...CURRENT, deviceId: "dev_old" },
       { ...CURRENT, refreshToken: "old-token" },
@@ -87,7 +91,7 @@ describe("CLI persisted device credential", () => {
         ...CURRENT,
         workspacePairing: { ...CURRENT.workspacePairing, sig: "wss://signal.example" },
       },
-      { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, srv: " server " } },
+      { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, srv: "server" } },
     ]) {
       write(invalid);
       expect(loadCliCredentials()).toBeNull();
@@ -96,6 +100,18 @@ describe("CLI persisted device credential", () => {
     fs.rmSync(credentialPath(), { force: true });
     fs.mkdirSync(credentialPath(), { recursive: true });
     expect(loadCliCredentials()).toBeNull();
+    expect(warning).toHaveBeenCalled();
+  });
+
+  it("diagnoses every non-canonical JSON shape generically", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    write({ deviceId: CURRENT.deviceId });
+
+    expect(loadCliCredentials()).toBeNull();
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringMatching(/not a canonical device credential.*pair again/su)
+    );
+    expect(warning).not.toHaveBeenCalledWith(expect.stringMatching(/schema|migrat/iu));
   });
 
   it("rejects invalid writes without replacing the valid credential", () => {

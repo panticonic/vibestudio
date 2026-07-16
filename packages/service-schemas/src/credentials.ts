@@ -877,6 +877,12 @@ const StoredCredentialSummarySchema = z
     bindings: z.array(CredentialBindingOutputSchema).optional(),
     owner: CredentialOwnerSchema.optional(),
     scopes: z.array(z.string()),
+    lifecycle: z
+      .object({
+        state: z.enum(["active", "expired", "revoked"]),
+        canRefresh: z.boolean(),
+      })
+      .strict(),
     expiresAt: z.number().optional(),
     revokedAt: z.number().optional(),
     metadata: z.record(z.string(), z.string()).optional(),

@@ -2,6 +2,27 @@ import type { CredentialInjection, UrlAudience } from "./urlAudience.js";
 
 export type { CredentialInjection, UrlAudience } from "./urlAudience.js";
 
+export type OAuthTokenAuthMethod =
+  | "none"
+  | "client_secret_post"
+  | "client_secret_basic"
+  | "private_key_jwt";
+
+/**
+ * Everything needed to redeem a persisted OAuth refresh token except secret
+ * client material. Public clients are self-contained. Confidential clients
+ * name the exact encrypted client-config version that owns their secret.
+ */
+export interface OAuthRefreshRecipe {
+  tokenUrl: string;
+  clientId: string;
+  tokenAuth: OAuthTokenAuthMethod;
+  clientConfig?: {
+    configId: string;
+    configVersion: string;
+  };
+}
+
 export interface Credential {
   id?: string;
   label?: string;
@@ -15,6 +36,7 @@ export interface Credential {
   accountIdentity: AccountIdentity;
   accessToken: string;
   refreshToken?: string;
+  oauthRefresh?: OAuthRefreshRecipe;
   oauth1ConsumerSecret?: string;
   oauth1TokenSecret?: string;
   awsSecretAccessKey?: string;
@@ -182,12 +204,6 @@ export interface OAuthStoredClientSpec {
   accountValidation?: OAuthAccountValidationSpec;
   revocationUrl?: string;
 }
-
-export type OAuthTokenAuthMethod =
-  | "none"
-  | "client_secret_post"
-  | "client_secret_basic"
-  | "private_key_jwt";
 
 export interface OAuth2AuthCodePkceFlowSpec {
   type: "oauth2-auth-code-pkce";
@@ -516,9 +532,20 @@ export interface StoredCredentialSummary {
   bindings?: CredentialBinding[];
   owner?: CredentialOwner;
   scopes: string[];
+  /**
+   * Current secret-free lifecycle facts, derived by the credential owner.
+   * Consumers must use this instead of treating storage presence as usability.
+   */
+  lifecycle: StoredCredentialLifecycle;
   expiresAt?: number;
   revokedAt?: number;
   metadata?: Record<string, string>;
+}
+
+export interface StoredCredentialLifecycle {
+  state: "active" | "expired" | "revoked";
+  /** Whether persisted secret material can renew an expired access token. */
+  canRefresh: boolean;
 }
 
 export interface ManagedCredentialSummary extends StoredCredentialSummary {

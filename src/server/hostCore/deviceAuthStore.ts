@@ -1,14 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
 import {
-  DEVICE_ID_PATTERN,
   DEVICE_REFRESH_TOKEN_PATTERN,
   SERVER_ID_PATTERN,
 } from "@vibestudio/shared/deviceCredentials";
 import type {
   AgentCredentialRow,
+  ControlRoomRow,
   DeviceRow,
   IdentityDb,
   PairingCodeIntent,
@@ -22,13 +22,7 @@ import { authError } from "./auth/errors.js";
  */
 export type DeviceRecord = DeviceRow;
 
-/**
- * An entity-scoped agent credential plus the spawning user (WP0 §3.3).
- * Authenticates as caller kind `agent`, principal `agent:<entityId>`. Only the
- * sha256 hash of the secret is persisted (mirrors device refresh tokens); the
- * clear token exists only at mint time. Lifecycle follows the entity —
- * `retireEntity` revokes every outstanding credential for it.
- */
+/** Authentication secret for one exact runtime entity. */
 export type AgentCredentialRecord = AgentCredentialRow;
 
 /** Exact agent credential grammar emitted by this pre-release server. */
@@ -36,15 +30,10 @@ export const AGENT_ID_PATTERN = /^agt_[A-Za-z0-9_-]{24}$/;
 export const AGENT_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 export const AGENT_TOKEN_PATTERN = /^agent:agt_[A-Za-z0-9_-]{24}:[A-Za-z0-9_-]{43}$/;
 
-/** The validated binding an agent credential authorizes (no secret material). */
-export interface AgentBinding {
+/** Identity authenticated by an agent credential. Semantic authority is resolved live. */
+export interface AuthenticatedAgentEntity {
   agentId: string;
   entityId: string;
-  contextId: string;
-  channelId: string;
-  scopes?: string[];
-  /** The user whose lineage spawned the agent (WP0 §3.3) — subject inheritance. */
-  userId: string;
 }
 
 export interface IssuedAgentCredential {
@@ -69,6 +58,20 @@ export interface IssuedDeviceCredential {
   userId: string;
   label: string;
   platform?: string;
+}
+
+/** A newly issued device and the stable hub control room promoted to it. */
+export interface PairedDeviceCredential extends IssuedDeviceCredential {
+  controlRoom: string;
+  /** Exact workspace suggested by the consumed invite. */
+  workspaceId: string;
+}
+
+/** Presentable pairing secret plus its durable hub-owned invite room. */
+export interface PairingInvite {
+  code: string;
+  room: string;
+  expiresAt: number;
 }
 
 export interface DeviceAuthStoreOptions {
@@ -96,43 +99,41 @@ export class DeviceAuthStore {
     this.db = options.db;
     this.now = options.now ?? (() => Date.now());
     this.serverId = this.loadServerId(options.serverIdPath);
-    if (!this.db.readOnly) this.db.deleteExpiredPairingReceipts(this.now());
+    if (!this.db.readOnly) {
+      this.db.deleteExpiredPairingInvites(this.now());
+      this.db.deleteRevokedDeviceControlRooms();
+    }
   }
 
   getServerId(): string {
     return this.serverId;
   }
 
-  createPairingCode(
+  createPairingInvite(
     ttlMs = DEFAULT_PAIRING_CODE_TTL_MS,
     opts: { workspaceId: string; userId?: string; intent?: PairingCodeIntent }
-  ): string {
+  ): PairingInvite {
     const code = randomBase64Url(24);
     const codeHash = hashSecret(code);
     const createdAt = this.now();
-    this.db.insertPairingCode({
+    const expiresAt = createdAt + ttlMs;
+    const room = randomUUID();
+    this.db.insertPairingInvite({
       code: codeHash,
+      room,
       workspaceId: opts.workspaceId,
       intent: opts?.intent ?? "pair-device",
       createdAt,
-      expiresAt: createdAt + ttlMs,
+      expiresAt,
       ...(opts?.userId ? { userId: opts.userId } : {}),
     });
-    return code;
+    return { code, room, expiresAt };
   }
 
-  pairingCodeExpiresAt(code: string): number {
-    const row = this.db.getPairingCode(hashSecret(code));
-    if (!row || row.expiresAt <= this.now()) {
-      throw authError("PAIRING_CODE_INVALID_OR_EXPIRED", "Pairing code is invalid or expired", 401);
-    }
-    return row.expiresAt;
-  }
-
-  /** Cancel a code that was never returned because reach setup failed. */
-  cancelPairingCode(code: string): boolean {
+  /** Cancel an invite that was never returned, including its hub control room. */
+  cancelPairingInvite(code: string): Extract<ControlRoomRow, { kind: "invite" }> | null {
     const codeHash = hashSecret(code);
-    return this.db.deletePairingCode(codeHash);
+    return this.db.deletePairingInvite(codeHash);
   }
 
   completePairing(input: {
@@ -141,33 +142,27 @@ export class DeviceAuthStore {
     createRootUser?: () => string;
     label?: string;
     platform?: string;
-    expectedWorkspaceId?: string;
-    proposedCredential?: { deviceId: string; refreshToken: string };
-  }): IssuedDeviceCredential {
-    if (
-      input.proposedCredential &&
-      (!DEVICE_ID_PATTERN.test(input.proposedCredential.deviceId) ||
-        !DEVICE_REFRESH_TOKEN_PATTERN.test(input.proposedCredential.refreshToken))
-    ) {
-      throw authError("PAIRING_CREDENTIAL_INVALID", "Proposed device credential is invalid", 400);
-    }
+  }): PairedDeviceCredential {
     const codeHash = hashSecret(input.code);
-    const deviceId = input.proposedCredential?.deviceId ?? `dev_${randomBase64Url(18)}`;
-    const refreshToken = input.proposedCredential?.refreshToken ?? randomBase64Url(32);
     let completed: ReturnType<IdentityDb["completePairing"]>;
     try {
       completed = this.db.completePairing({
         code: codeHash,
-        expectedWorkspaceId: input.expectedWorkspaceId,
         createRootUser: input.createRootUser,
-        createDevice: (userId) => ({
-          deviceId,
-          refreshTokenHash: hashSecret(refreshToken),
-          userId,
-          label: input.label ?? "Vibestudio client",
-          createdAt: this.now(),
-          ...(input.platform ? { platform: input.platform } : {}),
-        }),
+        createDevice: (userId) => {
+          const refreshToken = randomBase64Url(32);
+          return {
+            refreshToken,
+            device: {
+              deviceId: `dev_${randomBase64Url(18)}`,
+              refreshTokenHash: hashSecret(refreshToken),
+              userId,
+              label: input.label ?? "Vibestudio client",
+              createdAt: this.now(),
+              ...(input.platform ? { platform: input.platform } : {}),
+            },
+          };
+        },
       });
     } catch (error) {
       if (error instanceof Error && error.message === "Pairing code is not bound to a user") {
@@ -178,9 +173,20 @@ export class DeviceAuthStore {
     if (!completed) {
       throw authError("PAIRING_CODE_INVALID_OR_EXPIRED", "Pairing code is invalid or expired", 401);
     }
+    if (
+      !DEVICE_REFRESH_TOKEN_PATTERN.test(completed.refreshToken) ||
+      !constantTimeStringEqual(
+        hashSecret(completed.refreshToken),
+        completed.device.refreshTokenHash
+      )
+    ) {
+      throw new Error("Pairing issuance does not match its device refresh credential");
+    }
     return {
       deviceId: completed.device.deviceId,
-      refreshToken,
+      refreshToken: completed.refreshToken,
+      controlRoom: completed.controlRoom,
+      workspaceId: completed.workspaceId,
       userId: completed.device.userId,
       label: completed.device.label,
       ...(completed.device.platform ? { platform: completed.device.platform } : {}),
@@ -243,6 +249,22 @@ export class DeviceAuthStore {
     return this.db.listDevices();
   }
 
+  listControlRooms(): ControlRoomRow[] {
+    return this.db.listControlRooms();
+  }
+
+  getDeviceControlRoom(deviceId: string): string | null {
+    return this.db.getDeviceControlRoom(deviceId)?.room ?? null;
+  }
+
+  /** Reconcile startup/expiry state and return rooms the live ingress should disarm. */
+  cleanupControlRooms(now = this.now()): ControlRoomRow[] {
+    return [
+      ...this.db.deleteExpiredPairingInvites(now),
+      ...this.db.deleteRevokedDeviceControlRooms(),
+    ];
+  }
+
   /** Whether durable pairing state has ever been created for this workspace hub. */
   hasEverPaired(): boolean {
     return this.db.listDevices().length > 0;
@@ -253,32 +275,19 @@ export class DeviceAuthStore {
   // ===========================================================================
 
   /**
-   * Mint an entity-scoped agent credential. `agentId` is `agt_<rand>`; the
-   * secret is a fresh 32-byte base64url token stored only as a sha256 hash
-   * (mirrors `issueDevice`). `userId` is the spawner's — resolved from the
-   * caller that requested the spawn (WP0 §3.3) — so the agent inherits its
-   * human's subject. Returns the full presentable token `agent:<agentId>:<secret>`.
+   * Rotate the authentication secret for one exact runtime entity. Context,
+   * channel, owner, and authorization never enter this credential; callers
+   * resolve those facts from the live entity graph after authentication.
    */
-  mintAgentCredential(input: {
-    entityId: string;
-    contextId: string;
-    channelId: string;
-    userId: string;
-    ttlMs?: number;
-    scopes?: string[];
-  }): IssuedAgentCredential {
+  mintAgentCredential(input: { entityId: string; ttlMs?: number }): IssuedAgentCredential {
     const agentId = `agt_${randomBase64Url(18)}`;
     const secret = randomBase64Url(32);
     const record: AgentCredentialRecord = {
       agentId,
       tokenHash: hashSecret(secret),
       entityId: input.entityId,
-      contextId: input.contextId,
-      channelId: input.channelId,
-      userId: input.userId,
       createdAt: this.now(),
       ...(input.ttlMs ? { expiresAt: this.now() + input.ttlMs } : {}),
-      ...(input.scopes ? { scopes: input.scopes } : {}),
     };
     this.db.insertAgentCredential(record);
     return { agentId, agentToken: `agent:${agentId}:${secret}` };
@@ -286,10 +295,10 @@ export class DeviceAuthStore {
 
   /**
    * Validate a presented agent secret against a stored credential. Returns the
-   * authorized binding (no secret material) or null when unknown, revoked,
+   * authenticated entity identity (no semantic binding) or null when unknown, revoked,
    * expired, or the secret mismatches (constant-time compare).
    */
-  validateAgentToken(agentId: string, token: string): AgentBinding | null {
+  validateAgentToken(agentId: string, token: string): AuthenticatedAgentEntity | null {
     const record = this.db.getAgentCredential(agentId);
     if (!record || record.revokedAt) return null;
     if (record.expiresAt !== undefined && record.expiresAt < this.now()) return null;
@@ -298,10 +307,6 @@ export class DeviceAuthStore {
     return {
       agentId: record.agentId,
       entityId: record.entityId,
-      contextId: record.contextId,
-      channelId: record.channelId,
-      userId: record.userId,
-      ...(record.scopes ? { scopes: record.scopes } : {}),
     };
   }
 
@@ -315,8 +320,8 @@ export class DeviceAuthStore {
   }
 
   /**
-   * Revoke every outstanding agent credential bound to an entity. Called by
-   * `retireEntity` so credentials never outlive their entity. Returns the ids
+   * Revoke the current agent credential bound to an entity. Called by
+   * `retireEntity` so the credential never outlives its entity. Returns the ids
    * revoked so the caller can also drop live TokenManager tokens.
    */
   revokeAgentCredentialsForEntity(entityId: string): string[] {

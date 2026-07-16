@@ -11,7 +11,11 @@ import {
 } from "../services/mobileCredentials";
 import type { RootStackParamList } from "../navigation/RootNavigator";
 import { resetToNativeBootstrap } from "../services/auth";
-import { listMobileWorkspaces, selectMobileWorkspace } from "../services/workspaceSelection";
+import {
+  listMobileWorkspaces,
+  mobileWorkspaceSelectionDependencies,
+  selectMobileWorkspace,
+} from "../services/workspaceSelection";
 import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
 import { isAuthenticatedAtom } from "../state/authAtoms";
 import { activePanelIdAtom } from "../state/navigationAtoms";
@@ -53,6 +57,10 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
   const [workspaceError, setWorkspaceError] = React.useState<string | null>(null);
   const [switchingWorkspace, setSwitchingWorkspace] = React.useState<string | null>(null);
   const mountedRef = React.useRef(true);
+  const workspaceSelection = React.useMemo(
+    () => (shellClient ? mobileWorkspaceSelectionDependencies(shellClient.hubControl) : null),
+    [shellClient]
+  );
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -65,7 +73,8 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
     setWorkspacesLoading(true);
     setWorkspaceError(null);
     try {
-      const next = await listMobileWorkspaces();
+      if (!workspaceSelection) throw new Error("The mobile session is not connected.");
+      const next = await listMobileWorkspaces(workspaceSelection);
       if (mountedRef.current) setWorkspaces(next);
     } catch (error) {
       if (mountedRef.current) {
@@ -76,7 +85,7 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
     } finally {
       if (mountedRef.current) setWorkspacesLoading(false);
     }
-  }, []);
+  }, [workspaceSelection]);
 
   React.useEffect(() => {
     void loadWorkspaces();
@@ -88,7 +97,8 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
       setSwitchingWorkspace(workspace.name);
       setWorkspaceError(null);
       try {
-        await selectMobileWorkspace(workspace.name);
+        if (!workspaceSelection) throw new Error("The mobile session is not connected.");
+        await selectMobileWorkspace(workspace.workspaceId, workspaceSelection);
         // Success schedules a native reload. Keep the pending state visible until
         // React Native tears this workspace tree down.
       } catch (error) {
@@ -100,7 +110,7 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
         }
       }
     },
-    [shellClient?.workspaceId, switchingWorkspace]
+    [shellClient?.workspaceId, switchingWorkspace, workspaceSelection]
   );
 
   const performDisconnect = async () => {

@@ -4,12 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   createDeviceCredentialStore,
-  mergeDeviceCredentialEntries,
   parseDeviceCredentialDocument,
   selectCurrentRemote,
   type DeviceCredentialDocument,
   type DeviceCredentialEntry,
-  type PendingLoopbackPairing,
   type StoreCipher,
 } from "./deviceCredentialStore.js";
 
@@ -42,17 +40,6 @@ const LOCAL_DEVICE_ID = `dev_${"l".repeat(24)}`;
 const REMOTE_DEVICE_ID = `dev_${"r".repeat(24)}`;
 const LOCAL_REFRESH_TOKEN = "a".repeat(43);
 const REMOTE_REFRESH_TOKEN = "b".repeat(43);
-const pending: PendingLoopbackPairing = {
-  serverId: LOCAL_SERVER_ID,
-  transport: "pending-loopback",
-  deviceId: LOCAL_DEVICE_ID,
-  refreshToken: LOCAL_REFRESH_TOKEN,
-  inviteCode: "P".repeat(32),
-  preparedAt: 1_000,
-  expiresAt: 61_000,
-  label: "Local desktop",
-};
-
 const loopback: DeviceCredentialEntry = {
   serverId: LOCAL_SERVER_ID,
   transport: "loopback",
@@ -126,42 +113,6 @@ describe("deviceCredentialStore", () => {
     expect(store.load()).toEqual(document);
   });
 
-  it("round-trips the encrypted prepare-before-consume local pairing state", () => {
-    const { store } = makeStore(xorCipher);
-    store.save({ entries: { [pending.serverId]: pending } });
-    expect(store.load()).toEqual({ entries: { [pending.serverId]: pending } });
-  });
-
-  it("merges workspace-local legacy snapshots by freshness", () => {
-    const newerLoopback = { ...loopback, pairedAt: loopback.pairedAt + 10 };
-    expect(
-      mergeDeviceCredentialEntries([
-        { [loopback.serverId]: loopback },
-        { [newerLoopback.serverId]: newerLoopback },
-      ])
-    ).toEqual({ [newerLoopback.serverId]: newerLoopback });
-  });
-
-  it("keeps only the newest remote while preserving non-remote fallbacks", () => {
-    const otherLoopback = { ...loopback, serverId: OTHER_SERVER_ID };
-    const olderRemote = {
-      ...webrtc,
-      serverId: OTHER_SERVER_ID,
-      pairedAt: webrtc.pairedAt - 1,
-    };
-
-    expect(
-      mergeDeviceCredentialEntries([
-        { [otherLoopback.serverId]: otherLoopback },
-        { [olderRemote.serverId]: olderRemote },
-        { [webrtc.serverId]: webrtc },
-      ])
-    ).toEqual({
-      [otherLoopback.serverId]: otherLoopback,
-      [webrtc.serverId]: webrtc,
-    });
-  });
-
   it("encrypts at rest", () => {
     const { store, filePath } = makeStore(xorCipher);
     store.save(doc([loopback, webrtc]));
@@ -188,33 +139,32 @@ describe("deviceCredentialStore", () => {
     expect(store.load()).toBeNull();
   });
 
-  it("treats a corrupt (undecryptable) file as absent", () => {
+  it("fails loud when the credential file is corrupt or undecryptable", () => {
     const { store, filePath } = makeStore(xorCipher);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, "not-json{{{");
-    expect(store.load()).toBeNull();
-    // …but the file IS present — a mutator must NOT reseed from empty over it.
+    expect(() => store.load()).toThrow(/unreadable|canonical schema/u);
     expect(store.exists()).toBe(true);
   });
 
-  it("treats structurally invalid records as absent", () => {
+  it("fails loud for stale document shapes and structurally invalid records", () => {
     const { store, filePath } = makeStore(xorCipher);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(
       filePath,
       xorCipher.encrypt(JSON.stringify({ [webrtc.serverId]: { ...webrtc, pairedAt: 1.5 } }))
     );
-    expect(store.load()).toBeNull();
+    expect(() => store.load()).toThrow(/unreadable|canonical schema/u);
 
     expect(() =>
       store.save({
         entries: { [webrtc.serverId]: { ...webrtc, refreshToken: "" } },
       })
     ).toThrow(/non-canonical device credential/u);
-    expect(store.load()).toBeNull();
+    expect(() => store.load()).toThrow(/unreadable|canonical schema/u);
   });
 
-  it("rejects non-issuer credentials, missing pairing fields, retired fields, and ambiguity", () => {
+  it("rejects non-issuer credentials, missing pairing fields, and retired fields", () => {
     const { store } = makeStore(xorCipher);
     const colonFingerprint = Array.from({ length: 32 }, () => "AA").join(":");
     const invalidEntries = [
@@ -269,20 +219,12 @@ describe("deviceCredentialStore", () => {
       {
         [webrtc.serverId]: {
           ...webrtc,
-          workspacePairing: { ...webrtc.workspacePairing, srv: " remote " },
-        },
-      },
-      {
-        [webrtc.serverId]: webrtc,
-        [OTHER_SERVER_ID]: {
-          ...webrtc,
-          serverId: OTHER_SERVER_ID,
-          workspacePairing: { ...webrtc.workspacePairing, room: "other-room" },
+          workspacePairing: { ...webrtc.workspacePairing, srv: "remote" },
         },
       },
     ];
     for (const entries of invalidEntries) {
-      expect(() => store.save(entries as never)).toThrow(/non-canonical device credential/u);
+      expect(() => store.save({ entries } as never)).toThrow(/non-canonical device credential/u);
     }
     expect(store.load()).toBeNull();
   });
@@ -311,11 +253,6 @@ describe("selectCurrentRemote", () => {
     // webrtc2 pairedAt (9999) > webrtc pairedAt (5678).
     expect(selectCurrentRemote(doc([webrtc, webrtc2]))?.serverId).toBe(webrtc2.serverId);
   });
-
-  it("falls back off a stale current pointer to a valid remote", () => {
-    const document = doc([webrtc], "srv_does_not_exist");
-    expect(selectCurrentRemote(document)?.serverId).toBe(webrtc.serverId);
-  });
 });
 
 describe("parseDeviceCredentialDocument", () => {
@@ -323,14 +260,32 @@ describe("parseDeviceCredentialDocument", () => {
     expect(parseDeviceCredentialDocument(null)).toBeNull();
     expect(parseDeviceCredentialDocument([webrtc])).toBeNull();
     expect(parseDeviceCredentialDocument({ notEntries: {} })).toBeNull();
+    expect(parseDeviceCredentialDocument({ [webrtc.serverId]: webrtc })).toBeNull();
   });
 
-  it("drops a current pointer that no longer resolves to a valid remote", () => {
-    const parsed = parseDeviceCredentialDocument({
+  it("rejects stale pointers and the entire document when any entry is invalid", () => {
+    expect(
+      parseDeviceCredentialDocument({
+        currentRemoteServerId: "gone",
+        entries: { [webrtc.serverId]: webrtc },
+      })
+    ).toBeNull();
+    expect(
+      parseDeviceCredentialDocument({
+        entries: {
+          [webrtc.serverId]: webrtc,
+          [LOCAL_SERVER_ID]: { ...loopback, refreshToken: "retired-secret-shape" },
+        },
+      })
+    ).toBeNull();
+  });
+
+  it("accepts only the current canonical document", () => {
+    const canonical = {
       currentRemoteServerId: "gone",
       entries: { [webrtc.serverId]: webrtc },
-    });
-    expect(parsed?.currentRemoteServerId).toBeUndefined();
-    expect(parsed?.entries[webrtc.serverId]).toEqual(webrtc);
+    };
+    canonical.currentRemoteServerId = webrtc.serverId;
+    expect(parseDeviceCredentialDocument(canonical)).toEqual(canonical);
   });
 });

@@ -21,6 +21,7 @@ export type {
 export { createReactNativeWebRtcProvider } from "./reactNativeWebRtcPeer.js";
 export { completeFreshMobilePairing } from "./freshPairing.js";
 export type { CompleteFreshMobilePairingOptions } from "./freshPairing.js";
+export { MobileConnectionAggregateError } from "./connectionPair.js";
 export { createStoredShellCredential, parseStoredShellCredential } from "./storedCredential.js";
 export {
   randomRequestId,
@@ -31,10 +32,9 @@ export {
   clearShellCredential,
   establishWebRtcConnection,
   reconnectViaWebRtc,
+  reconnectMobileSession,
 } from "./connect.js";
-export { connectMobileHubControl } from "./hubControl.js";
 export { createMobileHubControlClient } from "./hubControlClient.js";
-export type { MobileHubControlConnection } from "./hubControl.js";
 export type {
   MobileHubControlClient,
   MobileHubWorkspace,

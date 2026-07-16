@@ -43,6 +43,7 @@
  */
 
 import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
+import type { DeviceCredential, PairingContext } from "../protocol/wsProtocol.js";
 import { createSignalingClient } from "./webrtcSignalingClient.js";
 import type {
   PeerConnectionProvider,
@@ -58,11 +59,7 @@ import {
   type WebRtcTransport,
 } from "./webrtcClient.js";
 
-/** Durable device credential handed back on the pairing open-result. */
-export interface DeviceCredential {
-  deviceId: string;
-  refreshToken: string;
-}
+export type { DeviceCredential, PairingContext } from "../protocol/wsProtocol.js";
 
 export interface CreatePairedConnectionOptions {
   /** Transport-level pairing: pinned server DTLS fingerprint + room + ICE policy. */
@@ -91,7 +88,7 @@ export interface CreatePairedConnectionOptions {
    * code): AWAITED with retry (3 attempts + backoff); a persistent failure is
    * surfaced via {@link onPersistError}, never a void'd rejection.
    */
-  onPaired?(credential: DeviceCredential): Promise<void> | void;
+  onPaired?(credential: DeviceCredential, context?: PairingContext): Promise<void> | void;
   /** Main logical session was rejected or terminally closed while the pipe may remain up. */
   onTerminalClose?(error: Error): void;
   /** Persistence hook failed after all `onPaired` retries. */
@@ -215,10 +212,10 @@ export async function createPairedConnection(
   // onPaired: awaited by the session before ready() resolves. A persistent
   // failure is surfaced via onPersistError, not as a void'd rejection.
   const runOnPaired = options.onPaired
-    ? async (credential: DeviceCredential): Promise<void> => {
+    ? async (credential: DeviceCredential, context?: PairingContext): Promise<void> => {
         for (let attempt = 1; attempt <= ON_PAIRED_MAX_ATTEMPTS; attempt++) {
           try {
-            await options.onPaired!(credential);
+            await options.onPaired!(credential, context);
             return;
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));

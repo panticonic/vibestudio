@@ -21,6 +21,8 @@ import type {
   OAuthAccountValidationSpec,
   OAuthConnectionErrorCode,
   OAuthConnectionTransactionState,
+  OAuthRefreshRecipe,
+  OAuthTokenAuthMethod,
   StoredCredentialSummary,
   UrlAudience,
 } from "@vibestudio/credential-client/types";
@@ -110,8 +112,7 @@ interface BrowserHandoffResolution {
 type BrowserHandoffDeliveryAttempt =
   | "event-service-missing"
   | "emit-to-caller"
-  | "emit-to-connection"
-  | "emit-to-connection-fallback";
+  | "emit-to-connection";
 
 interface BrowserHandoffDeliveryResult {
   delivered: boolean;
@@ -197,7 +198,13 @@ type InternalOAuthConnectionRequest = {
   };
   credential: ConnectCredentialRequest["credential"];
   redirectUri: string;
-  tokenAuth: "none" | "client_secret_post" | "client_secret_basic" | "private_key_jwt";
+  tokenAuth: OAuthTokenAuthMethod;
+  clientConfig?: OAuthRefreshRecipe["clientConfig"];
+};
+
+type StoredOAuthCredentialParams = StoreUrlBoundCredentialParams & {
+  refreshToken?: string;
+  oauthRefresh?: OAuthRefreshRecipe;
 };
 
 export interface SessionCredentialCapture {
@@ -279,7 +286,7 @@ export interface CredentialConnectionCoordinatorDeps {
   };
   storeCredential(
     ctx: ServiceContext,
-    params: StoreUrlBoundCredentialParams,
+    params: StoredOAuthCredentialParams,
     options?: {
       approvalDecision?: Exclude<GrantedDecision, "deny">;
       preapprovedUseDecision?: Exclude<GrantedDecision, "deny">;
@@ -363,6 +370,41 @@ export function createCredentialConnectionCoordinator(
     appendAudit,
   } = deps;
   const oauthTransactions = new Map<string, OAuthConnectionTransaction>();
+
+  function oauthRefreshMaterial(params: {
+    refreshToken: string | undefined;
+    tokenUrl: string;
+    clientId: string;
+    tokenAuth: OAuthTokenAuthMethod;
+    clientConfig?: OAuthRefreshRecipe["clientConfig"];
+  }): Pick<Credential, "oauthRefresh" | "refreshToken"> {
+    if (!params.refreshToken) return {};
+    if (params.tokenAuth !== "none" && !params.clientConfig) {
+      throw new OAuthConnectionError(
+        "client_config_unavailable",
+        "OAuth refresh with client authentication requires an exact client config version"
+      );
+    }
+    return {
+      refreshToken: params.refreshToken,
+      oauthRefresh: {
+        tokenUrl: canonicalUrl(params.tokenUrl),
+        clientId: params.clientId,
+        tokenAuth: params.tokenAuth,
+        ...(params.clientConfig ? { clientConfig: params.clientConfig } : {}),
+      },
+    };
+  }
+
+  function grantedOAuthScopes(params: {
+    tokenScopes: string[] | undefined;
+    requestedScopes: string[] | undefined;
+    declaredScopes: string[] | undefined;
+  }): string[] {
+    // RFC 6749: when the token response omits `scope`, it is identical to the
+    // requested scope. A returned scope is the provider's authoritative grant.
+    return params.tokenScopes ?? params.requestedScopes ?? params.declaredScopes ?? [];
+  }
 
   function validateOAuthCredentialRequest(
     request: InternalOAuthConnectionRequest,
@@ -739,27 +781,16 @@ export function createCredentialConnectionCoordinator(
       const delivered = eventService.emitToCaller(target.deliveryCallerId, event, payload);
       return { delivered, attempt: "emit-to-caller", callerDelivered: delivered };
     }
-    if (
-      eventService.emitToConnection(
-        target.deliveryCallerId,
-        target.deliveryConnectionId,
-        event,
-        payload
-      )
-    ) {
-      return { delivered: true, attempt: "emit-to-connection", connectionDelivered: true };
-    }
-    log.warn("Browser handoff owner connection missing; falling back to caller-wide delivery", {
-      callerId: target.deliveryCallerId,
-      connectionId: target.deliveryConnectionId,
+    const delivered = eventService.emitToConnection(
+      target.deliveryCallerId,
+      target.deliveryConnectionId,
       event,
-    });
-    const delivered = eventService.emitToCaller(target.deliveryCallerId, event, payload);
+      payload
+    );
     return {
       delivered,
-      attempt: "emit-to-connection-fallback",
-      connectionDelivered: false,
-      callerDelivered: delivered,
+      attempt: "emit-to-connection",
+      connectionDelivered: delivered,
     };
   }
 
@@ -1375,7 +1406,11 @@ export function createCredentialConnectionCoordinator(
         accountIdentity: request.credential.accountIdentity ?? {
           providerUserId: `service:${request.flow.clientConfigId}`,
         },
-        scopes: request.credential.scopes ?? request.flow.scopes ?? token.scopes ?? [],
+        scopes: grantedOAuthScopes({
+          tokenScopes: token.scopes,
+          requestedScopes: request.flow.scopes,
+          declaredScopes: request.credential.scopes,
+        }),
         expiresAt: token.expiresAt,
         metadata: {
           ...(request.credential.metadata ?? {}),
@@ -1439,7 +1474,8 @@ export function createCredentialConnectionCoordinator(
       scopes: request.flow.scopes,
       persistRefreshToken: request.flow.persistRefreshToken,
     });
-    const stored = await storeCredential(
+    const configVersion = config.currentVersion ?? String(config.updatedAt);
+    return storeCredential(
       ctx,
       {
         label: request.credential.label,
@@ -1447,33 +1483,31 @@ export function createCredentialConnectionCoordinator(
         injection,
         bindings: request.credential.bindings,
         material: { type: "bearer-token", token: token.accessToken },
+        ...oauthRefreshMaterial({
+          refreshToken: token.refreshToken,
+          tokenUrl: request.flow.tokenUrl,
+          clientId,
+          tokenAuth: "private_key_jwt",
+          clientConfig: { configId: request.flow.clientConfigId, configVersion },
+        }),
         accountIdentity: request.credential.accountIdentity ?? {
           providerUserId: request.flow.subject ?? clientId,
         },
-        scopes: request.credential.scopes ?? request.flow.scopes ?? token.scopes ?? [],
+        scopes: grantedOAuthScopes({
+          tokenScopes: token.scopes,
+          requestedScopes: request.flow.scopes,
+          declaredScopes: request.credential.scopes,
+        }),
         expiresAt: token.expiresAt,
         metadata: {
           ...(request.credential.metadata ?? {}),
           flowType: request.flow.type,
-          clientConfigId: request.flow.clientConfigId,
-          clientConfigVersion: config.currentVersion ?? String(config.updatedAt),
-          oauthTokenAuth: "private_key_jwt",
           oauthTokenOrigin: new URL(request.flow.tokenUrl).origin,
           ...(request.flow.revocationUrl ? { oauthRevocationUrl: request.flow.revocationUrl } : {}),
         },
       },
       { approvalDecision, preapprovedUseDecision: approvalDecision }
     );
-    if (token.refreshToken) {
-      const persisted = await credentialStore.loadUrlBound(stored.id);
-      if (persisted?.id) {
-        await credentialStore.saveUrlBound({
-          ...persisted,
-          refreshToken: token.refreshToken,
-        } as Credential & { id: string });
-      }
-    }
-    return stored;
   }
 
   async function connectOAuthTokenExchange(
@@ -1536,7 +1570,8 @@ export function createCredentialConnectionCoordinator(
       resource: request.flow.resource,
       persistRefreshToken: request.flow.persistRefreshToken,
     });
-    const stored = await storeCredential(
+    const configVersion = config.currentVersion ?? String(config.updatedAt);
+    return storeCredential(
       ctx,
       {
         label: request.credential.label,
@@ -1544,32 +1579,30 @@ export function createCredentialConnectionCoordinator(
         injection,
         bindings: request.credential.bindings,
         material: { type: "bearer-token", token: token.accessToken },
+        ...oauthRefreshMaterial({
+          refreshToken: token.refreshToken,
+          tokenUrl: request.flow.tokenUrl,
+          clientId,
+          tokenAuth,
+          clientConfig: { configId: request.flow.clientConfigId, configVersion },
+        }),
         accountIdentity: request.credential.accountIdentity ?? subject.accountIdentity,
-        scopes: request.credential.scopes ?? request.flow.scopes ?? token.scopes ?? [],
+        scopes: grantedOAuthScopes({
+          tokenScopes: token.scopes,
+          requestedScopes: request.flow.scopes,
+          declaredScopes: request.credential.scopes,
+        }),
         expiresAt: token.expiresAt,
         metadata: {
           ...(request.credential.metadata ?? {}),
           flowType: request.flow.type,
-          clientConfigId: request.flow.clientConfigId,
-          clientConfigVersion: config.currentVersion ?? String(config.updatedAt),
           subjectCredentialId: request.flow.subjectCredentialId,
-          oauthTokenAuth: tokenAuth,
           oauthTokenOrigin: new URL(request.flow.tokenUrl).origin,
           ...(request.flow.revocationUrl ? { oauthRevocationUrl: request.flow.revocationUrl } : {}),
         },
       },
       { approvalDecision, preapprovedUseDecision: approvalDecision }
     );
-    if (token.refreshToken) {
-      const persisted = await credentialStore.loadUrlBound(stored.id);
-      if (persisted?.id) {
-        await credentialStore.saveUrlBound({
-          ...persisted,
-          refreshToken: token.refreshToken,
-        } as Credential & { id: string });
-      }
-    }
-    return stored;
   }
 
   async function connectBrowserCookieSession(
@@ -1878,7 +1911,14 @@ export function createCredentialConnectionCoordinator(
     } finally {
       presentation?.dispose();
     }
-    const stored = await storeCredential(
+    const clientConfig =
+      config && request.flow.clientConfigId
+        ? {
+            configId: request.flow.clientConfigId,
+            configVersion: config.currentVersion ?? String(config.updatedAt),
+          }
+        : undefined;
+    return storeCredential(
       ctx,
       {
         label: request.credential.label,
@@ -1886,15 +1926,23 @@ export function createCredentialConnectionCoordinator(
         injection,
         bindings: request.credential.bindings,
         material: { type: "bearer-token", token: token.accessToken },
+        ...oauthRefreshMaterial({
+          refreshToken: token.refreshToken,
+          tokenUrl: request.flow.tokenUrl,
+          clientId,
+          tokenAuth,
+          clientConfig,
+        }),
         accountIdentity: request.credential.accountIdentity,
-        scopes: request.credential.scopes ?? request.flow.scopes ?? token.scopes ?? [],
+        scopes: grantedOAuthScopes({
+          tokenScopes: token.scopes,
+          requestedScopes: request.flow.scopes,
+          declaredScopes: request.credential.scopes,
+        }),
         expiresAt: token.expiresAt,
         metadata: {
           ...(request.credential.metadata ?? {}),
           flowType: request.flow.type,
-          ...(request.flow.clientConfigId ? { clientConfigId: request.flow.clientConfigId } : {}),
-          ...(config?.currentVersion ? { clientConfigVersion: config.currentVersion } : {}),
-          oauthTokenAuth: tokenAuth,
           oauthDeviceVerificationOrigin: new URL(verificationUrl).origin,
           oauthTokenOrigin: new URL(request.flow.tokenUrl).origin,
           ...(request.flow.revocationUrl ? { oauthRevocationUrl: request.flow.revocationUrl } : {}),
@@ -1905,16 +1953,6 @@ export function createCredentialConnectionCoordinator(
         preapprovedUseDecision: approvalDecision,
       }
     );
-    if (token.refreshToken) {
-      const persisted = await credentialStore.loadUrlBound(stored.id);
-      if (persisted?.id) {
-        await credentialStore.saveUrlBound({
-          ...persisted,
-          refreshToken: token.refreshToken,
-        } as Credential & { id: string });
-      }
-    }
-    return stored;
   }
 
   async function connectOAuth1a(
@@ -2252,13 +2290,22 @@ export function createCredentialConnectionCoordinator(
           injection: oauthRequest.credential.injection,
           bindings: oauthRequest.credential.bindings,
           material: { type: "bearer-token", token: token.accessToken },
+          ...oauthRefreshMaterial({
+            refreshToken: token.refreshToken,
+            tokenUrl: oauthRequest.flow.tokenUrl,
+            clientId: oauthRequest.flow.clientId,
+            tokenAuth: oauthRequest.tokenAuth,
+            clientConfig: oauthRequest.clientConfig,
+          }),
           accountIdentity,
-          scopes: oauthRequest.credential.scopes ?? oauthRequest.flow.scopes ?? token.scopes ?? [],
+          scopes: grantedOAuthScopes({
+            tokenScopes: token.scopes,
+            requestedScopes: oauthRequest.flow.scopes,
+            declaredScopes: oauthRequest.credential.scopes,
+          }),
           expiresAt: token.expiresAt,
           metadata: {
             ...(oauthRequest.credential.metadata ?? {}),
-            ...(token.refreshToken ? { oauthRefreshTokenStored: "true" } : {}),
-            oauthTokenAuth: oauthRequest.tokenAuth,
             oauthAuthorizeOrigin: new URL(oauthRequest.flow.authorizeUrl).origin,
             oauthTokenOrigin: new URL(oauthRequest.flow.tokenUrl).origin,
             ...(oauthRequest.flow.revocationUrl
@@ -2270,7 +2317,6 @@ export function createCredentialConnectionCoordinator(
                     .origin,
                 }
               : {}),
-            oauthScopes: (oauthRequest.flow.scopes ?? []).join(" "),
           },
         },
         {
@@ -2280,15 +2326,6 @@ export function createCredentialConnectionCoordinator(
           replacementCredentialLabel: duplicate?.label ?? duplicate?.connectionLabel,
         }
       );
-      if (token.refreshToken) {
-        const persisted = await credentialStore.loadUrlBound(stored.id);
-        if (persisted?.id) {
-          await credentialStore.saveUrlBound({
-            ...persisted,
-            refreshToken: token.refreshToken,
-          } as Credential & { id: string });
-        }
-      }
       await transitionOAuthTransaction(tx, "stored");
       await transitionOAuthTransaction(tx, "completed");
       oauthTransactions.delete(tx.id);
@@ -2317,6 +2354,10 @@ export function createCredentialConnectionCoordinator(
       const privateKeyPem = config.fields["privateKeyPem"]?.value;
       const keyId = config.fields["keyId"]?.value;
       const keyAlgorithm = config.fields["algorithm"]?.value;
+      const clientConfig = {
+        configId: request.flow.clientConfigId,
+        configVersion: config.currentVersion ?? String(config.updatedAt),
+      };
       const tokenAuth = request.tokenAuth ?? (clientSecret ? "client_secret_post" : "none");
       if (!clientId) {
         throw new OAuthConnectionError("client_config_unavailable");
@@ -2338,16 +2379,10 @@ export function createCredentialConnectionCoordinator(
               accountValidation: request.flow.accountValidation,
               revocationUrl: request.flow.revocationUrl,
             },
-            credential: {
-              ...request.credential,
-              metadata: {
-                ...(request.credential.metadata ?? {}),
-                clientConfigId: request.flow.clientConfigId,
-                clientConfigVersion: config.currentVersion ?? String(config.updatedAt),
-              },
-            },
+            credential: request.credential,
             redirectUri,
             tokenAuth,
+            clientConfig,
           };
         }
         throw new OAuthConnectionError("client_config_unavailable");
@@ -2365,16 +2400,10 @@ export function createCredentialConnectionCoordinator(
           accountValidation: request.flow.accountValidation,
           revocationUrl: request.flow.revocationUrl,
         },
-        credential: {
-          ...request.credential,
-          metadata: {
-            ...(request.credential.metadata ?? {}),
-            clientConfigId: request.flow.clientConfigId,
-            clientConfigVersion: config.currentVersion ?? String(config.updatedAt),
-          },
-        },
+        credential: request.credential,
         redirectUri,
         tokenAuth,
+        clientConfig,
       };
     }
     if (request.tokenAuth !== "none") {

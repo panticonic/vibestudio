@@ -1,57 +1,73 @@
-import { ConnectionInfoResponseSchema } from "@vibestudio/service-schemas/auth";
 import { HubWorkspaceRouteSchema } from "@vibestudio/service-schemas/hubControl";
+import type { PairingContext } from "@vibestudio/rpc/transports/pairedConnection";
 import type { WebRtcConnection } from "./connect.js";
+import { composeMobileSession } from "./connectionPair.js";
 import type { ShellCredential, ShellPairing } from "./storedCredential.js";
 
 export interface CompleteFreshMobilePairingOptions {
-  connection: WebRtcConnection;
+  /** Stable-hub pipe retained alongside the selected workspace pipe. */
+  controlConnection: WebRtcConnection;
   credential: ShellCredential | null;
+  pairingContext: PairingContext | null;
+  controlPairing: ShellPairing;
   persistCredential(
     credential: ShellCredential,
     controlPairing: ShellPairing,
     workspacePairing: ShellPairing
   ): Promise<void>;
+  /** Open the actual workspace pipe after the durable route is committed. */
+  connectWorkspace(
+    workspacePairing: ShellPairing,
+    credential: ShellCredential
+  ): Promise<WebRtcConnection>;
 }
 
 /**
  * Commit a freshly redeemed mobile pairing as one fail-closed transaction.
- * The authenticated child identifies its workspace, the hub returns both exact
- * durable reaches, and Keychain persistence completes before success is exposed.
+ * The pairing issuer identifies the exact workspace, the hub returns its exact
+ * durable reach, and Keychain persistence completes before success is exposed.
  * Every post-connect failure closes the session so a retry cannot accumulate a
  * half-paired keepalive loop.
  */
 export async function completeFreshMobilePairing(
   options: CompleteFreshMobilePairingOptions
 ): Promise<WebRtcConnection> {
-  const { connection, credential, persistCredential } = options;
+  const {
+    controlConnection,
+    credential,
+    pairingContext,
+    controlPairing,
+    persistCredential,
+    connectWorkspace,
+  } = options;
+  let controlCloseAttempted = false;
+  const closeControl = async (): Promise<void> => {
+    if (controlCloseAttempted) return;
+    controlCloseAttempted = true;
+    await controlConnection.close();
+  };
   try {
     if (!credential) {
       throw new Error("Fresh pairing did not issue a current mobile device credential");
     }
-    const workspace = await connection.rpc.call<unknown>("main", "workspace.getActive", []);
-    if (typeof workspace !== "string" || !workspace) {
-      throw new Error("Paired workspace did not report its active name");
+    if (!pairingContext?.workspaceId) {
+      throw new Error("Fresh pairing did not identify its workspace");
     }
-    const connectionInfo = ConnectionInfoResponseSchema.parse(
-      await connection.rpc.call("main", "auth.getConnectionInfo", [])
-    );
     const route = HubWorkspaceRouteSchema.parse(
-      await connection.rpc.call("main", "hubControl.routeWorkspace", [{ workspace }])
+      await controlConnection.rpc.call("main", "hubControl.routeWorkspace", [
+        { workspaceId: pairingContext.workspaceId },
+      ])
     );
-    if (
-      route.workspace !== workspace ||
-      route.workspaceId !== connectionInfo.workspaceId ||
-      route.serverId !== connectionInfo.serverId ||
-      route.serverBootId !== connectionInfo.serverBootId
-    ) {
-      throw new Error("Workspace route changed the authenticated server or workspace identity");
+    if (route.workspaceId !== pairingContext.workspaceId) {
+      throw new Error("Workspace route changed the pairing target");
     }
-    await persistCredential(credential, route.controlReach, route.workspaceReach);
-    connection.deviceId = credential.deviceId;
-    return connection;
+    await persistCredential(credential, controlPairing, route.workspaceReach);
+    const workspaceConnection = await connectWorkspace(route.workspaceReach, credential);
+    workspaceConnection.deviceId = credential.deviceId;
+    return composeMobileSession(controlConnection, workspaceConnection);
   } catch (error) {
     try {
-      await connection.close();
+      await closeControl();
     } catch (closeError) {
       const failure = error instanceof Error ? error.message : String(error);
       const cleanup = closeError instanceof Error ? closeError.message : String(closeError);

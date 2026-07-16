@@ -11,10 +11,16 @@ import {
 import { SettingsScreen } from "./SettingsScreen";
 import { connectionStatusAtom } from "../state/connectionAtoms";
 import { shellClientAtom } from "../state/shellClientAtom";
-import { listMobileWorkspaces, selectMobileWorkspace } from "../services/workspaceSelection";
+import {
+  listMobileWorkspaces,
+  mobileWorkspaceSelectionDependencies,
+  selectMobileWorkspace,
+} from "../services/workspaceSelection";
+import { setApprovedAppCapabilities } from "../services/appCapabilities";
 
 jest.mock("../services/workspaceSelection", () => ({
   listMobileWorkspaces: jest.fn(),
+  mobileWorkspaceSelectionDependencies: jest.fn((control) => ({ control })),
   selectMobileWorkspace: jest.fn(),
 }));
 
@@ -30,6 +36,9 @@ jest.mock("./ConnectionBar", () => ({
 
 const listMock = listMobileWorkspaces as jest.MockedFunction<typeof listMobileWorkspaces>;
 const selectMock = selectMobileWorkspace as jest.MockedFunction<typeof selectMobileWorkspace>;
+const dependenciesMock = mobileWorkspaceSelectionDependencies as jest.MockedFunction<
+  typeof mobileWorkspaceSelectionDependencies
+>;
 const clearCredentialMock = clearShellCredential as jest.MockedFunction<
   typeof clearShellCredential
 >;
@@ -61,6 +70,7 @@ function renderSettings() {
   const shellClient = {
     workspaceId: "ws-a",
     credentials: { deviceId: `dev_${"d".repeat(24)}` },
+    hubControl: { listWorkspaces: jest.fn(), routeWorkspace: jest.fn() },
     dispose: jest.fn(),
     refreshAccountProfile: jest.fn(async () => profile),
     updateAccountProfile: jest.fn(async () => ({
@@ -86,10 +96,12 @@ function renderSettings() {
 
 describe("SettingsScreen workspace selector", () => {
   beforeEach(() => {
+    setApprovedAppCapabilities(["clipboard"]);
     (Clipboard.getString as jest.Mock).mockReset().mockResolvedValue("");
     (Clipboard.hasImage as jest.Mock).mockReset().mockResolvedValue(false);
     listMock.mockReset().mockResolvedValue(workspaces);
     selectMock.mockReset().mockResolvedValue({} as never);
+    dependenciesMock.mockClear();
     clearCredentialMock.mockReset().mockResolvedValue(undefined);
     loadCredentialMock.mockReset().mockResolvedValue({
       schemaVersion: 3,
@@ -113,6 +125,10 @@ describe("SettingsScreen workspace selector", () => {
     });
     persistCredentialMock.mockReset().mockResolvedValue(undefined);
     nativeHost.resetToNativeBootstrap.mockReset().mockResolvedValue({ reloading: true });
+  });
+
+  afterEach(() => {
+    setApprovedAppCapabilities([]);
   });
 
   it("saves the current account profile and clears its avatar", async () => {
@@ -198,7 +214,10 @@ describe("SettingsScreen workspace selector", () => {
 
     fireEvent.press(view.getByTestId("workspace-option-ws-b"));
 
-    expect(selectMock).toHaveBeenCalledWith("beta");
+    expect(selectMock).toHaveBeenCalledWith(
+      "ws-b",
+      expect.objectContaining({ control: view.shellClient.hubControl })
+    );
     expect(view.getByText("Switching…")).toBeTruthy();
     expect(view.getByTestId("workspace-option-ws-b").props.accessibilityState).toMatchObject({
       busy: true,

@@ -1,8 +1,8 @@
 /**
- * Server-side WebRTC ingress pool. A hub-managed workspace child arms an
- * answerer pipe only when the hub routes a user, device, or invite to it.
- * Routing rooms are deliberately ephemeral runtime state: identity rows never
- * carry transport topology and a child restart requires a fresh hub route.
+ * Server-side WebRTC ingress pool. A hub or hub-managed workspace child arms an
+ * answerer pipe for a control invite or a paired device's durable routed room.
+ * The ingress pipe itself is runtime state; the owning control/child route is
+ * durable and is re-armed after restart.
  *
  * Each armed room gets its own `createWebRtcAnswererPipe` attached to the live
  * `RpcServer` via `attachWebRtcPipe` (per-pipe closures — N pipes attach
@@ -33,10 +33,9 @@ export interface WebRtcAttachable {
   attachWebRtcPipe(pipe: WebRtcAnswererPipe): void;
 }
 
-/** The routed principal or invite associated with an ephemeral room. */
+/** The paired device associated with a routed room; absent for an invite. */
 export interface WebRtcRoomMeta {
   deviceId?: string;
-  inviteCode?: string;
 }
 
 export interface WebRtcRoomStatus {
@@ -76,8 +75,6 @@ export interface WebRtcIngressOptions {
   /** Persistent cert (stable fingerprint → stable QR pin). */
   certificatePemFile: string;
   keyPemFile: string;
-  /** The server's DTLS SHA-256 fingerprint (the published pin; for logging). */
-  fingerprint: string;
   iceTransportPolicy?: TurnPolicy;
   log?: (message: string) => void;
   /** Loud channel for the relay alarm (§9.8); defaults to `console.warn`. */
@@ -96,6 +93,9 @@ interface RoomEntry {
   disarmed: boolean;
   /** The pipe-creation chain; disarm/close await it before closing the pipe. */
   ready: Promise<void>;
+  /** Settles after the pipe's signaling/connect loop has stopped. */
+  connectTask: Promise<void> | null;
+  unsubscribeCandidateType: (() => void) | null;
 }
 
 /** §9.8 relay-rate alarm: fire once when > this share of connects rode TURN… */
@@ -118,6 +118,9 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
   const warn = options.warn ?? ((m: string) => console.warn(`[webrtc-ingress] ${m}`));
   const rooms = new Map<string, RoomEntry>();
   let closed = false;
+  let closePromise: Promise<void> | null = null;
+  const pendingTeardowns = new Set<Promise<void>>();
+  const closingRooms = new Map<string, Promise<void>>();
 
   // --- relay alarm (§9.8): per-pool connect counters + one aggregated warning.
   let connects = 0;
@@ -188,14 +191,16 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
 
   const armRoom = async (room: string, meta: WebRtcRoomMeta): Promise<void> => {
     if (closed) {
-      log(`armRoom(${room}) ignored: ingress is closed`);
-      return;
+      throw new Error(`Cannot arm WebRTC room ${room}: ingress is closed`);
     }
     const existing = rooms.get(room);
     if (existing) {
       // Idempotent re-arm: merge meta only (invite room → device room re-tag).
       existing.meta = { ...existing.meta, ...meta };
       await existing.ready;
+      if (closed || existing.disarmed || rooms.get(room) !== existing) {
+        throw new Error(`Cannot arm WebRTC room ${room}: room was disarmed`);
+      }
       return;
     }
     if (rooms.size >= MAX_ARMED_ROOMS) {
@@ -206,7 +211,9 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
         `armRoom(${room}) refused: armed-room cap (${MAX_ARMED_ROOMS}) reached — ` +
           `possible runaway pairing-invite minting`
       );
-      return;
+      throw new Error(
+        `Cannot arm WebRTC room ${room}: armed-room cap (${MAX_ARMED_ROOMS}) reached`
+      );
     }
     const entry: RoomEntry = {
       room,
@@ -214,6 +221,8 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
       pipe: null,
       disarmed: false,
       ready: Promise.resolve(),
+      connectTask: null,
+      unsubscribeCandidateType: null,
     };
     rooms.set(room, entry);
     entry.ready = (async () => {
@@ -221,16 +230,18 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
       if (entry.disarmed) {
         // Disarmed while the pipe was being built — never attach it.
         await pipe.close();
-        return;
+        throw new Error(`Cannot arm WebRTC room ${room}: room was disarmed`);
       }
       entry.pipe = pipe;
       // Relay alarm (§9.8): log each connect's selected path; WARN on TURN.
-      pipe.onCandidateType((type) => onPipeCandidateType(entry, type));
+      entry.unsubscribeCandidateType = pipe.onCandidateType((type) =>
+        onPipeCandidateType(entry, type)
+      );
       options.rpcServer.attachWebRtcPipe(pipe);
       // Arm signaling and wait for a client, without blocking the caller.
       // connect() resolves on the first completed hello and rejects only on
       // close(); signaling failures retry inside the pipe's supervised loop.
-      void pipe
+      entry.connectTask = pipe
         .connect()
         .then(() => log(`room ${room}: client connected`))
         .catch((error) =>
@@ -251,24 +262,55 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
       throw error;
     });
     await entry.ready;
+    if (closed || entry.disarmed || rooms.get(room) !== entry) {
+      throw new Error(`Cannot arm WebRTC room ${room}: room was disarmed`);
+    }
   };
 
-  const disarmRoom = async (room: string): Promise<void> => {
+  const disarmRoom = (room: string): Promise<void> => {
     const entry = rooms.get(room);
-    if (!entry) return;
+    if (!entry) return closingRooms.get(room) ?? Promise.resolve();
     entry.disarmed = true;
     rooms.delete(room);
-    await entry.ready.catch(() => undefined);
-    if (entry.pipe) {
-      await entry.pipe
-        .close()
-        .catch((error) =>
-          log(
-            `error closing pipe for room ${room}: ${error instanceof Error ? error.message : String(error)}`
-          )
-        );
-    }
-    log(`disarmed room ${room}`);
+    const teardown = (async () => {
+      await entry.ready.catch(() => undefined);
+      entry.unsubscribeCandidateType?.();
+      entry.unsubscribeCandidateType = null;
+      if (entry.pipe) {
+        await entry.pipe
+          .close()
+          .catch((error) =>
+            log(
+              `error closing pipe for room ${room}: ${error instanceof Error ? error.message : String(error)}`
+            )
+          );
+        await entry.connectTask;
+      }
+      log(`disarmed room ${room}`);
+    })();
+    pendingTeardowns.add(teardown);
+    closingRooms.set(room, teardown);
+    void teardown.then(
+      () => {
+        pendingTeardowns.delete(teardown);
+        if (closingRooms.get(room) === teardown) closingRooms.delete(room);
+      },
+      () => {
+        pendingTeardowns.delete(teardown);
+        if (closingRooms.get(room) === teardown) closingRooms.delete(room);
+      }
+    );
+    return teardown;
+  };
+
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closed = true;
+    closePromise = (async () => {
+      await Promise.all([...rooms.keys()].map((room) => disarmRoom(room)));
+      await Promise.all([...pendingTeardowns]);
+    })();
+    return closePromise;
   };
 
   return {
@@ -283,9 +325,6 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
         ...(entry.meta.deviceId ? { deviceId: entry.meta.deviceId } : {}),
       })),
     stats: (): WebRtcIngressStats => ({ connects, relayConnects }),
-    close: async (): Promise<void> => {
-      closed = true;
-      await Promise.all([...rooms.keys()].map((room) => disarmRoom(room)));
-    },
+    close,
   };
 }

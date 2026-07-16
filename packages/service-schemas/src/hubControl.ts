@@ -39,7 +39,6 @@ export const HubReachSchema = z
     }),
     v: z.literal(PAIRING_PROTOCOL_VERSION),
     ice: z.enum(["all", "relay"]),
-    srv: z.string().min(1).optional(),
   })
   .strict();
 
@@ -49,7 +48,6 @@ export const HubWorkspaceRouteSchema = z
     workspaceId: z.string(),
     running: z.literal(true),
     serverUrl: z.string(),
-    controlReach: HubReachSchema,
     workspaceReach: HubReachSchema,
     serverId: z.string().regex(SERVER_ID_PATTERN),
     serverBootId: z.string().regex(SERVER_BOOT_ID_PATTERN),
@@ -84,8 +82,7 @@ export const HubPairingInviteSchema = HubReachSchema.extend({
         signaling.kind === "ok" &&
         parsed.sig === signaling.url &&
         parsed.v === invite.v &&
-        parsed.ice === invite.ice &&
-        parsed.srv === invite.srv;
+        parsed.ice === invite.ice;
       if (!matches) {
         ctx.addIssue({
           code: "custom",
@@ -100,11 +97,7 @@ export const HubReadyPayloadSchema = z
   .object({
     mode: z.literal("hub"),
     gatewayUrl: z.string().url(),
-    connectUrl: z.string().url(),
-    rootInvites: z
-      .object({ desktop: HubPairingInviteSchema, mobile: HubPairingInviteSchema })
-      .strict()
-      .nullable(),
+    rootInvite: HubPairingInviteSchema.nullable(),
     serverId: z.string().regex(SERVER_ID_PATTERN),
     serverBootId: z.string().regex(SERVER_BOOT_ID_PATTERN),
     gatewayPort: z.number().int().min(1).max(65_535),
@@ -114,23 +107,21 @@ export const HubReadyPayloadSchema = z
   })
   .strict()
   .superRefine((ready, ctx) => {
-    if (!ready.rootInvites) return;
-    for (const kind of ["desktop", "mobile"] as const) {
-      const invite = ready.rootInvites[kind];
-      if (invite.serverId !== ready.serverId) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["rootInvites", kind, "serverId"],
-          message: "Invite serverId does not match the ready-file serverId",
-        });
-      }
-      if (invite.serverBootId !== ready.serverBootId) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["rootInvites", kind, "serverBootId"],
-          message: "Invite serverBootId does not match the ready-file serverBootId",
-        });
-      }
+    const invite = ready.rootInvite;
+    if (!invite) return;
+    if (invite.serverId !== ready.serverId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["rootInvite", "serverId"],
+        message: "Invite serverId does not match the ready-file serverId",
+      });
+    }
+    if (invite.serverBootId !== ready.serverBootId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["rootInvite", "serverBootId"],
+        message: "Invite serverBootId does not match the ready-file serverBootId",
+      });
     }
   });
 
@@ -211,10 +202,11 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   routeWorkspace: {
-    description: "Route the authenticated device directly into a workspace child.",
-    args: z.tuple([z.object({ workspace: z.string().min(1) }).strict()]),
+    description:
+      "Route one exact workspaceId and return only that child's workspaceReach; the caller keeps its existing hub control reach.",
+    args: z.tuple([z.object({ workspaceId: z.string().min(1) }).strict()]),
     returns: HubWorkspaceRouteSchema,
-    access: readAccess,
+    access: writeAccess,
   },
   createWorkspace: {
     description: "Create and register a workspace through the hub control plane.",
@@ -223,6 +215,12 @@ export const hubControlMethods = defineServiceMethods({
     ]),
     returns: HubWorkspaceEntrySchema,
     access: writeAccess,
+  },
+  ensureEphemeralWorkspace: {
+    description: "Ensure the canonical disposable development workspace exists on the live hub.",
+    args: z.tuple([]),
+    returns: HubWorkspaceEntrySchema,
+    access: adminAccess,
   },
   deleteWorkspace: {
     description: "Delete a workspace and cascade every membership row.",
@@ -376,6 +374,7 @@ export const hubControlMethods = defineServiceMethods({
 });
 
 export type HubWorkspaceRoute = z.infer<typeof HubWorkspaceRouteSchema>;
+export type HubDevice = z.infer<typeof HubDeviceSchema>;
 export type HubPairingInvite = z.infer<typeof HubPairingInviteSchema>;
 export type HubReadyPayload = z.infer<typeof HubReadyPayloadSchema>;
 export type HubUserPresence = z.infer<typeof HubUserPresenceSchema>;
