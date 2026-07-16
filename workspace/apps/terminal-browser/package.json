@@ -391,7 +391,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Vibestudio Terminal",
     "app": {

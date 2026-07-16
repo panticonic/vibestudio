@@ -62,7 +62,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "File Tools",
     "entry": "index.ts",

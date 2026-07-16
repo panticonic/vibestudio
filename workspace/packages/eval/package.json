@@ -12,9 +12,12 @@
   "dependencies": {
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
+    "acorn": "^8.17.0",
+    "eslint-scope": "^8.4.0",
     "sucrase": "^3.35.0"
   },
   "devDependencies": {
+    "@types/eslint-scope": "^8.4.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }

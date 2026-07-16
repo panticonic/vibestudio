@@ -62,7 +62,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Local Models",
     "entry": "index.ts",

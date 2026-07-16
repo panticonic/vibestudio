@@ -328,7 +328,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Claude Code",
     "entry": "index.ts",

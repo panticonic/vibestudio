@@ -76,7 +76,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Shell",
     "entry": "index.ts",

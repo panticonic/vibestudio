@@ -79,6 +79,19 @@ export function declaredMethodCapabilityDependencies(matrix) {
           required.add(additional.capability);
         }
       }
+      for (const leaf of declaration.prepared?.leaves ?? []) {
+        const admitsCode =
+          leaf?.requirement?.kind === "selected"
+            ? leaf.requirement.principals?.includes("code")
+            : includesCode(leaf?.requirement);
+        if (
+          typeof leaf?.capability === "string" &&
+          !leaf.capability.endsWith("*") &&
+          admitsCode
+        ) {
+          required.add(leaf.capability);
+        }
+      }
       if (required.size > 0) dependencies.set(`service:${service}.${method}`, required);
     }
   }

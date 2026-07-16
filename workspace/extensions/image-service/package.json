@@ -27,7 +27,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Image Service",
     "entry": "index.ts",

@@ -20,7 +20,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "React Native Build Provider",
     "entry": "index.ts",

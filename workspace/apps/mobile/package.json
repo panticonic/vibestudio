@@ -840,7 +840,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Vibestudio Mobile",
     "app": {

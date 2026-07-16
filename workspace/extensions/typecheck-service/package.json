@@ -69,7 +69,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Typecheck Service",
     "entry": "index.ts",

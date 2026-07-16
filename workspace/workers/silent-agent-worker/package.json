@@ -56,7 +56,28 @@
           }
         },
         {
-          "capability": "service:eval.run",
+          "capability": "service:eval.cancel",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.events",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.get",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.start",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -195,7 +216,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "entry": "index.ts",
     "durable": {

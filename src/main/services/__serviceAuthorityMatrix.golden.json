@@ -5,52 +5,132 @@
     },
     "methods": {
       "addCustomList": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "addToWhitelist": {
-        "principals": ["user", "code"]
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "getConfig": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "getPanelUrl": {
-        "principals": ["user", "code"]
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "getStats": {
-        "principals": ["user", "code"]
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "getStatsForPanel": {
-        "principals": ["user", "code"]
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "isActive": {
-        "principals": ["user", "code"]
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "isEnabledForPanel": {
-        "principals": ["user", "code"]
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "rebuildEngine": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "removeCustomList": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
       },
       "removeFromWhitelist": {
-        "principals": ["user", "code"]
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
       },
       "resetStats": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
       },
       "resetStatsForPanel": {
-        "principals": ["user", "code"]
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "setEnabled": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "setEnabledForPanel": {
-        "principals": ["user", "code"]
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "setListEnabled": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       }
     }
   },
@@ -60,34 +140,84 @@
     },
     "methods": {
       "applyUpdate": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "clearBuildCache": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "getInfo": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "getShellPages": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "getSystemTheme": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "listPendingUpdates": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "openDevTools": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "openExternal": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "openWorkspacePath": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "setThemeMode": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       }
     }
   },
@@ -97,13 +227,28 @@
     },
     "methods": {
       "subscribe": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "unsubscribe": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "unsubscribeAll": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       }
     }
   },
@@ -113,13 +258,28 @@
     },
     "methods": {
       "showContext": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "showHamburger": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "showPanelContext": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       }
     }
   },
@@ -129,250 +289,300 @@
     },
     "methods": {
       "dismiss": {
-        "requirement": {
-          "kind": "any",
-          "requirements": [
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:notification.dismiss"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:notification.dismiss"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:notification.dismiss"
+          },
+          "additional": [
             {
-              "kind": "all",
-              "requirements": [
-                {
-                  "kind": "capability",
-                  "principal": "user",
-                  "capability": "service:notification.dismiss"
+              "capability": "notifications",
+              "requirement": {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "user",
+                        "capability": "notifications"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "notifications"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "resource": {
+                "kind": "literal",
+                "key": "platform:notifications"
+              },
+              "evalAcquisition": {
+                "kind": "approval",
+                "title": "Allow eval to show notifications",
+                "description": "Evaluated code wants to use the workspace notification surface.",
+                "operation": {
+                  "kind": "notification",
+                  "verb": "dismiss"
                 },
-                {
-                  "kind": "relationship",
-                  "name": "workspace-member"
-                }
-              ]
-            },
-            {
-              "kind": "all",
-              "requirements": [
-                {
-                  "kind": "capability",
-                  "principal": "code",
-                  "capability": "service:notification.dismiss"
-                },
-                {
-                  "kind": "relationship",
-                  "name": "workspace-member"
-                }
-              ]
+                "grantScopes": ["run", "session", "version"]
+              }
             }
           ]
         },
-        "resource": {
-          "kind": "literal",
-          "key": "service:notification.dismiss"
-        },
-        "additional": [
-          {
-            "capability": "notifications",
-            "requirement": {
-              "kind": "any",
-              "requirements": [
-                {
-                  "kind": "all",
-                  "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "user",
-                      "capability": "notifications"
-                    },
-                    {
-                      "kind": "relationship",
-                      "name": "workspace-member"
-                    }
-                  ]
-                },
-                {
-                  "kind": "all",
-                  "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "code",
-                      "capability": "notifications"
-                    },
-                    {
-                      "kind": "relationship",
-                      "name": "workspace-member"
-                    }
-                  ]
-                }
-              ]
-            },
-            "resource": {
-              "kind": "literal",
-              "key": "platform:notifications"
-            }
-          }
-        ]
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "reportAction": {
-        "requirement": {
-          "kind": "any",
-          "requirements": [
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:notification.reportAction"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:notification.reportAction"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:notification.reportAction"
+          },
+          "additional": [
             {
-              "kind": "all",
-              "requirements": [
-                {
-                  "kind": "capability",
-                  "principal": "user",
-                  "capability": "service:notification.reportAction"
+              "capability": "notifications",
+              "requirement": {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "user",
+                        "capability": "notifications"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "notifications"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "resource": {
+                "kind": "literal",
+                "key": "platform:notifications"
+              },
+              "evalAcquisition": {
+                "kind": "approval",
+                "title": "Allow eval to show notifications",
+                "description": "Evaluated code wants to use the workspace notification surface.",
+                "operation": {
+                  "kind": "notification",
+                  "verb": "reportAction"
                 },
-                {
-                  "kind": "relationship",
-                  "name": "workspace-member"
-                }
-              ]
-            },
-            {
-              "kind": "all",
-              "requirements": [
-                {
-                  "kind": "capability",
-                  "principal": "code",
-                  "capability": "service:notification.reportAction"
-                },
-                {
-                  "kind": "relationship",
-                  "name": "workspace-member"
-                }
-              ]
+                "grantScopes": ["run", "session", "version"]
+              }
             }
           ]
         },
-        "resource": {
-          "kind": "literal",
-          "key": "service:notification.reportAction"
-        },
-        "additional": [
-          {
-            "capability": "notifications",
-            "requirement": {
-              "kind": "any",
-              "requirements": [
-                {
-                  "kind": "all",
-                  "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "user",
-                      "capability": "notifications"
-                    },
-                    {
-                      "kind": "relationship",
-                      "name": "workspace-member"
-                    }
-                  ]
-                },
-                {
-                  "kind": "all",
-                  "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "code",
-                      "capability": "notifications"
-                    },
-                    {
-                      "kind": "relationship",
-                      "name": "workspace-member"
-                    }
-                  ]
-                }
-              ]
-            },
-            "resource": {
-              "kind": "literal",
-              "key": "platform:notifications"
-            }
-          }
-        ]
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "show": {
-        "requirement": {
-          "kind": "any",
-          "requirements": [
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:notification.show"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:notification.show"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:notification.show"
+          },
+          "additional": [
             {
-              "kind": "all",
-              "requirements": [
-                {
-                  "kind": "capability",
-                  "principal": "user",
-                  "capability": "service:notification.show"
+              "capability": "notifications",
+              "requirement": {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "user",
+                        "capability": "notifications"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "notifications"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "resource": {
+                "kind": "literal",
+                "key": "platform:notifications"
+              },
+              "evalAcquisition": {
+                "kind": "approval",
+                "title": "Allow eval to show notifications",
+                "description": "Evaluated code wants to use the workspace notification surface.",
+                "operation": {
+                  "kind": "notification",
+                  "verb": "show"
                 },
-                {
-                  "kind": "relationship",
-                  "name": "workspace-member"
-                }
-              ]
-            },
-            {
-              "kind": "all",
-              "requirements": [
-                {
-                  "kind": "capability",
-                  "principal": "code",
-                  "capability": "service:notification.show"
-                },
-                {
-                  "kind": "relationship",
-                  "name": "workspace-member"
-                }
-              ]
+                "grantScopes": ["run", "session", "version"]
+              }
             }
           ]
         },
-        "resource": {
-          "kind": "literal",
-          "key": "service:notification.show"
-        },
-        "additional": [
-          {
-            "capability": "notifications",
-            "requirement": {
-              "kind": "any",
-              "requirements": [
-                {
-                  "kind": "all",
-                  "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "user",
-                      "capability": "notifications"
-                    },
-                    {
-                      "kind": "relationship",
-                      "name": "workspace-member"
-                    }
-                  ]
-                },
-                {
-                  "kind": "all",
-                  "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "code",
-                      "capability": "notifications"
-                    },
-                    {
-                      "kind": "relationship",
-                      "name": "workspace-member"
-                    }
-                  ]
-                }
-              ]
-            },
-            "resource": {
-              "kind": "literal",
-              "key": "platform:notifications"
-            }
-          }
-        ]
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "signalUserInbox": {
-        "principals": ["code", "host"]
+        "authority": {
+          "principals": ["code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       }
     }
   },
@@ -382,16 +592,36 @@
     },
     "methods": {
       "list": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "register": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "run": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "unregister": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       }
     }
   },
@@ -401,49 +631,124 @@
     },
     "methods": {
       "ensureLoaded": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "forceReloadView": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "getAddressOptions": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "getBrowserAddressOptions": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "getChromeState": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "getFocusedPanelId": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "getThemeConfig": {
-        "principals": ["user", "code"]
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "getTreeSnapshot": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "listPinnedPanelIds": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "markBrowserNavigationIntent": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "reloadView": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "takeOver": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "togglePin": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "updateTheme": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "updateThemeConfig": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       }
     }
   },
@@ -453,28 +758,68 @@
     },
     "methods": {
       "clear": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
       },
       "getCurrent": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "listDevices": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       },
       "pair": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
       },
       "pairDevice": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
       },
       "reconnectNow": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "relaunch": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
       },
       "revokeDevice": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
       }
     }
   },
@@ -484,7 +829,12 @@
     },
     "methods": {
       "getData": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       }
     }
   },
@@ -494,67 +844,172 @@
     },
     "methods": {
       "bindNativePanelSlot": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "browserForceReload": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "browserGoBack": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "browserGoForward": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "browserNavigate": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "browserReload": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "browserStop": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "clearNativePanelSlot": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "forwardMouseClick": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "hideContentOverlay": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "hideNativeShellOverlay": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "setBounds": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "setHostedShellReady": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "setShellOverlay": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "setThemeCss": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "setVisible": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "showContentOverlay": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "showNativeShellOverlay": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "updateContentOverlay": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "updateNativePanelSlot": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       },
       "updateNativeShellOverlay": {
-        "inherits": true
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
       }
     }
   }

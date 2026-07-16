@@ -34,7 +34,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "PDF Ingest",
     "entry": "index.ts",

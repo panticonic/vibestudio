@@ -36,6 +36,9 @@ for (const [service, entry] of Object.entries(serverMatrix)) {
 const authorityLedger = JSON.parse(
   fs.readFileSync(path.join(root, "docs/runtime-foundations/authority-ledger.json"), "utf8")
 );
+const evalAcquisitionPolicy = JSON.parse(
+  fs.readFileSync(path.join(root, "scripts/eval-capability-acquisition.json"), "utf8")
+);
 const workspaceManifest = YAML.parse(
   fs.readFileSync(path.join(workspaceRoot, "meta/vibestudio.yml"), "utf8")
 );
@@ -59,6 +62,24 @@ const directCapabilities = new Set(
     .filter((row) => row.rpcPlane === "workspace-do")
     .map((row) => `rpc:${row.method}`)
 );
+const evalDelegationCapabilities = [...new Set(
+  [
+    ...authorityLedger.rows
+      .filter(
+        (row) =>
+          row.authorityPrincipals.includes("code") && row.evalAcquisition?.kind !== "closed"
+      )
+      .map((row) =>
+        row.capability ??
+        (row.rpcPlane === "host-service" ? `service:${row.owner}.${row.method}` : `rpc:${row.method}`)
+      )
+      .filter((capability) => !capability.endsWith("*")),
+    ...evalAcquisitionPolicy.additionalLeaves
+      .filter((leaf) => leaf.acquisition.kind !== "closed")
+      .map((leaf) => leaf.capability),
+    ...(workspaceManifest.services ?? []).map((service) => `userland-service:${service.name}`),
+  ]
+)].sort();
 
 const packageFiles = [];
 const walk = (directory) => {
@@ -203,8 +224,20 @@ for (const pkg of [...packages.values()].sort((a, b) => a.file.localeCompare(b.f
     capability,
     resource: { kind: "prefix", prefix: "" },
   }));
+  const delegations = pkg.manifest.vibestudio?.agent
+    ? [
+        {
+          audience: "eval",
+          purpose: "agentic-code-execution",
+          capabilities: evalDelegationCapabilities.map((capability) => ({
+            capability,
+            resource: { kind: "prefix", prefix: "" },
+          })),
+        },
+      ]
+    : [];
   const next = structuredClone(pkg.manifest);
-  next.vibestudio.authority = { requests };
+  next.vibestudio.authority = { requests, delegations };
   const expected = `${JSON.stringify(next, null, 2)}\n`;
   const actual = fs.readFileSync(pkg.file, "utf8");
   if (actual === expected) continue;

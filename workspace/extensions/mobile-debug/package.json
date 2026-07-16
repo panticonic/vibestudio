@@ -34,7 +34,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Mobile Debug",
     "entry": "index.ts",

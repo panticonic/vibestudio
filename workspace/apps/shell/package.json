@@ -658,7 +658,28 @@
           }
         },
         {
-          "capability": "service:eval.run",
+          "capability": "service:eval.cancel",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.events",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.get",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.start",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -1526,6 +1547,13 @@
           }
         },
         {
+          "capability": "service:runtime.cleanupEvalOwnedContext",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
           "capability": "service:runtime.cloneContext",
           "resource": {
             "kind": "prefix",
@@ -1674,6 +1702,13 @@
         },
         {
           "capability": "service:shellApproval.submitSecretInput",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:userlandApproval.ask",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -2547,7 +2582,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Vibestudio Shell",
     "app": {

@@ -53,4 +53,32 @@ describe("declared host-method capability dependencies", () => {
     });
     assert.equal(dependencies.has("service:settings.update"), false);
   });
+
+  it("adds exact schema-owned prepared leaves and excludes dynamic namespace templates", () => {
+    const dependencies = declaredMethodCapabilityDependencies({
+      runtime: {
+        methods: {
+          create: {
+            prepared: {
+              resolver: "runtime.create.authority",
+              leaves: [
+                {
+                  capability: "context.boundary",
+                  requirement: { kind: "selected", principals: ["code", "host"] },
+                },
+                {
+                  capability: "userland-service:*",
+                  requirement: { kind: "selected", principals: ["code"] },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    assert.deepEqual(
+      [...(dependencies.get("service:runtime.create") ?? [])],
+      ["context.boundary"]
+    );
+  });
 });

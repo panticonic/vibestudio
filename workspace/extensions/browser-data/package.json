@@ -272,7 +272,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Browser Data",
     "entry": "index.ts",

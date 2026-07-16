@@ -7,7 +7,56 @@
     "authority": {
       "requests": [
         {
-          "capability": "service:eval.run",
+          "capability": "service:devHost.eval.cancelChildChallenge",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:devHost.eval.completeChildRun",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:devHost.eval.confirmChildRoute",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:devHost.eval.resolveChildChallenge",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.cancel",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.delegatedStart",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.events",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.get",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -117,8 +166,23 @@
             "kind": "prefix",
             "prefix": ""
           }
+        },
+        {
+          "capability": "service:shellApproval.listPending",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:shellApproval.resolve",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Development Host",
     "entry": "index.ts",
@@ -136,7 +200,10 @@
             "status",
             "rebuild",
             "stop",
-            "eval",
+            "evalStart",
+            "evalGet",
+            "evalEvents",
+            "evalCancel",
             "logs",
             "watch"
           ]

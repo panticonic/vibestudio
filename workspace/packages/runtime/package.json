@@ -6,6 +6,7 @@
   "exports": {
     ".": {
       "vibestudio-panel": "./src/panel/index.ts",
+      "vibestudio-eval": "./src/eval/index.ts",
       "worker": "./src/worker/index.ts",
       "workerd": "./src/worker/index.ts",
       "default": "./src/panel/index.ts"

@@ -6,13 +6,6 @@
     "authority": {
       "requests": [
         {
-          "capability": "notifications",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
           "capability": "rpc:acknowledgeInvite",
           "resource": {
             "kind": "prefix",
@@ -559,7 +552,28 @@
           }
         },
         {
-          "capability": "service:eval.run",
+          "capability": "service:eval.cancel",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.events",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.get",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.start",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -1175,6 +1189,13 @@
           }
         },
         {
+          "capability": "service:runtime.cleanupEvalOwnedContext",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
           "capability": "service:runtime.cloneContext",
           "resource": {
             "kind": "prefix",
@@ -1246,6 +1267,13 @@
         },
         {
           "capability": "service:runtime.setTitle",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:userlandApproval.ask",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -1755,7 +1783,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "title": "Testkit Driver",
     "kind": "worker",

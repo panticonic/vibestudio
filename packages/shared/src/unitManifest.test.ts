@@ -12,7 +12,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           extension: {
             activationEvents: ["*"],
             dependencyMode: "external",
@@ -32,7 +32,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           extension: {
             activationEvents: ["*"],
             providerContracts: {
@@ -48,7 +48,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           extension: {
             activationEvents: ["*"],
             providerContracts: {
@@ -64,7 +64,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           extension: {
             activationEvents: ["*"],
             providerContracts: {
@@ -82,7 +82,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           extension: { activationEvents: ["*"], contributes: { buildTargets: ["electron"] } },
         },
         { unitName: "@workspace-extensions/a" }
@@ -95,7 +95,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           extension: { activationEvents: ["*"] },
           app: { target: "electron", renderer: "index.tsx" },
         },
@@ -109,7 +109,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           app: {
             target: "electron",
             renderer: "index.tsx",
@@ -126,7 +126,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           app: { target: "electron", renderer: "index.tsx", preload: "preload.ts" },
         },
         { unitName: "@workspace-apps/shell" }
@@ -139,7 +139,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           app: { target: "dist", renderer: "index.tsx", distDir: "dist" },
         },
         { unitName: "@workspace-apps/prebuilt" }
@@ -152,7 +152,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           app: {
             target: "terminal",
             entry: "index.ts",
@@ -169,7 +169,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           app: { target: "react-native", renderer: "index.tsx", rnComponentName: "Vibestudio" },
         },
         { unitName: "@workspace-apps/mobile" }
@@ -182,7 +182,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         {
-          authority: { requests: [] },
+          authority: { requests: [], delegations: [] },
           app: {
             target: "react-native",
             renderer: "index.tsx",

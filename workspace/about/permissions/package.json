@@ -19,7 +19,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "title": "Permissions",
     "description": "Review and revoke saved app and agent permissions",

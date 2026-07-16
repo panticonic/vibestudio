@@ -48,7 +48,8 @@
             "prefix": ""
           }
         }
-      ]
+      ],
+      "delegations": []
     },
     "displayName": "Workspace Test Runner",
     "entry": "index.ts",
