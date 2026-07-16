@@ -4,6 +4,7 @@ import {
   type AccountProfileUpdate,
 } from "@vibestudio/service-schemas/account";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 
 export type MobileAccountProfile = AccountProfile;
 export type MobileAccountProfileUpdate = AccountProfileUpdate;
@@ -15,10 +16,16 @@ interface AccountProfileTransport {
 export class MobileAccountProfileClient {
   private profile: MobileAccountProfile | null = null;
   private readonly account;
+  private readonly hubControl;
 
   constructor(transport: AccountProfileTransport) {
     this.account = createTypedServiceClient("account", accountMethods, (service, method, args) =>
       transport.call("main", `${service}.${method}`, args)
+    );
+    this.hubControl = createTypedServiceClient(
+      "hubControl",
+      hubControlMethods,
+      (service, method, args) => transport.call("main", `${service}.${method}`, args)
     );
   }
 
@@ -36,7 +43,7 @@ export class MobileAccountProfileClient {
   }
 
   async update(input: MobileAccountProfileUpdate): Promise<MobileAccountProfile> {
-    const profile = await this.account.updateProfile(input);
+    const profile = await this.hubControl.updateProfile(input);
     this.profile = profile;
     return profile;
   }

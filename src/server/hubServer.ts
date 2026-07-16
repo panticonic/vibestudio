@@ -11,7 +11,9 @@ import {
   deleteAndUnregisterWorkspace,
   deleteUnregisteredWorkspace,
   getCentralConfigPaths,
+  recoverStagedWorkspaceDeletions,
 } from "@vibestudio/workspace/loader";
+import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { TokenManager, type TokenEntry } from "@vibestudio/shared/tokenManager";
@@ -29,6 +31,7 @@ import {
   PAIRING_PROTOCOL_VERSION,
   selectedWorkspaceUrl,
   WORKSPACE_ROUTE_PREFIX,
+  type ConnectPairing,
 } from "@vibestudio/shared/connect";
 import {
   hubControlMethods,
@@ -44,28 +47,46 @@ import {
 import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
 import { MembershipStore } from "@vibestudio/identity/membership";
-import { isValidHandle, type User, type UserRole } from "@vibestudio/identity/types";
+import { type User, type UserRole } from "@vibestudio/identity/types";
 import {
   RevokedUserCleanupResultSchema,
   type RevokedUserCleanupResult,
 } from "@vibestudio/identity/revocationCleanup";
 import { GovernanceLog } from "@vibestudio/shared/governance/governanceLog";
-import { ApprovalRecordSchema } from "@vibestudio/shared/governance/governanceLog";
 import { type MembershipGovernanceRecord } from "@vibestudio/shared/governance/types";
 import {
   DEFAULT_PAIRING_CODE_TTL_MS,
   DeviceAuthStore,
   hashSecret,
+  type PairedDeviceCredential,
 } from "./hostCore/deviceAuthStore.js";
 import { updateAccountProfile } from "./hostCore/accountProfile.js";
-import { governanceListQuerySchema } from "./hostCore/governanceQuery.js";
+import {
+  WorkspaceChildAgentCredentialMintInputSchema,
+  WorkspaceChildAgentCredentialRevokeEntityInputSchema,
+  WorkspaceChildAgentCredentialRevokeInputSchema,
+  WorkspaceChildDeviceTouchInputSchema,
+  WorkspaceChildGovernanceAppendInputSchema,
+  WorkspaceChildGovernanceQueryInputSchema,
+  WorkspaceChildPresenceReportInputSchema,
+} from "./workspaceChildHubPort.js";
 import { shellCallerId } from "./hostCore/auth/model.js";
 import { authError, authErrorStatus } from "./hostCore/auth/errors.js";
 import { bridgeDuplexSockets } from "./socketBridge.js";
-import { RoutedRoomStore, routedRoomStatePath } from "./hostCore/routedRoomStore.js";
+import {
+  RoutedRoomStore,
+  routedRoomStatePath,
+  workspaceReachPaths,
+} from "./hostCore/routedRoomStore.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
+import { ServiceDispatcher, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
 declare const __filename: string;
+
+const HUB_PROCESS_LEASE_TTL_MS = 30_000;
+const HUB_PROCESS_LEASE_HEARTBEAT_MS = 5_000;
 
 export interface HubServerArgs {
   appRoot?: string;
@@ -91,8 +112,8 @@ export interface WorkspaceRuntime {
   publicUrl: string;
   child: ChildProcess;
   ready: Record<string, unknown>;
-  /** Per-child capability for authenticated child→hub control calls. */
-  controlToken: string;
+  /** Per-process runtime token for the child's exact typed hub ports. */
+  runtimeToken: string;
 }
 
 interface HubWorkspacePresenceSnapshot {
@@ -134,16 +155,23 @@ export interface HubRuntimeState {
   connectUrl: string;
   /** Absolute path to `identity.db`; handed to children as a READ-ONLY handle. */
   identityDbPath: string;
-  startupPairingCode: string | null;
-  startupQrPairingCode: string | null;
-  /** Child-only capabilities mapped to the workspace they may represent. */
-  childControlTokens: Map<string, string>;
+  /** Exact child-runtime identities mapped to the workspace they represent. */
+  workspaceChildTokens: Map<string, string>;
   /** Freshly registered workspaces whose first startup units may self-approve. */
   autoApproveStartupWorkspaceIds?: Set<string>;
   /** Latest live-session projection reported by each workspace child (WP8 §4.4). */
   workspacePresence: Map<string, HubWorkspacePresenceSnapshot>;
   runtimes: Map<string, WorkspaceRuntime | PendingWorkspaceRuntime>;
+  /** Stable machine-level control/pairing ingress; never owned by a workspace child. */
+  controlTransport?: HubControlTransport;
   shuttingDown: boolean;
+}
+
+interface HubControlTransport {
+  ingress: import("./webrtcIngress.js").WebRtcIngress;
+  pairing: Omit<ConnectPairing, "code" | "room">;
+  rpcServer: import("./rpcServer.js").RpcServer;
+  inviteExpiryTimers: Map<string, NodeJS.Timeout>;
 }
 
 const WORKSPACE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -158,52 +186,10 @@ const HubPairingCredentialBodySchema = z
 
 export const HubCompletePairingBodySchema = HubPairingCredentialBodySchema;
 
-const rootProfileFields = {
-  handle: z.string().refine(isValidHandle, "Invalid or reserved user handle").optional(),
-  displayName: z.string().trim().min(1).max(128).optional(),
-};
-
-export const HubRootCompletePairingBodySchema = HubPairingCredentialBodySchema.extend({
-  ...rootProfileFields,
-  deviceId: z.string().regex(DEVICE_ID_PATTERN, "Invalid proposed device id format").optional(),
-  refreshToken: z
-    .string()
-    .regex(DEVICE_REFRESH_TOKEN_PATTERN, "Invalid proposed refresh token format")
-    .optional(),
-})
-  .strict()
-  .superRefine((body, ctx) => {
-    if ((body.deviceId === undefined) !== (body.refreshToken === undefined)) {
-      ctx.addIssue({
-        code: "custom",
-        message: "deviceId and refreshToken must be proposed together",
-      });
-    }
-  });
-
-const HubChildCompletePairingBodySchema = HubPairingCredentialBodySchema.extend({
-  ...rootProfileFields,
-  deviceId: z.string().regex(DEVICE_ID_PATTERN, "Invalid proposed device id format"),
-  refreshToken: z
-    .string()
-    .regex(DEVICE_REFRESH_TOKEN_PATTERN, "Invalid proposed refresh token format"),
-}).strict();
-
 export const HubDeviceCredentialBodySchema = z
   .object({
     deviceId: z.string().regex(DEVICE_ID_PATTERN, "Invalid device id format"),
     refreshToken: z.string().regex(DEVICE_REFRESH_TOKEN_PATTERN, "Invalid refresh token format"),
-  })
-  .strict();
-
-const HubRpcBodySchema = z
-  .object({
-    method: z.string().min(1),
-    args: z.array(z.unknown()),
-    subject: z
-      .object({ userId: z.string().min(1), deviceId: z.string().min(1).optional() })
-      .strict()
-      .optional(),
   })
   .strict();
 
@@ -223,7 +209,6 @@ const WorkspaceChildReadySchema = z
         sig: z.string().min(1),
         v: z.literal(PAIRING_PROTOCOL_VERSION),
         ice: z.enum(["all", "relay"]),
-        srv: z.string().min(1).optional(),
       })
       .strict(),
     serverId: z.string().regex(SERVER_ID_PATTERN),
@@ -233,44 +218,6 @@ const WorkspaceChildReadySchema = z
     workerdPort: z.number().int().min(0).max(65_535),
     pid: z.number().int().positive(),
     version: z.string().min(1),
-  })
-  .strict();
-
-const HubAgentCredentialMintBodySchema = z
-  .object({
-    entityId: z.string().min(1),
-    contextId: z.string().min(1),
-    channelId: z.string().min(1),
-    userId: z.string().min(1),
-    ttlMs: z.number().int().positive().optional(),
-    scopes: z.array(z.string().min(1)).optional(),
-  })
-  .strict();
-const HubAgentCredentialRevokeBodySchema = z.object({ agentId: z.string().min(1) }).strict();
-const HubAgentCredentialRevokeEntityBodySchema = z.object({ entityId: z.string().min(1) }).strict();
-const HubGovernanceAppendBodySchema = z
-  .object({ record: ApprovalRecordSchema.omit({ workspaceId: true }) })
-  .strict();
-const HubGovernanceQueryBodySchema = z
-  .object({ query: governanceListQuerySchema.optional() })
-  .strict();
-const HubWorkspacePresenceReportBodySchema = z
-  .object({
-    serverBootId: z.string().regex(SERVER_BOOT_ID_PATTERN),
-    revision: z.number().int().nonnegative(),
-    users: z
-      .array(
-        z
-          .object({
-            userId: z.string().min(1),
-            endpoints: z.number().int().positive(),
-          })
-          .strict()
-      )
-      .refine(
-        (users) => new Set(users.map((user) => user.userId)).size === users.length,
-        "Presence report contains duplicate users"
-      ),
   })
   .strict();
 
@@ -333,8 +280,6 @@ export interface HubSubject {
   role: UserRole;
   /** Present when the caller authenticated as a device (`shell:<deviceId>`). */
   deviceId?: string;
-  /** Present only for a subject forwarded by a workspace child. */
-  sourceWorkspaceId?: string;
 }
 
 /**
@@ -366,31 +311,6 @@ function hubSubjectFor(state: HubRuntimeState, caller: TokenEntry): HubSubject {
   throw authError("EACCES", "Caller is not a recognized user", 403);
 }
 
-function childControlSubjectFor(state: HubRuntimeState, token: string, raw: unknown): HubSubject {
-  const sourceWorkspaceId = state.childControlTokens.get(token);
-  if (!sourceWorkspaceId) throw authError("EACCES", "Invalid child control capability", 403);
-  const input = asRecord(raw) ?? {};
-  const userId = typeof input["userId"] === "string" ? input["userId"] : "";
-  const user = userId ? state.userStore.getUser(userId) : null;
-  if (!user || user.revokedAt !== undefined) {
-    throw authError("EACCES", "Child control subject is not a live user", 403);
-  }
-  if (!state.membershipStore.has(user.id, sourceWorkspaceId)) {
-    throw authError("EACCES", "Child control subject is no longer a workspace member", 403);
-  }
-  const deviceId = typeof input["deviceId"] === "string" ? input["deviceId"] : undefined;
-  if (deviceId && state.deviceAuthStore.userFor(deviceId) !== user.id) {
-    throw authError("EACCES", "Device does not belong to the acting user", 403);
-  }
-  return {
-    userId: user.id,
-    handle: user.handle,
-    role: user.role,
-    ...(deviceId ? { deviceId } : {}),
-    sourceWorkspaceId,
-  };
-}
-
 /** Management gate (WP2 §3): passes for `root`/`admin`, rejects `member`. */
 function requireRole(subject: HubSubject, role: "admin"): HubSubject {
   if (subject.role === "root" || subject.role === role) return subject;
@@ -402,6 +322,14 @@ function requireWorkspaceId(state: HubRuntimeState, name: string): string {
   const workspaceId = state.centralData.getWorkspaceIdByName(name);
   if (!workspaceId) throw new Error(`Unknown workspace "${name}"`);
   return workspaceId;
+}
+
+function requireWorkspaceName(state: HubRuntimeState, workspaceId: string): string {
+  const entry = state.centralData
+    .listWorkspaces()
+    .find((workspace) => workspace.workspaceId === workspaceId);
+  if (!entry) throw new Error(`Unknown workspace id "${workspaceId}"`);
+  return entry.name;
 }
 
 /**
@@ -653,21 +581,19 @@ function subjectForDeviceCredential(
 
 function responseForCredential(
   state: HubRuntimeState,
-  credential: {
-    deviceId: string;
-    refreshToken: string;
-    userId: string;
-    label: string;
-    platform?: string;
-  }
+  credential: PairedDeviceCredential
 ): Record<string, unknown> {
   return {
-    ...credential,
+    deviceId: credential.deviceId,
+    refreshToken: credential.refreshToken,
+    userId: credential.userId,
+    label: credential.label,
+    ...(credential.platform ? { platform: credential.platform } : {}),
     shellToken: state.tokenManager.ensureToken(shellCallerId(credential.deviceId), "shell"),
     callerId: shellCallerId(credential.deviceId),
     serverId: state.deviceAuthStore.getServerId(),
     serverBootId: state.serverBootId,
-    workspaceId: null,
+    workspaceId: credential.workspaceId,
   };
 }
 
@@ -690,7 +616,7 @@ function listHubWorkspaces(
     workspaceId: entry.workspaceId,
     lastOpened: entry.lastOpened,
     running: isRuntimeRunning(state, entry.name),
-    ...(state.args.ephemeral && entry.name === "dev" ? { ephemeral: true } : {}),
+    ...(isWorkspaceEphemeral(state, entry.name) ? { ephemeral: true } : {}),
   }));
   return entries;
 }
@@ -728,7 +654,7 @@ export function applyHubWorkspacePresenceReport(
   workspaceId: string,
   rawReport: unknown
 ): boolean {
-  const report = HubWorkspacePresenceReportBodySchema.parse(rawReport);
+  const report = WorkspaceChildPresenceReportInputSchema.parse(rawReport);
   const previous = state.workspacePresence.get(workspaceId);
   if (previous?.serverBootId === report.serverBootId && report.revision <= previous.revision) {
     return false;
@@ -755,14 +681,13 @@ export function applyHubWorkspacePresenceReport(
 /** Canonical, secret-free process handoff consumed by desktop and scripts. */
 export function buildHubReadyPayload(
   state: HubRuntimeState,
-  rootInvites: HubReadyPayload["rootInvites"],
+  rootInvite: HubReadyPayload["rootInvite"],
   pid = process.pid
 ): HubReadyPayload {
   return HubReadyPayloadSchema.parse({
     mode: "hub",
     gatewayUrl: `${state.protocol}://${state.externalHost}:${state.gatewayPort}`,
-    connectUrl: state.connectUrl,
-    rootInvites,
+    rootInvite,
     serverId: state.deviceAuthStore.getServerId(),
     serverBootId: state.serverBootId,
     gatewayPort: state.gatewayPort,
@@ -804,6 +729,11 @@ function isRuntimeRunning(state: HubRuntimeState, name: string): boolean {
   return !!runtime && !("promise" in runtime) && runtime.child.exitCode === null;
 }
 
+function isWorkspaceEphemeral(state: HubRuntimeState, name: string): boolean {
+  const ephemeral = state.centralData.getEphemeralWorkspace();
+  return ephemeral?.ownerBootId === state.serverBootId && ephemeral.name === name;
+}
+
 function workspaceConfigExists(name: string): boolean {
   return fs.existsSync(path.join(getWorkspaceDir(name), "source", "meta/vibestudio.yml"));
 }
@@ -817,6 +747,55 @@ function normalizeWorkspaceName(raw: unknown): string {
     throw new Error("Workspace name must contain only letters, numbers, hyphens, and underscores");
   }
   return name;
+}
+
+export function selectBootstrapWorkspace(
+  args: Pick<HubServerArgs, "bootstrapWorkspace" | "ephemeral">,
+  registered: readonly { name: string }[]
+): { name: string; lifecycle: "existing" | "register" | "ephemeral" } {
+  if (args.ephemeral) {
+    const name = normalizeWorkspaceName(args.bootstrapWorkspace ?? EPHEMERAL_DEV_WORKSPACE_NAME);
+    if (name !== EPHEMERAL_DEV_WORKSPACE_NAME) {
+      throw new Error("Ephemeral hubs use the canonical dev workspace");
+    }
+    return { name, lifecycle: "ephemeral" };
+  }
+  if (args.bootstrapWorkspace) {
+    return { name: normalizeWorkspaceName(args.bootstrapWorkspace), lifecycle: "register" };
+  }
+  const existing = registered[0];
+  if (existing) {
+    return { name: normalizeWorkspaceName(existing.name), lifecycle: "existing" };
+  }
+  return { name: "default", lifecycle: "register" };
+}
+
+/**
+ * Re-establish every independently durable workspace reach contract without
+ * coupling hub availability to any one child. A failed child remains absent
+ * from the runtime map and a later route request retries it with the original
+ * concrete error, while the machine control plane and healthy workspaces can
+ * finish starting.
+ */
+export async function restoreRoutedWorkspaceRuntimes(
+  workspaces: readonly { name: string }[],
+  start: (name: string) => Promise<unknown>,
+  reportFailure: (name: string, error: unknown) => void = (name, error) => {
+    console.error(
+      `[Hub] Workspace "${name}" reach restoration failed; runtime is unavailable:`,
+      error
+    );
+  }
+): Promise<void> {
+  await Promise.all(
+    workspaces.map(async ({ name }) => {
+      try {
+        await start(name);
+      } catch (error) {
+        reportFailure(name, error);
+      }
+    })
+  );
 }
 
 function workspaceEndpointUrl(state: HubRuntimeState, name: string): string {
@@ -842,17 +821,107 @@ interface ChildReach {
   sig: string;
   v: typeof PAIRING_PROTOCOL_VERSION;
   ice: "all" | "relay";
-  srv?: string;
 }
 
-type ChildRouteRequest =
-  | {
-      deviceId: string;
-      purpose: "control" | "workspace";
-      reuseExisting?: true;
+function requireControlTransport(state: HubRuntimeState): HubControlTransport {
+  if (!state.controlTransport) throw new Error("Hub control ingress is not ready");
+  return state.controlTransport;
+}
+
+function reachFromControlTransport(transport: HubControlTransport, room: string): ChildReach {
+  return { room, ...transport.pairing };
+}
+
+function clearControlInviteExpiry(transport: HubControlTransport, codeHash: string): void {
+  const timer = transport.inviteExpiryTimers.get(codeHash);
+  if (timer) clearTimeout(timer);
+  transport.inviteExpiryTimers.delete(codeHash);
+}
+
+function scheduleControlInviteExpiry(
+  state: HubRuntimeState,
+  codeHash: string,
+  expiresAt: number
+): void {
+  const transport = requireControlTransport(state);
+  clearControlInviteExpiry(transport, codeHash);
+  const expire = (): void => {
+    transport.inviteExpiryTimers.delete(codeHash);
+    for (const room of state.deviceAuthStore.cleanupControlRooms(Date.now())) {
+      void transport.ingress.disarmRoom(room.room).catch((error) => {
+        console.warn(`[Hub] Failed to disarm expired control room ${room.room}:`, error);
+      });
     }
-  | { userId: string }
-  | { inviteCode: string; expiresAt: number };
+  };
+  const remainingMs = expiresAt - Date.now();
+  if (remainingMs <= 0) {
+    expire();
+    return;
+  }
+  const timer = setTimeout(expire, remainingMs);
+  timer.unref();
+  transport.inviteExpiryTimers.set(codeHash, timer);
+}
+
+async function armControlInvite(
+  state: HubRuntimeState,
+  invite: { code: string; room: string; expiresAt: number }
+): Promise<ChildReach> {
+  const transport = requireControlTransport(state);
+  await transport.ingress.armRoom(invite.room, {});
+  scheduleControlInviteExpiry(state, hashSecret(invite.code), invite.expiresAt);
+  return reachFromControlTransport(transport, invite.room);
+}
+
+async function disarmControlInvite(state: HubRuntimeState, code: string): Promise<void> {
+  const transport = requireControlTransport(state);
+  const codeHash = hashSecret(code);
+  clearControlInviteExpiry(transport, codeHash);
+  const room = state.deviceAuthStore.cancelPairingInvite(code);
+  if (room) await transport.ingress.disarmRoom(room.room);
+}
+
+/** Stop stable hub reach only after the revoked caller's final response drains. */
+function retireDeviceControlReach(
+  state: HubRuntimeState,
+  deviceId: string,
+  controlRoom: string | null
+): void {
+  const transport = state.controlTransport;
+  if (!transport || !controlRoom) return;
+  const retired = transport.rpcServer.retireCaller(shellCallerId(deviceId));
+  void retired
+    .then(() => transport.ingress.disarmRoom(controlRoom))
+    .catch((error) => {
+      console.warn(`[Hub] Failed to disarm revoked device control room ${controlRoom}:`, error);
+    });
+}
+
+async function completeControlPairing(
+  state: HubRuntimeState,
+  code: string,
+  input: { label?: string; platform?: string }
+): Promise<PairedDeviceCredential> {
+  const transport = requireControlTransport(state);
+  const codeHash = hashSecret(code);
+  const bootstrapRoot = !state.identityDb.hasUsers();
+  const credential = state.deviceAuthStore.completePairing({
+    code,
+    ...(bootstrapRoot
+      ? {
+          createRootUser: () =>
+            state.userStore.createRoot({ handle: "root", displayName: "Root" }).id,
+        }
+      : {}),
+    label: input.label ?? "Vibestudio client",
+    platform: input.platform,
+  });
+  clearControlInviteExpiry(transport, codeHash);
+  await transport.ingress.armRoom(credential.controlRoom, { deviceId: credential.deviceId });
+  return credential;
+}
+
+type ChildRouteRequest = { deviceId: string };
 
 /** Ask a child to arm ingress only. No identity row is ever written there. */
 async function armChildReach(
@@ -866,17 +935,7 @@ async function armChildReach(
   const response = await fetchImpl(`http://127.0.0.1:${runtime.port}/_r/s/internal/route`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify(
-      "inviteCode" in input
-        ? { inviteCodeHash: hashSecret(input.inviteCode), expiresAt: input.expiresAt }
-        : "deviceId" in input
-          ? {
-              deviceId: input.deviceId,
-              purpose: input.purpose,
-              ...(input.reuseExisting ? { reuseExisting: true } : {}),
-            }
-          : input
-    ),
+    body: JSON.stringify(input),
   });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
@@ -901,28 +960,7 @@ async function armChildReach(
     sig: body["sig"],
     v: PAIRING_PROTOCOL_VERSION,
     ice: body["ice"],
-    ...(typeof body["srv"] === "string" ? { srv: body["srv"] } : {}),
   };
-}
-
-async function releaseChildReach(
-  runtime: Pick<WorkspaceRuntime, "port" | "ready">,
-  inviteCode: string,
-  fetchImpl: typeof fetch = fetch
-): Promise<void> {
-  const adminToken =
-    typeof runtime.ready["adminToken"] === "string" ? runtime.ready["adminToken"] : null;
-  if (!adminToken) return;
-  try {
-    await fetchImpl(`http://127.0.0.1:${runtime.port}/_r/s/internal/release-route`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ inviteCodeHash: hashSecret(inviteCode) }),
-    });
-  } catch {
-    // Hub cancellation is authoritative. The child also expires every invite
-    // route from its TTL, so a failed cleanup request cannot leak durable state.
-  }
 }
 
 function pairingInviteFromReach(
@@ -973,51 +1011,8 @@ async function handleAuthRoute(
       return;
     }
     if (route === "complete-pairing") {
-      // A root is created only after the store has successfully consumed a live
-      // root-bootstrap code. Invalid/expired input can never leave an orphaned
-      // root account behind.
-      const shouldBootstrapRoot = !state.identityDb.hasUsers();
-      const rawBody = await readJson(req);
-      const childToken = bearerToken(req);
-      const childWorkspaceId = childToken
-        ? (state.childControlTokens.get(childToken) ?? null)
-        : null;
-      const childBody = childWorkspaceId ? HubChildCompletePairingBodySchema.parse(rawBody) : null;
-      const rootBody = shouldBootstrapRoot
-        ? (childBody ?? HubRootCompletePairingBodySchema.parse(rawBody))
-        : null;
-      const body = childBody ?? rootBody ?? HubCompletePairingBodySchema.parse(rawBody);
-      const { code } = body;
-      const credential = state.deviceAuthStore.completePairing({
-        ...(rootBody
-          ? {
-              createRootUser: () =>
-                state.userStore.createRoot({
-                  handle: rootBody.handle ?? "root",
-                  displayName: rootBody.displayName ?? "Root",
-                }).id,
-            }
-          : {}),
-        code,
-        label: body.label ?? "Vibestudio client",
-        platform: body.platform,
-        ...(childBody && childWorkspaceId ? { expectedWorkspaceId: childWorkspaceId } : {}),
-        ...(childBody
-          ? {
-              proposedCredential: {
-                deviceId: childBody.deviceId,
-                refreshToken: childBody.refreshToken,
-              },
-            }
-          : rootBody?.deviceId && rootBody.refreshToken
-            ? {
-                proposedCredential: {
-                  deviceId: rootBody.deviceId,
-                  refreshToken: rootBody.refreshToken,
-                },
-              }
-            : {}),
-      });
+      const body = HubCompletePairingBodySchema.parse(await readJson(req));
+      const credential = await completeControlPairing(state, body.code, body);
       sendJson(res, 200, responseForCredential(state, credential));
       return;
     }
@@ -1055,49 +1050,35 @@ async function handleInternalRoute(
       return;
     }
     const token = bearerToken(req);
-    const sourceWorkspaceId = token ? state.childControlTokens.get(token) : undefined;
-    if (!sourceWorkspaceId) {
+    const boundWorkspaceId = token ? state.workspaceChildTokens.get(token) : undefined;
+    if (!boundWorkspaceId) {
       sendJson(res, 401, { error: "Unauthorized", code: "UNAUTHORIZED" });
       return;
     }
     const rawBody = await readJson(req);
     // A child can exit while a request body is being read. Re-check the scoped
-    // capability so a delayed report from the retired process cannot overwrite
-    // the replacement child's state.
-    if (!token || state.childControlTokens.get(token) !== sourceWorkspaceId) {
-      sendJson(res, 401, { error: "Workspace child capability expired", code: "UNAUTHORIZED" });
+    // runtime/process token so a delayed report from the retired process cannot
+    // overwrite the replacement child's state.
+    if (!token || state.workspaceChildTokens.get(token) !== boundWorkspaceId) {
+      sendJson(res, 401, { error: "Workspace child runtime expired", code: "UNAUTHORIZED" });
       return;
     }
     if (route === "agent-credential/mint") {
-      const body = HubAgentCredentialMintBodySchema.parse(rawBody);
-      const userId = body.userId;
-      if (
-        userId !== "system" &&
-        (!state.userStore.getUser(userId) || !state.membershipStore.has(userId, sourceWorkspaceId))
-      ) {
-        throw authError("EACCES", "Agent owner is not a live workspace member", 403);
-      }
+      const body = WorkspaceChildAgentCredentialMintInputSchema.parse(rawBody);
       const result = state.deviceAuthStore.mintAgentCredential({
         entityId: body.entityId,
-        contextId: body.contextId,
-        channelId: body.channelId,
-        userId,
         ...(body.ttlMs !== undefined ? { ttlMs: body.ttlMs } : {}),
-        ...(body.scopes !== undefined ? { scopes: body.scopes } : {}),
       });
       sendJson(res, 200, result);
       return;
     }
     if (route === "device/touch") {
-      const body = z
-        .object({ deviceId: z.string().regex(DEVICE_ID_PATTERN) })
-        .strict()
-        .parse(rawBody);
+      const body = WorkspaceChildDeviceTouchInputSchema.parse(rawBody);
       const device = state.identityDb.getDevice(body.deviceId);
       if (!device || device.revokedAt !== undefined) {
         throw authError("DEVICE_NOT_PAIRED", "Device is not paired", 401);
       }
-      if (!state.membershipStore.has(device.userId, sourceWorkspaceId)) {
+      if (!state.membershipStore.has(device.userId, boundWorkspaceId)) {
         throw authError("EACCES", "Device owner is not a workspace member", 403);
       }
       state.identityDb.touchDevice(body.deviceId);
@@ -1105,41 +1086,41 @@ async function handleInternalRoute(
       return;
     }
     if (route === "presence/report") {
-      const updated = applyHubWorkspacePresenceReport(state, sourceWorkspaceId, rawBody);
+      const updated = applyHubWorkspacePresenceReport(state, boundWorkspaceId, rawBody);
       sendJson(res, 200, { updated });
       return;
     }
     if (route === "agent-credential/revoke") {
-      const body = HubAgentCredentialRevokeBodySchema.parse(rawBody);
+      const body = WorkspaceChildAgentCredentialRevokeInputSchema.parse(rawBody);
       sendJson(res, 200, { revoked: state.deviceAuthStore.revokeAgentCredential(body.agentId) });
       return;
     }
     if (route === "agent-credential/revoke-entity") {
-      const body = HubAgentCredentialRevokeEntityBodySchema.parse(rawBody);
+      const body = WorkspaceChildAgentCredentialRevokeEntityInputSchema.parse(rawBody);
       sendJson(res, 200, {
         revokedAgentIds: state.deviceAuthStore.revokeAgentCredentialsForEntity(body.entityId),
       });
       return;
     }
     if (route === "governance/append-approval") {
-      const body = HubGovernanceAppendBodySchema.parse(rawBody);
+      const body = WorkspaceChildGovernanceAppendInputSchema.parse(rawBody);
       if (!state.governanceLog) throw new Error("Governance log is unavailable");
       await state.governanceLog.append({
         ...body.record,
-        workspaceId: sourceWorkspaceId,
+        workspaceId: boundWorkspaceId,
       });
       sendJson(res, 200, { appended: true });
       return;
     }
     if (route === "governance/query") {
-      const body = HubGovernanceQueryBodySchema.parse(rawBody);
+      const body = WorkspaceChildGovernanceQueryInputSchema.parse(rawBody);
       const query = body.query ?? {};
       const requestedLimit = query.limit ?? 100;
       const records =
         (await state.governanceLog?.query({
           filter: {
             ...query.filter,
-            workspaceId: sourceWorkspaceId,
+            workspaceId: boundWorkspaceId,
           },
           limit: Math.max(1, Math.min(500, Math.trunc(requestedLimit))),
           ...(query.after !== undefined ? { after: query.after } : {}),
@@ -1153,522 +1134,635 @@ async function handleInternalRoute(
   }
 }
 
-/** Hub RPC dispatch (loopback `/rpc`). Exported for tests. */
-export async function handleRpc(
+/** Revoke one user and every reach rooted in that identity. */
+export async function revokeHubUser(
   state: HubRuntimeState,
-  req: http.IncomingMessage,
-  res: http.ServerResponse
-): Promise<void> {
-  try {
-    if (req.method !== "POST") {
-      sendText(res, 405, "Method Not Allowed");
-      return;
-    }
-    const body = HubRpcBodySchema.parse(await readJson(req));
-    const token = bearerToken(req);
-    const caller = token ? state.tokenManager.validateToken(token) : null;
-    const subject = caller
-      ? hubSubjectFor(state, caller)
-      : token && state.childControlTokens.has(token)
-        ? childControlSubjectFor(state, token, body.subject)
-        : null;
-    if (!subject) {
-      sendJson(res, 401, { error: "Unauthorized", code: "UNAUTHORIZED" });
-      return;
-    }
-    if (!body.method.startsWith("hubControl.")) {
-      sendJson(res, 200, { error: `Unknown hub RPC method: ${body.method}` });
-      return;
-    }
-    const method = body.method.slice("hubControl.".length);
-    const definition = hubControlMethods[method as keyof typeof hubControlMethods];
-    if (!definition) {
-      sendJson(res, 200, { error: `Unknown hub RPC method: ${body.method}` });
-      return;
-    }
-    const args = definition.args.parse(body.args) as unknown[];
-    const respond = (result: unknown): void => {
-      sendJson(res, 200, { result: definition.returns?.parse(result) ?? result });
-    };
+  subject: HubSubject,
+  input: { userId?: unknown; handle?: unknown }
+): Promise<{
+  revoked: boolean;
+  userId: string;
+  handle: string;
+  closedSessions: number;
+  cleanup: RevokedUserCleanupResult[];
+}> {
+  requireRole(subject, "admin");
+  const target = findTargetUser(state, { userId: input.userId, handle: input.handle });
+  if (!target) throw new Error("Unknown user — pass { userId } or { handle }");
+  if (target.role === "root") state.userStore.revokeUser(target.id);
 
-    if (method === "listWorkspaces") {
-      respond(listHubWorkspaces(state, subject));
-      return;
+  const deviceIds = state.identityDb.listDevicesForUser(target.id).map((device) => device.deviceId);
+  const controlRooms = new Map(
+    deviceIds.map((deviceId) => [deviceId, state.deviceAuthStore.getDeviceControlRoom(deviceId)])
+  );
+  const workspaceIds = state.centralData.listWorkspaces().map((entry) => entry.workspaceId);
+  const revoked = state.userStore.revokeUser(target.id, workspaceIds);
+  for (const deviceId of deviceIds) {
+    state.tokenManager.revokeToken(shellCallerId(deviceId));
+    retireDeviceControlReach(state, deviceId, controlRooms.get(deviceId) ?? null);
+  }
+  await ensureRevocationGovernance(state, {
+    actor: subject,
+    target: { userId: target.id, handle: target.handle },
+  });
+  const cleanup = await processUserRevocationCleanup(state, target.id);
+  return {
+    revoked,
+    userId: target.id,
+    handle: target.handle,
+    closedSessions: cleanup.reduce((sum, result) => sum + result.closedSessions, 0),
+    cleanup,
+  };
+}
+
+/** Revoke one device and retire its hub/workspace transport reach. */
+export async function revokeHubDevice(
+  state: HubRuntimeState,
+  subject: HubSubject,
+  deviceId: string
+): Promise<{ revoked: boolean; closedSessions: number }> {
+  const device = state.identityDb.getDevice(deviceId);
+  if (!device) throw new Error("Unknown device");
+  if (device.userId !== subject.userId) requireRole(subject, "admin");
+  const controlRoom = state.deviceAuthStore.getDeviceControlRoom(deviceId);
+  const revoked = state.deviceAuthStore.revokeDevice(deviceId);
+  if (revoked) {
+    state.tokenManager.revokeToken(shellCallerId(deviceId));
+    retireDeviceControlReach(state, deviceId, controlRoom);
+  }
+  const closedSessions = revoked ? await closeDeviceSessionsAcrossChildren(state, deviceId) : 0;
+  return { revoked, closedSessions };
+}
+
+/** One semantic hub-control dispatcher for the hub-owned RPC ingress. */
+async function executeHubControl(
+  state: HubRuntimeState,
+  subject: HubSubject,
+  method: string,
+  args: unknown[],
+  respond: (result: unknown) => void
+): Promise<void> {
+  if (state.shuttingDown) throw new Error("Hub is shutting down");
+
+  if (method === "listWorkspaces") {
+    respond(listHubWorkspaces(state, subject));
+    return;
+  }
+  if (method === "listUserPresence") {
+    const opts = asRecord(args[0]) ?? {};
+    const target = requireTargetUser(state, {
+      userId: opts["userId"],
+      handle: opts["handle"],
+    });
+    respond(hubUserPresence(state, subject, target));
+    return;
+  }
+  if (method === "routeWorkspace") {
+    // WP1 §5 / WP2 §4: membership pre-filter, spawn/attach the child, and
+    // return the coordinates for the client to reach the CHILD's ingress
+    // directly — the hub never relays media/RPC (child owns its DTLS pipe).
+    const opts = asRecord(args[0]) ?? {};
+    const workspaceId = typeof opts["workspaceId"] === "string" ? opts["workspaceId"] : "";
+    const name = requireWorkspaceName(state, workspaceId);
+    assertMember(state, subject, name);
+    const runtime = await ensureWorkspaceRuntime(state, name);
+    if (!subject.deviceId) throw new Error("Workspace routing requires a paired device");
+    const workspaceReach = await armChildReach(runtime, { deviceId: subject.deviceId });
+    const childServerId = runtime.ready["serverId"];
+    const childServerBootId = runtime.ready["serverBootId"];
+    if (typeof childServerId !== "string" || typeof childServerBootId !== "string") {
+      throw new Error(`Workspace "${name}" returned no canonical server identity`);
     }
-    if (method === "listUserPresence") {
-      const opts = asRecord(args[0]) ?? {};
-      const target = requireTargetUser(state, {
-        userId: opts["userId"],
-        handle: opts["handle"],
-      });
-      respond(hubUserPresence(state, subject, target));
-      return;
-    }
-    if (method === "routeWorkspace") {
-      // WP1 §5 / WP2 §4: membership pre-filter, spawn/attach the child, and
-      // return the coordinates for the client to reach the CHILD's ingress
-      // directly — the hub never relays media/RPC (child owns its DTLS pipe).
-      const opts = asRecord(args[0]) ?? {};
-      const name = normalizeWorkspaceName(opts["workspace"]);
-      assertMember(state, subject, name);
-      const runtime = await ensureWorkspaceRuntime(state, name);
-      let controlReach: ChildReach;
-      let workspaceReach: ChildReach;
-      if (subject.deviceId) {
-        [controlReach, workspaceReach] = await Promise.all([
-          armChildReach(runtime, {
-            deviceId: subject.deviceId,
-            purpose: "control",
-            reuseExisting: true,
-          }),
-          armChildReach(runtime, {
-            deviceId: subject.deviceId,
-            purpose: "workspace",
-          }),
-        ]);
-      } else {
-        // Child-forwarded non-device actors do not persist remote coordinates;
-        // their ephemeral user route exists only for the current in-process action.
-        const userReach = await armChildReach(runtime, { userId: subject.userId });
-        controlReach = userReach;
-        workspaceReach = userReach;
-      }
-      const childServerId = runtime.ready["serverId"];
-      const childServerBootId = runtime.ready["serverBootId"];
-      if (typeof childServerId !== "string" || typeof childServerBootId !== "string") {
-        throw new Error(`Workspace "${name}" returned no canonical server identity`);
-      }
-      state.centralData.setLastWorkspaceForUser(subject.userId, name);
-      respond({
-        workspace: runtime.advertisedName,
-        workspaceId: runtime.workspaceId,
-        running: true,
-        serverUrl: runtime.publicUrl,
-        controlReach,
-        workspaceReach,
-        serverId: childServerId,
-        serverBootId: childServerBootId,
-      });
-      return;
-    }
-    if (method === "createWorkspace") {
-      requireRole(subject, "admin");
-      const opts = asRecord(args[0]) ?? {};
-      const name = normalizeWorkspaceName(opts["workspace"]);
-      const entry = createAndRegisterWorkspace(name, state.centralData, {
-        ...(typeof opts["forkFrom"] === "string" ? { forkFrom: opts["forkFrom"] } : {}),
-      });
-      try {
-        if (subject.role !== "root") {
-          state.membershipStore.add(subject.userId, entry.workspaceId, subject.userId);
-          await recordMembershipOp(state, {
-            op: "add-member",
-            actor: subject,
-            target: { userId: subject.userId, handle: subject.handle },
-            workspaceId: entry.workspaceId,
-          });
-        }
-      } catch (error) {
-        deleteAndUnregisterWorkspace(name, state.centralData);
-        throw error;
-      }
-      respond({ ...entry, running: false });
-      return;
-    }
-    if (method === "deleteWorkspace") {
-      requireRole(subject, "admin");
-      const opts = asRecord(args[0]) ?? {};
-      const name = normalizeWorkspaceName(opts["workspace"]);
-      const workspaceId = requireWorkspaceId(state, name);
-      if (subject.sourceWorkspaceId === workspaceId) {
-        throw new Error("Cannot delete the workspace handling this control request");
-      }
-      const active = state.runtimes.get(name);
-      if (active) {
-        const runtime = "promise" in active ? await active.promise : active;
-        await terminateWorkspaceChild(runtime.child);
-        state.runtimes.delete(name);
-        state.workspacePresence.delete(workspaceId);
-      }
-      const removedWorkspaceId = deleteAndUnregisterWorkspace(name, state.centralData);
-      respond({ deleted: removedWorkspaceId !== null, workspaceId: removedWorkspaceId });
-      return;
-    }
-    if (method === "addWorkspaceMember") {
-      requireRole(subject, "admin");
-      const opts = asRecord(args[0]) ?? {};
-      const target = requireTargetUser(state, { userId: opts["userId"], handle: opts["handle"] });
-      const name = normalizeWorkspaceName(opts["workspace"]);
-      const workspaceId = requireWorkspaceId(state, name);
-      const priorMembership = state.identityDb
-        .listMembers(workspaceId)
-        .find((existing) => existing.userId === target.id);
-      const membership = state.membershipStore.add(target.id, workspaceId, subject.userId);
-      try {
+    state.centralData.setLastWorkspaceForUser(subject.userId, name);
+    respond({
+      workspace: runtime.advertisedName,
+      workspaceId: runtime.workspaceId,
+      running: true,
+      serverUrl: runtime.publicUrl,
+      workspaceReach,
+      serverId: childServerId,
+      serverBootId: childServerBootId,
+    });
+    return;
+  }
+  if (method === "createWorkspace") {
+    requireRole(subject, "admin");
+    const opts = asRecord(args[0]) ?? {};
+    const name = normalizeWorkspaceName(opts["workspace"]);
+    const entry = createAndRegisterWorkspace(name, state.centralData, {
+      ...(typeof opts["forkFrom"] === "string" ? { forkFrom: opts["forkFrom"] } : {}),
+    });
+    try {
+      if (subject.role !== "root") {
+        state.membershipStore.add(subject.userId, entry.workspaceId, subject.userId);
         await recordMembershipOp(state, {
           op: "add-member",
+          actor: subject,
+          target: { userId: subject.userId, handle: subject.handle },
+          workspaceId: entry.workspaceId,
+        });
+      }
+    } catch (error) {
+      deleteAndUnregisterWorkspace(name, state.centralData);
+      throw error;
+    }
+    respond({ ...entry, running: false });
+    return;
+  }
+  if (method === "ensureEphemeralWorkspace") {
+    requireRole(subject, "admin");
+    const existing = state.centralData.getEphemeralWorkspace();
+    if (existing) {
+      if (
+        existing.ownerBootId !== state.serverBootId ||
+        existing.name !== EPHEMERAL_DEV_WORKSPACE_NAME
+      ) {
+        throw new Error("Another ephemeral workspace lifecycle is already registered");
+      }
+      respond({
+        workspaceId: existing.workspaceId,
+        name: existing.name,
+        lastOpened: existing.lastOpened,
+        running: isRuntimeRunning(state, existing.name),
+        ephemeral: true,
+      });
+      return;
+    }
+    const entry = state.centralData.addEphemeralWorkspace(
+      EPHEMERAL_DEV_WORKSPACE_NAME,
+      state.serverBootId
+    );
+    respond({
+      workspaceId: entry.workspaceId,
+      name: entry.name,
+      lastOpened: entry.lastOpened,
+      running: false,
+      ephemeral: true,
+    });
+    return;
+  }
+  if (method === "deleteWorkspace") {
+    requireRole(subject, "admin");
+    const opts = asRecord(args[0]) ?? {};
+    const name = normalizeWorkspaceName(opts["workspace"]);
+    const workspaceId = requireWorkspaceId(state, name);
+    const active = state.runtimes.get(name);
+    if (active) {
+      const runtime = "promise" in active ? await active.promise : active;
+      // Removing desired ownership before signaling makes the exit handler
+      // recognize this as an intentional stop, never an availability fault.
+      if (state.runtimes.get(name) === active || state.runtimes.get(name) === runtime) {
+        state.runtimes.delete(name);
+      }
+      await terminateWorkspaceChild(runtime.child);
+      state.workspacePresence.delete(workspaceId);
+    }
+    const removedWorkspaceId = isWorkspaceEphemeral(state, name)
+      ? removeOwnedEphemeralWorkspace(state.centralData, state.serverBootId)
+      : deleteAndUnregisterWorkspace(name, state.centralData);
+    respond({ deleted: removedWorkspaceId !== null, workspaceId: removedWorkspaceId });
+    return;
+  }
+  if (method === "addWorkspaceMember") {
+    requireRole(subject, "admin");
+    const opts = asRecord(args[0]) ?? {};
+    const target = requireTargetUser(state, { userId: opts["userId"], handle: opts["handle"] });
+    const name = normalizeWorkspaceName(opts["workspace"]);
+    const workspaceId = requireWorkspaceId(state, name);
+    const priorMembership = state.identityDb
+      .listMembers(workspaceId)
+      .find((existing) => existing.userId === target.id);
+    const membership = state.membershipStore.add(target.id, workspaceId, subject.userId);
+    try {
+      await recordMembershipOp(state, {
+        op: "add-member",
+        actor: subject,
+        target: { userId: target.id, handle: target.handle },
+        workspaceId,
+      });
+    } catch (error) {
+      // `add` is an upsert. Restore a previous row exactly rather than
+      // deleting a membership that predated this failed governance write.
+      // Use the DB directly for the new-row case so explicit root rows are
+      // also compensated (MembershipStore.remove intentionally no-ops root).
+      if (priorMembership) state.identityDb.addMembership(priorMembership);
+      else state.identityDb.removeMembership(target.id, workspaceId);
+      throw error;
+    }
+    respond({ ...membership, workspace: name, handle: target.handle });
+    return;
+  }
+  if (method === "removeWorkspaceMember") {
+    requireRole(subject, "admin");
+    const opts = asRecord(args[0]) ?? {};
+    const target = requireTargetUser(state, { userId: opts["userId"], handle: opts["handle"] });
+    const name = normalizeWorkspaceName(opts["workspace"]);
+    const workspaceId = requireWorkspaceId(state, name);
+    const priorMembership = state.identityDb
+      .listMembers(workspaceId)
+      .find((membership) => membership.userId === target.id);
+    const removed = state.membershipStore.remove(target.id, workspaceId);
+    if (removed) {
+      try {
+        await recordMembershipOp(state, {
+          op: "remove-member",
           actor: subject,
           target: { userId: target.id, handle: target.handle },
           workspaceId,
         });
       } catch (error) {
-        // `add` is an upsert. Restore a previous row exactly rather than
-        // deleting a membership that predated this failed governance write.
-        // Use the DB directly for the new-row case so explicit root rows are
-        // also compensated (MembershipStore.remove intentionally no-ops root).
         if (priorMembership) state.identityDb.addMembership(priorMembership);
-        else state.identityDb.removeMembership(target.id, workspaceId);
         throw error;
       }
-      respond({ ...membership, workspace: name, handle: target.handle });
-      return;
     }
-    if (method === "removeWorkspaceMember") {
-      requireRole(subject, "admin");
-      const opts = asRecord(args[0]) ?? {};
-      const target = requireTargetUser(state, { userId: opts["userId"], handle: opts["handle"] });
-      const name = normalizeWorkspaceName(opts["workspace"]);
-      const workspaceId = requireWorkspaceId(state, name);
-      const priorMembership = state.identityDb
-        .listMembers(workspaceId)
-        .find((membership) => membership.userId === target.id);
-      const removed = state.membershipStore.remove(target.id, workspaceId);
-      if (removed) {
-        try {
-          await recordMembershipOp(state, {
-            op: "remove-member",
-            actor: subject,
-            target: { userId: target.id, handle: target.handle },
-            workspaceId,
-          });
-        } catch (error) {
-          if (priorMembership) state.identityDb.addMembership(priorMembership);
-          throw error;
-        }
+    const active = state.runtimes.get(name);
+    const closedSessions =
+      removed && active && !("promise" in active)
+        ? await closeUserSessionsInRuntime(active, target.id)
+        : 0;
+    respond({ removed, closedSessions });
+    return;
+  }
+  if (method === "listWorkspaceMembers") {
+    requireRole(subject, "admin");
+    const opts = asRecord(args[0]) ?? {};
+    const name = normalizeWorkspaceName(opts["workspace"]);
+    const workspaceId = requireWorkspaceId(state, name);
+    const storedMembers = state.membershipStore.listMembers(workspaceId);
+    const root = state.userStore
+      .listUsers()
+      .find((user) => user.role === "root" && user.revokedAt === undefined);
+    const membershipRows =
+      root && !storedMembers.some((row) => row.userId === root.id)
+        ? [
+            {
+              userId: root.id,
+              workspaceId,
+              addedBy: root.id,
+              addedAt: root.createdAt,
+              implicit: true,
+            },
+            ...storedMembers,
+          ]
+        : storedMembers;
+    const members = membershipRows.map((row) => {
+      const user = state.userStore.getUser(row.userId);
+      return {
+        ...row,
+        handle: user?.handle ?? null,
+        displayName: user?.displayName ?? null,
+        role: user?.role ?? null,
+      };
+    });
+    respond({ workspace: name, workspaceId, members });
+    return;
+  }
+  if (method === "inviteUser") {
+    // WP1 §6: root/admin creates a NEW user; the pairing code is bound to
+    // that user so the first device to redeem it is issued as them.
+    requireRole(subject, "admin");
+    const opts = asRecord(args[0]) ?? {};
+    const handle = typeof opts["handle"] === "string" ? opts["handle"].trim() : "";
+    if (!handle) throw new Error("hubControl.inviteUser requires { handle }");
+    const displayName =
+      typeof opts["displayName"] === "string" && opts["displayName"].trim()
+        ? opts["displayName"].trim()
+        : handle;
+    const role = opts["role"] === "admin" ? "admin" : "member";
+    const workspaceNames = Array.isArray(opts["workspaces"])
+      ? [...new Set(opts["workspaces"].map((name) => normalizeWorkspaceName(name)))]
+      : [];
+    if (workspaceNames.length === 0) {
+      throw new Error("hubControl.inviteUser requires at least one workspace");
+    }
+    const primaryWorkspaceName = workspaceNames[0];
+    if (!primaryWorkspaceName) throw new Error("hubControl.inviteUser requires a workspace");
+    // Resolve every workspace to its opaque id BEFORE creating the user so
+    // an unknown name fails the whole invite, not half of it.
+    const workspaceIds = workspaceNames.map((name) => requireWorkspaceId(state, name));
+    const ttlMs = pairingTtl(opts["ttlMs"]);
+    const invited = state.userStore.inviteUser({
+      handle,
+      displayName,
+      role,
+      createdBy: subject.userId,
+    });
+    let pairing: import("./hostCore/deviceAuthStore.js").PairingInvite | null = null;
+    let reach: ChildReach;
+    try {
+      for (const workspaceId of workspaceIds) {
+        state.membershipStore.add(invited.id, workspaceId, subject.userId);
       }
-      const active = state.runtimes.get(name);
-      const closedSessions =
-        removed && active && !("promise" in active)
-          ? await closeUserSessionsInRuntime(active, target.id)
-          : 0;
-      respond({ removed, closedSessions });
-      return;
-    }
-    if (method === "listWorkspaceMembers") {
-      requireRole(subject, "admin");
-      const opts = asRecord(args[0]) ?? {};
-      const name = normalizeWorkspaceName(opts["workspace"]);
-      const workspaceId = requireWorkspaceId(state, name);
-      const storedMembers = state.membershipStore.listMembers(workspaceId);
-      const root = state.userStore
-        .listUsers()
-        .find((user) => user.role === "root" && user.revokedAt === undefined);
-      const membershipRows =
-        root && !storedMembers.some((row) => row.userId === root.id)
-          ? [
-              {
-                userId: root.id,
-                workspaceId,
-                addedBy: root.id,
-                addedAt: root.createdAt,
-                implicit: true,
-              },
-              ...storedMembers,
-            ]
-          : storedMembers;
-      const members = membershipRows.map((row) => {
-        const user = state.userStore.getUser(row.userId);
-        return {
-          ...row,
-          handle: user?.handle ?? null,
-          displayName: user?.displayName ?? null,
-          role: user?.role ?? null,
-        };
+      pairing = state.deviceAuthStore.createPairingInvite(ttlMs, {
+        workspaceId: requireWorkspaceId(state, primaryWorkspaceName),
+        userId: invited.id,
+        intent: "invite-user",
       });
-      respond({ workspace: name, workspaceId, members });
-      return;
+      reach = await armControlInvite(state, pairing);
+    } catch (error) {
+      if (pairing) await disarmControlInvite(state, pairing.code);
+      state.userStore.rollbackInvite(invited.id);
+      throw error;
     }
-    if (method === "inviteUser") {
-      // WP1 §6: root/admin creates a NEW user; the pairing code is bound to
-      // that user so the first device to redeem it is issued as them.
-      requireRole(subject, "admin");
-      const opts = asRecord(args[0]) ?? {};
-      const handle = typeof opts["handle"] === "string" ? opts["handle"].trim() : "";
-      if (!handle) throw new Error("hubControl.inviteUser requires { handle }");
-      const displayName =
-        typeof opts["displayName"] === "string" && opts["displayName"].trim()
-          ? opts["displayName"].trim()
-          : handle;
-      const role = opts["role"] === "admin" ? "admin" : "member";
-      const workspaceNames = Array.isArray(opts["workspaces"])
-        ? [...new Set(opts["workspaces"].map((name) => normalizeWorkspaceName(name)))]
-        : [];
-      if (workspaceNames.length === 0) {
-        throw new Error("hubControl.inviteUser requires at least one workspace");
-      }
-      const primaryWorkspaceName = workspaceNames[0];
-      if (!primaryWorkspaceName) throw new Error("hubControl.inviteUser requires a workspace");
-      // Resolve every workspace to its opaque id BEFORE creating the user so
-      // an unknown name fails the whole invite, not half of it.
-      const workspaceIds = workspaceNames.map((name) => requireWorkspaceId(state, name));
-      const ttlMs = pairingTtl(opts["ttlMs"]);
-      const pairingRuntime = await ensureWorkspaceRuntime(state, primaryWorkspaceName);
-      const invited = state.userStore.inviteUser({
-        handle,
-        displayName,
-        role,
-        createdBy: subject.userId,
-      });
-      let pairingCode = "";
-      let pairingExpiresAt = 0;
-      let reach: ChildReach;
-      try {
-        for (const workspaceId of workspaceIds) {
-          state.membershipStore.add(invited.id, workspaceId, subject.userId);
-        }
-        pairingCode = state.deviceAuthStore.createPairingCode(ttlMs, {
-          workspaceId: requireWorkspaceId(state, primaryWorkspaceName),
-          userId: invited.id,
-          intent: "invite-user",
-        });
-        pairingExpiresAt = state.deviceAuthStore.pairingCodeExpiresAt(pairingCode);
-        reach = await armChildReach(pairingRuntime, {
-          inviteCode: pairingCode,
-          expiresAt: pairingExpiresAt,
-        });
-      } catch (error) {
-        if (pairingCode) {
-          state.deviceAuthStore.cancelPairingCode(pairingCode);
-          await releaseChildReach(pairingRuntime, pairingCode);
-        }
-        state.userStore.rollbackInvite(invited.id);
-        throw error;
-      }
-      try {
-        await recordMembershipOps(state, [
-          {
-            op: "invite-user",
-            actor: subject,
-            target: { userId: invited.id, handle: invited.handle },
-            role,
-          },
-          ...workspaceIds.map((workspaceId) => ({
-            op: "add-member" as const,
-            actor: subject,
-            target: { userId: invited.id, handle: invited.handle },
-            workspaceId,
-          })),
-        ]);
-      } catch (error) {
-        state.deviceAuthStore.cancelPairingCode(pairingCode);
-        await releaseChildReach(pairingRuntime, pairingCode);
-        state.userStore.rollbackInvite(invited.id);
-        throw error;
-      }
-      respond({
-        user: {
-          userId: invited.id,
-          handle: invited.handle,
-          displayName: invited.displayName,
-          role: invited.role,
+    try {
+      await recordMembershipOps(state, [
+        {
+          op: "invite-user",
+          actor: subject,
+          target: { userId: invited.id, handle: invited.handle },
+          role,
         },
-        workspaces: workspaceNames,
-        pairing: pairingInviteFromReach(state, pairingCode, pairingExpiresAt, reach),
-      });
-      return;
+        ...workspaceIds.map((workspaceId) => ({
+          op: "add-member" as const,
+          actor: subject,
+          target: { userId: invited.id, handle: invited.handle },
+          workspaceId,
+        })),
+      ]);
+    } catch (error) {
+      if (pairing) await disarmControlInvite(state, pairing.code);
+      state.userStore.rollbackInvite(invited.id);
+      throw error;
     }
-    if (method === "pairDevice") {
-      // WP1 §6: any authenticated member adds a device to THEMSELF — the code
-      // is bound to the caller's own userId, never someone else's.
-      const opts = asRecord(args[0]) ?? {};
-      const ttlMs = pairingTtl(opts["ttlMs"]);
-      const workspace = resolveInviteWorkspace(state, subject, opts["workspace"]);
-      assertMember(state, subject, workspace);
-      const runtime = await ensureWorkspaceRuntime(state, workspace);
-      const workspaceId = requireWorkspaceId(state, workspace);
-      const pairingCode = state.deviceAuthStore.createPairingCode(ttlMs, {
-        workspaceId,
-        userId: subject.userId,
-        intent: "pair-device",
-      });
-      const pairingExpiresAt = state.deviceAuthStore.pairingCodeExpiresAt(pairingCode);
-      let reach: ChildReach;
-      try {
-        reach = await armChildReach(runtime, {
-          inviteCode: pairingCode,
-          expiresAt: pairingExpiresAt,
-        });
-      } catch (error) {
-        state.deviceAuthStore.cancelPairingCode(pairingCode);
-        await releaseChildReach(runtime, pairingCode);
-        throw error;
-      }
-      respond({
-        userId: subject.userId,
-        handle: subject.handle,
-        workspace,
-        pairing: pairingInviteFromReach(state, pairingCode, pairingExpiresAt, reach),
-      });
-      return;
+    if (!pairing) throw new Error("Invite pairing was not created");
+    respond({
+      user: {
+        userId: invited.id,
+        handle: invited.handle,
+        displayName: invited.displayName,
+        role: invited.role,
+      },
+      workspaces: workspaceNames,
+      pairing: pairingInviteFromReach(state, pairing.code, pairing.expiresAt, reach),
+    });
+    return;
+  }
+  if (method === "pairDevice") {
+    // WP1 §6: any authenticated member adds a device to THEMSELF — the code
+    // is bound to the caller's own userId, never someone else's.
+    const opts = asRecord(args[0]) ?? {};
+    const ttlMs = pairingTtl(opts["ttlMs"]);
+    const workspace = resolveInviteWorkspace(state, subject, opts["workspace"]);
+    assertMember(state, subject, workspace);
+    const workspaceId = requireWorkspaceId(state, workspace);
+    const pairing = state.deviceAuthStore.createPairingInvite(ttlMs, {
+      workspaceId,
+      userId: subject.userId,
+      intent: "pair-device",
+    });
+    let reach: ChildReach;
+    try {
+      reach = await armControlInvite(state, pairing);
+    } catch (error) {
+      await disarmControlInvite(state, pairing.code);
+      throw error;
     }
-    if (method === "revokeUser") {
-      // WP9 §6.5: root/admin revokes a user COMPLETELY, in order — (1) the
-      // identity-DB cascade (account + devices + agent credentials +
-      // memberships + pending pairing codes, one transaction), (2) the hub's
-      // live shell tokens for the user's devices, (3) every live session
-      // across workspace children (in-flight RPCs settle CONNECTION_LOST).
-      // Deputy retirement, channel_members pruning, and tree archival are
-      // child/userland reactions to the shared-DB write. Root cannot be
-      // revoked (`UserStore.revokeUser` throws ROOT_IMMUTABLE).
-      requireRole(subject, "admin");
-      const opts = asRecord(args[0]) ?? {};
-      const target = findTargetUser(state, {
+    respond({
+      userId: subject.userId,
+      handle: subject.handle,
+      workspace,
+      pairing: pairingInviteFromReach(state, pairing.code, pairing.expiresAt, reach),
+    });
+    return;
+  }
+  if (method === "revokeUser") {
+    const opts = asRecord(args[0]) ?? {};
+    respond(
+      await revokeHubUser(state, subject, {
         userId: opts["userId"],
         handle: opts["handle"],
-      });
-      if (!target) throw new Error("Unknown user — pass { userId } or { handle }");
-      if (target.role === "root") {
-        // Preserve the canonical UserStore error/code for the immutable root.
-        state.userStore.revokeUser(target.id);
-      }
-      // Snapshot the user's devices BEFORE the cascade flips them to revoked,
-      // so the hub can drop their live shell tokens afterwards.
-      const deviceIds = state.identityDb.listDevicesForUser(target.id).map((d) => d.deviceId);
-      const workspaceIds = state.centralData.listWorkspaces().map((entry) => entry.workspaceId);
-      const revoked = state.userStore.revokeUser(target.id, workspaceIds);
-      for (const deviceId of deviceIds) {
-        state.tokenManager.revokeToken(shellCallerId(deviceId));
-      }
-      await ensureRevocationGovernance(state, {
+      })
+    );
+    return;
+  }
+  if (method === "setRole") {
+    // WP9 §6: role assignment is ROOT-only (the one gate stricter than
+    // root/admin). `UserStore.setRole` enforces root immutability — the
+    // root user cannot be demoted and nobody can be promoted to root.
+    if (subject.role !== "root") {
+      throw authError("EACCES", "Requires the root role", 403);
+    }
+    const opts = asRecord(args[0]) ?? {};
+    const role = opts["role"];
+    if (role !== "admin" && role !== "member") {
+      throw new Error('hubControl.setRole requires { role: "admin" | "member" }');
+    }
+    const target = requireTargetUser(state, { userId: opts["userId"], handle: opts["handle"] });
+    const priorRole = target.role;
+    state.userStore.setRole(target.id, role);
+    try {
+      await recordMembershipOp(state, {
+        op: "role-change",
         actor: subject,
         target: { userId: target.id, handle: target.handle },
+        role,
       });
-      const cleanup = await processUserRevocationCleanup(
-        state,
-        target.id,
-        target.id === subject.userId ? subject.sourceWorkspaceId : undefined
-      );
-      respond({
-        revoked,
-        userId: target.id,
-        handle: target.handle,
-        closedSessions: cleanup.reduce((sum, result) => sum + result.closedSessions, 0),
-        cleanup,
-      });
-      return;
+    } catch (error) {
+      state.userStore.setRole(target.id, priorRole);
+      throw error;
     }
-    if (method === "setRole") {
-      // WP9 §6: role assignment is ROOT-only (the one gate stricter than
-      // root/admin). `UserStore.setRole` enforces root immutability — the
-      // root user cannot be demoted and nobody can be promoted to root.
-      if (subject.role !== "root") {
-        throw authError("EACCES", "Requires the root role", 403);
-      }
-      const opts = asRecord(args[0]) ?? {};
-      const role = opts["role"];
-      if (role !== "admin" && role !== "member") {
-        throw new Error('hubControl.setRole requires { role: "admin" | "member" }');
-      }
-      const target = requireTargetUser(state, { userId: opts["userId"], handle: opts["handle"] });
-      const priorRole = target.role;
-      state.userStore.setRole(target.id, role);
-      try {
-        await recordMembershipOp(state, {
-          op: "role-change",
-          actor: subject,
-          target: { userId: target.id, handle: target.handle },
-          role,
-        });
-      } catch (error) {
-        state.userStore.setRole(target.id, priorRole);
-        throw error;
-      }
-      respond({ userId: target.id, handle: target.handle, role });
-      return;
-    }
-    if (method === "updateProfile") {
-      // WP6 §6: personalization is a HUB write — the hub is the sole identity
-      // writer (WP0 §2). Self-service for any member; editing ANOTHER user's
-      // profile is root-only. Handle renames validate against the regex +
-      // reserved set inside `UserStore.renameHandle`. Children serve the
-      // matching live READS (`account.getProfile`/`resolveProfiles`) off the
-      // shared DB, so this write re-renders everywhere without roster rewrites.
-      const opts = asRecord(args[0]) ?? {};
-      const targetUserId =
-        typeof opts["userId"] === "string" && opts["userId"] ? opts["userId"] : subject.userId;
-      if (targetUserId !== subject.userId && subject.role !== "root") {
-        throw authError("EACCES", "Only root may update another user's profile", 403);
-      }
-      const profile = updateAccountProfile(
-        { userStore: state.userStore },
-        {
-          userId: targetUserId,
-          ...(typeof opts["displayName"] === "string" ? { displayName: opts["displayName"] } : {}),
-          // `null` is the wire form of "clear this field"; absent = untouched.
-          ...("avatar" in opts
-            ? { avatar: opts["avatar"] === null ? null : String(opts["avatar"]) }
-            : {}),
-          ...("color" in opts
-            ? { color: opts["color"] === null ? null : String(opts["color"]) }
-            : {}),
-          ...(typeof opts["handle"] === "string" ? { handle: opts["handle"] } : {}),
-        }
-      );
-      respond(profile);
-      return;
-    }
-    if (method === "getProfile") {
-      const opts = asRecord(args[0]) ?? {};
-      const targetUserId =
-        typeof opts["userId"] === "string" && opts["userId"] ? opts["userId"] : subject.userId;
-      const user = state.userStore.getUser(targetUserId);
-      respond(
-        user
-          ? {
-              userId: user.id,
-              handle: user.handle,
-              displayName: user.displayName,
-              role: user.role,
-              ...(user.color !== undefined ? { color: user.color } : {}),
-              ...(user.avatarBlob !== undefined ? { avatar: user.avatarBlob } : {}),
-            }
-          : null
-      );
-      return;
-    }
-    if (method === "listDevices") {
-      const visibleDevices =
-        subject.role === "root" || subject.role === "admin"
-          ? state.deviceAuthStore.listDevices()
-          : state.identityDb.listDevicesForUser(subject.userId);
-      respond({
-        serverId: state.deviceAuthStore.getServerId(),
-        devices: visibleDevices.map(({ refreshTokenHash: _secret, ...device }) => device),
-      });
-      return;
-    }
-    if (method === "revokeDevice") {
-      const deviceId = typeof args[0] === "string" ? args[0] : "";
-      const device = state.identityDb.getDevice(deviceId);
-      if (!device) throw new Error("Unknown device");
-      if (device.userId !== subject.userId) requireRole(subject, "admin");
-      const revoked = state.deviceAuthStore.revokeDevice(deviceId);
-      if (revoked) state.tokenManager.revokeToken(shellCallerId(deviceId));
-      const closedSessions = revoked
-        ? await closeDeviceSessionsAcrossChildren(
-            state,
-            deviceId,
-            deviceId === subject.deviceId ? subject.sourceWorkspaceId : undefined
-          )
-        : 0;
-      respond({ revoked, closedSessions });
-      return;
-    }
-
-    sendJson(res, 200, { error: `Unknown hub RPC method: ${method}` });
-  } catch (error) {
-    sendJson(res, authErrorStatus(error) ?? 500, remoteErrorPayload(error));
+    respond({ userId: target.id, handle: target.handle, role });
+    return;
   }
+  if (method === "updateProfile") {
+    // WP6 §6: personalization is a HUB write — the hub is the sole identity
+    // writer (WP0 §2). Self-service for any member; editing ANOTHER user's
+    // profile is root-only. Handle renames validate against the regex +
+    // reserved set inside `UserStore.renameHandle`. Children serve the
+    // matching live READS (`account.getProfile`/`resolveProfiles`) off the
+    // shared DB, so this write re-renders everywhere without roster rewrites.
+    const opts = asRecord(args[0]) ?? {};
+    const targetUserId =
+      typeof opts["userId"] === "string" && opts["userId"] ? opts["userId"] : subject.userId;
+    if (targetUserId !== subject.userId && subject.role !== "root") {
+      throw authError("EACCES", "Only root may update another user's profile", 403);
+    }
+    const profile = updateAccountProfile(
+      { userStore: state.userStore },
+      {
+        userId: targetUserId,
+        ...(typeof opts["displayName"] === "string" ? { displayName: opts["displayName"] } : {}),
+        // `null` is the wire form of "clear this field"; absent = untouched.
+        ...("avatar" in opts
+          ? { avatar: opts["avatar"] === null ? null : String(opts["avatar"]) }
+          : {}),
+        ...("color" in opts
+          ? { color: opts["color"] === null ? null : String(opts["color"]) }
+          : {}),
+        ...(typeof opts["handle"] === "string" ? { handle: opts["handle"] } : {}),
+      }
+    );
+    respond(profile);
+    return;
+  }
+  if (method === "getProfile") {
+    const opts = asRecord(args[0]) ?? {};
+    const targetUserId =
+      typeof opts["userId"] === "string" && opts["userId"] ? opts["userId"] : subject.userId;
+    const user = state.userStore.getUser(targetUserId);
+    respond(
+      user
+        ? {
+            userId: user.id,
+            handle: user.handle,
+            displayName: user.displayName,
+            role: user.role,
+            ...(user.color !== undefined ? { color: user.color } : {}),
+            ...(user.avatarBlob !== undefined ? { avatar: user.avatarBlob } : {}),
+          }
+        : null
+    );
+    return;
+  }
+  if (method === "listDevices") {
+    const visibleDevices =
+      subject.role === "root" || subject.role === "admin"
+        ? state.deviceAuthStore.listDevices()
+        : state.identityDb.listDevicesForUser(subject.userId);
+    respond({
+      serverId: state.deviceAuthStore.getServerId(),
+      devices: visibleDevices.map(({ refreshTokenHash: _secret, ...device }) => device),
+    });
+    return;
+  }
+  if (method === "revokeDevice") {
+    const deviceId = typeof args[0] === "string" ? args[0] : "";
+    respond(await revokeHubDevice(state, subject, deviceId));
+    return;
+  }
+
+  throw new Error(`Unknown hub RPC method: ${method}`);
+}
+
+function createDirectHubControlService(state: HubRuntimeState): ServiceDefinition {
+  const invoke = async (
+    ctx: ServiceContext,
+    method: keyof typeof hubControlMethods & string,
+    args: unknown[]
+  ): Promise<unknown> => {
+    const subject = hubSubjectFor(state, {
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
+    });
+    const definition = hubControlMethods[method];
+    let responded = false;
+    let result: unknown;
+    await executeHubControl(state, subject, method, args, (value) => {
+      responded = true;
+      result = definition.returns?.parse(value) ?? value;
+    });
+    if (!responded) throw new Error(`Hub control method ${method} produced no response`);
+    return result;
+  };
+
+  return {
+    name: "hubControl",
+    description: "Machine-level workspace and account control",
+    policy: { allowed: ["shell"] },
+    methods: hubControlMethods,
+    handler: defineServiceHandler(
+      "hubControl",
+      hubControlMethods,
+      mapServiceHandlers(hubControlMethods, (method, ctx, args) =>
+        invoke(ctx, method as keyof typeof hubControlMethods & string, args)
+      )
+    ),
+  };
+}
+
+async function startHubControlTransport(
+  state: HubRuntimeState,
+  configDir: string
+): Promise<HubControlTransport> {
+  const reachRoot = path.join(configDir, "server-auth", "webrtc");
+
+  const dispatcher = new ServiceDispatcher();
+  dispatcher.registerService(createDirectHubControlService(state));
+  dispatcher.markInitialized();
+  const { RpcServer } = await import("./rpcServer.js");
+  const { createHubCredentialRedeemer } = await import("./services/authService.js");
+  const rpcServer = new RpcServer({
+    tokenManager: state.tokenManager,
+    dispatcher,
+    relayAuthorization: ({ targetId }) => ({
+      ok: false,
+      reason: `Hub control transport cannot relay to runtime target ${targetId}`,
+    }),
+    userSubjectSource: {
+      resolve: (callerId, callerKind) => {
+        if (callerKind !== "shell" || !callerId.startsWith(SHELL_CALLER_PREFIX)) return null;
+        const userId = state.deviceAuthStore.userFor(callerId.slice(SHELL_CALLER_PREFIX.length));
+        const user = userId ? state.userStore.getUser(userId) : null;
+        return user && user.revokedAt === undefined
+          ? { userId: user.id, handle: user.handle }
+          : null;
+      },
+    },
+    liveCallerGate: (caller) => {
+      if (caller.runtime.kind !== "shell" || !caller.runtime.id.startsWith(SHELL_CALLER_PREFIX)) {
+        return false;
+      }
+      const userId = state.deviceAuthStore.userFor(
+        caller.runtime.id.slice(SHELL_CALLER_PREFIX.length)
+      );
+      const user = userId ? state.userStore.getUser(userId) : null;
+      return !!user && user.revokedAt === undefined;
+    },
+    redeemPairingCredential: createHubCredentialRedeemer({
+      deviceAuthStore: state.deviceAuthStore,
+      tokenManager: state.tokenManager,
+      resolveUser: (userId) => state.userStore.getUser(userId),
+      redeemPairingCode: (code, input) => completeControlPairing(state, code, input),
+    }),
+  });
+  rpcServer.initHandlers();
+
+  const { resolveSignalingUrl } = await import("@vibestudio/shared/connect");
+  const signalUrl = resolveSignalingUrl({ env: process.env }).url;
+  const { ensurePersistentCert } = await import("../node/webrtc/cert.js");
+  const { assertNodeDatachannelAvailable } = await import("../node/webrtc/nodeDatachannelPeer.js");
+  assertNodeDatachannelAvailable();
+  const identityFile = path.join(reachRoot, "identity.pem");
+  const cert = ensurePersistentCert({ identityPemFile: identityFile });
+  const clientIce: import("@vibestudio/shared/connect").TurnPolicy =
+    process.env["VIBESTUDIO_WEBRTC_ICE"] === "relay" ? "relay" : "all";
+  const serverIce: import("@vibestudio/shared/connect").TurnPolicy =
+    process.env["VIBESTUDIO_WEBRTC_SERVER_ICE"] === "relay"
+      ? "relay"
+      : process.env["VIBESTUDIO_WEBRTC_SERVER_ICE"] === "all"
+        ? "all"
+        : clientIce;
+  const { startWebRtcIngress } = await import("./webrtcIngress.js");
+  const ingress = startWebRtcIngress({
+    rpcServer,
+    signalUrl,
+    certificatePemFile: cert.certificatePemFile,
+    keyPemFile: cert.keyPemFile,
+    iceTransportPolicy: serverIce,
+  });
+  const transport: HubControlTransport = {
+    ingress,
+    pairing: {
+      fp: cert.fingerprint,
+      sig: signalUrl,
+      v: PAIRING_PROTOCOL_VERSION,
+      ice: clientIce,
+    },
+    rpcServer,
+    inviteExpiryTimers: new Map(),
+  };
+  state.controlTransport = transport;
+
+  state.deviceAuthStore.cleanupControlRooms(Date.now());
+  for (const room of state.deviceAuthStore.listControlRooms()) {
+    await ingress.armRoom(room.room, {
+      ...(room.kind === "device" ? { deviceId: room.deviceId } : {}),
+    });
+    if (room.kind === "invite") {
+      scheduleControlInviteExpiry(state, room.codeHash, room.expiresAt);
+    }
+  }
+  return transport;
 }
 
 function parseWorkspaceProxyUrl(rawUrl: string): { name: string; upstreamPath: string } | null {
@@ -1693,7 +1787,7 @@ async function existingWorkspaceRuntime(
   const current = state.runtimes.get(advertisedName);
   if (!current) return null;
   const runtime = "promise" in current ? await current.promise : current;
-  return runtime.child.exitCode === null ? runtime : null;
+  return workspaceChildExited(runtime.child) ? null : runtime;
 }
 
 async function runtimeForProxyRequest(
@@ -1841,25 +1935,51 @@ async function proxyUpgrade(
 
 async function ensureWorkspaceRuntime(
   state: HubRuntimeState,
-  advertisedName: string
+  advertisedName: string,
+  options: { reuseEphemeralDiskName?: string } = {}
 ): Promise<WorkspaceRuntime> {
   requireWorkspaceId(state, advertisedName);
   const current = state.runtimes.get(advertisedName);
-  if (current) return "promise" in current ? current.promise : current;
+  if (current) {
+    if ("promise" in current) return current.promise;
+    if (!workspaceChildExited(current.child)) return current;
+    state.runtimes.delete(advertisedName);
+  }
+  return beginWorkspaceRuntimeStart(state, advertisedName, (onSpawn) =>
+    startWorkspaceRuntime(state, advertisedName, onSpawn, options)
+  );
+}
+
+function beginWorkspaceRuntimeStart(
+  state: HubRuntimeState,
+  advertisedName: string,
+  start: (onSpawn: (child: ChildProcess) => void) => Promise<WorkspaceRuntime>
+): Promise<WorkspaceRuntime> {
   const pending: PendingWorkspaceRuntime = { promise: null as never };
-  const promise = startWorkspaceRuntime(state, advertisedName, (child) => {
+  const started = start((child) => {
     pending.child = child;
   });
+  const promise = started
+    .then((runtime) => {
+      if (workspaceChildExited(runtime.child)) {
+        throw new Error(
+          `Workspace runtime "${advertisedName}" exited while readiness was being published`
+        );
+      }
+      if (state.runtimes.get(advertisedName) === pending) {
+        state.runtimes.set(advertisedName, runtime);
+      }
+      return runtime;
+    })
+    .catch((error: unknown) => {
+      if (state.runtimes.get(advertisedName) === pending) {
+        state.runtimes.delete(advertisedName);
+      }
+      throw error;
+    });
   pending.promise = promise;
   state.runtimes.set(advertisedName, pending);
-  try {
-    const runtime = await promise;
-    state.runtimes.set(advertisedName, runtime);
-    return runtime;
-  } catch (error) {
-    state.runtimes.delete(advertisedName);
-    throw error;
-  }
+  return promise;
 }
 
 /**
@@ -1884,11 +2004,11 @@ export function buildWorkspaceChildEnv(input: {
   workspaceId: string;
   hubUrl: string;
   identityDbPath: string;
-  hubControlToken: string;
+  workspaceChildToken: string;
   ephemeral: boolean;
   autoApproveStartupUnits: boolean;
 }): NodeJS.ProcessEnv {
-  const advertisedStateDir = path.join(getWorkspaceDir(input.advertisedWorkspaceName), "state");
+  const reach = workspaceReachPaths(input.advertisedWorkspaceName);
   const env: NodeJS.ProcessEnv = {
     ...input.baseEnv,
     VIBESTUDIO_APP_ROOT: input.appRoot,
@@ -1904,16 +2024,16 @@ export function buildWorkspaceChildEnv(input: {
     // of one child process's disk checkout. This is identical for persistent
     // workspaces and crucial for ephemeral dev, whose random checkout is
     // deleted on every restart while paired devices must retain their room.
-    VIBESTUDIO_ROUTED_ROOM_STATE_PATH: routedRoomStatePath(input.advertisedWorkspaceName),
+    VIBESTUDIO_ROUTED_ROOM_STATE_PATH: reach.routesFile,
     VIBESTUDIO_IDENTITY_DB_PATH: input.identityDbPath,
-    VIBESTUDIO_HUB_CONTROL_TOKEN: input.hubControlToken,
+    VIBESTUDIO_WORKSPACE_CHILD_TOKEN: input.workspaceChildToken,
     // Every child gets a distinct loopback-management capability. Never pass
     // through the hub's operator token from baseEnv.
     VIBESTUDIO_ADMIN_TOKEN: randomBytes(32).toString("hex"),
     // The certificate identifies the advertised logical workspace. Ephemeral
     // dev may replace its random checkout on every launch, but paired clients
     // must continue to see the fingerprint they pinned for `dev`.
-    VIBESTUDIO_WEBRTC_IDENTITY: path.join(advertisedStateDir, "webrtc", "identity.pem"),
+    VIBESTUDIO_WEBRTC_IDENTITY: reach.identityFile,
     VIBESTUDIO_PROCESS_ROLE: "workspace-child",
     VIBESTUDIO_HUB_URL: input.hubUrl,
   };
@@ -1938,15 +2058,34 @@ export function buildWorkspaceChildEnv(input: {
  * still removes the currently recorded checkout. */
 export function prepareEphemeralWorkspaceDisk(
   centralData: CentralDataManager,
+  ownerBootId: string,
   workspaceId: string,
   nextDiskName: string,
   removeWorkspace: typeof deleteUnregisteredWorkspace = deleteUnregisteredWorkspace
 ): void {
-  const previous = centralData.getEphemeralWorkspace();
-  if (previous?.diskName && previous.diskName !== nextDiskName) {
-    removeWorkspace(previous.diskName, centralData);
+  const cleanup = centralData.rotateEphemeralWorkspaceDiskName(
+    ownerBootId,
+    workspaceId,
+    nextDiskName
+  );
+  if (cleanup) {
+    removeWorkspace(cleanup, centralData, ownerBootId);
   }
-  centralData.setEphemeralWorkspaceDiskName(workspaceId, nextDiskName);
+}
+
+/**
+ * Release only the checkout owned by this process instance. There is no marker
+ * read before the compare-and-remove: a displaced shutdown receives no cleanup
+ * ticket and therefore has no filesystem coordinate it may delete.
+ */
+export function removeOwnedEphemeralWorkspace(
+  centralData: CentralDataManager,
+  ownerBootId: string,
+  removeWorkspace: typeof deleteUnregisteredWorkspace = deleteUnregisteredWorkspace
+): string | null {
+  const removal = centralData.removeEphemeralWorkspace(ownerBootId, ownerBootId);
+  if (removal?.cleanup) removeWorkspace(removal.cleanup, centralData, ownerBootId);
+  return removal?.workspace.workspaceId ?? null;
 }
 
 export function buildWorkspaceChildArgs(input: {
@@ -1982,9 +2121,10 @@ export function buildWorkspaceChildArgs(input: {
 async function startWorkspaceRuntime(
   state: HubRuntimeState,
   advertisedName: string,
-  onSpawn: (child: ChildProcess) => void
+  onSpawn: (child: ChildProcess) => void,
+  options: { reuseEphemeralDiskName?: string } = {}
 ): Promise<WorkspaceRuntime> {
-  const isEphemeralDevWorkspace = state.args.ephemeral && advertisedName === "dev";
+  const isEphemeralDevWorkspace = isWorkspaceEphemeral(state, advertisedName);
   const workspaceId = requireWorkspaceId(state, advertisedName);
   // A new child instance owns a fresh report stream. Never retain endpoints
   // from a prior process while the replacement is starting.
@@ -1993,14 +2133,30 @@ async function startWorkspaceRuntime(
     advertisedName === "default" &&
     state.autoApproveStartupWorkspaceIds?.has(workspaceId) === true &&
     !workspaceConfigExists("default");
-  const childWorkspaceName = isEphemeralDevWorkspace
-    ? `dev-${randomBytes(4).toString("hex")}`
-    : advertisedName;
+  if (options.reuseEphemeralDiskName && !isEphemeralDevWorkspace) {
+    throw new Error("Only an ephemeral dev runtime may reuse an ephemeral disk coordinate");
+  }
+  if (options.reuseEphemeralDiskName && !/^dev-[0-9a-f]{8}$/.test(options.reuseEphemeralDiskName)) {
+    throw new Error("Invalid ephemeral restart disk coordinate");
+  }
+  const childWorkspaceName =
+    options.reuseEphemeralDiskName ??
+    (isEphemeralDevWorkspace ? `dev-${randomBytes(4).toString("hex")}` : advertisedName);
+  if (options.reuseEphemeralDiskName && !fs.existsSync(getWorkspaceDir(childWorkspaceName))) {
+    throw new Error(
+      `Cannot recover workspace "${advertisedName}": owned checkout "${childWorkspaceName}" is missing`
+    );
+  }
   // Runtime startup consumes an explicitly registered workspace; it never
   // creates catalog state as a routing side effect. Ephemeral dev children use
   // a random disk name but retain the registered advertised workspace id.
   if (isEphemeralDevWorkspace) {
-    prepareEphemeralWorkspaceDisk(state.centralData, workspaceId, childWorkspaceName);
+    prepareEphemeralWorkspaceDisk(
+      state.centralData,
+      state.serverBootId,
+      workspaceId,
+      childWorkspaceName
+    );
   }
   const readyDir = fs.mkdtempSync(
     path.join(os.tmpdir(), `vibestudio-workspace-${advertisedName}-`)
@@ -2025,13 +2181,13 @@ async function startWorkspaceRuntime(
     workspaceId,
     hubUrl: state.connectUrl,
     identityDbPath: state.identityDbPath,
-    hubControlToken: randomBytes(32).toString("base64url"),
+    workspaceChildToken: randomBytes(32).toString("base64url"),
     ephemeral: isEphemeralDevWorkspace === true,
     autoApproveStartupUnits: shouldAutoApproveDefaultStartup,
   });
-  const controlToken = childEnv["VIBESTUDIO_HUB_CONTROL_TOKEN"];
-  if (!controlToken) throw new Error("Workspace child environment has no hub control token");
-  state.childControlTokens.set(controlToken, workspaceId);
+  const runtimeToken = childEnv["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"];
+  if (!runtimeToken) throw new Error("Workspace child environment has no runtime identity token");
+  state.workspaceChildTokens.set(runtimeToken, workspaceId);
 
   const child = spawn(process.execPath, [...process.execArgv, ...childArgs], {
     cwd: state.appRoot,
@@ -2080,17 +2236,21 @@ async function startWorkspaceRuntime(
   child.stderr?.on("data", (chunk) =>
     forwardOutput(process.stderr, `[workspace:${advertisedName}:err] `, chunk)
   );
-  child.on("exit", () => {
-    state.childControlTokens.delete(controlToken);
-    state.workspacePresence.delete(workspaceId);
-    const current = state.runtimes.get(advertisedName);
-    if (current?.child === child) {
-      state.runtimes.delete(advertisedName);
-    }
-    // Preserve a crashed ephemeral checkout until the replacement runtime is
-    // requested. It contains the evidence needed to inspect the crash. The
-    // next start rotates it via prepareEphemeralWorkspaceDisk; clean shutdown
-    // removes the currently recorded checkout below.
+  child.on("exit", (code, signal) => {
+    void handleWorkspaceChildExit(state, {
+      advertisedName,
+      childWorkspaceName,
+      workspaceId,
+      runtimeToken,
+      child,
+      code,
+      signal,
+    }).catch((error) => {
+      console.error(
+        `[Hub] Workspace "${advertisedName}" exit reconciliation failed; runtime remains unavailable:`,
+        error
+      );
+    });
   });
 
   let ready: Record<string, unknown>;
@@ -2109,7 +2269,7 @@ async function startWorkspaceRuntime(
     state.autoApproveStartupWorkspaceIds?.delete(workspaceId);
   } catch (error) {
     await terminateWorkspaceChild(child);
-    state.childControlTokens.delete(controlToken);
+    state.workspaceChildTokens.delete(runtimeToken);
     throw error;
   } finally {
     fs.rmSync(readyDir, { recursive: true, force: true });
@@ -2122,7 +2282,7 @@ async function startWorkspaceRuntime(
     publicUrl,
     child,
     ready,
-    controlToken,
+    runtimeToken,
   };
 }
 
@@ -2132,7 +2292,141 @@ type ProcessSignalDeps = {
 };
 
 function workspaceChildExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
+  return (
+    (child.exitCode !== null && child.exitCode !== undefined) ||
+    (child.signalCode !== null && child.signalCode !== undefined)
+  );
+}
+
+type WorkspaceChildExitInput = {
+  advertisedName: string;
+  childWorkspaceName: string;
+  workspaceId: string;
+  runtimeToken: string;
+  child: ChildProcess;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
+
+type WorkspaceChildExitDeps = {
+  shouldRestart?: (state: HubRuntimeState, advertisedName: string) => boolean;
+  reap?: (child: ChildProcess) => Promise<void>;
+  restart?: (
+    state: HubRuntimeState,
+    input: WorkspaceChildExitInput,
+    reaped: Promise<void>
+  ) => Promise<WorkspaceRuntime>;
+};
+
+function workspaceRuntimeIsDesired(state: HubRuntimeState, advertisedName: string): boolean {
+  if (!state.centralData.hasWorkspace(advertisedName)) return false;
+  if (isWorkspaceEphemeral(state, advertisedName)) return true;
+  const routeFile = routedRoomStatePath(advertisedName);
+  return fs.existsSync(routeFile) && new RoutedRoomStore(routeFile).list().length > 0;
+}
+
+function restartExitedWorkspaceRuntime(
+  state: HubRuntimeState,
+  input: WorkspaceChildExitInput,
+  reaped: Promise<void>
+): Promise<WorkspaceRuntime> {
+  return beginWorkspaceRuntimeStart(state, input.advertisedName, async (onSpawn) => {
+    await reaped;
+    return startWorkspaceRuntime(state, input.advertisedName, onSpawn, {
+      reuseEphemeralDiskName: isWorkspaceEphemeral(state, input.advertisedName)
+        ? input.childWorkspaceName
+        : undefined,
+    });
+  });
+}
+
+/**
+ * Converge the runtime registry after an observed OS exit. A ready child with
+ * durable demand is replaced immediately; ephemeral recovery reuses the exact
+ * hub-owned checkout so run/DO state survives the process fault. Intentional
+ * stops remove the map entry before signaling and are therefore ignored here.
+ */
+export async function handleWorkspaceChildExit(
+  state: HubRuntimeState,
+  input: WorkspaceChildExitInput,
+  deps: WorkspaceChildExitDeps = {}
+): Promise<void> {
+  state.workspaceChildTokens.delete(input.runtimeToken);
+  state.workspacePresence.delete(input.workspaceId);
+  const current = state.runtimes.get(input.advertisedName);
+  if (!current || current.child !== input.child) return;
+  const wasReady = !("promise" in current);
+  state.runtimes.delete(input.advertisedName);
+
+  const reaped = (deps.reap ?? reapWorkspaceChildProcessGroup)(input.child);
+  const exitDescription = `code=${input.code ?? "null"}, signal=${input.signal ?? "null"}, pid=${input.child.pid ?? "unknown"}`;
+  if (state.shuttingDown) {
+    console.log(
+      `[Hub] Workspace "${input.advertisedName}" exited during shutdown (${exitDescription})`
+    );
+    await reaped;
+    return;
+  }
+  console.error(
+    `[Hub] Workspace "${input.advertisedName}" exited unexpectedly (${exitDescription})`
+  );
+
+  if (
+    !wasReady ||
+    !(deps.shouldRestart ?? workspaceRuntimeIsDesired)(state, input.advertisedName)
+  ) {
+    await reaped;
+    return;
+  }
+
+  try {
+    const runtime = await (deps.restart ?? restartExitedWorkspaceRuntime)(state, input, reaped);
+    console.log(
+      `[Hub] Workspace "${input.advertisedName}" recovered on child ${runtime.child.pid ?? "unknown"} using checkout "${runtime.name}"`
+    );
+  } catch (error) {
+    console.error(
+      `[Hub] Workspace "${input.advertisedName}" recovery failed; runtime remains unavailable:`,
+      error
+    );
+  }
+}
+
+/** Kill and prove absence of the exact detached process group owned by a child. */
+export async function reapWorkspaceChildProcessGroup(
+  child: ChildProcess,
+  deps: ProcessSignalDeps & {
+    now?: () => number;
+    pause?: (ms: number) => Promise<void>;
+    timeoutMs?: number;
+  } = {}
+): Promise<void> {
+  const platform = deps.platform ?? process.platform;
+  const pid = child.pid;
+  if (platform === "win32" || !Number.isInteger(pid) || (pid ?? 0) <= 0) return;
+  const killProcess = deps.killProcess ?? process.kill;
+  try {
+    killProcess(-(pid as number), "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+    throw error;
+  }
+
+  const now = deps.now ?? Date.now;
+  const pause = deps.pause ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const deadline = now() + (deps.timeoutMs ?? 5_000);
+  while (true) {
+    try {
+      killProcess(-(pid as number), 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw error;
+    }
+    if (now() >= deadline) {
+      throw new Error(`Workspace child process group ${pid} survived SIGKILL`);
+    }
+    await pause(25);
+  }
 }
 
 /** Signal the workspace runtime and every process it owns. */
@@ -2161,22 +2455,31 @@ export function signalWorkspaceChildTree(
  * signalWorkspaceChildTree(SIGKILL). There is deliberately no elapsed-time
  * cutoff between those explicit lifecycle actions.
  */
-export async function terminateWorkspaceChild(child: ChildProcess): Promise<void> {
-  if (workspaceChildExited(child)) return;
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  const delivered = child.kill("SIGTERM");
-  if (!delivered && !workspaceChildExited(child)) {
-    throw new Error(`Could not signal workspace child ${child.pid ?? "unknown"}`);
+export async function terminateWorkspaceChild(
+  child: ChildProcess,
+  deps: { reap?: (child: ChildProcess) => Promise<void> } = {}
+): Promise<void> {
+  if (!workspaceChildExited(child)) {
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    const delivered = child.kill("SIGTERM");
+    if (!delivered && !workspaceChildExited(child)) {
+      throw new Error(`Could not signal workspace child ${child.pid ?? "unknown"}`);
+    }
+    await exited;
   }
-  await exited;
+  await (deps.reap ?? reapWorkspaceChildProcessGroup)(child);
 }
 
 async function waitForReadyFile(
   readyFile: string,
   child: ChildProcess
 ): Promise<Record<string, unknown>> {
-  const deadline = Date.now() + 180_000;
-  while (Date.now() < deadline) {
+  // Readiness is a state transition, not a duration. Cold protected-root
+  // validation can legitimately take several minutes and already emits
+  // per-service watchdog/progress output. Treat process exit as failure; do
+  // not kill a live, progressing workspace because a machine-local deadline
+  // happened to expire.
+  for (;;) {
     if (child.exitCode !== null) {
       throw new Error(`Workspace runtime exited before readiness (code ${child.exitCode})`);
     }
@@ -2186,7 +2489,6 @@ async function waitForReadyFile(
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
-  throw new Error(`Timed out waiting for workspace runtime readiness: ${readyFile}`);
 }
 
 function resolveAdminToken(): { adminToken: string; tokenSource: HubRuntimeState["tokenSource"] } {
@@ -2266,7 +2568,12 @@ async function startHubGateway(input: {
         return;
       }
       if (url.pathname === "/rpc") {
-        await handleRpc(state, req, res);
+        const control = state.controlTransport;
+        if (!control) {
+          sendText(res, 503, "Hub control starting");
+          return;
+        }
+        await control.rpcServer.handleGatewayHttpRequest(req, res);
         return;
       }
       sendText(res, 404, "Not Found");
@@ -2281,6 +2588,17 @@ async function startHubGateway(input: {
     const state = input.getState();
     if (!state) {
       socket.destroy();
+      return;
+    }
+    const url = new URL(req.url ?? "/", "http://hub.local");
+    if (url.pathname === "/rpc") {
+      const control = state.controlTransport;
+      if (!control) {
+        socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      control.rpcServer.handleGatewayWsUpgrade(req, socket, head);
       return;
     }
     const proxied = parseWorkspaceProxyUrl(req.url ?? "/");
@@ -2327,12 +2645,42 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   const identityDbPath =
     process.env["VIBESTUDIO_IDENTITY_DB_PATH"] ??
     path.join(centralPaths.configDir, "server-auth", "identity.db");
+  const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
   const { centralData, identityDb } = openHubDataStores(identityDbPath);
-  const staleEphemeral = centralData.getEphemeralWorkspace();
-  if (staleEphemeral?.diskName) {
-    deleteUnregisteredWorkspace(staleEphemeral.diskName, centralData);
+  try {
+    centralData.claimHubProcessLease({
+      ownerBootId: serverBootId,
+      gatewayPort,
+      pid: process.pid,
+      ttlMs: HUB_PROCESS_LEASE_TTL_MS,
+    });
+  } catch (error) {
+    identityDb.close();
+    centralData.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    throw error;
   }
-  if (staleEphemeral) centralData.removeEphemeralWorkspace();
+  let processLeaseLost = false;
+  const processLeaseHeartbeat = setInterval(() => {
+    if (processLeaseLost) return;
+    try {
+      if (centralData.renewHubProcessLease(serverBootId, HUB_PROCESS_LEASE_TTL_MS)) return;
+      console.error(`[Hub] Lost machine-control lease for ${serverBootId}; terminating`);
+    } catch (error) {
+      console.error(`[Hub] Could not renew machine-control lease for ${serverBootId}:`, error);
+    }
+    processLeaseLost = true;
+    process.kill(process.pid, "SIGTERM");
+  }, HUB_PROCESS_LEASE_HEARTBEAT_MS);
+  processLeaseHeartbeat.unref();
+  const staleEphemeral = centralData.getEphemeralWorkspace();
+  if (staleEphemeral) {
+    centralData.removeEphemeralWorkspace(serverBootId, staleEphemeral.ownerBootId);
+  }
+  for (const cleanup of centralData.listEphemeralWorkspaceCleanups(serverBootId)) {
+    deleteUnregisteredWorkspace(cleanup, centralData, serverBootId);
+  }
+  recoverStagedWorkspaceDeletions(centralData);
   const version =
     process.env["VIBESTUDIO_APP_VERSION"] ?? process.env["npm_package_version"] ?? "0.1.0";
   const tokenManager = new TokenManager();
@@ -2347,17 +2695,13 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   });
   const userStore = new UserStore(identityDb);
   const membershipStore = new MembershipStore(identityDb, userStore);
-  const bootstrapWorkspace = normalizeWorkspaceName(
-    args.bootstrapWorkspace ?? (args.ephemeral ? "dev" : "default")
-  );
-  if (args.ephemeral && bootstrapWorkspace !== "dev") {
-    throw new Error("Ephemeral hubs use the canonical dev workspace");
-  }
+  const bootstrap = selectBootstrapWorkspace(args, centralData.listWorkspaces());
+  const bootstrapWorkspace = bootstrap.name;
   let bootstrapWasCreated = false;
-  if (args.ephemeral) {
-    centralData.addEphemeralWorkspace(bootstrapWorkspace);
+  if (bootstrap.lifecycle === "ephemeral") {
+    centralData.addEphemeralWorkspace(bootstrapWorkspace, serverBootId);
     bootstrapWasCreated = true;
-  } else if (args.bootstrapWorkspace || centralData.listWorkspaces().length === 0) {
+  } else if (bootstrap.lifecycle === "register") {
     bootstrapWasCreated = !centralData.hasWorkspace(bootstrapWorkspace);
     centralData.addWorkspace(bootstrapWorkspace);
   }
@@ -2373,19 +2717,12 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   // is issued with the new root's userId (see the complete-pairing route). Once
   // a root exists, new humans arrive by invite (WP1), so no startup code is minted.
   const needsRootBootstrap = !identityDb.hasUsers();
-  const startupPairingCode = needsRootBootstrap
-    ? deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS, {
+  const startupPairing = needsRootBootstrap
+    ? deviceAuthStore.createPairingInvite(DEFAULT_PAIRING_CODE_TTL_MS, {
         workspaceId: bootstrapWorkspaceId,
         intent: "root-bootstrap",
       })
     : null;
-  const startupQrPairingCode = needsRootBootstrap
-    ? deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS, {
-        workspaceId: bootstrapWorkspaceId,
-        intent: "root-bootstrap",
-      })
-    : null;
-  const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
   // No public ingress: the hub is loopback HTTP only. connectUrl is the loopback
   // gateway URL; remote reach is the per-workspace WebRTC pipe (answerer seam).
   const gatewayUrl = `${hostConfig.protocol}://${hostConfig.externalHost}:${gatewayPort}`;
@@ -2410,9 +2747,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     bindHost: hostConfig.bindHost,
     connectUrl,
     identityDbPath,
-    startupPairingCode,
-    startupQrPairingCode,
-    childControlTokens: new Map(),
+    workspaceChildTokens: new Map(),
     autoApproveStartupWorkspaceIds: new Set(
       bootstrapWasCreated && bootstrapWorkspace === "default" ? [bootstrapWorkspaceId] : []
     ),
@@ -2421,21 +2756,21 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     shuttingDown: false,
   };
   const activeState = state;
+  await startHubControlTransport(activeState, centralPaths.configDir);
 
   let startupInvite: HubPairingInvite | null = null;
-  let startupQrInvite: HubPairingInvite | null = null;
   // A persisted device room is a live reach contract. Restart every registered
   // child that owns at least one route so returning clients can reconnect
   // without first reaching an in-memory hub session to re-route themselves.
   const restartableWorkspaces = centralData.listWorkspaces().filter((entry) => {
     const routeFile = routedRoomStatePath(entry.name);
     return (
-      (args.ephemeral && entry.name === bootstrapWorkspace) ||
+      isWorkspaceEphemeral(activeState, entry.name) ||
       (fs.existsSync(routeFile) && new RoutedRoomStore(routeFile).list().length > 0)
     );
   });
-  await Promise.all(
-    restartableWorkspaces.map((entry) => ensureWorkspaceRuntime(activeState, entry.name))
+  await restoreRoutedWorkspaceRuntimes(restartableWorkspaces, (name) =>
+    ensureWorkspaceRuntime(activeState, name)
   );
   let revocationCleanupDrain: Promise<void> | null = null;
   const drainRevocationCleanup = (): Promise<void> => {
@@ -2459,59 +2794,33 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     });
   }, 10_000);
   revocationCleanupTimer.unref();
-  if (startupPairingCode && startupQrPairingCode) {
-    const runtime = await ensureWorkspaceRuntime(state, bootstrapWorkspace);
-    let desktopReach: ChildReach;
-    let mobileReach: ChildReach;
+  if (startupPairing) {
+    let rootReach: ChildReach;
     try {
-      [desktopReach, mobileReach] = await Promise.all([
-        armChildReach(runtime, {
-          inviteCode: startupPairingCode,
-          expiresAt: deviceAuthStore.pairingCodeExpiresAt(startupPairingCode),
-        }),
-        armChildReach(runtime, {
-          inviteCode: startupQrPairingCode,
-          expiresAt: deviceAuthStore.pairingCodeExpiresAt(startupQrPairingCode),
-        }),
-      ]);
+      rootReach = await armControlInvite(state, startupPairing);
     } catch (error) {
-      deviceAuthStore.cancelPairingCode(startupPairingCode);
-      deviceAuthStore.cancelPairingCode(startupQrPairingCode);
-      await Promise.all([
-        releaseChildReach(runtime, startupPairingCode),
-        releaseChildReach(runtime, startupQrPairingCode),
-      ]);
+      await disarmControlInvite(state, startupPairing.code);
       throw error;
     }
     startupInvite = pairingInviteFromReach(
       state,
-      startupPairingCode,
-      deviceAuthStore.pairingCodeExpiresAt(startupPairingCode),
-      desktopReach
-    );
-    startupQrInvite = pairingInviteFromReach(
-      state,
-      startupQrPairingCode,
-      deviceAuthStore.pairingCodeExpiresAt(startupQrPairingCode),
-      mobileReach
+      startupPairing.code,
+      startupPairing.expiresAt,
+      rootReach
     );
   }
 
   console.log("vibestudio-server hub ready:");
   console.log(`  Gateway:     ${gatewayUrl} (loopback)`);
   console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
-  if (startupPairingCode) {
+  if (startupPairing) {
     console.log(`  Root Pair URL: ${startupInvite?.pairUrl ?? "unavailable"}`);
-    console.log(`  Root QR URL:   ${startupQrInvite?.pairUrl ?? "unavailable"}`);
   } else {
     console.log("  Identity:    root already bootstrapped (add users via invite)");
   }
 
   if (args.readyFile) {
-    const payload = buildHubReadyPayload(
-      state,
-      startupInvite && startupQrInvite ? { desktop: startupInvite, mobile: startupQrInvite } : null
-    );
+    const payload = buildHubReadyPayload(state, startupInvite);
     writeFileAtomicSync(args.readyFile, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   }
 
@@ -2528,15 +2837,17 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     state.shuttingDown = true;
     clearInterval(revocationCleanupTimer);
     console.log("[Hub] Shutting down...");
+    if (state.controlTransport) {
+      for (const timer of state.controlTransport.inviteExpiryTimers.values()) clearTimeout(timer);
+      state.controlTransport.inviteExpiryTimers.clear();
+      await state.controlTransport.ingress.close();
+      await state.controlTransport.rpcServer.stop();
+    }
     const childProcesses = workspaceChildren();
     await Promise.all(childProcesses.map((child) => terminateWorkspaceChild(child)));
-    if (state.args.ephemeral) {
+    if (state.centralData.getEphemeralWorkspace()?.ownerBootId === state.serverBootId) {
       try {
-        const ephemeral = state.centralData.getEphemeralWorkspace();
-        if (ephemeral?.diskName) {
-          deleteUnregisteredWorkspace(ephemeral.diskName, state.centralData);
-        }
-        if (ephemeral) state.centralData.removeEphemeralWorkspace();
+        removeOwnedEphemeralWorkspace(state.centralData, state.serverBootId);
       } catch (error) {
         // Keep the lifecycle marker intact so the next startup retries cleanup.
         console.error("[Hub] Ephemeral workspace cleanup will retry on next startup:", error);
@@ -2544,7 +2855,8 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     }
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await state.governanceLog?.close();
-    state.centralData.clearHubRuntime();
+    clearInterval(processLeaseHeartbeat);
+    state.centralData.releaseHubProcessLease(state.serverBootId);
     state.centralData.close();
     state.identityDb.close();
     process.exit(0);

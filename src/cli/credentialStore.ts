@@ -18,9 +18,10 @@ export type CliStoredPairing = Omit<ConnectPairing, "code" | "v" | "ice"> & {
 };
 
 export interface CliCredentials {
-  schemaVersion: 3;
+  schemaVersion: 4;
   kind: "device";
   url: string;
+  workspaceId: string;
   workspaceName: string;
   serverId: string;
   deviceId: string;
@@ -34,6 +35,7 @@ const CREDENTIAL_KEYS = new Set([
   "schemaVersion",
   "kind",
   "url",
+  "workspaceId",
   "workspaceName",
   "serverId",
   "deviceId",
@@ -43,7 +45,7 @@ const CREDENTIAL_KEYS = new Set([
   "pairedAt",
 ]);
 
-const STORED_PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice", "srv"]);
+const STORED_PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice"]);
 
 export const credentialPath = cliCredentialPath;
 
@@ -62,7 +64,12 @@ export function loadCliCredentials(): CliCredentials | null {
     );
     return null;
   }
-  return isCliCredentials(parsed) ? parsed : null;
+  if (isCliCredentials(parsed)) return parsed;
+  console.warn(
+    `[vibestudio] credential file is not a canonical device credential: ${p}\n` +
+      "             delete it and pair again, or restore a good copy."
+  );
+  return null;
 }
 
 export function saveCliCredentials(creds: CliCredentials): void {
@@ -84,6 +91,23 @@ export function isWebRtcCredential<T extends { workspacePairing?: unknown }>(
   return !!creds?.workspacePairing && isStoredPairing(creds.workspacePairing);
 }
 
+/** Canonical persisted form of a hub-returned WebRTC reach record. */
+export function canonicalStoredPairing(reach: CliStoredPairing): CliStoredPairing {
+  const signaling = parseSignalingEndpoint(reach.sig);
+  if (signaling.kind === "error") throw new Error(signaling.reason);
+  const canonical: CliStoredPairing = {
+    room: reach.room,
+    fp: normalizeFingerprint(reach.fp),
+    sig: signaling.url,
+    v: reach.v,
+    ice: reach.ice,
+  };
+  if (!isStoredPairing(canonical)) {
+    throw new Error("Hub returned non-canonical WebRTC reach coordinates");
+  }
+  return canonical;
+}
+
 function isStoredPairing(value: unknown): value is CliStoredPairing {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (Object.keys(value).some((key) => !STORED_PAIRING_KEYS.has(key))) return false;
@@ -99,12 +123,7 @@ function isStoredPairing(value: unknown): value is CliStoredPairing {
     signaling?.kind === "ok" &&
     signaling.url === pairing.sig &&
     pairing.v === PAIRING_PROTOCOL_VERSION &&
-    (pairing.ice === "all" || pairing.ice === "relay") &&
-    (pairing.srv === undefined ||
-      (typeof pairing.srv === "string" &&
-        pairing.srv.length > 0 &&
-        pairing.srv.length <= 128 &&
-        pairing.srv.trim() === pairing.srv))
+    (pairing.ice === "all" || pairing.ice === "relay")
   );
 }
 
@@ -113,8 +132,11 @@ function isCliCredentials(value: unknown): value is CliCredentials {
   if (Object.keys(value).some((key) => !CREDENTIAL_KEYS.has(key))) return false;
   const candidate = value as Partial<CliCredentials>;
   if (
-    candidate.schemaVersion !== 3 ||
+    candidate.schemaVersion !== 4 ||
     candidate.kind !== "device" ||
+    typeof candidate.workspaceId !== "string" ||
+    candidate.workspaceId.length === 0 ||
+    candidate.workspaceId.trim() !== candidate.workspaceId ||
     typeof candidate.workspaceName !== "string" ||
     !/^[A-Za-z0-9_-]{1,64}$/.test(candidate.workspaceName) ||
     !isServerId(candidate.serverId) ||

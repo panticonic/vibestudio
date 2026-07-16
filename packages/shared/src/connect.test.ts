@@ -43,12 +43,11 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
       sig: "wss://signal.example/",
       v: 2,
       ice: "all",
-      srv: undefined,
     });
   });
 
   it("round-trips the https pair carrier with identical payload semantics", () => {
-    const link = createConnectPairUrl({ ...PAIR, srv: "remote box" });
+    const link = createConnectPairUrl(PAIR);
     expect(link).toMatch(/^https:\/\/vibestudio\.app\/pair#/);
     expect(parseConnectLink(link)).toEqual({
       kind: "ok",
@@ -58,7 +57,6 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
       sig: "wss://signal.example/",
       v: 2,
       ice: "all",
-      srv: "remote box",
     });
   });
 
@@ -77,14 +75,21 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     }
   });
 
-  it("carries the optional srv label and relay policy", () => {
-    const link = createConnectDeepLink({ ...PAIR, srv: "home", ice: "relay" });
+  it("carries the relay policy", () => {
+    const link = createConnectDeepLink({ ...PAIR, ice: "relay" });
     const parsed = parseConnectLink(link);
     expect(parsed.kind).toBe("ok");
     if (parsed.kind === "ok") {
-      expect(parsed.srv).toBe("home");
       expect(parsed.ice).toBe("relay");
     }
+  });
+
+  it("rejects the removed srv transport label", () => {
+    const canonical = createConnectDeepLink(PAIR);
+    expect(parseConnectLink(`${canonical}&srv=home`)).toEqual({
+      kind: "error",
+      reason: "Deep link contains unsupported parameter `srv`",
+    });
   });
 
   it("round-trips a live expiry and rejects an expired invite", () => {
@@ -274,9 +279,9 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
       const pairUrl = createConnectPairUrl(PAIR);
       expect(mirror.createConnectPairUrl(PAIR)).toBe(pairUrl);
       expect(mirror.parseConnectLink(pairUrl)).toEqual(parseConnectLink(pairUrl));
-      const withSrv = createConnectDeepLink({ ...PAIR, srv: "home", ice: "relay" });
-      expect(mirror.createConnectDeepLink({ ...PAIR, srv: "home", ice: "relay" })).toBe(withSrv);
-      expect(mirror.parseConnectLink(withSrv)).toEqual(parseConnectLink(withSrv));
+      const relayOnly = createConnectDeepLink({ ...PAIR, ice: "relay" });
+      expect(mirror.createConnectDeepLink({ ...PAIR, ice: "relay" })).toBe(relayOnly);
+      expect(mirror.parseConnectLink(relayOnly)).toEqual(parseConnectLink(relayOnly));
       const expiringPair = { ...PAIR, exp: Date.now() + 60_000 };
       const withExpiry = createConnectDeepLink(expiringPair);
       expect(mirror.createConnectDeepLink(expiringPair)).toBe(withExpiry);

@@ -22,6 +22,7 @@
   "dependencies": {
     "@vibestudio/dev-log": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@puppeteer/browsers": "^2.6.1",

@@ -37,10 +37,23 @@ afterEach(() => {
 });
 
 describe("remote-doctor", () => {
-  it("supports the documented workspace identity selector", () => {
+  it("checks the stable hub control identity by default", () => {
+    vi.stubEnv("XDG_CONFIG_HOME", "/tmp/vibestudio-doctor-xdg");
+    vi.stubEnv("VIBESTUDIO_WEBRTC_IDENTITY", "/tmp/child-identity.pem");
+    const parsed = parseArgs([]);
+    expect(parsed.identityScope).toBe("hub");
+    expect(parsed.identityExplicit).toBe(false);
+    expect(parsed.identity).toBe(
+      path.join("/tmp/vibestudio-doctor-xdg", "vibestudio", "server-auth", "webrtc", "identity.pem")
+    );
+  });
+
+  it("supports an explicit workspace identity selector", () => {
     const parsed = parseArgs(["--workspace", "dev_one"]);
     expect(parsed.workspace).toBe("dev_one");
-    expect(parsed.identity).toContain(path.join("workspaces", "dev_one", "state", "webrtc"));
+    expect(parsed.identityScope).toBe("workspace");
+    expect(parsed.identityExplicit).toBe(true);
+    expect(parsed.identity).toContain(path.join("workspaces", "dev_one", "reach", "webrtc"));
     expect(() => parseArgs(["--workspace", "dev", "--identity", "/tmp/id.pem"])).toThrow(
       /not both/
     );
@@ -87,7 +100,10 @@ describe("remote-doctor", () => {
   it("reads the signaling endpoint from the canonical paired credential", () => {
     const file = tmpFile(
       "cli-credentials.json",
-      JSON.stringify({ workspacePairing: { sig: "ws://127.0.0.1:8790/" } })
+      JSON.stringify({
+        controlPairing: { sig: "ws://127.0.0.1:8790/" },
+        workspacePairing: { sig: "ws://127.0.0.1:9999/" },
+      })
     );
     expect(pairedSignalingUrl(file)).toBe("ws://127.0.0.1:8790/");
   });
@@ -109,13 +125,14 @@ describe("remote-doctor", () => {
       }
     );
     expect(dialed).toContain("127.0.0.1:8790");
-    expect(result.checks.find((entry: { name: string }) => entry.name === "signaling")).toMatchObject(
-      { ok: true, source: "paired-credential" }
-    );
+    expect(
+      result.checks.find((entry: { name: string }) => entry.name === "signaling")
+    ).toMatchObject({ ok: true, source: "paired-credential" });
   });
 
   it("passes a well-formed 0600 identity file", () => {
     const file = tmpFile("identity.pem", IDENTITY_PEM, 0o600);
+    fs.writeFileSync(path.join(path.dirname(file), "server.pem"), "unrelated-old-file");
     const result = inspectIdentity(file);
     expect(result.ok).toBe(true);
     expect(result.message).toContain("cert+key");
@@ -204,5 +221,6 @@ describe("remote-doctor", () => {
     expect(
       result.checks.some((c: { name: string; ok: boolean }) => c.name === "signaling" && c.ok)
     ).toBe(true);
+    expect(result.checks.some((c: { name: string }) => c.name.includes("legacy"))).toBe(false);
   });
 });

@@ -94,15 +94,14 @@ export function certFileFingerprint(certificatePemFile: string): string {
 }
 
 /**
- * Load the persistent cert at the given paths, or mint-and-persist one on FIRST
- * provision (neither file present). Returns the paths plus the stable DTLS
- * fingerprint to publish in the QR. The private key is written `0600`.
+ * Load the combined persistent identity, or mint-and-persist one on first
+ * provision. Returns the certificate/key views plus the stable DTLS fingerprint
+ * to publish in this endpoint's reach. The combined identity is written `0600`.
  *
- * Fails loud rather than re-minting on a half-provisioned identity: if exactly
- * one of the two files is present, or a file exists but is empty/unparseable,
- * this throws {@link CertIdentityError}. Silently re-minting there would hand
- * every already-paired device a new fingerprint and break its DTLS pin (§2.6);
- * the only deliberate re-mint is deleting BOTH files.
+ * Fails loud rather than re-minting an empty or malformed identity. Silently
+ * changing a fingerprint would break every saved reach for this endpoint. The
+ * operator must deliberately repair the hub control identity or an exact
+ * workspace child and accept that scope's distinct recovery consequence.
  */
 export function ensurePersistentCert(opts: {
   identityPemFile: string;
@@ -113,7 +112,7 @@ export function ensurePersistentCert(opts: {
   const identityState = classifyIdentityFile(identityPemFile);
 
   const consequence =
-    "regenerate with `vibestudio remote repair-identity` after accepting that all paired devices must re-pair";
+    "repair a workspace child with `vibestudio remote repair-identity --workspace <name> --yes`; hub control identity rotation is intentionally unsupported, so restore that identity from its exact backup";
 
   if (identityState === "present") {
     // Already provisioned — reuse so the fingerprint stays stable across restarts.

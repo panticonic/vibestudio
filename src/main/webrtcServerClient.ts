@@ -32,7 +32,11 @@ import {
   type WebRtcSession,
   type WebRtcTransport,
 } from "@vibestudio/rpc/transports/webrtcClient";
-import { createPairedConnection } from "@vibestudio/rpc/transports/pairedConnection";
+import {
+  createPairedConnection,
+  type DeviceCredential,
+  type PairingContext,
+} from "@vibestudio/rpc/transports/pairedConnection";
 import type {
   PeerConnectionProvider,
   RtcCandidateType,
@@ -66,8 +70,7 @@ export interface WebRtcServerClientArgs {
    * redeemed): the durable device credential to persist so `getShellToken` can
    * switch to `refresh:<deviceId>:<refreshToken>` for reconnects.
    */
-  onPaired?: (credential: { deviceId: string; refreshToken: string }) => void;
-  onServerEvent?: (event: string, payload: unknown) => void;
+  onPaired?: (credential: DeviceCredential, context?: PairingContext) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
@@ -133,13 +136,7 @@ export async function createWebRtcServerClient(
   const effectiveConnectionStatus = (): ConnectionStatus =>
     mainSessionTerminalError || mainSession.isClosed() ? "disconnected" : transport.status();
   transport.onStatusChange(() => args.onConnectionStatusChanged?.(effectiveConnectionStatus()));
-  // Older/custom transports used by embedders and tests may not yet expose
-  // reconnect progress. Treat it as additive observability: real transports
-  // forward it, while a legacy seam must not make an otherwise healthy
-  // connection fail during setup.
-  if (typeof transport.onReconnectProgress === "function") {
-    transport.onReconnectProgress((progress) => args.onReconnectProgress?.(progress));
-  }
+  transport.onReconnectProgress((progress) => args.onReconnectProgress?.(progress));
   // Relay alarm (§9.8): remember the selected path for the shell and warn loud
   // when TURN engages — a relayed pipe works but P2P failed (or was forced).
   let lastCandidateType: RtcCandidateType | null = transport.candidateType();
@@ -156,12 +153,6 @@ export async function createWebRtcServerClient(
     // the shell's replay guard (the status value is unchanged).
     args.onConnectionStatusChanged?.(effectiveConnectionStatus());
   });
-  if (args.onServerEvent) {
-    mainSession.onMessage((envelope) => {
-      const message = envelope.message;
-      if (message && message.type === "event") args.onServerEvent?.(message.event, message.payload);
-    });
-  }
   const rpc = createRpcClient({
     selfId: args.callerId,
     callerKind: "shell",
@@ -289,9 +280,22 @@ export async function createWebRtcServerClient(
       // REQUEST body out on the same channel (plan §1.6).
       return rpc.stream("main", `${service}.${method}`, callArgs, options);
     },
+    onDirectEvent(event, listener) {
+      return rpc.on(event, ({ payload }) => listener(payload as never));
+    },
     async callAs(caller, service, method, callArgs, options?: RpcCallOptions): Promise<unknown> {
       const client = await getScopedClient(caller);
       return client.rpc.call("main", `${service}.${method}`, callArgs, options);
+    },
+    async streamAs(
+      caller,
+      service,
+      method,
+      callArgs,
+      options?: RpcStreamOptions
+    ): Promise<Response> {
+      const client = await getScopedClient(caller);
+      return client.rpc.stream("main", `${service}.${method}`, callArgs, options);
     },
     addMessageListener(caller, listener): () => void {
       const key = scopedKey(caller);

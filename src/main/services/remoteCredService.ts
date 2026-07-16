@@ -1,10 +1,8 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   HubWorkspaceRouteSchema,
-  hubControlMethods,
   type HubWorkspaceRoute,
 } from "@vibestudio/service-schemas/hubControl";
 import type { ViewManager } from "../viewManager.js";
@@ -96,27 +94,20 @@ export function persistStoredRemoteWorkspaceRoute(rawRoute: HubWorkspaceRoute): 
   if (route.serverId !== existing.serverId) {
     throw new Error("Workspace route changed the paired server identity");
   }
-  const storedReach = (reach: HubWorkspaceRoute["controlReach"]) => ({
+  const storedReach = (reach: HubWorkspaceRoute["workspaceReach"]) => ({
     room: reach.room,
     fp: normalizeFingerprint(reach.fp),
     sig: reach.sig,
     v: reach.v,
     ice: reach.ice,
-    ...(reach.srv ? { srv: reach.srv } : {}),
   });
   saveDeviceCredential({
     ...existing,
     workspaceName: route.workspace,
-    controlPairing: storedReach(route.controlReach),
+    controlPairing: existing.controlPairing,
     workspacePairing: storedReach(route.workspaceReach),
   });
   return true;
-}
-
-function hubControlClientFor(client: ServerClient) {
-  return createTypedServiceClient("hubControl", hubControlMethods, (service, method, args) =>
-    client.call(service, method, args)
-  );
 }
 
 export function createRemoteCredService(deps: {
@@ -131,11 +122,6 @@ export function createRemoteCredService(deps: {
   getConnectionMode?: () => "local" | "remote";
   getViewManager?: () => ViewManager;
 }): ServiceDefinition {
-  const requireLiveClient = (): ServerClient => {
-    const client = deps.getServerClient?.() ?? null;
-    if (!client?.isConnected()) throw new Error("Not connected to a Vibestudio server");
-    return client;
-  };
   const requireRemoteCredCaller = (ctx: ServiceContext, method: string): void => {
     if (ctx.caller.runtime.kind !== "app") return;
     if (!deps.getViewManager) {
@@ -191,24 +177,6 @@ export function createRemoteCredService(deps: {
         }
         relaunchApp({ args: relaunchArgs });
         return { ok: true };
-      },
-      pairDevice: async (ctx, [options]) => {
-        requireRemoteCredCaller(ctx, "pairDevice");
-        const client = hubControlClientFor(requireLiveClient());
-        return await client.pairDevice(options);
-      },
-      listDevices: async (ctx) => {
-        requireRemoteCredCaller(ctx, "listDevices");
-        const response = await hubControlClientFor(requireLiveClient()).listDevices();
-        return response.devices;
-      },
-      revokeDevice: async (ctx, [deviceId]) => {
-        requireRemoteCredCaller(ctx, "revokeDevice");
-        const stored = loadStoredRemotePairingFromStore();
-        const result = await hubControlClientFor(requireLiveClient()).revokeDevice(deviceId);
-        const currentDevice = result.revoked && stored?.deviceId === deviceId;
-        if (currentDevice) clearStoredRemotePairingInStore();
-        return { ...result, currentDevice };
       },
       reconnectNow: (ctx) => {
         requireRemoteCredCaller(ctx, "reconnectNow");

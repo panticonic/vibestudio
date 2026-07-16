@@ -99,13 +99,7 @@ async function createWebRtcHeadlessHostOverrides(
     );
     const activeFacade = facade;
 
-    const eventListeners = new Set<(event: string, payload: unknown) => void>();
     const recoveryHandlers = new Set<() => void | Promise<void>>();
-    cleanups.push(
-      await client.onEvent("panel:runtimeLeaseChanged", (payload) => {
-        for (const listener of eventListeners) listener("panel:runtimeLeaseChanged", payload);
-      })
-    );
     cleanups.push(
       await client.onRecovery(async () => {
         for (const handler of recoveryHandlers) await handler();
@@ -118,9 +112,6 @@ async function createWebRtcHeadlessHostOverrides(
       connectionFactory: async () => ({
         rpc,
         getToken: () => token,
-        onServerEvent(listener: (event: string, payload: unknown) => void) {
-          eventListeners.add(listener);
-        },
         onResubscribe(handler: () => void | Promise<void>) {
           recoveryHandlers.add(handler);
         },

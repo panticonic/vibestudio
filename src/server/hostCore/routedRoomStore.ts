@@ -6,53 +6,28 @@ import { DEVICE_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { writeFileAtomicSync } from "../../atomicFile.js";
 
-const USER_ID_PATTERN = /^usr_[A-Za-z0-9_-]{24}$/;
-export const PAIRING_CODE_HASH_PATTERN = /^[a-f0-9]{64}$/;
-
 const room = z.string().regex(PAIRING_ROOM_PATTERN);
 
 const DeviceRouteSchema = z
   .object({
     kind: z.literal("device"),
-    purpose: z.enum(["control", "workspace"]),
     deviceId: z.string().regex(DEVICE_ID_PATTERN),
     room,
   })
   .strict();
 
-const UserRouteSchema = z
-  .object({
-    kind: z.literal("user"),
-    userId: z.string().regex(USER_ID_PATTERN),
-    room,
-  })
-  .strict();
-
-const InviteRouteSchema = z
-  .object({
-    kind: z.literal("invite"),
-    codeHash: z.string().regex(PAIRING_CODE_HASH_PATTERN),
-    room,
-    expiresAt: z.number().int().positive(),
-  })
-  .strict();
-
-export const RoutedRoomRecordSchema = z.discriminatedUnion("kind", [
-  DeviceRouteSchema,
-  UserRouteSchema,
-  InviteRouteSchema,
-]);
+export const RoutedRoomRecordSchema = DeviceRouteSchema;
 
 export type RoutedRoomRecord = z.infer<typeof RoutedRoomRecordSchema>;
 
 interface RoutedRoomIngress {
-  armRoom(room: string, meta: { deviceId?: string }): Promise<void>;
+  armRoom(room: string, meta: { deviceId: string }): Promise<void>;
   disarmRoom(room: string): Promise<void>;
 }
 
 const RoutedRoomStateSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(3),
     routes: z.array(RoutedRoomRecordSchema),
   })
   .strict()
@@ -77,18 +52,21 @@ const RoutedRoomStateSchema = z
   });
 
 export function routedRoomKey(route: RoutedRoomRecord): string {
-  switch (route.kind) {
-    case "device":
-      return `${route.purpose}:${route.deviceId}`;
-    case "user":
-      return `user:${route.userId}`;
-    case "invite":
-      return `invite:${route.codeHash}`;
-  }
+  return `device:${route.deviceId}`;
 }
 
 export function routedRoomStatePath(workspaceName: string): string {
-  return path.join(getWorkspaceDir(workspaceName), "state", "webrtc", "routes.json");
+  return workspaceReachPaths(workspaceName).routesFile;
+}
+
+/** Hub-owned reachability coordinates for one advertised workspace. */
+export function workspaceReachPaths(workspaceName: string) {
+  const webrtc = path.join(getWorkspaceDir(workspaceName), "reach", "webrtc");
+  return {
+    root: webrtc,
+    identityFile: path.join(webrtc, "identity.pem"),
+    routesFile: path.join(webrtc, "routes.json"),
+  } as const;
 }
 
 /**
@@ -154,41 +132,9 @@ export class RoutedRoomStore {
     return existing;
   }
 
-  /** Atomically replace an invite owner with the newly-issued device owner. */
-  promoteInvite(
-    codeHash: string,
-    deviceId: string
-  ): {
-    route: Extract<RoutedRoomRecord, { kind: "device" }>;
-    replacedDeviceRoute: Extract<RoutedRoomRecord, { kind: "device" }> | null;
-  } {
-    const inviteKey = `invite:${codeHash}`;
-    const invite = this.records.get(inviteKey);
-    if (!invite || invite.kind !== "invite") {
-      throw new Error("The pairing invite route is no longer armed");
-    }
-    const deviceKey = `control:${deviceId}`;
-    const prior = this.records.get(deviceKey);
-    const next = new Map(this.records);
-    next.delete(inviteKey);
-    next.delete(deviceKey);
-    const route = DeviceRouteSchema.parse({
-      kind: "device",
-      purpose: "control",
-      deviceId,
-      room: invite.room,
-    });
-    next.set(deviceKey, route);
-    this.commit(next);
-    return {
-      route,
-      replacedDeviceRoute: prior?.kind === "device" ? prior : null,
-    };
-  }
-
   private commit(next: Map<string, RoutedRoomRecord>): void {
     const state = RoutedRoomStateSchema.parse({
-      schemaVersion: 1,
+      schemaVersion: 3,
       routes: [...next.values()].sort((a, b) => routedRoomKey(a).localeCompare(routedRoomKey(b))),
     });
     writeFileAtomicSync(this.filePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
@@ -204,18 +150,15 @@ export class RoutedRoomStore {
  */
 export async function replaceRoutedRoom(
   store: RoutedRoomStore,
-  liveRooms: Map<string, string>,
   route: RoutedRoomRecord,
-  ingress: RoutedRoomIngress,
-  meta: { deviceId?: string }
+  ingress: RoutedRoomIngress
 ): Promise<void> {
   const key = routedRoomKey(route);
   const previous = store.get(key);
 
-  await ingress.armRoom(route.room, meta);
+  await ingress.armRoom(route.room, { deviceId: route.deviceId });
   try {
     store.upsert(route);
-    liveRooms.set(key, route.room);
   } catch (error) {
     await ingress.disarmRoom(route.room).catch(() => undefined);
     throw error;

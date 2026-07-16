@@ -3,7 +3,6 @@
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import { HubDeviceSchema, HubPairingInviteSchema } from "./hubControl.js";
 
 const readAccess: MethodAccessDescriptor = { sensitivity: "read" };
 const writeAccess: MethodAccessDescriptor = { sensitivity: "write" };
@@ -58,41 +57,6 @@ export const remoteCredMethods = defineServiceMethods({
     returns: PairResultSchema,
     access: adminAccess,
   },
-  pairDevice: {
-    description: "Create an invite for another device belonging to the authenticated account.",
-    args: z.tuple([
-      z
-        .object({
-          workspace: z.string().min(1).optional(),
-          ttlMs: z.number().int().min(30_000).max(3_600_000).optional(),
-        })
-        .strict()
-        .optional(),
-    ]),
-    returns: z.object({
-      userId: z.string(),
-      handle: z.string(),
-      workspace: z.string(),
-      pairing: HubPairingInviteSchema,
-    }),
-    access: adminAccess,
-  },
-  listDevices: {
-    description: "List paired devices visible to the authenticated account.",
-    args: z.tuple([]),
-    returns: z.array(HubDeviceSchema),
-    access: readAccess,
-  },
-  revokeDevice: {
-    description: "Revoke a device and close all of its live workspace sessions.",
-    args: z.tuple([z.string().min(1)]),
-    returns: z.object({
-      revoked: z.boolean(),
-      closedSessions: z.number(),
-      currentDevice: z.boolean(),
-    }),
-    access: destructiveAccess,
-  },
   reconnectNow: {
     description: "Probe the current remote pipe immediately so a dead connection reconnects now.",
     args: z.tuple([]),
@@ -112,6 +76,3 @@ export const remoteCredMethods = defineServiceMethods({
     access: adminAccess,
   },
 });
-
-export type RemoteCredDeviceRecord = z.infer<typeof HubDeviceSchema>;
-export type RemoteCredPairingInvite = z.infer<typeof HubPairingInviteSchema>;

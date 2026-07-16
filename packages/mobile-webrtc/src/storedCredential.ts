@@ -13,7 +13,6 @@ export interface ShellPairing {
   fp: string;
   sig: string;
   ice: TurnPolicy;
-  srv?: string;
   v: typeof PAIRING_PROTOCOL_VERSION;
   /** Present only while redeeming a fresh invite; never persisted. */
   code?: string;
@@ -34,7 +33,7 @@ export interface StoredShellCredential extends ShellCredential {
 }
 
 const CREDENTIAL_KEYS = new Set(["deviceId", "refreshToken"]);
-const PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice", "srv"]);
+const PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice"]);
 const FRESH_PAIRING_KEYS = new Set([...PAIRING_KEYS, "code"]);
 const STORED_KEYS = new Set([
   "schemaVersion",
@@ -80,12 +79,7 @@ function isCurrentPairing(
     signaling?.kind !== "ok" ||
     (requireCanonical && signaling.url !== value["sig"]) ||
     value["v"] !== PAIRING_PROTOCOL_VERSION ||
-    (value["ice"] !== "all" && value["ice"] !== "relay") ||
-    (value["srv"] !== undefined &&
-      (typeof value["srv"] !== "string" ||
-        value["srv"].length === 0 ||
-        value["srv"].length > 128 ||
-        value["srv"].trim() !== value["srv"]))
+    (value["ice"] !== "all" && value["ice"] !== "relay")
   ) {
     return false;
   }
@@ -127,7 +121,6 @@ export function createStoredShellCredential(
       sig: signaling.url,
       v: PAIRING_PROTOCOL_VERSION,
       ice: pairing.ice,
-      ...(pairing.srv ? { srv: pairing.srv } : {}),
     };
   };
   return {

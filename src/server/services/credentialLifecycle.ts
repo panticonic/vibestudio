@@ -2,6 +2,7 @@ import type { Credential } from "@vibestudio/credential-client/types";
 import type { CredentialStore } from "@vibestudio/credential-client/store";
 import type { ClientConfigStore } from "@vibestudio/credential-client/clientConfigStore";
 import type { OAuthConnectionErrorCode } from "@vibestudio/credential-client/types";
+import { isOAuthRefreshRecipeComplete } from "@vibestudio/credential-client/credentialStatus";
 import { createSign, randomUUID } from "node:crypto";
 
 export class CredentialLifecycleError extends Error {
@@ -15,7 +16,7 @@ export class CredentialLifecycleError extends Error {
 
 export interface CredentialLifecycleDeps {
   credentialStore: Pick<CredentialStore, "saveUrlBound">;
-  clientConfigStore: Pick<ClientConfigStore, "load" | "loadVersion">;
+  clientConfigStore: Pick<ClientConfigStore, "loadVersion">;
 }
 
 export class CredentialLifecycle {
@@ -26,13 +27,13 @@ export class CredentialLifecycle {
     options: { skewMs?: number } = {}
   ): Promise<Credential & { id: string }> {
     const skewMs = options.skewMs ?? 30_000;
-    if (!credential.expiresAt || credential.expiresAt > Date.now() + skewMs) {
+    if (typeof credential.expiresAt !== "number" || credential.expiresAt > Date.now() + skewMs) {
       return credential;
     }
-    if (!credential.refreshToken) {
+    if (!credential.refreshToken || !isOAuthRefreshRecipeComplete(credential.oauthRefresh)) {
       throw new CredentialLifecycleError(
         "client_not_authorized",
-        "OAuth credential is expired and has no refresh token"
+        "OAuth credential is expired and has no complete refresh material"
       );
     }
     return this.refreshCredential(credential);
@@ -41,44 +42,62 @@ export class CredentialLifecycle {
   async refreshCredential(
     credential: Credential & { id: string }
   ): Promise<Credential & { id: string }> {
-    const configId = credential.metadata?.["clientConfigId"];
-    const configVersion = credential.metadata?.["clientConfigVersion"];
     const refreshToken = credential.refreshToken;
-    if (!configId || !refreshToken) {
+    const recipe = credential.oauthRefresh;
+    if (!refreshToken || !isOAuthRefreshRecipeComplete(recipe)) {
       throw new CredentialLifecycleError("client_not_authorized");
     }
 
-    const config = configVersion
-      ? await this.deps.clientConfigStore.loadVersion(configId, configVersion)
-      : await this.deps.clientConfigStore.load(configId);
-    if (!config) {
+    const config = recipe.clientConfig
+      ? await this.deps.clientConfigStore.loadVersion(
+          recipe.clientConfig.configId,
+          recipe.clientConfig.configVersion
+        )
+      : null;
+    if (recipe.clientConfig && !config) {
       throw new CredentialLifecycleError(
         "client_not_authorized",
-        "client config version is unavailable"
+        "exact client config version is unavailable"
       );
     }
-    if (
-      config.status === "deleted" ||
-      (config.status === "disabled" && !config.allowRefreshWhenDisabled)
-    ) {
-      throw new CredentialLifecycleError(
-        "client_config_unavailable",
-        "client config is unavailable for refresh"
-      );
+    if (config) {
+      if (
+        config.status === "deleted" ||
+        (config.status === "disabled" && !config.allowRefreshWhenDisabled)
+      ) {
+        throw new CredentialLifecycleError(
+          "client_config_unavailable",
+          "client config is unavailable for refresh"
+        );
+      }
+      if (
+        config.fields["clientId"]?.value !== recipe.clientId ||
+        canonicalUrl(config.tokenUrl) !== canonicalUrl(recipe.tokenUrl)
+      ) {
+        throw new CredentialLifecycleError(
+          "client_config_unavailable",
+          "exact client config no longer matches the refresh recipe"
+        );
+      }
     }
 
-    const clientId = config.fields["clientId"]?.value;
-    const clientSecret = config.fields["clientSecret"]?.value;
-    const privateKeyPem = config.fields["privateKeyPem"]?.value;
-    const tokenAuth =
-      credential.metadata?.["oauthTokenAuth"] ?? (clientSecret ? "client_secret_post" : "none");
-    if (!clientId) {
-      throw new CredentialLifecycleError("client_not_authorized");
-    }
+    const clientId = recipe.clientId;
+    const clientSecret = config?.fields["clientSecret"]?.value;
+    const privateKeyPem = config?.fields["privateKeyPem"]?.value;
+    const tokenAuth = recipe.tokenAuth;
     if (tokenAuth === "private_key_jwt" && !privateKeyPem) {
       throw new CredentialLifecycleError(
         "client_config_unavailable",
         "private_key_jwt config is unavailable for refresh"
+      );
+    }
+    if (
+      (tokenAuth === "client_secret_basic" || tokenAuth === "client_secret_post") &&
+      !clientSecret
+    ) {
+      throw new CredentialLifecycleError(
+        "client_config_unavailable",
+        `${tokenAuth} config is unavailable for refresh`
       );
     }
 
@@ -92,10 +111,10 @@ export class CredentialLifecycle {
         "client_assertion",
         signJwtAssertion({
           clientId,
-          tokenUrl: config.tokenUrl,
+          tokenUrl: recipe.tokenUrl,
           privateKeyPem,
-          keyId: config.fields["keyId"]?.value,
-          keyAlgorithm: config.fields["algorithm"]?.value,
+          keyId: config?.fields["keyId"]?.value,
+          keyAlgorithm: config?.fields["algorithm"]?.value,
         })
       );
     } else if (tokenAuth === "client_secret_basic" && clientSecret) {
@@ -108,7 +127,7 @@ export class CredentialLifecycle {
       headers["authorization"] = basicAuthHeader(clientId, clientSecret);
     }
 
-    const response = await fetch(config.tokenUrl, {
+    const response = await fetch(recipe.tokenUrl, {
       method: "POST",
       headers,
       body,
@@ -136,18 +155,25 @@ export class CredentialLifecycle {
 
     const expiresIn = readNumericField(data?.["expires_in"]);
     const nextRefreshToken = data?.["refresh_token"];
+    const grantedScopes = readScopeField(data?.["scope"]);
     const updated = {
       ...credential,
       accessToken,
       refreshToken:
         typeof nextRefreshToken === "string" && nextRefreshToken ? nextRefreshToken : refreshToken,
-      expiresAt:
-        typeof expiresIn === "number" ? Date.now() + expiresIn * 1000 : credential.expiresAt,
+      scopes: grantedScopes ?? credential.scopes,
       metadata: {
         ...(credential.metadata ?? {}),
         oauthTokenUpdatedAt: String(Date.now()),
       },
     } as Credential & { id: string };
+    if (typeof expiresIn === "number") {
+      updated.expiresAt = Date.now() + expiresIn * 1000;
+    } else {
+      // The new access token owns its own lifetime. An omitted expires_in means
+      // unknown lifetime, never inheritance from the token it replaced.
+      delete updated.expiresAt;
+    }
     await this.deps.credentialStore.saveUrlBound(updated);
     return updated;
   }
@@ -185,6 +211,14 @@ function readNumericField(value: unknown): number | undefined {
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
   }
   return undefined;
+}
+
+function readScopeField(value: unknown): string[] | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().split(/\s+/) : undefined;
+}
+
+function canonicalUrl(value: string): string {
+  return new URL(value).toString();
 }
 
 function basicAuthHeader(username: string, password: string): string {

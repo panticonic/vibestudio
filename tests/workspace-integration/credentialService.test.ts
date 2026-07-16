@@ -403,6 +403,121 @@ describe("credentialService", () => {
     expect(auditLog.entries).toHaveLength(1);
   });
 
+  it("renews one semantic credential across UI surfaces without losing its grants", async () => {
+    const store = new MemoryCredentialStore();
+    const existingGrant: CredentialUseGrant = {
+      bindingId: "fetch",
+      use: "fetch",
+      resource: "https://chatgpt.com/backend-api",
+      action: "use",
+      scope: "version",
+      repoPath: "workers/agent-worker",
+      effectiveVersion: "worker-v1",
+      grantedAt: 10,
+      grantedBy: "version",
+    };
+    await store.saveUrlBound({
+      id: "cred-model",
+      label: "ChatGPT Codex model credential",
+      providerId: "url-bound",
+      connectionId: "cred-model",
+      connectionLabel: "ChatGPT Codex model credential",
+      owner: {
+        sourceId: "workers/agent-worker",
+        sourceKind: "workspace",
+        label: "workers/agent-worker",
+      },
+      accountIdentity: { providerUserId: "account-1" },
+      accessToken: "expired-token",
+      scopes: ["openid"],
+      bindings: [
+        {
+          id: "fetch",
+          use: "fetch",
+          audience: [{ url: "https://chatgpt.com/backend-api", match: "path-prefix" }],
+          injection: {
+            type: "header",
+            name: "authorization",
+            valueTemplate: "Bearer {token}",
+          },
+        },
+      ],
+      grants: [existingGrant],
+      expiresAt: 1,
+      metadata: {
+        modelProviderId: "openai-codex",
+        createdAt: "10",
+        updatedAt: "11",
+      },
+    });
+    const emit = vi.fn();
+    const service = createCredentialService({
+      credentialStore: store as never,
+      eventService: targetedOpenEventService(emit) as never,
+      approvalQueue: approvingQueue() as never,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              access_token: "renewed-token",
+              refresh_token: "renewed-refresh",
+              expires_in: 3600,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          )
+      )
+    );
+
+    const { pending, redirectUri, state } = await startOAuthConnection(
+      service,
+      emit,
+      { caller: verifiedTestCaller("shell:renew", "shell") },
+      {
+        flow: {
+          type: "oauth2-auth-code-pkce",
+          authorizeUrl: "https://auth.example.test/oauth/authorize",
+          tokenUrl: "https://auth.example.test/oauth/token",
+          clientId: "client-1",
+          persistRefreshToken: true,
+        },
+        credential: {
+          label: "ChatGPT Codex model credential",
+          audience: [{ url: "https://chatgpt.com/backend-api", match: "path-prefix" }],
+          injection: {
+            type: "header",
+            name: "authorization",
+            valueTemplate: "Bearer {token}",
+          },
+          accountIdentity: { providerUserId: "account-1" },
+          metadata: { modelProviderId: "openai-codex" },
+        },
+      }
+    );
+    await deliverOAuthCallback(redirectUri, new URLSearchParams({ code: "code-1", state }));
+
+    await expect(pending).resolves.toMatchObject({
+      id: "cred-model",
+      owner: { sourceId: "workers/agent-worker" },
+    });
+    const credentials = await store.listUrlBound();
+    expect(credentials).toHaveLength(1);
+    expect(credentials[0]).toMatchObject({
+      id: "cred-model",
+      owner: { sourceId: "workers/agent-worker" },
+      grants: [existingGrant],
+      accessToken: "renewed-token",
+      refreshToken: "renewed-refresh",
+      metadata: {
+        modelProviderId: "openai-codex",
+        createdAt: "10",
+        updatedAt: expect.any(String),
+      },
+    });
+  });
+
   it("inspects persisted credential grants with focusable panel and worker subjects", async () => {
     const store = new MemoryCredentialStore();
     const grantedAt = Date.now();
@@ -1517,6 +1632,7 @@ describe("credentialService", () => {
             refresh_token: "durable-refresh-token",
             token_type: "Bearer",
             expires_in: 3600,
+            scope: "read",
           }),
           {
             status: 200,
@@ -1535,12 +1651,20 @@ describe("credentialService", () => {
     );
     const completed = await started.pending;
 
-    expect(completed.metadata?.["oauthRefreshTokenStored"]).toBe("true");
+    expect(completed.lifecycle).toEqual({ state: "active", canRefresh: true });
+    expect(completed.scopes).toEqual(["read"]);
     expect(JSON.stringify(completed)).not.toContain("durable-refresh-token");
 
     const persisted = await store.loadUrlBound(completed.id);
     expect(persisted?.accessToken).toBe("oauth-access-token");
     expect(persisted?.refreshToken).toBe("durable-refresh-token");
+    expect(persisted?.oauthRefresh).toEqual({
+      tokenUrl: "https://auth.example.test/oauth/token",
+      clientId: "client-1",
+      tokenAuth: "none",
+    });
+    expect(persisted?.metadata).not.toHaveProperty("oauthRefreshTokenStored");
+    expect(persisted?.metadata).not.toHaveProperty("oauthScopes");
   });
 
   it("credentials.connect owns browser handoff, callback validation, token exchange, and initial grant", async () => {
@@ -2008,15 +2132,11 @@ describe("credentialService", () => {
     await pending;
   });
 
-  it("falls back to caller-wide browser handoff when a remembered owner connection is stale", async () => {
-    const emit = vi.fn();
+  it("fails closed when a remembered browser-owner connection is stale", async () => {
     const eventService = {
       emit: vi.fn(),
       emitToConnection: vi.fn(() => false),
-      emitToCaller: vi.fn((callerId: string, event: string, payload: unknown) => {
-        emit(event, payload);
-        return callerId.length > 0;
-      }),
+      emitToCaller: vi.fn(() => true),
     };
     const service = createCredentialService({
       credentialStore: new MemoryCredentialStore() as never,
@@ -2066,27 +2186,23 @@ describe("credentialService", () => {
       ]
     ) as Promise<StoredCredentialSummary>;
 
-    await vi.waitFor(() => expect(eventService.emitToCaller).toHaveBeenCalled());
+    const error = await pending.then(
+      () => {
+        throw new Error("expected stale exact-connection handoff to fail");
+      },
+      (rejection: Error & { code?: string }) => rejection
+    );
     expect(eventService.emitToConnection).toHaveBeenCalledWith(
       "shell:owner",
       "stale-owner-conn",
       "external-open:open",
       expect.objectContaining({ callerId: "worker:test" })
     );
-    expect(eventService.emitToCaller).toHaveBeenCalledWith(
-      "shell:owner",
-      "external-open:open",
-      expect.objectContaining({ callerId: "worker:test" })
-    );
-    const authorizeUrl = new URL(emit.mock.calls[0]![1].url);
-    await deliverOAuthCallback(
-      authorizeUrl.searchParams.get("redirect_uri")!,
-      new URLSearchParams({
-        code: "code-1",
-        state: authorizeUrl.searchParams.get("state")!,
-      })
-    );
-    await pending;
+    expect(eventService.emitToCaller).not.toHaveBeenCalled();
+    expect(error).toMatchObject({ code: "browser_unavailable" });
+    expect(error.message).toContain("connection=stale-owner-conn");
+    expect(error.message).toContain("attempt=emit-to-connection");
+    expect(error.message).toContain("connectionDelivered=false");
   });
 
   it("credentials.connect can open OAuth in an internal browser panel for a worker-requested panel handoff", async () => {

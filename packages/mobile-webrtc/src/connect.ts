@@ -21,7 +21,10 @@ import * as Keychain from "react-native-keychain";
 import { createRpcClient } from "@vibestudio/rpc";
 import type { RpcClient } from "@vibestudio/rpc";
 import type { WebRtcTransport, WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
-import { createPairedConnection } from "@vibestudio/rpc/transports/pairedConnection";
+import {
+  createPairedConnection,
+  type PairingContext,
+} from "@vibestudio/rpc/transports/pairedConnection";
 import { DEFAULT_CHUNK_SIZE } from "@vibestudio/rpc/transports/webrtcPeer";
 import {
   createStoredShellCredential,
@@ -31,6 +34,7 @@ import {
   type StoredShellCredential,
 } from "./storedCredential.js";
 import { createReactNativeWebRtcProvider } from "./reactNativeWebRtcPeer.js";
+import { composeMobileSession } from "./connectionPair.js";
 
 export type {
   ShellCredential,
@@ -51,11 +55,10 @@ export interface WebRtcConnectionHandlers {
   /** Persist the freshly issued device credential. AWAITED with retry by the
    * shared bootstrap; a persistent failure surfaces via {@link onPersistError},
    * never a void'd rejection. */
-  onPaired?: (credential: ShellCredential) => void | Promise<void>;
+  onPaired?: (credential: ShellCredential, context?: PairingContext) => void | Promise<void>;
   /** The credential persist exhausted its retries — surface it (log/telemetry),
    * never swallow it. */
   onPersistError?: (error: Error) => void;
-  onServerEvent?: (event: string, payload: unknown) => void;
   /**
    * Post-auth recovery signal raised by the session on (re)open: `"resubscribe"`
    * for a normal reconnect, `"cold-recover"` when the server restarted
@@ -72,6 +75,8 @@ export interface WebRtcConnection {
   transport: WebRtcTransport;
   callerId: string;
   deviceId?: string | null;
+  /** Present on composed client sessions that retain the stable hub pipe. */
+  hubControlRpc?: RpcClient;
   close(): Promise<void>;
 }
 
@@ -258,16 +263,6 @@ export async function establishWebRtcConnection(
   const { transport, mainSession: session } = paired;
   try {
     const callerId = session.callerId() || "shell:pending";
-    if (handlers.onServerEvent) {
-      session.onMessage((envelope) => {
-        const message = (
-          envelope as { message?: { type?: string; event?: string; payload?: unknown } }
-        )?.message;
-        if (message && message.type === "event") {
-          handlers.onServerEvent?.(message.event ?? "", message.payload);
-        }
-      });
-    }
     const client = createRpcClient({
       selfId: callerId,
       callerKind: "shell",
@@ -300,9 +295,12 @@ export async function establishWebRtcConnection(
 /** Returning device: reconnect with the stored refresh secret over the same room. */
 export async function reconnectViaWebRtc(
   stored: StoredShellCredential,
-  onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>
+  onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>,
+  reach: "workspace" | "control" = "workspace",
+  onCredentialStored?: (stored: StoredShellCredential) => void
 ): Promise<WebRtcConnection> {
-  const pairing = stored.workspacePairing;
+  let currentStored = stored;
+  const pairing = reach === "control" ? stored.controlPairing : stored.workspacePairing;
   const tokenProvider = makeShellTokenProvider(pairing, {
     deviceId: stored.deviceId,
     refreshToken: stored.refreshToken,
@@ -316,10 +314,17 @@ export async function reconnectViaWebRtc(
       tokenProvider.setCredential(credential);
       await persistShellCredential(
         credential,
-        stored.controlPairing,
-        stored.workspacePairing,
-        stored.pairedAt
+        currentStored.controlPairing,
+        currentStored.workspacePairing,
+        currentStored.pairedAt
       );
+      currentStored = createStoredShellCredential(
+        credential,
+        currentStored.controlPairing,
+        currentStored.workspacePairing,
+        currentStored.pairedAt
+      );
+      onCredentialStored?.(currentStored);
     },
     onPersistError: (error) => {
       persistFailure.current = error;
@@ -335,4 +340,37 @@ export async function reconnectViaWebRtc(
   }
   connection.deviceId = stored.deviceId;
   return connection;
+}
+
+/**
+ * Returning mobile client session: one retained stable hub pipe plus one exact
+ * workspace pipe. The exposed RPC defaults to workspace services and carries
+ * `hubControlRpc` explicitly for the one server-wide control surface.
+ */
+export async function reconnectMobileSession(
+  stored: StoredShellCredential,
+  onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>
+): Promise<WebRtcConnection> {
+  let currentStored = stored;
+  const control = await reconnectViaWebRtc(currentStored, undefined, "control", (next) => {
+    currentStored = next;
+  });
+  try {
+    const workspace = await reconnectViaWebRtc(
+      currentStored,
+      onRecovery,
+      "workspace",
+      (next) => {
+        currentStored = next;
+      }
+    );
+    return composeMobileSession(control, workspace);
+  } catch (error) {
+    await closeAfterFailure(
+      () => control.close(),
+      error,
+      "Mobile workspace connection failed after hub control connected"
+    );
+    throw error;
+  }
 }

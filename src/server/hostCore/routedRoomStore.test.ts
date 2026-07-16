@@ -2,55 +2,47 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { replaceRoutedRoom, RoutedRoomStore } from "./routedRoomStore.js";
-import { PairingActivationStore } from "../services/pairingActivationStore.js";
+import {
+  replaceRoutedRoom,
+  routedRoomKey,
+  RoutedRoomStore,
+  workspaceReachPaths,
+} from "./routedRoomStore.js";
 
 const DEVICE_ID = `dev_${"d".repeat(24)}`;
-const CODE_HASH = "a".repeat(64);
+const OTHER_DEVICE_ID = `dev_${"e".repeat(24)}`;
 
 function statePath(): string {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "routed-room-store-")), "routes.json");
 }
 
 describe("RoutedRoomStore", () => {
-  it("persists exact routes and atomically promotes an invite across reopen", () => {
+  it("persists and reopens the device-owned workspace route", () => {
     const filePath = statePath();
     const first = new RoutedRoomStore(filePath);
-    first.upsert({
-      kind: "invite",
-      codeHash: CODE_HASH,
-      room: "room-invite",
-      expiresAt: 2_000_000_000_000,
-    });
-    first.upsert({ kind: "user", userId: `usr_${"u".repeat(24)}`, room: "room-user" });
+    first.upsert({ kind: "device", deviceId: DEVICE_ID, room: "room-device" });
 
-    const promoted = first.promoteInvite(CODE_HASH, DEVICE_ID);
-    expect(promoted.route).toEqual({
-      kind: "device",
-      purpose: "control",
-      deviceId: DEVICE_ID,
-      room: "room-invite",
-    });
-    expect(promoted.replacedDeviceRoute).toBeNull();
-
-    const reopened = new RoutedRoomStore(filePath);
-    expect(reopened.list()).toEqual([
-      { kind: "device", purpose: "control", deviceId: DEVICE_ID, room: "room-invite" },
-      { kind: "user", userId: `usr_${"u".repeat(24)}`, room: "room-user" },
+    expect(new RoutedRoomStore(filePath).list()).toEqual([
+      { kind: "device", deviceId: DEVICE_ID, room: "room-device" },
     ]);
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toMatchObject({ schemaVersion: 3 });
     expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
   });
 
-  it("keeps the previous durable and live route when replacement arming fails", async () => {
+  it("keys the route by its paired device", () => {
+    expect(routedRoomKey({ kind: "device", deviceId: DEVICE_ID, room: "room-device" })).toBe(
+      `device:${DEVICE_ID}`
+    );
+  });
+
+  it("keeps the previous durable route when replacement arming fails", async () => {
     const store = new RoutedRoomStore(statePath());
     const previous = {
       kind: "device" as const,
-      purpose: "workspace" as const,
       deviceId: DEVICE_ID,
       room: "room-previous",
     };
     const replacement = { ...previous, room: "room-replacement" };
-    const liveRooms = new Map([[`workspace:${DEVICE_ID}`, previous.room]]);
     store.upsert(previous);
     const ingress = {
       armRoom: vi.fn(async () => {
@@ -59,12 +51,11 @@ describe("RoutedRoomStore", () => {
       disarmRoom: vi.fn(async () => undefined),
     };
 
-    await expect(
-      replaceRoutedRoom(store, liveRooms, replacement, ingress, { deviceId: DEVICE_ID })
-    ).rejects.toThrow("signaling unavailable");
+    await expect(replaceRoutedRoom(store, replacement, ingress)).rejects.toThrow(
+      "signaling unavailable"
+    );
 
-    expect(store.get(`workspace:${DEVICE_ID}`)).toEqual(previous);
-    expect(liveRooms.get(`workspace:${DEVICE_ID}`)).toBe(previous.room);
+    expect(store.get(`device:${DEVICE_ID}`)).toEqual(previous);
     expect(ingress.disarmRoom).not.toHaveBeenCalled();
   });
 
@@ -72,48 +63,74 @@ describe("RoutedRoomStore", () => {
     const store = new RoutedRoomStore(statePath());
     const previous = {
       kind: "device" as const,
-      purpose: "workspace" as const,
       deviceId: DEVICE_ID,
       room: "room-previous",
     };
     const replacement = { ...previous, room: "room-replacement" };
-    const key = `workspace:${DEVICE_ID}`;
-    const liveRooms = new Map([[key, previous.room]]);
+    const key = `device:${DEVICE_ID}`;
     store.upsert(previous);
     const ingress = {
       armRoom: vi.fn(async () => {
         expect(store.get(key)).toEqual(previous);
-        expect(liveRooms.get(key)).toBe(previous.room);
       }),
       disarmRoom: vi.fn(async (room: string) => {
         expect(room).toBe(previous.room);
         expect(store.get(key)).toEqual(replacement);
-        expect(liveRooms.get(key)).toBe(replacement.room);
       }),
     };
 
-    await replaceRoutedRoom(store, liveRooms, replacement, ingress, { deviceId: DEVICE_ID });
+    await replaceRoutedRoom(store, replacement, ingress);
 
     expect(ingress.armRoom).toHaveBeenCalledWith(replacement.room, { deviceId: DEVICE_ID });
     expect(ingress.disarmRoom).toHaveBeenCalledOnce();
   });
 
-  it("rejects corrupt, unknown, duplicate-key, and duplicate-room state", () => {
+  it("disarms a newly armed room when the durable commit is rejected", async () => {
+    const store = new RoutedRoomStore(statePath());
+    const previous = { kind: "device" as const, deviceId: DEVICE_ID, room: "room-previous" };
+    store.upsert(previous);
+    store.upsert({ kind: "device", deviceId: OTHER_DEVICE_ID, room: "room-owned" });
+    const ingress = {
+      armRoom: vi.fn(async () => undefined),
+      disarmRoom: vi.fn(async () => undefined),
+    };
+
+    await expect(
+      replaceRoutedRoom(store, { ...previous, room: "room-owned" }, ingress)
+    ).rejects.toThrow(/already owned/u);
+
+    expect(store.get(`device:${DEVICE_ID}`)).toEqual(previous);
+    expect(ingress.disarmRoom).toHaveBeenCalledWith("room-owned");
+  });
+
+  it("rejects old, unknown, duplicate-key, and duplicate-room state", () => {
     const invalidStates: unknown[] = [
-      { schemaVersion: 0, routes: [] },
-      { schemaVersion: 1, routes: [], legacy: true },
+      { schemaVersion: 1, routes: [] },
+      { schemaVersion: 2, routes: [], legacy: true },
       {
-        schemaVersion: 1,
+        schemaVersion: 3,
+        routes: [{ kind: "device", purpose: "workspace", deviceId: DEVICE_ID, room: "room-one" }],
+      },
+      {
+        schemaVersion: 3,
+        routes: [{ kind: "invite", codeHash: "a".repeat(64), room: "room-invite", expiresAt: 123 }],
+      },
+      {
+        schemaVersion: 3,
+        routes: [{ kind: "user", userId: `usr_${"u".repeat(24)}`, room: "room-user" }],
+      },
+      {
+        schemaVersion: 3,
         routes: [
-          { kind: "device", purpose: "control", deviceId: DEVICE_ID, room: "room-one" },
-          { kind: "device", purpose: "control", deviceId: DEVICE_ID, room: "room-two" },
+          { kind: "device", deviceId: DEVICE_ID, room: "room-one" },
+          { kind: "device", deviceId: DEVICE_ID, room: "room-two" },
         ],
       },
       {
-        schemaVersion: 1,
+        schemaVersion: 3,
         routes: [
-          { kind: "device", purpose: "control", deviceId: DEVICE_ID, room: "same-room" },
-          { kind: "invite", codeHash: CODE_HASH, room: "same-room", expiresAt: 123 },
+          { kind: "device", deviceId: DEVICE_ID, room: "same-room" },
+          { kind: "device", deviceId: OTHER_DEVICE_ID, room: "same-room" },
         ],
       },
     ];
@@ -129,52 +146,17 @@ describe("RoutedRoomStore", () => {
 
   it("fails instead of assigning one room to multiple principals", () => {
     const store = new RoutedRoomStore(statePath());
-    store.upsert({
-      kind: "device",
-      purpose: "control",
-      deviceId: DEVICE_ID,
-      room: "owned-room",
-    });
+    store.upsert({ kind: "device", deviceId: DEVICE_ID, room: "owned-room" });
     expect(() =>
-      store.upsert({
-        kind: "invite",
-        codeHash: CODE_HASH,
-        room: "owned-room",
-        expiresAt: 123,
-      })
+      store.upsert({ kind: "device", deviceId: OTHER_DEVICE_ID, room: "owned-room" })
     ).toThrow(/already owned/u);
   });
 
-  it("resumes pair → promotion after a child restart and preserves the reconnect room", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "routed-room-restart-"));
-    const routesPath = path.join(root, "routes.json");
-    const activationsPath = path.join(root, "activations.json");
-    const beforeRestart = new RoutedRoomStore(routesPath);
-    beforeRestart.upsert({
-      kind: "invite",
-      codeHash: CODE_HASH,
-      room: "stable-reconnect-room",
-      expiresAt: 2_000_000_000_000,
-    });
-    const proposed = new PairingActivationStore(activationsPath).prepare(
-      CODE_HASH,
-      2_000_000_000_000
-    );
-
-    // Process boundary: both stores are reopened from disk before the child
-    // acknowledges route promotion.
-    const restartedRoutes = new RoutedRoomStore(routesPath);
-    const restartedActivations = new PairingActivationStore(activationsPath);
-    expect(restartedActivations.get(CODE_HASH)).toEqual(proposed);
-    restartedRoutes.promoteInvite(CODE_HASH, proposed.deviceId);
-
-    expect(new RoutedRoomStore(routesPath).list()).toEqual([
-      {
-        kind: "device",
-        purpose: "control",
-        deviceId: proposed.deviceId,
-        room: "stable-reconnect-room",
-      },
+  it("exposes only the identity and route files under workspace reach", () => {
+    expect(Object.keys(workspaceReachPaths("example")).sort()).toEqual([
+      "identityFile",
+      "root",
+      "routesFile",
     ]);
   });
 });

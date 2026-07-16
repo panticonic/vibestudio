@@ -6,12 +6,13 @@ const credential = {
   deviceId: `dev_${"d".repeat(24)}`,
   refreshToken: "r".repeat(43),
 };
-const controlReach = {
+const controlPairing = {
   room: "control-2222",
   fp: "AA".repeat(32),
   sig: "wss://signal.example/",
   v: 2 as const,
   ice: "all" as const,
+  code: "c".repeat(32),
 };
 const workspaceReach = {
   room: "workspace-b-2222",
@@ -20,25 +21,15 @@ const workspaceReach = {
   v: 2 as const,
   ice: "relay" as const,
 };
-const connectionInfo = {
-  serverUrl: "https://workspace.example",
-  protocol: "https",
-  externalHost: "workspace.example",
-  gatewayPort: 443,
-  serverId: `srv_${"s".repeat(24)}`,
-  serverBootId: `boot_${"b".repeat(24)}`,
-  workspaceId: "ws-b",
-  callerKind: "shell",
-};
+const pairingContext = { workspaceId: "ws-b" };
 const route = {
   workspace: "beta",
   workspaceId: "ws-b",
   running: true,
   serverUrl: "https://workspace.example",
-  controlReach,
   workspaceReach,
-  serverId: connectionInfo.serverId,
-  serverBootId: connectionInfo.serverBootId,
+  serverId: `srv_${"s".repeat(24)}`,
+  serverBootId: `boot_${"b".repeat(24)}`,
 };
 
 function fixture(
@@ -46,13 +37,12 @@ function fixture(
     route?: unknown;
     persist?: () => Promise<void>;
     close?: () => Promise<void>;
+    connect?: () => Promise<WebRtcConnection>;
   } = {}
 ) {
   const events: string[] = [];
   const call = vi.fn(async (_target: string, method: string) => {
     events.push(method);
-    if (method === "workspace.getActive") return "beta";
-    if (method === "auth.getConnectionInfo") return connectionInfo;
     if (method === "hubControl.routeWorkspace") return overrides.route ?? route;
     throw new Error(`unexpected method: ${method}`);
   });
@@ -60,47 +50,89 @@ function fixture(
     events.push("close");
     await overrides.close?.();
   });
-  const connection = {
+  const controlConnection = {
     rpc: { call },
     close,
     callerId: `shell:${credential.deviceId}`,
+  } as unknown as WebRtcConnection;
+  const workspaceClose = vi.fn(async () => {
+    events.push("workspace-close");
+  });
+  const workspaceConnection = {
+    callerId: `shell:${credential.deviceId}`,
+    rpc: { call: vi.fn() },
+    close: workspaceClose,
   } as unknown as WebRtcConnection;
   const persistCredential = vi.fn(async () => {
     events.push("persist");
     await overrides.persist?.();
   });
-  return { connection, call, close, persistCredential, events };
+  const connectWorkspace = vi.fn(async () => {
+    events.push("connect-workspace");
+    return (await overrides.connect?.()) ?? workspaceConnection;
+  });
+  return {
+    controlConnection,
+    workspaceConnection,
+    call,
+    close,
+    workspaceClose,
+    persistCredential,
+    connectWorkspace,
+    events,
+  };
 }
 
 describe("fresh mobile pairing commit", () => {
-  it("validates identity and persists both routed reaches before succeeding", async () => {
-    const { connection, call, close, persistCredential, events } = fixture();
+  it("routes the issued workspace and preserves the original control pairing", async () => {
+    const {
+      controlConnection,
+      workspaceConnection,
+      call,
+      close,
+      persistCredential,
+      connectWorkspace,
+      events,
+    } = fixture();
 
-    await expect(
-      completeFreshMobilePairing({ connection, credential, persistCredential })
-    ).resolves.toBe(connection);
+    const connection = await completeFreshMobilePairing({
+        controlConnection,
+        credential,
+        pairingContext,
+        controlPairing,
+        persistCredential,
+        connectWorkspace,
+      });
 
     expect(call.mock.calls).toEqual([
-      ["main", "workspace.getActive", []],
-      ["main", "auth.getConnectionInfo", []],
-      ["main", "hubControl.routeWorkspace", [{ workspace: "beta" }]],
+      ["main", "hubControl.routeWorkspace", [{ workspaceId: "ws-b" }]],
     ]);
-    expect(persistCredential).toHaveBeenCalledWith(credential, controlReach, workspaceReach);
-    expect(connection.deviceId).toBe(credential.deviceId);
+    expect(persistCredential).toHaveBeenCalledWith(credential, controlPairing, workspaceReach);
+    expect(connectWorkspace).toHaveBeenCalledWith(workspaceReach, credential);
+    expect(workspaceConnection.deviceId).toBe(credential.deviceId);
+    expect(connection.hubControlRpc).toBe(controlConnection.rpc);
     expect(close).not.toHaveBeenCalled();
     expect(events).toEqual([
-      "workspace.getActive",
-      "auth.getConnectionInfo",
       "hubControl.routeWorkspace",
       "persist",
+      "connect-workspace",
     ]);
+    await connection.close();
+    expect(events.slice(-2)).toEqual(["workspace-close", "close"]);
   });
 
   it("requires a durable issuer credential and closes without issuing RPC", async () => {
-    const { connection, call, close, persistCredential } = fixture();
+    const { controlConnection, call, close, persistCredential, connectWorkspace } = fixture();
 
     await expect(
-      completeFreshMobilePairing({ connection, credential: null, persistCredential })
+      completeFreshMobilePairing({
+        controlConnection,
+        credential: null,
+        pairingContext,
+        controlPairing,
+        persistCredential,
+        connectWorkspace,
+      })
     ).rejects.toThrow(/did not issue/u);
 
     expect(call).not.toHaveBeenCalled();
@@ -108,14 +140,40 @@ describe("fresh mobile pairing commit", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it("requires the workspace identity issued with the credential", async () => {
+    const { controlConnection, call, close, persistCredential, connectWorkspace } = fixture();
+
+    await expect(
+      completeFreshMobilePairing({
+        controlConnection,
+        credential,
+        pairingContext: null,
+        controlPairing,
+        persistCredential,
+        connectWorkspace,
+      })
+    ).rejects.toThrow(/did not identify its workspace/u);
+
+    expect(call).not.toHaveBeenCalled();
+    expect(persistCredential).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it("closes on malformed routes or identity changes", async () => {
-    const { connection, close, persistCredential } = fixture({
+    const { controlConnection, close, persistCredential, connectWorkspace } = fixture({
       route: { ...route, workspaceId: "different" },
     });
 
     await expect(
-      completeFreshMobilePairing({ connection, credential, persistCredential })
-    ).rejects.toThrow(/changed the authenticated/u);
+      completeFreshMobilePairing({
+        controlConnection,
+        credential,
+        pairingContext,
+        controlPairing,
+        persistCredential,
+        connectWorkspace,
+      })
+    ).rejects.toThrow(/changed the pairing target/u);
     expect(persistCredential).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
   });
@@ -128,9 +186,12 @@ describe("fresh mobile pairing commit", () => {
     });
     await expect(
       completeFreshMobilePairing({
-        connection: first.connection,
+        controlConnection: first.controlConnection,
         credential,
+        pairingContext,
+        controlPairing,
         persistCredential: first.persistCredential,
+        connectWorkspace: first.connectWorkspace,
       })
     ).rejects.toThrow("keychain locked");
     expect(first.close).toHaveBeenCalledTimes(1);
@@ -145,10 +206,40 @@ describe("fresh mobile pairing commit", () => {
     });
     await expect(
       completeFreshMobilePairing({
-        connection: second.connection,
+        controlConnection: second.controlConnection,
         credential,
+        pairingContext,
+        controlPairing,
         persistCredential: second.persistCredential,
+        connectWorkspace: second.connectWorkspace,
       })
     ).rejects.toThrow(/keychain locked.*pipe close failed/u);
+  });
+
+  it("keeps the durable route and closes control after a workspace dial failure", async () => {
+    const failed = fixture({
+      connect: async () => {
+        throw new Error("workspace unavailable");
+      },
+    });
+
+    await expect(
+      completeFreshMobilePairing({
+        controlConnection: failed.controlConnection,
+        credential,
+        pairingContext,
+        controlPairing,
+        persistCredential: failed.persistCredential,
+        connectWorkspace: failed.connectWorkspace,
+      })
+    ).rejects.toThrow("workspace unavailable");
+
+    expect(failed.close).toHaveBeenCalledTimes(1);
+    expect(failed.events).toEqual([
+      "hubControl.routeWorkspace",
+      "persist",
+      "connect-workspace",
+      "close",
+    ]);
   });
 });

@@ -253,12 +253,10 @@ async function main() {
     await waitForReadyFile(readyFile, server, deadlineMs);
     const invite = await waitForRootInvite({
       readyFile,
-      kind: "desktop",
       timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
     });
     const pairing = parseConnectLink(invite.pairUrl);
-    if (pairing.kind !== "ok")
-      throw new Error(`desktop root invite was invalid: ${pairing.reason}`);
+    if (pairing.kind !== "ok") throw new Error(`root invite was invalid: ${pairing.reason}`);
     if (!options.localSignaling && !options.signalUrl && pairing.sig !== DEFAULT_SIGNAL_URL) {
       throw new Error(
         `remote serve did not use hosted signaling (expected ${DEFAULT_SIGNAL_URL}, got ${pairing.sig})`
@@ -283,14 +281,21 @@ async function main() {
       Math.max(1_000, deadlineMs - Date.now()),
       "remote pair"
     );
+    if (typeof pair.credentialPath !== "string") {
+      throw new Error(`remote pair returned no credential path: ${JSON.stringify(pair)}`);
+    }
+    const credential = JSON.parse(await fsp.readFile(pair.credentialPath, "utf8"));
     const pairedUrl = typeof pair.url === "string" ? new URL(pair.url) : null;
-    const expectedWorkspace = pairing.srv ?? "default";
     if (
       !pairedUrl ||
       pairedUrl.protocol !== "webrtc:" ||
-      !pairedUrl.hostname ||
-      pairedUrl.hostname === pairing.room ||
-      pairedUrl.pathname !== `/_workspace/${expectedWorkspace}`
+      typeof credential.workspacePairing?.room !== "string" ||
+      pairedUrl.hostname !== credential.workspacePairing.room ||
+      typeof credential.workspaceName !== "string" ||
+      pairedUrl.pathname !== `/_workspace/${encodeURIComponent(credential.workspaceName)}` ||
+      typeof credential.workspaceId !== "string" ||
+      credential.workspaceId.length === 0 ||
+      credential.url !== pair.url
     ) {
       throw new Error(`remote pair returned an unexpected URL: ${JSON.stringify(pair)}`);
     }
@@ -303,6 +308,7 @@ async function main() {
     );
     if (
       status.url !== pair.url ||
+      status.workspaceId !== credential.workspaceId ||
       typeof status.serverId !== "string" ||
       !status.serverId ||
       typeof status.workspaceId !== "string" ||

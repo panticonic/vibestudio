@@ -25,7 +25,7 @@ describe("MobileAccountProfileClient", () => {
     transport.call.mockResolvedValueOnce(updated);
 
     await expect(client.update(update)).resolves.toEqual(updated);
-    expect(transport.call).toHaveBeenLastCalledWith("main", "account.updateProfile", [update]);
+    expect(transport.call).toHaveBeenLastCalledWith("main", "hubControl.updateProfile", [update]);
     expect(client.current).toEqual(updated);
   });
 

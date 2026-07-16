@@ -1,7 +1,7 @@
 /**
  * Server RPC connection for the headless host: WS /rpc transport with
- * ws:auth fields declaring a headless client and event subscription for lease
- * changes. Public raw/device auth is intentionally absent: server-spawned hosts
+ * ws:auth fields declaring a headless client. Public raw/device auth is
+ * intentionally absent: server-spawned hosts
  * receive a capability over IPC; the CLI injects its paired WebRTC connection.
  */
 import { WebSocket } from "ws";
@@ -18,13 +18,8 @@ export interface ServerConnection extends HeadlessHostServerConnection {
   rpc: RpcClient;
   /** Current server-issued IPC capability. */
   getToken(): string;
-  onServerEvent(listener: (event: string, payload: unknown) => void): void;
   onResubscribe(handler: () => void | Promise<void>): void;
   close(): Promise<void>;
-}
-
-export function normalizeServerEventName(event: string): string {
-  return event.startsWith("event:") ? event.slice("event:".length) : event;
 }
 
 export async function connectToServer(config: HeadlessHostConfig): Promise<ServerConnection> {
@@ -32,7 +27,6 @@ export async function connectToServer(config: HeadlessHostConfig): Promise<Serve
     throw new Error("headless-host: injected auth requires connectionFactory");
   }
   const currentToken = config.auth.token;
-  const eventListeners = new Set<(event: string, payload: unknown) => void>();
   const wsUrl = serverRpcWsUrl(config.serverUrl);
 
   const transport = wsClientTransport({
@@ -40,10 +34,6 @@ export async function connectToServer(config: HeadlessHostConfig): Promise<Serve
     getWsUrl: () => wsUrl,
     reconnect: true,
     logPrefix: "HeadlessHost",
-    onServerEvent: (event, payload) => {
-      const normalizedEvent = normalizeServerEventName(event);
-      for (const listener of eventListeners) listener(normalizedEvent, payload);
-    },
     getAuthMessageFields: () => ({
       clientLabel: config.label,
       clientSessionId: config.clientSessionId,
@@ -68,9 +58,6 @@ export async function connectToServer(config: HeadlessHostConfig): Promise<Serve
   return {
     rpc,
     getToken: () => currentToken,
-    onServerEvent: (listener) => {
-      eventListeners.add(listener);
-    },
     onResubscribe: (handler) => {
       transport.onRecovery("resubscribe", handler);
       transport.onRecovery("cold-recover", handler);

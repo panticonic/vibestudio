@@ -38,6 +38,7 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
     session: WebRtcSession;
     token?: string;
   }> = [];
+  const sessionListeners = new Map<WebRtcSession, Set<(event: RpcEnvelope) => void>>();
   // Token of the first session opened — the main shell principal (createPairedConnection
   // opens it during construction). Any session whose token differs is a scoped grant.
   let shellToken: string | undefined;
@@ -51,6 +52,10 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
   const emitCandidateType = (type: string | null): void => {
     for (const listener of candidateTypeListeners) listener(type);
   };
+  const reconnectProgressListeners = new Set<(progress: ReconnectProgress) => void>();
+  const emitReconnectProgress = (progress: ReconnectProgress): void => {
+    for (const listener of reconnectProgressListeners) listener(progress);
+  };
   const transport = {
     connect: vi.fn(async () => {
       status = "connected";
@@ -60,6 +65,10 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
     onStatusChange: (listener: (next: "connected" | "disconnected") => void) => {
       statusListeners.add(listener);
       return () => statusListeners.delete(listener);
+    },
+    onReconnectProgress: (listener: (progress: ReconnectProgress) => void) => {
+      reconnectProgressListeners.add(listener);
+      return () => reconnectProgressListeners.delete(listener);
     },
     candidateType: () => null,
     onCandidateType: (listener: (type: string | null) => void) => {
@@ -130,11 +139,29 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
         },
       } as unknown as WebRtcSession;
       entry.session = session;
+      sessionListeners.set(session, listeners);
       opened.push(entry);
       return session;
     },
   } as unknown as WebRtcTransport;
-  return { transport, opened, emitCandidateType, emitStatus };
+  const emitEvent = (session: WebRtcSession, event: string, payload: unknown): void => {
+    const envelope: RpcEnvelope = {
+      from: "main",
+      target: "shell:dev",
+      delivery: { caller: { callerId: "main", callerKind: "server" } },
+      provenance: [{ callerId: "main", callerKind: "server" }],
+      message: { type: "event", fromId: "main", event, payload },
+    };
+    for (const listener of sessionListeners.get(session) ?? []) listener(envelope);
+  };
+  return {
+    transport,
+    opened,
+    emitCandidateType,
+    emitReconnectProgress,
+    emitStatus,
+    emitEvent,
+  };
 }
 
 describe("createWebRtcServerClient", () => {
@@ -158,17 +185,27 @@ describe("createWebRtcServerClient", () => {
     await expect(client.call("demo", "echo", ["hi"])).resolves.toEqual({ echoed: "hi" });
   });
 
-  it("forwards reconnect progress when the injected transport supports it", async () => {
-    const { transport } = makeFakeTransport(() => null);
-    let emitProgress: ((progress: ReconnectProgress) => void) | undefined;
-    (
-      transport as unknown as {
-        onReconnectProgress: (listener: (progress: ReconnectProgress) => void) => () => void;
-      }
-    ).onReconnectProgress = (listener) => {
-      emitProgress = listener;
-      return () => {};
-    };
+  it("delivers events addressed directly to the main authenticated session", async () => {
+    const { transport, opened, emitEvent } = makeFakeTransport(() => null);
+    const client = await createWebRtcServerClient({
+      pairing: PAIRING,
+      callerId: "shell:dev",
+      getShellToken: () => "shell-token",
+      transport,
+    });
+    const listener = vi.fn();
+    const unsubscribe = client.onDirectEvent("user-notifications-changed", listener);
+
+    emitEvent(opened[0]!.session, "user-notifications-changed", { changedAt: 12 });
+    expect(listener).toHaveBeenCalledWith({ changedAt: 12 });
+
+    unsubscribe();
+    emitEvent(opened[0]!.session, "user-notifications-changed", { changedAt: 13 });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards reconnect progress from the transport contract", async () => {
+    const { transport, emitReconnectProgress } = makeFakeTransport(() => null);
     const onReconnectProgress = vi.fn();
     await createWebRtcServerClient({
       pairing: PAIRING,
@@ -178,7 +215,12 @@ describe("createWebRtcServerClient", () => {
       onReconnectProgress,
     });
 
-    emitProgress?.({ attempt: 2, phase: "connecting", reason: "retry", layer: "signaling" });
+    emitReconnectProgress({
+      attempt: 2,
+      phase: "connecting",
+      reason: "retry",
+      layer: "signaling",
+    });
     expect(onReconnectProgress).toHaveBeenCalledWith({
       attempt: 2,
       phase: "connecting",

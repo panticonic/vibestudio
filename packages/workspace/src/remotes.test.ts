@@ -15,6 +15,9 @@ import {
   syncDeclaredRemoteForRepo,
 } from "./remotes.js";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+
+const BASE_CONFIG = { id: "test", systemEpoch: WORKSPACE_SYSTEM_EPOCH } as const;
 
 function tempWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-remotes-"));
@@ -58,7 +61,7 @@ describe("workspace remotes", () => {
   });
 
   it("stores remote names as keys under the section/repo declaration", () => {
-    const config: WorkspaceConfig = { id: "test", git: {} };
+    const config: WorkspaceConfig = { ...BASE_CONFIG, git: {} };
 
     const withOrigin = setDeclaredRemoteInConfig(config, "panels/chat", {
       name: "origin",
@@ -90,7 +93,7 @@ describe("workspace remotes", () => {
   });
 
   it("stores branch-specific remotes as object declarations", () => {
-    const next = setDeclaredRemoteInConfig({ id: "test", git: {} }, "projects/bgkit", {
+    const next = setDeclaredRemoteInConfig({ ...BASE_CONFIG, git: {} }, "projects/bgkit", {
       name: "origin",
       url: "https://github.com/werg/bgkit.git",
       branch: "vibestudio-bridge",
@@ -114,7 +117,7 @@ describe("workspace remotes", () => {
 
   it("removes a named remote without removing the repo declaration", () => {
     const config = setDeclaredRemoteInConfig(
-      setDeclaredRemoteInConfig({ id: "test", git: {} }, "panels/chat", {
+      setDeclaredRemoteInConfig({ ...BASE_CONFIG, git: {} }, "panels/chat", {
         name: "origin",
         url: "https://github.com/acme/chat.git",
       }),
@@ -133,18 +136,18 @@ describe("workspace remotes", () => {
   });
 
   it("prunes empty repo, section, and git maps after the last declaration is removed", () => {
-    const withRemote = setDeclaredRemoteInConfig({ id: "test" }, "panels/chat", {
+    const withRemote = setDeclaredRemoteInConfig(BASE_CONFIG, "panels/chat", {
       name: "origin",
       url: "https://github.com/acme/chat.git",
     });
 
     expect(removeDeclaredRemoteFromConfig(withRemote, "panels/chat", "origin")).toEqual({
-      id: "test",
+      ...BASE_CONFIG,
     });
   });
 
   it("prunes the upstream tree without disturbing the remaining remote tree", () => {
-    const withRemote = setDeclaredRemoteInConfig({ id: "test" }, "panels/chat", {
+    const withRemote = setDeclaredRemoteInConfig(BASE_CONFIG, "panels/chat", {
       name: "origin",
       url: "https://github.com/acme/chat.git",
     });
@@ -158,7 +161,7 @@ describe("workspace remotes", () => {
 
   it("rejects remote URLs with embedded credentials", () => {
     expect(() =>
-      setDeclaredRemoteInConfig({ id: "test" }, "panels/chat", {
+      setDeclaredRemoteInConfig(BASE_CONFIG, "panels/chat", {
         name: "origin",
         url: "https://token@github.com/acme/chat.git",
       })
@@ -167,7 +170,7 @@ describe("workspace remotes", () => {
 
   it("rejects invalid remote branch names", () => {
     expect(() =>
-      setDeclaredRemoteInConfig({ id: "test" }, "projects/bgkit", {
+      setDeclaredRemoteInConfig(BASE_CONFIG, "projects/bgkit", {
         name: "origin",
         url: "https://github.com/werg/bgkit.git",
         branch: "../main",
@@ -179,7 +182,7 @@ describe("workspace remotes", () => {
     const workspaceRoot = tempWorkspace();
     initRepo(workspaceRoot, "panels/chat");
     const config = setDeclaredRemoteInConfig(
-      setDeclaredRemoteInConfig({ id: "test", git: {} }, "panels/chat", {
+      setDeclaredRemoteInConfig({ ...BASE_CONFIG, git: {} }, "panels/chat", {
         name: "origin",
         url: "https://github.com/acme/chat.git",
       }),
@@ -215,7 +218,7 @@ describe("workspace remotes", () => {
 
   it("applies a predeclared remote when the repo appears later", async () => {
     const workspaceRoot = tempWorkspace();
-    const config = setDeclaredRemoteInConfig({ id: "test", git: {} }, "panels/future", {
+    const config = setDeclaredRemoteInConfig({ ...BASE_CONFIG, git: {} }, "panels/future", {
       name: "origin",
       url: "https://github.com/acme/future.git",
     });

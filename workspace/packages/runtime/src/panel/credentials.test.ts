@@ -15,6 +15,7 @@ const storedCredential: StoredCredentialSummary = {
     valueTemplate: "Bearer {token}",
   },
   scopes: ["scope-1"],
+  lifecycle: { state: "active", canRefresh: false },
   metadata: {},
 };
 

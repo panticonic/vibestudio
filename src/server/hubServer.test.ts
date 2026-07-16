@@ -1,10 +1,8 @@
 import * as fs from "node:fs";
-import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
-import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
@@ -16,21 +14,78 @@ import { MembershipStore } from "@vibestudio/identity/membership";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { DeviceAuthStore } from "./hostCore/deviceAuthStore.js";
 import {
-  applyHubWorkspacePresenceReport,
   buildHubReadyPayload,
   buildWorkspaceChildArgs,
   buildWorkspaceChildEnv,
-  handleRpc,
+  handleWorkspaceChildExit,
   HubCompletePairingBodySchema,
   HubDeviceCredentialBodySchema,
-  HubRootCompletePairingBodySchema,
   openHubDataStores,
   prepareEphemeralWorkspaceDisk,
+  reapWorkspaceChildProcessGroup,
+  removeOwnedEphemeralWorkspace,
+  revokeHubDevice,
+  revokeHubUser,
+  restoreRoutedWorkspaceRuntimes,
+  selectBootstrapWorkspace,
   signalWorkspaceChildTree,
   terminateWorkspaceChild,
   type HubRuntimeState,
   type WorkspaceRuntime,
 } from "./hubServer.js";
+
+describe("hub bootstrap workspace selection", () => {
+  it("uses the most recently opened registered workspace instead of assuming default", () => {
+    expect(selectBootstrapWorkspace({}, [{ name: "active" }, { name: "older" }])).toEqual({
+      name: "active",
+      lifecycle: "existing",
+    });
+  });
+
+  it("creates default only for an empty persistent catalog", () => {
+    expect(selectBootstrapWorkspace({}, [])).toEqual({
+      name: "default",
+      lifecycle: "register",
+    });
+  });
+
+  it("honors explicit persistent and canonical ephemeral bootstraps", () => {
+    expect(selectBootstrapWorkspace({ bootstrapWorkspace: "dogfood" }, [])).toEqual({
+      name: "dogfood",
+      lifecycle: "register",
+    });
+    expect(selectBootstrapWorkspace({ ephemeral: true }, [])).toEqual({
+      name: "dev",
+      lifecycle: "ephemeral",
+    });
+    expect(() =>
+      selectBootstrapWorkspace({ ephemeral: true, bootstrapWorkspace: "not-dev" }, [])
+    ).toThrow("canonical dev workspace");
+  });
+});
+
+describe("routed workspace restoration", () => {
+  it("keeps the hub available when one independently restored workspace fails", async () => {
+    const starts: string[] = [];
+    const failures: Array<{ name: string; error: unknown }> = [];
+
+    await expect(
+      restoreRoutedWorkspaceRuntimes(
+        [{ name: "stale" }, { name: "healthy" }],
+        async (name) => {
+          starts.push(name);
+          if (name === "stale") throw new Error("system epoch mismatch");
+        },
+        (name, error) => failures.push({ name, error })
+      )
+    ).resolves.toBeUndefined();
+
+    expect(starts).toEqual(["stale", "healthy"]);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.name).toBe("stale");
+    expect(failures[0]?.error).toEqual(new Error("system epoch mismatch"));
+  });
+});
 
 describe("workspace child process-tree ownership", () => {
   function fakeChild(overrides: Partial<ChildProcess> = {}): ChildProcess {
@@ -52,7 +107,7 @@ describe("workspace child process-tree ownership", () => {
       return true;
     });
 
-    await terminateWorkspaceChild(child);
+    await terminateWorkspaceChild(child, { reap: async () => undefined });
 
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
@@ -84,12 +139,201 @@ describe("workspace child process-tree ownership", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
+  it("reaps the exact detached child process group and proves it disappeared", async () => {
+    const child = fakeChild();
+    const missing = Object.assign(new Error("gone"), { code: "ESRCH" });
+    const killProcess = vi.fn((_pid: number, signal?: NodeJS.Signals | number): true => {
+      if (signal === 0) throw missing;
+      return true;
+    });
+
+    await reapWorkspaceChildProcessGroup(child, { platform: "linux", killProcess });
+
+    expect(killProcess).toHaveBeenNthCalledWith(1, -4321, "SIGKILL");
+    expect(killProcess).toHaveBeenNthCalledWith(2, -4321, 0);
+  });
+
   it("does not signal a child whose OS exit is already recorded", async () => {
     const child = fakeChild({ exitCode: 0 });
 
-    await terminateWorkspaceChild(child);
+    await terminateWorkspaceChild(child, { reap: async () => undefined });
 
     expect(child.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe("workspace child exit reconciliation", () => {
+  function runtimeState(child: ChildProcess): HubRuntimeState {
+    const runtime: WorkspaceRuntime = {
+      name: "dev-deadbeef",
+      advertisedName: "dev",
+      workspaceId: "ws_dev",
+      port: 43545,
+      publicUrl: "http://127.0.0.1:3030/w/dev",
+      child,
+      ready: {},
+      runtimeToken: "child-token",
+    };
+    return {
+      args: { ephemeral: true },
+      centralData: {
+        hasWorkspace: () => true,
+        getEphemeralWorkspace: () => ({
+          name: "dev",
+          workspaceId: "ws_dev",
+          ownerBootId: "boot-owner",
+          lastOpened: 1,
+          diskName: "dev-deadbeef",
+        }),
+      },
+      serverBootId: "boot-owner",
+      workspaceChildTokens: new Map([["child-token", "ws_dev"]]),
+      workspacePresence: new Map([
+        ["ws_dev", { serverBootId: "boot-child", revision: 1, users: new Map() }],
+      ]),
+      runtimes: new Map([["dev", runtime]]),
+      shuttingDown: false,
+    } as unknown as HubRuntimeState;
+  }
+
+  it("removes a dead ready runtime, reaps its group, and recovers the same checkout", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 4321,
+      exitCode: 1,
+      signalCode: null,
+      kill: vi.fn(),
+    }) as unknown as ChildProcess;
+    const state = runtimeState(child);
+    const reaped = vi.fn(async () => undefined);
+    const replacement = {
+      ...(state.runtimes.get("dev") as WorkspaceRuntime),
+      child: Object.assign(new EventEmitter(), { pid: 8765 }) as unknown as ChildProcess,
+    };
+    const restart = vi.fn(async (_state, input, reapedPromise) => {
+      expect(state.runtimes.has("dev")).toBe(false);
+      expect(input.childWorkspaceName).toBe("dev-deadbeef");
+      await reapedPromise;
+      state.runtimes.set("dev", replacement);
+      return replacement;
+    });
+
+    await handleWorkspaceChildExit(
+      state,
+      {
+        advertisedName: "dev",
+        childWorkspaceName: "dev-deadbeef",
+        workspaceId: "ws_dev",
+        runtimeToken: "child-token",
+        child,
+        code: 1,
+        signal: null,
+      },
+      { shouldRestart: () => true, reap: reaped, restart }
+    );
+
+    expect(reaped).toHaveBeenCalledWith(child);
+    expect(restart).toHaveBeenCalledOnce();
+    expect(state.runtimes.get("dev")).toBe(replacement);
+    expect(state.workspaceChildTokens.has("child-token")).toBe(false);
+    expect(state.workspacePresence.has("ws_dev")).toBe(false);
+  });
+
+  it("does not reap or restart a child already detached by an intentional stop", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 4321,
+      exitCode: 0,
+      signalCode: null,
+      kill: vi.fn(),
+    }) as unknown as ChildProcess;
+    const state = runtimeState(child);
+    state.runtimes.delete("dev");
+    const reap = vi.fn(async () => undefined);
+    const restart = vi.fn(async () => {
+      throw new Error("must not restart");
+    });
+
+    await handleWorkspaceChildExit(
+      state,
+      {
+        advertisedName: "dev",
+        childWorkspaceName: "dev-deadbeef",
+        workspaceId: "ws_dev",
+        runtimeToken: "child-token",
+        child,
+        code: 0,
+        signal: null,
+      },
+      { shouldRestart: () => true, reap, restart }
+    );
+
+    expect(reap).not.toHaveBeenCalled();
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it("reaps a child that exits during startup without starting a competing replacement", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 4321,
+      exitCode: 1,
+      signalCode: null,
+      kill: vi.fn(),
+    }) as unknown as ChildProcess;
+    const state = runtimeState(child);
+    state.runtimes.set("dev", {
+      child,
+      promise: new Promise<WorkspaceRuntime>(() => undefined),
+    });
+    const reap = vi.fn(async () => undefined);
+    const restart = vi.fn(async () => {
+      throw new Error("must not restart");
+    });
+
+    await handleWorkspaceChildExit(
+      state,
+      {
+        advertisedName: "dev",
+        childWorkspaceName: "dev-deadbeef",
+        workspaceId: "ws_dev",
+        runtimeToken: "child-token",
+        child,
+        code: 1,
+        signal: null,
+      },
+      { shouldRestart: () => true, reap, restart }
+    );
+
+    expect(reap).toHaveBeenCalledWith(child);
+    expect(restart).not.toHaveBeenCalled();
+    expect(state.runtimes.has("dev")).toBe(false);
+  });
+
+  it("leaves no stale runtime when exact-checkout recovery fails", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 4321,
+      exitCode: 1,
+      signalCode: null,
+      kill: vi.fn(),
+    }) as unknown as ChildProcess;
+    const state = runtimeState(child);
+    const restart = vi.fn(async () => {
+      throw new Error("owned checkout is missing");
+    });
+
+    await handleWorkspaceChildExit(
+      state,
+      {
+        advertisedName: "dev",
+        childWorkspaceName: "dev-deadbeef",
+        workspaceId: "ws_dev",
+        runtimeToken: "child-token",
+        child,
+        code: 1,
+        signal: null,
+      },
+      { shouldRestart: () => true, reap: async () => undefined, restart }
+    );
+
+    expect(restart).toHaveBeenCalledOnce();
+    expect(state.runtimes.has("dev")).toBe(false);
   });
 });
 
@@ -101,16 +345,34 @@ describe("ephemeral workspace evidence retention", () => {
       diskName: "dev-crashed",
     };
     const centralData = {
-      getEphemeralWorkspace: () => record,
-      setEphemeralWorkspaceDiskName: (workspaceId: string, diskName: string) => {
+      rotateEphemeralWorkspaceDiskName: (
+        _ownerBootId: string,
+        workspaceId: string,
+        diskName: string
+      ) => {
+        const previous = record?.diskName ?? null;
         record = { workspaceId, diskName };
+        return previous
+          ? {
+              cleanupId: "cleanup_previous",
+              diskName: previous,
+              sourceOwnerBootId: "boot-owner",
+              createdAt: 1,
+            }
+          : null;
       },
     } as unknown as CentralDataManager;
 
-    prepareEphemeralWorkspaceDisk(centralData, "ws_dev", "dev-replacement", (name) => {
-      calls.push(name);
-      return true;
-    });
+    prepareEphemeralWorkspaceDisk(
+      centralData,
+      "boot-owner",
+      "ws_dev",
+      "dev-replacement",
+      (cleanup) => {
+        calls.push(cleanup.diskName);
+        return true;
+      }
+    );
 
     expect(calls).toEqual(["dev-crashed"]);
     expect(record).toEqual({ workspaceId: "ws_dev", diskName: "dev-replacement" });
@@ -119,13 +381,51 @@ describe("ephemeral workspace evidence retention", () => {
   it("does not remove a checkout when re-registering the same disk name", () => {
     const remove = vi.fn(() => true);
     const centralData = {
-      getEphemeralWorkspace: () => ({ workspaceId: "ws_dev", diskName: "dev-current" }),
-      setEphemeralWorkspaceDiskName: vi.fn(),
+      rotateEphemeralWorkspaceDiskName: vi.fn(() => null),
     } as unknown as CentralDataManager;
 
-    prepareEphemeralWorkspaceDisk(centralData, "ws_dev", "dev-current", remove);
+    prepareEphemeralWorkspaceDisk(centralData, "boot-owner", "ws_dev", "dev-current", remove);
 
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("gives a displaced shutdown no filesystem coordinate to delete", () => {
+    const remove = vi.fn(() => true);
+    const compareRemove = vi.fn(() => null);
+    const centralData = {
+      removeEphemeralWorkspace: compareRemove,
+    } as unknown as CentralDataManager;
+
+    removeOwnedEphemeralWorkspace(centralData, "boot-displaced", remove);
+
+    expect(compareRemove).toHaveBeenCalledWith("boot-displaced", "boot-displaced");
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("deletes only the durable cleanup ticket returned for the shutdown owner", () => {
+    const cleanup = {
+      cleanupId: "cleanup_owned",
+      diskName: "dev-deadbeef",
+      sourceOwnerBootId: "boot-owner",
+      createdAt: 1,
+    };
+    const remove = vi.fn(() => true);
+    const centralData = {
+      removeEphemeralWorkspace: vi.fn(() => ({
+        workspace: {
+          workspaceId: "ws_dev",
+          name: "dev",
+          ownerBootId: "boot-owner",
+          lastOpened: 1,
+          diskName: "dev-deadbeef",
+        },
+        cleanup,
+      })),
+    } as unknown as CentralDataManager;
+
+    removeOwnedEphemeralWorkspace(centralData, "boot-owner", remove);
+
+    expect(remove).toHaveBeenCalledWith(cleanup, centralData, "boot-owner");
   });
 });
 
@@ -144,22 +444,6 @@ describe("buildWorkspaceChildArgs", () => {
   });
 });
 
-const servers: http.Server[] = [];
-afterEach(async () => {
-  for (const server of servers.splice(0)) {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-async function listen(
-  handler: (req: http.IncomingMessage, res: http.ServerResponse) => void
-): Promise<number> {
-  const server = http.createServer(handler);
-  servers.push(server);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return (server.address() as AddressInfo).port;
-}
-
 describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
   const base = {
     baseEnv: {
@@ -173,7 +457,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     advertisedWorkspaceName: "base",
     hubUrl: "http://127.0.0.1:3030",
     identityDbPath: "/hub/state/identity.db",
-    hubControlToken: "hub-child-capability",
+    workspaceChildToken: "workspace-child-identity",
     workspaceId: "ws_base",
     ephemeral: false,
     autoApproveStartupUnits: false,
@@ -191,7 +475,6 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
       workspaceId: "ws_beta",
     });
 
-    const advertisedState = path.join(getWorkspaceDir("base"), "state");
     // Every child reads the hub's ONE identity DB (WP0 §2) — same path for all.
     expect(envA["VIBESTUDIO_IDENTITY_DB_PATH"]).toBe("/hub/state/identity.db");
     expect(envB["VIBESTUDIO_IDENTITY_DB_PATH"]).toBe("/hub/state/identity.db");
@@ -202,7 +485,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     // DTLS identity belongs to the advertised logical workspace, so replacing
     // an ephemeral child checkout preserves the pinned workspace fingerprint.
     expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(
-      path.join(advertisedState, "webrtc", "identity.pem")
+      path.join(getWorkspaceDir("base"), "reach", "webrtc", "identity.pem")
     );
     expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(envB["VIBESTUDIO_WEBRTC_IDENTITY"]);
 
@@ -218,12 +501,12 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     const env = buildWorkspaceChildEnv({ ...base, childWorkspaceName: "alpha", ephemeral: true });
     expect(env["VIBESTUDIO_PROCESS_ROLE"]).toBe("workspace-child");
     expect(env["VIBESTUDIO_HUB_URL"]).toBe("http://127.0.0.1:3030");
-    expect(env["VIBESTUDIO_HUB_CONTROL_TOKEN"]).toBe("hub-child-capability");
+    expect(env["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"]).toBe("workspace-child-identity");
     expect(env["VIBESTUDIO_WORKSPACE"]).toBe("alpha");
     expect(env["VIBESTUDIO_ADVERTISED_WORKSPACE"]).toBe("base");
     expect(env["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_base");
     expect(env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"]).toBe(
-      path.join(getWorkspaceDir("base"), "state", "webrtc", "routes.json")
+      path.join(getWorkspaceDir("base"), "reach", "webrtc", "routes.json")
     );
     expect(env["VIBESTUDIO_WORKSPACE_EPHEMERAL"]).toBe("1");
     expect(env["VIBESTUDIO_GATEWAY_PORT"]).toBeUndefined();
@@ -251,7 +534,7 @@ function fakeRuntime(
       serverBootId: `boot_${"B".repeat(24)}`,
       ...ready,
     },
-    controlToken: "child-control",
+    runtimeToken: "child-runtime",
   };
 }
 
@@ -265,6 +548,12 @@ function makeHubCentralData(
   seed: Array<{ name: string; workspaceId: string; lastOpened: number }> = []
 ): CentralDataManager {
   const entries = [...seed];
+  let ephemeral: {
+    name: string;
+    workspaceId: string;
+    lastOpened: number;
+    ownerBootId: string;
+  } | null = null;
   return {
     listWorkspaces: () => entries,
     getWorkspaceIdByName: (name: string) =>
@@ -275,24 +564,36 @@ function makeHubCentralData(
         entries.push({ name, workspaceId: `ws_${name}`, lastOpened: Date.now() });
       }
     },
+    addEphemeralWorkspace: (name: string, ownerBootId: string) => {
+      if (ephemeral) throw new Error("An ephemeral workspace lifecycle is already registered");
+      if (entries.some((entry) => entry.name === name)) {
+        throw new Error(`Cannot shadow persistent workspace "${name}" with ephemeral dev`);
+      }
+      ephemeral = {
+        name,
+        workspaceId: `ws_${name}`,
+        lastOpened: Date.now(),
+        ownerBootId,
+      };
+      entries.push({
+        name: ephemeral.name,
+        workspaceId: ephemeral.workspaceId,
+        lastOpened: ephemeral.lastOpened,
+      });
+      return ephemeral;
+    },
+    getEphemeralWorkspace: () => ephemeral,
+    removeEphemeralWorkspace: (_leaseOwnerBootId: string, expectedOwnerBootId: string) => {
+      if (!ephemeral || ephemeral.ownerBootId !== expectedOwnerBootId) return null;
+      const workspace = ephemeral;
+      const index = entries.findIndex((entry) => entry.workspaceId === workspace.workspaceId);
+      if (index >= 0) entries.splice(index, 1);
+      ephemeral = null;
+      return { workspace, cleanup: null };
+    },
     touchWorkspace: () => {},
     setLastWorkspaceForUser: () => {},
   } as unknown as CentralDataManager;
-}
-
-/** Hub RPC round-trip helper (loopback `/rpc`), shared across the suites below. */
-async function rpc(
-  port: number,
-  token: string,
-  method: string,
-  args: unknown[]
-): Promise<{ status: number; body: Record<string, unknown> }> {
-  const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ method, args }),
-  });
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 }
 
 const CHILD_REACH = {
@@ -311,22 +612,20 @@ describe("hub public request schemas", () => {
 
   it("accepts only the current pairing request contract", () => {
     expect(
-      HubRootCompletePairingBodySchema.safeParse({
+      HubCompletePairingBodySchema.safeParse({
         code: "c".repeat(32),
-        handle: "root_user",
-        displayName: "Root User",
         label: "Desktop",
         platform: "linux",
       }).success
     ).toBe(true);
     expect(
-      HubRootCompletePairingBodySchema.safeParse({
+      HubCompletePairingBodySchema.safeParse({
         code: "c".repeat(32),
         ...credential,
       }).success
-    ).toBe(true);
+    ).toBe(false);
     expect(
-      HubRootCompletePairingBodySchema.safeParse({
+      HubCompletePairingBodySchema.safeParse({
         code: "c".repeat(32),
         deviceId: credential.deviceId,
       }).success
@@ -347,37 +646,6 @@ describe("hub public request schemas", () => {
     ).toBe(false);
   });
 });
-
-/** A fake read-only workspace child exposing only the ingress-routing route. */
-async function listenFakeChild(expectations: {
-  adminToken: string;
-  onBody?: (body: unknown) => void;
-  responseForBody?: (body: Record<string, unknown>) => Record<string, unknown>;
-}): Promise<number> {
-  return listen((req, res) => {
-    void (async () => {
-      if (req.method === "POST" && req.url === "/_r/s/internal/route") {
-        if (req.headers.authorization !== `Bearer ${expectations.adminToken}`) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Unauthorized" }));
-          return;
-        }
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) chunks.push(chunk as Buffer);
-        const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<
-          string,
-          unknown
-        >;
-        expectations.onBody?.(body);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(expectations.responseForBody?.(body) ?? CHILD_REACH));
-        return;
-      }
-      res.writeHead(404);
-      res.end();
-    })();
-  });
-}
 
 describe("hub RPC pairing surfacing (§5)", () => {
   function makeState(runtime: WorkspaceRuntime): {
@@ -433,24 +701,36 @@ describe("hub RPC pairing surfacing (§5)", () => {
       bindHost: "127.0.0.1",
       connectUrl: "http://127.0.0.1:9",
       identityDbPath,
-      startupPairingCode: null,
-      startupQrPairingCode: null,
-      childControlTokens: new Map(),
+      workspaceChildTokens: new Map(),
       workspacePresence: new Map(),
       runtimes: new Map([[runtime.advertisedName, runtime]]),
       shuttingDown: false,
+    };
+    state.controlTransport = {
+      ingress: {
+        armRoom: vi.fn(async () => undefined),
+        disarmRoom: vi.fn(async () => undefined),
+      } as never,
+      pairing: {
+        fp: CHILD_REACH.fp,
+        sig: CHILD_REACH.sig,
+        v: CHILD_REACH.v,
+        ice: "all" as const,
+      },
+      rpcServer: {} as never,
+      inviteExpiryTimers: new Map(),
     };
     return { state, shellToken, rootUserId: root.id, rootDeviceId: rootDevice.deviceId };
   }
 
   it("writes one canonical secret-free hub ready contract", () => {
     const { state } = makeState(fakeRuntime(9, {}));
-    const invite = (kind: "desktop" | "mobile") => {
+    const invite = (() => {
       const pairing = {
-        room: `room-${kind}`,
+        room: "root-room",
         fp: "AA".repeat(32),
         sig: "wss://signal.example/",
-        code: (kind === "desktop" ? "D" : "M").repeat(32),
+        code: "R".repeat(32),
         v: 2 as const,
         ice: "all" as const,
       };
@@ -463,18 +743,15 @@ describe("hub RPC pairing surfacing (§5)", () => {
         serverId: state.deviceAuthStore.getServerId(),
         serverBootId: state.serverBootId,
       };
-    };
-    const desktop = invite("desktop");
-    const mobile = invite("mobile");
+    })();
 
-    const payload = buildHubReadyPayload(state, { desktop, mobile }, 4242);
+    const payload = buildHubReadyPayload(state, invite, 4242);
 
     expect(Object.keys(payload).sort()).toEqual(
       [
         "mode",
         "gatewayUrl",
-        "connectUrl",
-        "rootInvites",
+        "rootInvite",
         "serverId",
         "serverBootId",
         "gatewayPort",
@@ -486,366 +763,98 @@ describe("hub RPC pairing surfacing (§5)", () => {
     expect(payload).toMatchObject({
       mode: "hub",
       gatewayUrl: "http://127.0.0.1:9",
-      connectUrl: "http://127.0.0.1:9",
-      rootInvites: { desktop, mobile },
+      rootInvite: invite,
       pid: 4242,
       version: "test",
     });
     expect(payload).not.toHaveProperty("adminToken");
     expect(payload).not.toHaveProperty("publicUrl");
-    expect(payload.rootInvites).not.toHaveProperty("qr");
-    expect(payload.rootInvites?.desktop).not.toHaveProperty("serverUrl");
+    expect(payload.rootInvite).not.toHaveProperty("qr");
+    expect(payload.rootInvite).not.toHaveProperty("serverUrl");
   });
 
-  it("hubControl.routeWorkspace arms a child room without writing identity state", async () => {
-    const bodies: unknown[] = [];
-    const childPort = await listenFakeChild({
-      adminToken: "child-admin",
-      onBody: (body) => bodies.push(body),
-      responseForBody: (body) => ({
-        ...CHILD_REACH,
-        room: body["purpose"] === "control" ? "control-room" : "workspace-room",
-      }),
+  it("revokes a device immediately and disarms its exact control room after retirement", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    const invite = state.deviceAuthStore.createPairingInvite(30_000, {
+      workspaceId: runtime.workspaceId,
+      userId: rootUserId,
+      intent: "pair-device",
     });
-    const { state, shellToken } = makeState(fakeRuntime(childPort, { adminToken: "child-admin" }));
-    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
-
-    const { status, body } = await rpc(hubPort, shellToken, "hubControl.routeWorkspace", [
-      { workspace: "dev" },
-    ]);
-    expect(status).toBe(200);
-    expect(body["result"]).toMatchObject({
-      workspace: "dev",
-      running: true,
-      controlReach: { ...CHILD_REACH, room: "control-room" },
-      workspaceReach: { ...CHILD_REACH, room: "workspace-room" },
+    const paired = state.deviceAuthStore.completePairing({ code: invite.code, label: "phone" });
+    const pairedToken = state.tokenManager.ensureToken(`shell:${paired.deviceId}`, "shell");
+    let release!: () => void;
+    const retired = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    const deviceId = expect.stringMatching(/^dev_/);
-    expect(bodies).toEqual(
-      expect.arrayContaining([
-        { deviceId, purpose: "control", reuseExisting: true },
-        { deviceId, purpose: "workspace" },
-      ])
+    const retireCaller = vi.fn(() => retired);
+    state.controlTransport!.rpcServer = { retireCaller } as never;
+    const result = await revokeHubDevice(
+      state,
+      { userId: rootUserId, handle: "root", role: "root" },
+      paired.deviceId
     );
-    expect(bodies).toHaveLength(2);
+
+    expect(result).toMatchObject({ revoked: true });
+    expect(state.deviceAuthStore.userFor(paired.deviceId)).toBeNull();
+    expect(state.tokenManager.validateToken(pairedToken)).toBeNull();
+    expect(retireCaller).toHaveBeenCalledWith(`shell:${paired.deviceId}`);
+    expect(state.controlTransport!.ingress.disarmRoom).not.toHaveBeenCalled();
+
+    release();
+    await retired;
+    await Promise.resolve();
+    expect(state.controlTransport!.ingress.disarmRoom).toHaveBeenCalledWith(paired.controlRoom);
   });
-});
 
-describe("hub membership gating (WP2 §4)", () => {
-  /**
-   * A hub with two registered+running workspaces (`alpha`, `beta`), a root
-   * account, and a `member` (alice) who holds a membership row for `alpha`
-   * only. Both runtimes are pre-registered so route/list never spawn a child.
-   */
-  function makeFixture(): {
-    state: HubRuntimeState;
-    rootToken: string;
-    aliceToken: string;
-    rootUserId: string;
-    aliceUserId: string;
-    aliceDeviceId: string;
-  } {
-    const tokenManager = new TokenManager();
-    tokenManager.setAdminToken("hub-admin");
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hub-mem-"));
-    const identityDbPath = path.join(stateDir, "identity.db");
-    const identityDb = new IdentityDb({ path: identityDbPath, readOnly: false });
-    const catalog = new DatabaseSync(identityDbPath);
-    const insertWorkspace = catalog.prepare(
-      "INSERT INTO workspaces (workspace_id, name, last_opened) VALUES (?, ?, ?)"
-    );
-    insertWorkspace.run("ws_alpha", "alpha", 3000);
-    insertWorkspace.run("ws_beta", "beta", 2000);
-    catalog.close();
-    const userStore = new UserStore(identityDb);
-    const membershipStore = new MembershipStore(identityDb, userStore);
-    const deviceAuthStore = new DeviceAuthStore({
-      db: identityDb,
-      serverIdPath: path.join(stateDir, "server-id.json"),
-    });
-
-    const root = userStore.createRoot({ handle: "root", displayName: "Root" });
-    const alice = userStore.inviteUser({
+  it("retires and disarms every exact device reach when a user is revoked", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    const member = state.userStore.inviteUser({
       handle: "alice",
       displayName: "Alice",
       role: "member",
-      createdBy: root.id,
+      createdBy: rootUserId,
     });
-    const rootDevice = deviceAuthStore.issueDevice({ userId: root.id, label: "root-cli" });
-    const aliceDevice = deviceAuthStore.issueDevice({ userId: alice.id, label: "alice-laptop" });
-    const rootToken = tokenManager.ensureToken(`shell:${rootDevice.deviceId}`, "shell");
-    const aliceToken = tokenManager.ensureToken(`shell:${aliceDevice.deviceId}`, "shell");
-
-    // Two registered workspaces; alice is a member of `alpha` only.
-    const centralData = makeHubCentralData([
-      { name: "alpha", workspaceId: "ws_alpha", lastOpened: 3000 },
-      { name: "beta", workspaceId: "ws_beta", lastOpened: 2000 },
-    ]);
-    membershipStore.add(alice.id, "ws_alpha", root.id);
-
-    // Pre-register both runtimes so route/select attach the existing child
-    // instead of spawning a real process. `alpha` advertises a pairing seam.
-    const runtimes = new Map<string, WorkspaceRuntime>([
-      [
-        "alpha",
-        fakeRuntime(
-          9,
-          {
-            serverId: `srv_${"A".repeat(24)}`,
-            serverBootId: `boot_${"A".repeat(24)}`,
-            pairing: {
-              sig: "wss://sig.example/",
-              fp: "FP",
-              v: 2,
-              ice: "all",
-              srv: "alpha",
-            },
-          },
-          { advertisedName: "alpha", workspaceId: "ws_alpha" }
-        ),
-      ],
-      ["beta", fakeRuntime(9, {}, { advertisedName: "beta", workspaceId: "ws_beta" })],
-    ]);
-
-    const state: HubRuntimeState = {
-      appRoot: "/app",
-      args: {},
-      centralData,
-      deviceAuthStore,
-      identityDb,
-      userStore,
-      membershipStore,
-      tokenManager,
-      serverBootId: `boot_${"B".repeat(24)}`,
-      adminToken: "hub-admin",
-      tokenSource: "generated",
-      version: "test",
-      gatewayPort: 9,
-      protocol: "http",
-      externalHost: "127.0.0.1",
-      bindHost: "127.0.0.1",
-      connectUrl: "http://127.0.0.1:9",
-      identityDbPath,
-      startupPairingCode: null,
-      startupQrPairingCode: null,
-      childControlTokens: new Map(),
-      workspacePresence: new Map(),
-      runtimes,
-      shuttingDown: false,
-    };
-    return {
+    const paired = ["phone", "laptop"].map((label) => {
+      const invite = state.deviceAuthStore.createPairingInvite(30_000, {
+        workspaceId: runtime.workspaceId,
+        userId: member.id,
+        intent: "pair-device",
+      });
+      const credential = state.deviceAuthStore.completePairing({ code: invite.code, label });
+      state.tokenManager.ensureToken(`shell:${credential.deviceId}`, "shell");
+      return credential;
+    });
+    // No workspace cleanup task is needed for this transport-lifecycle test.
+    state.centralData = makeHubCentralData([]);
+    const releases = new Map<string, () => void>();
+    const retireCaller = vi.fn(
+      (callerId: string) =>
+        new Promise<void>((resolve) => {
+          releases.set(callerId, resolve);
+        })
+    );
+    state.controlTransport!.rpcServer = { retireCaller } as never;
+    const result = await revokeHubUser(
       state,
-      rootToken,
-      aliceToken,
-      rootUserId: root.id,
-      aliceUserId: alice.id,
-      aliceDeviceId: aliceDevice.deviceId,
-    };
-  }
-
-  it("hubControl.listWorkspaces — root sees the full registry", async () => {
-    const { state, rootToken } = makeFixture();
-    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
-
-    const { status, body } = await rpc(hubPort, rootToken, "hubControl.listWorkspaces", []);
-    expect(status).toBe(200);
-    const list = body["result"] as Array<{ name: string; workspaceId: string; running: boolean }>;
-    expect(list.map((w) => w.name)).toEqual(["alpha", "beta"]);
-    // Each entry surfaces its opaque id and running state.
-    expect(list.map((w) => w.workspaceId)).toEqual(["ws_alpha", "ws_beta"]);
-    expect(list.every((w) => w.running)).toBe(true);
-  });
-
-  it("aggregates ordered child presence reports across visible workspaces", async () => {
-    const { state, rootToken, aliceUserId, rootUserId } = makeFixture();
-    state.membershipStore.add(aliceUserId, "ws_beta", rootUserId);
-
-    expect(
-      applyHubWorkspacePresenceReport(state, "ws_alpha", {
-        serverBootId: `boot_${"A".repeat(24)}`,
-        revision: 2,
-        users: [{ userId: aliceUserId, endpoints: 2 }],
-      })
-    ).toBe(true);
-    expect(
-      applyHubWorkspacePresenceReport(state, "ws_alpha", {
-        serverBootId: `boot_${"A".repeat(24)}`,
-        revision: 1,
-        users: [],
-      })
-    ).toBe(false);
-    expect(
-      applyHubWorkspacePresenceReport(state, "ws_beta", {
-        serverBootId: `boot_${"C".repeat(24)}`,
-        revision: 1,
-        users: [{ userId: aliceUserId, endpoints: 1 }],
-      })
-    ).toBe(true);
-
-    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
-    const { status, body } = await rpc(hubPort, rootToken, "hubControl.listUserPresence", [
-      { handle: "ALICE" },
-    ]);
-    expect(status).toBe(200);
-    expect(body["result"]).toEqual({
-      userId: aliceUserId,
-      handle: "alice",
-      displayName: "Alice",
-      workspaces: [
-        { workspace: "alpha", workspaceId: "ws_alpha", endpoints: 2 },
-        { workspace: "beta", workspaceId: "ws_beta", endpoints: 1 },
-      ],
-    });
-  });
-
-  it("hubControl.listWorkspaces — a member sees only workspaces they belong to", async () => {
-    const { state, aliceToken } = makeFixture();
-    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
-
-    const { status, body } = await rpc(hubPort, aliceToken, "hubControl.listWorkspaces", []);
-    expect(status).toBe(200);
-    const list = body["result"] as Array<{ name: string; workspaceId: string }>;
-    // alice holds a row for `alpha` only — `beta` is filtered out of her view.
-    expect(list.map((w) => w.name)).toEqual(["alpha"]);
-    expect(list[0]!.workspaceId).toBe("ws_alpha");
-  });
-
-  it("hubControl.routeWorkspace — a non-member is refused before any spawn", async () => {
-    const { state, aliceToken } = makeFixture();
-    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
-
-    const { status, body } = await rpc(hubPort, aliceToken, "hubControl.routeWorkspace", [
-      { workspace: "beta" },
-    ]);
-    // The membership pre-filter short-circuits BEFORE ensureWorkspaceRuntime,
-    // so a non-member never starts (or reaches) the child (WP2 §4).
-    expect(status).toBe(403);
-    expect(body["code"]).toBe("EACCES");
-    expect(body["error"]).toMatch(/Not a member of workspace "beta"/);
-  });
-
-  it("hubControl.listWorkspaceMembers includes root's implicit membership", async () => {
-    const { state, rootToken, rootUserId } = makeFixture();
-    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
-
-    const { status, body } = await rpc(hubPort, rootToken, "hubControl.listWorkspaceMembers", [
-      { workspace: "alpha" },
-    ]);
-    expect(status).toBe(200);
-    expect(body["result"]).toMatchObject({
-      workspaceId: "ws_alpha",
-      members: expect.arrayContaining([
-        expect.objectContaining({ userId: rootUserId, role: "root", implicit: true }),
-      ]),
-    });
-  });
-
-  it("restores an existing membership when governance rejects a repeated add", async () => {
-    const { state, rootToken, aliceUserId } = makeFixture();
-    const before = state.identityDb
-      .listMembers("ws_alpha")
-      .find((row) => row.userId === aliceUserId)!;
-    state.governanceLog = {
-      append: async () => {
-        throw new Error("governance unavailable");
-      },
-    } as unknown as HubRuntimeState["governanceLog"];
-    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
-
-    const { status } = await rpc(hubPort, rootToken, "hubControl.addWorkspaceMember", [
-      { workspace: "alpha", userId: aliceUserId },
-    ]);
-
-    expect(status).toBe(500);
-    expect(
-      state.identityDb.listMembers("ws_alpha").find((row) => row.userId === aliceUserId)
-    ).toEqual(before);
-  });
-
-  it("removes a newly inserted explicit root row when governance rejects an add", async () => {
-    const { state, rootToken, rootUserId } = makeFixture();
-    state.governanceLog = {
-      append: async () => {
-        throw new Error("governance unavailable");
-      },
-    } as unknown as HubRuntimeState["governanceLog"];
-    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
-
-    const { status } = await rpc(hubPort, rootToken, "hubControl.addWorkspaceMember", [
-      { workspace: "alpha", userId: rootUserId },
-    ]);
-
-    expect(status).toBe(500);
-    expect(state.identityDb.listMembers("ws_alpha").some((row) => row.userId === rootUserId)).toBe(
-      false
+      { userId: rootUserId, handle: "root", role: "root" },
+      { userId: member.id }
     );
-  });
 
-  it("members list only their own devices and can mint a fully-routed device invite", async () => {
-    const bodies: Array<Record<string, unknown>> = [];
-    const childPort = await listenFakeChild({
-      adminToken: "child-admin",
-      onBody: (body) => bodies.push(body as Record<string, unknown>),
-    });
-    const { state, aliceToken, aliceUserId } = makeFixture();
-    state.runtimes.set(
-      "alpha",
-      fakeRuntime(
-        childPort,
-        { adminToken: "child-admin" },
-        { advertisedName: "alpha", workspaceId: "ws_alpha" }
-      )
-    );
-    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
+    expect(result).toMatchObject({ revoked: true, userId: member.id });
+    expect(state.userStore.getUser(member.id)?.revokedAt).toEqual(expect.any(Number));
+    expect(retireCaller).toHaveBeenCalledTimes(2);
+    expect(state.controlTransport!.ingress.disarmRoom).not.toHaveBeenCalled();
 
-    const listed = await rpc(hubPort, aliceToken, "hubControl.listDevices", []);
-    expect(listed.status).toBe(200);
-    const devices = (listed.body["result"] as { devices: Array<{ userId: string }> }).devices;
-    expect(devices).toHaveLength(1);
-    expect(devices[0]?.userId).toBe(aliceUserId);
-
-    const paired = await rpc(hubPort, aliceToken, "hubControl.pairDevice", [
-      { workspace: "alpha", ttlMs: 30_000 },
-    ]);
-    expect(paired.status).toBe(200);
-    const pairing = (paired.body["result"] as { pairing: { code: string; expiresAt: number } })
-      .pairing;
-    expect(bodies).toEqual([
-      expect.objectContaining({
-        inviteCodeHash: expect.stringMatching(/^[a-f0-9]{64}$/),
-        expiresAt: pairing.expiresAt,
-      }),
-    ]);
-  });
-
-  it("rolls an invited account back when its child reach cannot be armed", async () => {
-    const childPort = await listen((req, res) => {
-      if (req.url === "/_r/s/internal/release-route") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ released: true }));
-        return;
-      }
-      res.writeHead(503, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "ingress unavailable" }));
-    });
-    const { state, rootToken } = makeFixture();
-    state.runtimes.set(
-      "alpha",
-      fakeRuntime(
-        childPort,
-        { adminToken: "child-admin" },
-        { advertisedName: "alpha", workspaceId: "ws_alpha" }
-      )
-    );
-    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
-
-    const { status, body } = await rpc(hubPort, rootToken, "hubControl.inviteUser", [
-      { handle: "mara", workspaces: ["alpha"], ttlMs: 30_000 },
-    ]);
-    expect(status).toBe(500);
-    expect(body["error"]).toMatch(/ingress unavailable/);
-    expect(state.userStore.getByHandle("mara")).toBeNull();
-    expect(state.membershipStore.listMembers("ws_alpha")).toHaveLength(1);
+    for (const credential of paired) {
+      releases.get(`shell:${credential.deviceId}`)!();
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(state.controlTransport!.ingress.disarmRoom).toHaveBeenCalledTimes(2);
+    expect(state.controlTransport!.ingress.disarmRoom).toHaveBeenCalledWith(paired[0]!.controlRoom);
+    expect(state.controlTransport!.ingress.disarmRoom).toHaveBeenCalledWith(paired[1]!.controlRoom);
   });
 });
 

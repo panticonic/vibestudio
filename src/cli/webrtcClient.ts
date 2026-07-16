@@ -16,6 +16,8 @@ import {
 } from "@vibestudio/rpc";
 import {
   createPairedConnection,
+  type DeviceCredential,
+  type PairingContext,
   type PairedConnection,
 } from "@vibestudio/rpc/transports/pairedConnection";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
@@ -34,7 +36,7 @@ export interface WebRtcClientConfig {
   getToken: () => Promise<string> | string;
   connectionId?: string;
   clientLabel?: string;
-  onPaired?: (credential: { deviceId: string; refreshToken: string }) => void | Promise<void>;
+  onPaired?: (credential: DeviceCredential, context?: PairingContext) => void | Promise<void>;
   onPersistError?: (error: Error) => void;
   logPrefix?: string;
 }

@@ -1,5 +1,4 @@
 import type {
-  MobileHubControlConnection,
   MobileHubWorkspace,
   MobileHubWorkspaceRoute,
   StoredShellCredential,
@@ -11,7 +10,6 @@ import {
 } from "./workspaceSelection";
 
 jest.mock("@vibestudio/mobile-webrtc", () => ({
-  connectMobileHubControl: jest.fn(),
   loadShellCredential: jest.fn(),
   persistStoredShellCredential: jest.fn(),
   createStoredShellCredential: (
@@ -51,13 +49,7 @@ const WORKSPACE_B_PAIRING = {
   sig: "wss://signal.example/",
   v: 2 as const,
   ice: "relay" as const,
-  srv: "prod",
 };
-const ROUTED_CONTROL_PAIRING = {
-  ...CONTROL_PAIRING,
-  room: "control-2222",
-};
-
 const storedA: StoredShellCredential = {
   schemaVersion: 3,
   deviceId: DEVICE_ID,
@@ -87,7 +79,6 @@ const routeB: MobileHubWorkspaceRoute = {
   workspaceId: "ws-b",
   running: true,
   serverUrl: "https://workspace.example",
-  controlReach: ROUTED_CONTROL_PAIRING,
   workspaceReach: WORKSPACE_B_PAIRING,
   serverId: `srv_${"s".repeat(24)}`,
   serverBootId: `boot_${"b".repeat(24)}`,
@@ -106,7 +97,6 @@ function dependencies(
   deps: MobileWorkspaceSelectionDependencies;
   listWorkspaces: jest.Mock;
   routeWorkspace: jest.Mock;
-  close: jest.Mock;
   persistCredential: jest.Mock;
 } {
   const events = options.events ?? [];
@@ -114,26 +104,19 @@ function dependencies(
     events.push("list");
     return workspaces;
   });
-  const routeWorkspace = jest.fn(async ({ workspace }: { workspace: string }) => {
-    events.push(`route:${workspace}`);
+  const routeWorkspace = jest.fn(async ({ workspaceId }: { workspaceId: string }) => {
+    events.push(`route:${workspaceId}`);
     return options.route ? options.route() : routeB;
   });
-  const close = jest.fn(async () => {
-    events.push("close-control");
-  });
-  const control = {
-    client: { listWorkspaces, routeWorkspace },
-    getStoredCredential: () => options.currentStored ?? storedA,
-    close,
-  } as MobileHubControlConnection;
   const persistCredential = jest.fn(async (stored: StoredShellCredential) => {
     events.push(`persist:${stored.workspacePairing.room}`);
     await options.persist?.(stored);
   });
   return {
     deps: {
-      loadCredential: async () => (options.stored === undefined ? storedA : options.stored),
-      connectControl: async () => control,
+      control: { listWorkspaces, routeWorkspace },
+      loadCredential: async () =>
+        options.stored === undefined ? (options.currentStored ?? storedA) : options.stored,
       persistCredential,
       reloadBootstrap: async () => {
         events.push("reload");
@@ -142,7 +125,6 @@ function dependencies(
     },
     listWorkspaces,
     routeWorkspace,
-    close,
     persistCredential,
   };
 }
@@ -150,16 +132,15 @@ function dependencies(
 describe("mobile workspace selection", () => {
   it("lists visible workspaces through the stable control connection", async () => {
     const events: string[] = [];
-    const { deps, listWorkspaces, close } = dependencies({ events });
+    const { deps, listWorkspaces } = dependencies({ events });
 
     await expect(listMobileWorkspaces(deps)).resolves.toEqual(workspaces);
 
     expect(listWorkspaces).toHaveBeenCalledWith();
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(events).toEqual(["list", "close-control"]);
+    expect(events).toEqual(["list"]);
   });
 
-  it("routes over control and persists the exact reach before reload and close", async () => {
+  it("routes over retained control and persists the exact reach before reload", async () => {
     const events: string[] = [];
     const currentStored = { ...storedA, refreshToken: ROTATED_TOKEN };
     const { deps, routeWorkspace, persistCredential } = dependencies({
@@ -167,16 +148,16 @@ describe("mobile workspace selection", () => {
       currentStored,
     });
 
-    await expect(selectMobileWorkspace("beta", deps)).resolves.toEqual(routeB);
+    await expect(selectMobileWorkspace("ws-b", deps)).resolves.toEqual(routeB);
 
-    expect(routeWorkspace).toHaveBeenCalledWith({ workspace: "beta" });
+    expect(routeWorkspace).toHaveBeenCalledWith({ workspaceId: "ws-b" });
     expect(persistCredential).toHaveBeenCalledTimes(1);
     expect(persistCredential.mock.calls[0]?.[0]).toEqual({
       ...currentStored,
-      controlPairing: ROUTED_CONTROL_PAIRING,
+      controlPairing: CONTROL_PAIRING,
       workspacePairing: WORKSPACE_B_PAIRING,
     });
-    expect(events).toEqual(["route:beta", "persist:workspace-b-2222", "reload", "close-control"]);
+    expect(events).toEqual(["route:ws-b", "persist:workspace-b-2222", "reload"]);
   });
 
   it("restores the prior reach and leaves the active session untouched when reload fails", async () => {
@@ -189,22 +170,21 @@ describe("mobile workspace selection", () => {
       },
     });
 
-    await expect(selectMobileWorkspace("beta", deps)).rejects.toThrow("native reload unavailable");
+    await expect(selectMobileWorkspace("ws-b", deps)).rejects.toThrow("native reload unavailable");
 
     expect(persistCredential.mock.calls.map((call) => call[0])).toEqual([
       {
         ...storedA,
-        controlPairing: ROUTED_CONTROL_PAIRING,
+        controlPairing: CONTROL_PAIRING,
         workspacePairing: WORKSPACE_B_PAIRING,
       },
       storedA,
     ]);
     expect(events).toEqual([
-      "route:beta",
+      "route:ws-b",
       "persist:workspace-b-2222",
       "reload",
       "persist:workspace-a-1111",
-      "close-control",
     ]);
     expect(activeWorkspaceClose).not.toHaveBeenCalled();
   });
@@ -218,8 +198,8 @@ describe("mobile workspace selection", () => {
       },
     });
 
-    await expect(selectMobileWorkspace("beta", deps)).rejects.toThrow("membership denied");
+    await expect(selectMobileWorkspace("ws-b", deps)).rejects.toThrow("membership denied");
     expect(persistCredential).not.toHaveBeenCalled();
-    expect(events).toEqual(["route:beta", "close-control"]);
+    expect(events).toEqual(["route:ws-b"]);
   });
 });

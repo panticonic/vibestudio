@@ -35,7 +35,7 @@ import {
 } from "@vibestudio/mobile-webrtc/connectLink";
 import {
   establishWebRtcConnection,
-  reconnectViaWebRtc,
+  reconnectMobileSession,
   persistShellCredential,
   completeFreshMobilePairing,
   loadShellCredential,
@@ -56,6 +56,7 @@ import {
   HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS,
   isLaunchSessionEventForTarget,
 } from "@vibestudio/shared/hostTargetLaunchGate";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { name as appName } from "./app.json";
 import { VibestudioLogo } from "./VibestudioLogo";
 
@@ -85,18 +86,12 @@ function parseConnectDeepLink(rawUrl) {
     sig: parsed.sig,
     v: parsed.v,
     ice: parsed.ice,
-    srv: parsed.srv,
   };
 }
 
-/** A human label for a pairing target (the QR carries no server origin). */
-function pairingLabel(pairing) {
-  if (pairing?.srv) return pairing.srv;
-  try {
-    return new URL(pairing.sig).host;
-  } catch {
-    return "this Vibestudio server";
-  }
+/** Pairing reach is transport data, not a display identity. */
+function pairingLabel() {
+  return "this Vibestudio server";
 }
 
 async function activateApprovedWorkspaceApp(connection, options = {}) {
@@ -122,21 +117,34 @@ async function pairViaWebRtc(pairing) {
   smokePhase("embedded-pairing-start");
   const tokenProvider = makeShellTokenProvider(pairing, null);
   let pairedCredential = null;
+  let pairingContext = null;
   const connection = await establishWebRtcConnection(pairing, tokenProvider, {
-    onPaired: (credential) => {
+    onPaired: (credential, context) => {
       // Fires inside the open handshake (before `ready()` resolves): switch the
       // token provider to the refresh secret so reconnects authenticate.
       pairedCredential = credential;
+      pairingContext = context ?? null;
       tokenProvider.setCredential(credential);
     },
   });
-  await completeFreshMobilePairing({
-    connection,
+  const workspaceConnection = await completeFreshMobilePairing({
+    controlConnection: connection,
     credential: pairedCredential,
+    pairingContext,
+    controlPairing: pairing,
     persistCredential: persistShellCredential,
+    connectWorkspace: async (workspacePairing, credential) => {
+      const workspaceTokenProvider = makeShellTokenProvider(workspacePairing, credential);
+      return establishWebRtcConnection(workspacePairing, workspaceTokenProvider, {
+        onPaired: async (nextCredential) => {
+          workspaceTokenProvider.setCredential(nextCredential);
+          await persistShellCredential(nextCredential, pairing, workspacePairing);
+        },
+      });
+    },
   });
   smokePhase("embedded-pairing-complete");
-  return connection;
+  return workspaceConnection;
 }
 
 async function rpc(connection, method, args = []) {
@@ -212,20 +220,19 @@ function createLaunchReadinessEventClient(connection) {
     for (const waiter of Array.from(waiters)) waiter(true);
   };
   const unsubs = [];
+  const events = new EventsClient(connection.rpc);
   for (const name of eventNames) {
     unsubs.push(
-      connection.rpc.on(name, (ev) => {
-        const raw = typeof ev?.event === "string" ? ev.event : name;
-        const eventName = raw.startsWith("event:") ? raw.slice("event:".length) : raw;
-        if (isLaunchSessionEventForTarget("react-native", eventName, ev?.payload)) {
-          lastSession = ev.payload;
+      events.on(name, (payload) => {
+        if (isLaunchSessionEventForTarget("react-native", name, payload)) {
+          lastSession = payload;
           notify();
         }
       })
     );
-    // Best-effort server-side subscription; the poll fallback covers a failure.
-    void connection.rpc.call("main", "events.subscribe", [name]).catch(() => {});
   }
+  // The poll fallback covers an unavailable watch without inventing a retry loop.
+  void events.subscribeAll(eventNames).catch(() => {});
   return Promise.resolve({
     waitForLaunchSessionChange(sessionId, timeoutMs) {
       if (lastSession?.sessionId === sessionId && revision !== observedRevision) {
@@ -255,6 +262,7 @@ function createLaunchReadinessEventClient(connection) {
           unsub();
         } catch {}
       }
+      void events.unsubscribeAll().catch(() => {});
     },
   });
 }
@@ -540,7 +548,7 @@ function VibestudioMobileHostBootstrap() {
         return;
       }
       setStatus(`Reconnecting to ${pairingLabel(stored.workspacePairing)}...`);
-      connection = await reconnectViaWebRtc(stored);
+      connection = await reconnectMobileSession(stored);
       await runLaunchGate(connection);
     } catch (error) {
       const failure = await closeBootstrapConnectionAfterFailure(connection, error);

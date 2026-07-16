@@ -526,8 +526,8 @@ async function main() {
     startedChildren.push(signalingChild);
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
-    // The server publishes the complete mobile root invite through its strict
-    // ready-file handoff.
+    // The server publishes one complete root invitation fact through its strict
+    // ready-file handoff. Mobile consumes its deep-link presentation directly.
     const serverArgs = [
       serverEntryArg(),
       "--app-root",
@@ -553,9 +553,9 @@ async function main() {
     await waitForSpawn(serverChild, serverInvocation.command, serverInvocation.args);
     startedChildren.push(serverChild);
     const ready = await waitForServerReady(readyFilePath, serverChild);
-    const invite = ready.rootInvites?.mobile;
+    const invite = ready.rootInvite;
     if (!invite) {
-      throw new Error("Fresh isolated hub did not publish a mobile root invite");
+      throw new Error("Fresh isolated hub did not publish a root invite");
     }
     const connectLink = invite.deepLink;
     const workspace = ready.workspaces.find((entry) => entry.ephemeral) ?? ready.workspaces[0];

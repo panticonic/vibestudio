@@ -86,7 +86,6 @@ import {
   SESSION_STREAM_CANCEL,
   SESSION_STREAM_OPEN,
   type SessionControlFrame,
-  type SessionEventFrame,
   type SessionHelloFrame,
   type SessionOpenResultFrame,
   type SessionRouteFrame,
@@ -97,6 +96,7 @@ import {
   encodeControlFrame,
 } from "../protocol/sessionNegotiation.js";
 import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
+import type { DeviceCredential, PairingContext } from "../protocol/wsProtocol.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 import type {
   PeerConnectionProvider,
@@ -238,7 +238,7 @@ export interface WebRtcSessionOptions {
    * freshly issued device credential to persist for reconnects. Only the first
    * (pairing) open delivers it.
    */
-  onPaired?: (credential: { deviceId: string; refreshToken: string }) => void | Promise<void>;
+  onPaired?: (credential: DeviceCredential, context?: PairingContext) => void | Promise<void>;
   /** Fired when the server terminally closes this logical session. */
   onTerminalClose?: (error: Error) => void;
 }
@@ -770,9 +770,6 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         sessions.get(frame.sid)?.deliverEnvelope(envelope);
         return;
       }
-      case "event":
-        sessions.get(frame.sid)?.deliverServerEvent(frame as SessionEventFrame);
-        return;
       case "routed-response-error":
         // The server saw the routed message and failed to deliver it — the
         // pending settles here (request direction), or our RESPONSE reached
@@ -1811,7 +1808,9 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // A freshly paired device's credential rides back on the first open-result
       // (the server keeps only its hash). Hand it to the client to persist before
       // resolving ready(), so a reconnect can authenticate with the refresh secret.
-      if (frame.deviceCredential) await this.opts.onPaired?.(frame.deviceCredential);
+      if (frame.deviceCredential) {
+        await this.opts.onPaired?.(frame.deviceCredential, frame.pairingContext);
+      }
       if (this.sessionClosed) return;
       // cold-recover vs resubscribe (WS parity, wsClient.ts:136-155): server
       // restart (bootId change) OR a dirty session ⇒ cold-recover. Fires on the
@@ -1912,19 +1911,6 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           logWarn(`${log} session ${this.sid} message listener threw`, error);
         }
       }
-    }
-
-    deliverServerEvent(frame: SessionEventFrame): void {
-      // Synthesize a server-originated event envelope (parity with wsClient.ts:163-179).
-      const serverCaller: AuthenticatedCaller = { callerId: "main", callerKind: "server" };
-      const envelope: RpcEnvelope = {
-        from: "main",
-        target: this.resolvedCallerId ?? this.sid,
-        delivery: { caller: serverCaller },
-        provenance: [serverCaller],
-        message: { type: "event", event: frame.event, payload: frame.payload, fromId: "main" },
-      };
-      this.deliverEnvelope(envelope);
     }
 
     deliverRoutedResponseError(frame: SessionRoutedResponseErrorFrame): void {

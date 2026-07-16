@@ -5,6 +5,7 @@ import {
   createPairedConnection,
   type CreatePairedConnectionOptions,
   type DeviceCredential,
+  type PairingContext,
 } from "./pairedConnection.js";
 
 // ---------------------------------------------------------------------------
@@ -16,6 +17,7 @@ interface FakeOpts {
   readyError?: Error;
   /** Delivered to the session's onPaired on the first open (like a pairing open-result). */
   deviceCredential?: DeviceCredential;
+  pairingContext?: PairingContext;
 }
 
 interface FakeSession extends WebRtcSession {
@@ -36,7 +38,9 @@ function makeFakeSession(opts: WebRtcSessionOptions, fake: FakeOpts): FakeSessio
       // Mirror the real session: fire recovery + onPaired on the (first) open,
       // then settle — reject when the fake is configured to fail auth.
       opts.onRecovery?.("resubscribe");
-      if (fake.deviceCredential) await opts.onPaired?.(fake.deviceCredential);
+      if (fake.deviceCredential) {
+        await opts.onPaired?.(fake.deviceCredential, fake.pairingContext);
+      }
       if (fake.readyError) throw fake.readyError;
     },
     isClosed: () => closed,
@@ -164,9 +168,10 @@ describe("createPairedConnection", () => {
     vi.useFakeTimers();
     const { transport } = makeFakeTransport({
       deviceCredential: { deviceId: "d1", refreshToken: "r1" },
+      pairingContext: { workspaceId: "workspace-1" },
     });
     const onPaired = vi
-      .fn<(cred: DeviceCredential) => Promise<void>>()
+      .fn<(cred: DeviceCredential, context?: PairingContext) => Promise<void>>()
       .mockRejectedValueOnce(new Error("keychain busy"))
       .mockResolvedValueOnce(undefined);
     const onPersistError = vi.fn();
@@ -181,7 +186,16 @@ describe("createPairedConnection", () => {
     await vi.advanceTimersByTimeAsync(250); // backoff → attempt 2 (succeeds)
     const paired = await pairedPromise;
     expect(onPaired).toHaveBeenCalledTimes(2);
-    expect(onPaired).toHaveBeenCalledWith({ deviceId: "d1", refreshToken: "r1" });
+    expect(onPaired).toHaveBeenNthCalledWith(
+      1,
+      { deviceId: "d1", refreshToken: "r1" },
+      { workspaceId: "workspace-1" }
+    );
+    expect(onPaired).toHaveBeenNthCalledWith(
+      2,
+      { deviceId: "d1", refreshToken: "r1" },
+      { workspaceId: "workspace-1" }
+    );
     expect(onPersistError).not.toHaveBeenCalled();
     await paired.close();
   });

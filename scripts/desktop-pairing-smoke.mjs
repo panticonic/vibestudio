@@ -286,7 +286,6 @@ function buildConnectDeepLinkFromLog(loggedLink) {
     sig: parsed.sig,
     v: parsed.v,
     ice: parsed.ice,
-    srv: parsed.srv,
   });
 }
 
@@ -579,10 +578,10 @@ async function waitForRenderedPanel(app, timeoutMs) {
             continue;
           }
           if (
-            dom.hasHostChrome
-            || dom.hasLaunchGateApproval
-            || dom.readyState !== "complete"
-            || dom.childCount < 4
+            dom.hasHostChrome ||
+            dom.hasLaunchGateApproval ||
+            dom.readyState !== "complete" ||
+            dom.childCount < 4
           ) {
             continue;
           }
@@ -808,10 +807,9 @@ async function main() {
     );
 
     // 3. Follow the deployed first-device flow: consume the protected root
-    // desktop invite emitted in the server's ready payload.
+    // invite emitted in the server's ready payload.
     const invite = await waitForRootInvite({
       readyFile: options.readyFile,
-      kind: "desktop",
       timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
     });
     const loggedLink = invite.pairUrl;
@@ -848,9 +846,7 @@ async function main() {
     );
     const screenshotPath = await saveScreenshot(electronApp).catch(() => null);
     if (screenshotPath) {
-      console.log(
-        `[desktop-smoke] Post-pair window: ${path.relative(repoRoot, screenshotPath)}`
-      );
+      console.log(`[desktop-smoke] Post-pair window: ${path.relative(repoRoot, screenshotPath)}`);
     }
     console.log(
       `[desktop-smoke] PASS paired desktop app over WebRTC; ` +

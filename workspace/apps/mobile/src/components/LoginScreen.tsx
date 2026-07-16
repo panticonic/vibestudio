@@ -156,8 +156,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           deviceId: stored.deviceId,
         };
         setPairingIdentity({
-          server:
-            stored.workspacePairing.srv || stored.controlPairing.srv || "Paired workspace server",
+          server: "Paired workspace server",
           deviceId: stored.deviceId,
         });
         setConnectionPhase("Contacting your workspace server…");
@@ -176,7 +175,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           },
         });
         pendingClient = client;
-        const offProgress = client.transport.onReconnectProgress?.((progress) => {
+        const offProgress = client.transport.onReconnectProgress((progress) => {
           if (cancelled) return;
           setConnectionAttempt(progress.attempt);
           setConnectionPhase(

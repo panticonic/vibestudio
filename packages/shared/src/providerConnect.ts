@@ -7,12 +7,16 @@ import type {
   ConnectCredentialRequest,
   CredentialFlowSpec,
   OAuthLoopbackRedirectStrategy,
+  UrlAudience,
 } from "@vibestudio/credential-client/types";
+import { findMatchingUrlAudience } from "@vibestudio/credential-client/urlAudience";
 import type { CredentialInjection } from "@vibestudio/credential-client/urlAudience";
 
 export interface ProviderConnectPreset {
   providerId: string;
   credentialLabel: string;
+  /** Exact provider API surface to which the resulting credential is bound. */
+  credentialAudience: UrlAudience[];
   /** The credentials.connect flow (OAuth params or api-key field collection). */
   flow: CredentialFlowSpec;
   /** How the stored credential injects auth into model API requests. */
@@ -36,11 +40,13 @@ const BEARER_INJECTION: CredentialInjection = {
 function apiKeyPreset(opts: {
   providerId: string;
   label: string;
+  audienceUrl: string;
   injection?: CredentialInjection;
 }): ProviderConnectPreset {
   return {
     providerId: opts.providerId,
     credentialLabel: opts.label,
+    credentialAudience: [{ url: opts.audienceUrl, match: "path-prefix" }],
     flow: {
       type: "api-key",
       title: opts.label,
@@ -60,6 +66,7 @@ export const PROVIDER_CONNECT_PRESETS: Record<string, ProviderConnectPreset> = {
   "openai-codex": {
     providerId: "openai-codex",
     credentialLabel: "ChatGPT Codex model credential",
+    credentialAudience: [{ url: "https://chatgpt.com/backend-api", match: "path-prefix" }],
     injection: BEARER_INJECTION,
     accountIdentityJwtClaimRoot: OPENAI_CODEX_ACCOUNT_CLAIM,
     accountIdentityJwtClaimField: "chatgpt_account_id",
@@ -77,6 +84,7 @@ export const PROVIDER_CONNECT_PRESETS: Record<string, ProviderConnectPreset> = {
       tokenUrl: "https://auth.openai.com/oauth/token",
       clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
       scopes: ["openid", "profile", "email", "offline_access"],
+      persistRefreshToken: true,
       extraAuthorizeParams: {
         id_token_add_organizations: "true",
         codex_cli_simplified_flow: "true",
@@ -84,10 +92,15 @@ export const PROVIDER_CONNECT_PRESETS: Record<string, ProviderConnectPreset> = {
       },
     },
   },
-  openai: apiKeyPreset({ providerId: "openai", label: "OpenAI API key" }),
+  openai: apiKeyPreset({
+    providerId: "openai",
+    label: "OpenAI API key",
+    audienceUrl: "https://api.openai.com/v1",
+  }),
   anthropic: apiKeyPreset({
     providerId: "anthropic",
     label: "Anthropic API key",
+    audienceUrl: "https://api.anthropic.com",
     injection: {
       type: "header",
       name: "x-api-key",
@@ -95,14 +108,35 @@ export const PROVIDER_CONNECT_PRESETS: Record<string, ProviderConnectPreset> = {
       stripIncoming: ["x-api-key", "authorization"],
     },
   }),
-  openrouter: apiKeyPreset({ providerId: "openrouter", label: "OpenRouter API key" }),
-  groq: apiKeyPreset({ providerId: "groq", label: "Groq API key" }),
-  xai: apiKeyPreset({ providerId: "xai", label: "xAI API key" }),
-  deepseek: apiKeyPreset({ providerId: "deepseek", label: "DeepSeek API key" }),
-  mistral: apiKeyPreset({ providerId: "mistral", label: "Mistral API key" }),
+  openrouter: apiKeyPreset({
+    providerId: "openrouter",
+    label: "OpenRouter API key",
+    audienceUrl: "https://openrouter.ai/api/v1",
+  }),
+  groq: apiKeyPreset({
+    providerId: "groq",
+    label: "Groq API key",
+    audienceUrl: "https://api.groq.com/openai/v1",
+  }),
+  xai: apiKeyPreset({
+    providerId: "xai",
+    label: "xAI API key",
+    audienceUrl: "https://api.x.ai/v1",
+  }),
+  deepseek: apiKeyPreset({
+    providerId: "deepseek",
+    label: "DeepSeek API key",
+    audienceUrl: "https://api.deepseek.com",
+  }),
+  mistral: apiKeyPreset({
+    providerId: "mistral",
+    label: "Mistral API key",
+    audienceUrl: "https://api.mistral.ai",
+  }),
   google: apiKeyPreset({
     providerId: "google",
     label: "Google AI API key",
+    audienceUrl: "https://generativelanguage.googleapis.com/v1beta",
     injection: {
       type: "header",
       name: "x-goog-api-key",
@@ -132,7 +166,9 @@ export function listProviderConnectPresets(): ProviderConnectPreset[] {
   const orderedIds = new Set(ordered.map((preset) => preset.providerId));
   return [
     ...ordered,
-    ...Object.values(PROVIDER_CONNECT_PRESETS).filter((preset) => !orderedIds.has(preset.providerId)),
+    ...Object.values(PROVIDER_CONNECT_PRESETS).filter(
+      (preset) => !orderedIds.has(preset.providerId)
+    ),
   ];
 }
 
@@ -154,7 +190,13 @@ export function isTemplatedBaseUrl(baseUrl: string): boolean {
  * is concrete (not templated). Authoritative per-model connectability.
  */
 export function modelIsConnectable(providerId: string, baseUrl: string): boolean {
-  return providerIsConnectable(providerId) && !isTemplatedBaseUrl(baseUrl);
+  const preset = getProviderConnectPreset(providerId);
+  if (!preset || isTemplatedBaseUrl(baseUrl)) return false;
+  try {
+    return findMatchingUrlAudience(baseUrl, preset.credentialAudience) !== null;
+  } catch {
+    return false;
+  }
 }
 
 function credentialMetadataForPreset(preset: ProviderConnectPreset): Record<string, string> {
@@ -169,10 +211,9 @@ function credentialMetadataForPreset(preset: ProviderConnectPreset): Record<stri
   };
 }
 
-/** Build the `credentials.connect` request for a provider+model. */
+/** Build the `credentials.connect` request from canonical provider policy. */
 export function toCredentialConnectRequest(
   providerId: string,
-  modelBaseUrl: string,
   opts?: { browser?: "internal" | "external" }
 ): ConnectCredentialRequest | null {
   const preset = getProviderConnectPreset(providerId);
@@ -188,7 +229,7 @@ export function toCredentialConnectRequest(
     flow: preset.flow,
     credential: {
       label: preset.credentialLabel,
-      audience: [{ url: modelBaseUrl, match: "path-prefix" }],
+      audience: preset.credentialAudience.map((audience) => ({ ...audience })),
       injection: preset.injection,
       metadata: credentialMetadataForPreset(preset),
     },
@@ -197,13 +238,12 @@ export function toCredentialConnectRequest(
   };
 }
 
-/** Build the panel-facing `credentials.connect` request for a provider+model. */
+/** Build the panel-facing request from the same canonical provider policy. */
 export function toPanelConnectRequest(
   providerId: string,
-  modelBaseUrl: string,
   opts?: { browser?: "internal" | "external" }
 ): ConnectCredentialRequest | null {
-  return toCredentialConnectRequest(providerId, modelBaseUrl, opts);
+  return toCredentialConnectRequest(providerId, opts);
 }
 
 /**

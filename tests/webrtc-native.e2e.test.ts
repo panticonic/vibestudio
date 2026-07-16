@@ -31,6 +31,7 @@ import {
   FINGERPRINT_MISMATCH_CODE,
 } from "@vibestudio/rpc/transports/webrtcClient";
 import { createWebRtcAnswererPipe } from "@vibestudio/rpc/transports/webrtcAnswerer";
+import type { DeviceCredential } from "@vibestudio/rpc/transports/pairedConnection";
 import type {
   RtcCandidateType,
   RtcIceCandidate,
@@ -46,7 +47,13 @@ import type {
 } from "@vibestudio/shared/serviceDispatcher";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { IdentityDb } from "@vibestudio/identity/identityDb";
+import { UserStore } from "@vibestudio/identity/userStore";
 import { RpcServer } from "../src/server/rpcServer.js";
+import { DeviceAuthStore } from "../src/server/hostCore/deviceAuthStore.js";
+import { createHubCredentialRedeemer } from "../src/server/services/authService.js";
+import { createUserSubjectSource } from "../src/server/services/userSubjectSource.js";
 import { createNodeDatachannelProvider } from "../src/node/webrtc/nodeDatachannelPeer.js";
 import { ensurePersistentCert } from "../src/node/webrtc/cert.js";
 
@@ -107,24 +114,48 @@ function signalingPair(): { offerer: SignalingClient; answerer: SignalingClient 
 interface Harness {
   client: ReturnType<typeof createWebRtcTransport>;
   pipe: ReturnType<typeof createWebRtcAnswererPipe>;
-  shellToken: string;
+  getShellToken: () => string;
+  onPaired: (credential: DeviceCredential) => void;
   dispatched: Array<{ service: string; method: string; args: unknown[] }>;
+  dispatchedSubjects: Array<{ userId: string; handle: string } | undefined>;
+  expectedSubject: { userId: string; handle: string };
   /** §9.8 feed: everything the ANSWERER emitted via onCandidateType. */
   pipeCandidateTypes: Array<RtcCandidateType | null>;
   close: () => Promise<void>;
 }
 
-function makeServer(): {
+function makeServer(databasePath: string): {
   server: RpcServer;
-  shellToken: string;
+  pairingCode: string;
   dispatched: Array<{ service: string; method: string; args: unknown[] }>;
+  dispatchedSubjects: Array<{ userId: string; handle: string } | undefined>;
+  expectedSubject: { userId: string; handle: string };
+  close: () => void;
 } {
+  const central = new CentralDataManager({ databasePath });
+  const workspaceId = central.addWorkspace("native-e2e").workspaceId;
+  central.close();
+  const identityDb = new IdentityDb({ path: databasePath, readOnly: false });
+  const userStore = new UserStore(identityDb);
+  const root = userStore.createRoot({ handle: "root", displayName: "Root" });
+  const deviceAuthStore = new DeviceAuthStore({
+    db: identityDb,
+    serverIdPath: path.join(path.dirname(databasePath), "server-id.json"),
+  });
+  const invite = deviceAuthStore.createPairingInvite(60_000, {
+    workspaceId,
+    userId: root.id,
+    intent: "pair-device",
+  });
   const tokenManager = new TokenManager();
+  const entityCache = new EntityCache();
   const dispatched: Array<{ service: string; method: string; args: unknown[] }> = [];
+  const dispatchedSubjects: Array<{ userId: string; handle: string } | undefined> = [];
   const dispatcher = {
     initialized: true,
-    dispatch: async (_ctx: ServiceContext, service: string, method: string, args: unknown[]) => {
+    dispatch: async (ctx: ServiceContext, service: string, method: string, args: unknown[]) => {
       dispatched.push({ service, method, args });
+      dispatchedSubjects.push(ctx.caller.subject);
       if (service === "demo" && method === "stream") {
         return new Response("real-dtls-bytes", {
           status: 200,
@@ -144,10 +175,25 @@ function makeServer(): {
     server: new RpcServer({
       tokenManager,
       dispatcher,
-      entityCache: new EntityCache(),
+      entityCache,
+      userSubjectSource: createUserSubjectSource({
+        deviceAuthStore,
+        userStore,
+        entityCache,
+      }),
+      redeemPairingCredential: createHubCredentialRedeemer({
+        deviceAuthStore,
+        tokenManager,
+        redeemPairingCode: async (code, input) =>
+          deviceAuthStore.completePairing({ code, ...input }),
+        resolveUser: (userId) => userStore.getUser(userId),
+      }),
     }),
-    shellToken: tokenManager.ensureToken("shell:e2e", "shell"),
+    pairingCode: invite.code,
     dispatched,
+    dispatchedSubjects,
+    expectedSubject: { userId: root.id, handle: root.handle },
+    close: () => identityDb.close(),
   };
 }
 
@@ -181,7 +227,16 @@ async function connect(opts: {
   const sig = signalingPair();
   const serverProvider = createNodeDatachannelProvider({ peerName: "server" });
   const clientProvider = createNodeDatachannelProvider({ peerName: "client" });
-  const { server, shellToken, dispatched } = makeServer();
+  const authRoot = fs.mkdtempSync(path.join(path.dirname(opts.certFile), "native-auth-"));
+  const {
+    server,
+    pairingCode,
+    dispatched,
+    dispatchedSubjects,
+    expectedSubject,
+    close: closeIdentity,
+  } = makeServer(path.join(authRoot, "identity.db"));
+  let deviceCredential: DeviceCredential | null = null;
 
   const pipe = createWebRtcAnswererPipe({
     provider: serverProvider,
@@ -226,18 +281,38 @@ async function connect(opts: {
     await client.close().catch(() => {});
     await pipe.close().catch(() => {});
     await answering.catch(() => {});
+    closeIdentity();
+    fs.rmSync(authRoot, { recursive: true, force: true });
     throw error;
   }
 
   return {
     client,
     pipe,
-    shellToken,
+    getShellToken: () =>
+      deviceCredential
+        ? `refresh:${deviceCredential.deviceId}:${deviceCredential.refreshToken}`
+        : pairingCode,
+    onPaired: (credential) => {
+      deviceCredential = credential;
+    },
     dispatched,
+    dispatchedSubjects,
+    expectedSubject,
     pipeCandidateTypes,
     close: async () => {
-      await client.close();
-      await pipe.close();
+      const closed = await Promise.allSettled([client.close(), pipe.close()]);
+      closeIdentity();
+      fs.rmSync(authRoot, { recursive: true, force: true });
+      const failures = closed.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected"
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures.map((failure) => failure.reason),
+          "native WebRTC harness cleanup failed"
+        );
+      }
     },
   };
 }
@@ -266,22 +341,25 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () =
     const session = h.client.openSession({
       connectionId: "cli-1",
       callerKind: "shell",
-      getToken: () => h.shellToken,
+      getToken: h.getShellToken,
+      onPaired: h.onPaired,
     });
     await session.ready!();
-    expect(session.callerId()).toBe("shell:e2e");
+    const callerId = session.callerId();
+    expect(callerId).toMatch(/^shell:dev_/);
+    if (!callerId) throw new Error("paired native session has no authenticated caller id");
 
     const received: RpcEnvelope[] = [];
     session.onMessage((e) => received.push(e));
     await session.send({
-      from: "shell:e2e",
+      from: callerId,
       target: "main",
-      delivery: { caller: { callerId: "shell:e2e", callerKind: "shell" } },
-      provenance: [{ callerId: "shell:e2e", callerKind: "shell" }],
+      delivery: { caller: { callerId, callerKind: "shell" } },
+      provenance: [{ callerId, callerKind: "shell" }],
       message: {
         type: "request",
         requestId: "r1",
-        fromId: "shell:e2e",
+        fromId: callerId,
         method: "demo.healthz",
         args: [],
       },
@@ -296,6 +374,7 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () =
       args: [],
     });
     expect(h.dispatched).toContainEqual({ service: "demo", method: "healthz", args: [] });
+    expect(h.dispatchedSubjects).toContainEqual(h.expectedSubject);
   }, 20_000);
 
   it("surfaces the selected candidate type on BOTH ends (§9.8 relay alarm feed)", () => {
@@ -314,18 +393,20 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () =
     const session = h.client.openSession({
       connectionId: "cli-2",
       callerKind: "shell",
-      getToken: () => h.shellToken,
+      getToken: h.getShellToken,
     });
     await session.ready!();
+    const callerId = session.callerId();
+    if (!callerId) throw new Error("paired native stream session has no authenticated caller id");
     const resp = await session.stream!({
-      from: "shell:e2e",
+      from: callerId,
       target: "main",
-      delivery: { caller: { callerId: "shell:e2e", callerKind: "shell" } },
-      provenance: [{ callerId: "shell:e2e", callerKind: "shell" }],
+      delivery: { caller: { callerId, callerKind: "shell" } },
+      provenance: [{ callerId, callerKind: "shell" }],
       message: {
         type: "stream-request",
         requestId: "s1",
-        fromId: "shell:e2e",
+        fromId: callerId,
         method: "demo.stream",
         args: ["rtc://x"],
       },
@@ -398,22 +479,25 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () =
       const session = h.client.openSession({
         connectionId: "cli-turn",
         callerKind: "shell",
-        getToken: () => h.shellToken,
+        getToken: h.getShellToken,
+        onPaired: h.onPaired,
       });
       await session.ready!();
-      expect(session.callerId()).toBe("shell:e2e");
+      const callerId = session.callerId();
+      expect(callerId).toMatch(/^shell:dev_/);
+      if (!callerId) throw new Error("paired TURN session has no authenticated caller id");
 
       const received: RpcEnvelope[] = [];
       session.onMessage((e) => received.push(e));
       await session.send({
-        from: "shell:e2e",
+        from: callerId,
         target: "main",
-        delivery: { caller: { callerId: "shell:e2e", callerKind: "shell" } },
-        provenance: [{ callerId: "shell:e2e", callerKind: "shell" }],
+        delivery: { caller: { callerId, callerKind: "shell" } },
+        provenance: [{ callerId, callerKind: "shell" }],
         message: {
           type: "request",
           requestId: "turn-r1",
-          fromId: "shell:e2e",
+          fromId: callerId,
           method: "demo.healthz",
           args: ["turn"],
         },

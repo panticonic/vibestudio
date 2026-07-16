@@ -51,7 +51,12 @@ export function MobileSidebar({
   width = "min(85vw, 320px)",
 }: MobileSidebarProps) {
   return (
-    <Dialog.Root open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
       <Dialog.Content
         // Override Radix Themes' centred-card styling — we want a
         // full-height left-anchored panel.
@@ -77,9 +82,7 @@ export function MobileSidebar({
           <Dialog.Title>{title}</Dialog.Title>
         </VisuallyHidden>
         <Flex direction="column" style={{ height: "100%", minHeight: 0 }}>
-          <Box style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-            {children}
-          </Box>
+          <Box style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>{children}</Box>
         </Flex>
       </Dialog.Content>
     </Dialog.Root>

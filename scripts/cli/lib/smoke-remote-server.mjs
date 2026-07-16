@@ -13,11 +13,7 @@ export function createRemoteServeArgs(repoRoot, readyFile, port) {
   ];
 }
 
-export function waitForRootInvite({ readyFile, kind = "desktop", timeoutMs = 180_000 }) {
-  if (kind !== "desktop" && kind !== "mobile") {
-    return Promise.reject(new Error(`unsupported root-invite client: ${kind}`));
-  }
-
+export function waitForRootInvite({ readyFile, timeoutMs = 180_000 }) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (callback) => {
@@ -30,27 +26,25 @@ export function waitForRootInvite({ readyFile, kind = "desktop", timeoutMs = 180
     const read = async () => {
       try {
         const payload = JSON.parse(await fsp.readFile(readyFile, "utf8"));
-        const invite = payload?.rootInvites?.[kind];
+        const invite = payload?.rootInvite;
         if (typeof invite?.pairUrl === "string" && invite.pairUrl) {
           finish(() => resolve(invite));
           return;
         }
-        if (payload?.rootInvites === null) {
+        if (payload?.rootInvite === null) {
           finish(() =>
             reject(new Error("root account already exists; no first-device invite is available"))
           );
           return;
         }
-        if (invite != null) {
-          finish(() => reject(new Error(`root ${kind} invite has no pairing URL`)));
-        }
+        if (invite != null) finish(() => reject(new Error("root invite has no pairing URL")));
       } catch (error) {
         if (error?.code !== "ENOENT") finish(() => reject(error));
       }
     };
     const poll = setInterval(() => void read(), 100);
     const timer = setTimeout(() => {
-      finish(() => reject(new Error(`root ${kind} invite timed out after ${timeoutMs}ms`)));
+      finish(() => reject(new Error(`root invite timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
     void read();
   });

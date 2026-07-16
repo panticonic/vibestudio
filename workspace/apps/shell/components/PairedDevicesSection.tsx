@@ -6,6 +6,7 @@ import QRCode from "qrcode-terminal/vendor/QRCode/index.js";
 import QRErrorCorrectLevel from "qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js";
 import {
   account,
+  hubControl,
   remoteCred,
   type DeviceRecord,
   type PairingInvite,
@@ -37,7 +38,7 @@ export function PairedDevicesSection({
   const load = async () => {
     try {
       setError(null);
-      const next = await remoteCred.listDevices();
+      const { devices: next } = await hubControl.listDevices();
       setDevices(next);
       setOwners(await account.resolveProfiles([...new Set(next.map((device) => device.userId))]));
     } catch (err) {
@@ -63,7 +64,7 @@ export function PairedDevicesSection({
       // so continuing to hammer listDevices is pointless (the UI shows "Expired").
       if (!invite || Date.now() >= invite.expiresAt) return;
       try {
-        const next = await remoteCred.listDevices();
+        const { devices: next } = await hubControl.listDevices();
         if (cancelled) return;
         setDevices(next);
         const joined = next.find((device) => !knownDeviceIds.has(device.deviceId));
@@ -83,8 +84,9 @@ export function PairedDevicesSection({
   const revoke = async (deviceId: string) => {
     setBusyId(deviceId);
     try {
-      const result = await remoteCred.revokeDevice(deviceId);
-      if (result.currentDevice) {
+      const result = await hubControl.revokeDevice(deviceId);
+      if (result.revoked && currentDeviceId === deviceId) {
+        await remoteCred.clear();
         await remoteCred.relaunch();
         return;
       }
@@ -104,9 +106,10 @@ export function PairedDevicesSection({
     try {
       setError(null);
       setKnownDeviceIds(new Set(devices.map((device) => device.deviceId)));
-      setInvite(
-        await remoteCred.pairDevice(workspaceName ? { workspace: workspaceName } : undefined)
+      const result = await hubControl.pairDevice(
+        workspaceName ? { workspace: workspaceName } : undefined
       );
+      setInvite(result.pairing);
       setNow(Date.now());
       setConnectOpen(true);
     } catch (err) {
@@ -191,7 +194,7 @@ export function PairedDevicesSection({
                     yet? Install Vibestudio first, then open the link again.
                   </Text>
                   <Text size="2">
-                    Server <Code>{invite.srv ?? invite.serverId}</Code>
+                    Server <Code>{invite.serverId}</Code>
                   </Text>
                   {expired ? (
                     <Flex direction="column" gap="2" style={{ width: "fit-content" }}>

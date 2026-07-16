@@ -1,6 +1,6 @@
 /**
  * HeadlessHost — orchestrator. Startup order matters:
- *   rpc connect → panelRuntime.registerClient → event subscribe →
+ *   rpc connect → panelRuntime.registerClient → event watch →
  *   browser launch → cdp-host bridge connect → snapshot reconcile.
  * (The bridge upgrade is rejected until registerClient exists server-side.)
  */
@@ -29,6 +29,7 @@ import { CdpConnection } from "./browser/cdpConnection.js";
 import { PageHost } from "./pageHost.js";
 import { ConsoleHistoryStore } from "./consoleHistory.js";
 import { CdpHostBridgeClient } from "./hostBridge.js";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 
 const log = createDevLogger("HeadlessHost");
 
@@ -36,6 +37,8 @@ const IDLE_CHECK_INTERVAL_MS = 30_000;
 
 export class HeadlessHost implements PanelHost {
   private connection: HeadlessHostServerConnection | null = null;
+  private events: EventsClient | null = null;
+  private stopLeaseEvents: (() => void) | null = null;
   private panelInit: PanelInitClient | null = null;
   private tracker: LeaseTracker;
   private browser: LaunchedChromium | null = null;
@@ -88,18 +91,17 @@ export class HeadlessHost implements PanelHost {
 
     await this.registerClient(this.bootstrapRegistration);
     this.config.lifecycle?.onRegistered?.();
-    connection.onServerEvent((event, payload) => {
-      if (event === "panel:runtimeLeaseChanged") {
-        void this.handleRuntimeLeaseChanged(payload as PanelRuntimeLeaseChangedEvent);
-      }
+    this.events = new EventsClient(connection.rpc);
+    this.stopLeaseEvents = this.events.on("panel:runtimeLeaseChanged", (payload) => {
+      void this.handleRuntimeLeaseChanged(payload as PanelRuntimeLeaseChangedEvent);
     });
-    await connection.rpc.call("main", "events.subscribe", ["panel:runtimeLeaseChanged"]);
+    await this.events.subscribe("panel:runtimeLeaseChanged");
     connection.onResubscribe(async () => {
       try {
         await this.registerClient(
           this.bridge?.isConnected() ? this.registration : this.bootstrapRegistration
         );
-        await connection.rpc.call("main", "events.subscribe", ["panel:runtimeLeaseChanged"]);
+        await this.events?.recover();
         await this.reconcile();
       } catch (error) {
         log.warn(`resubscribe recovery failed: ${String(error)}`);
@@ -139,6 +141,10 @@ export class HeadlessHost implements PanelHost {
     }
     this.cdp?.close();
     this.browser?.kill();
+    this.stopLeaseEvents?.();
+    this.stopLeaseEvents = null;
+    await this.events?.unsubscribeAll().catch(() => {});
+    this.events = null;
     await this.connection?.close();
     this.resolveDone();
   }

@@ -3,6 +3,8 @@ import { HeadlessHost } from "./headlessHost.js";
 import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
 import { LeaseTracker } from "@vibestudio/shared/panel/leaseTracker";
 import type { PanelRuntimeLease } from "@vibestudio/shared/panel/panelLease";
+import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { encodeEventWatchRecord } from "@vibestudio/shared/events";
 
 function config(): HeadlessHostConfig {
   return {
@@ -18,7 +20,7 @@ function config(): HeadlessHostConfig {
 }
 
 describe("HeadlessHost lifecycle guards", () => {
-  it("re-registers and re-subscribes lease events after injected connection recovery", async () => {
+  it("re-registers and reopens the lease watch after injected connection recovery", async () => {
     let recover: (() => void | Promise<void>) | null = null;
     const rpc = {
       call: vi.fn(async <T = unknown>(_targetId: string, method: string): Promise<T> => {
@@ -27,7 +29,28 @@ describe("HeadlessHost lifecycle guards", () => {
         }
         return undefined as T;
       }),
-      stream: vi.fn(async () => new Response()),
+      stream: vi.fn(
+        async (
+          _target: string,
+          _method: string,
+          args: unknown[],
+          options?: { signal?: AbortSignal; bodyIdleTimeoutMs?: number | null }
+        ) =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(
+                  encodeEventWatchRecord({
+                    kind: "watching",
+                    events: args[0] as never,
+                    epoch: "test-epoch",
+                  })
+                );
+                options?.signal?.addEventListener("abort", () => controller.close());
+              },
+            })
+          )
+      ),
     };
     const close = vi.fn(async () => undefined);
     const host = new HeadlessHost({
@@ -36,7 +59,6 @@ describe("HeadlessHost lifecycle guards", () => {
       connectionFactory: async () => ({
         rpc: rpc as unknown as HeadlessHostServerConnection["rpc"],
         getToken: () => "token",
-        onServerEvent: vi.fn(),
         onResubscribe: (handler) => {
           recover = handler;
         },
@@ -62,9 +84,15 @@ describe("HeadlessHost lifecycle guards", () => {
     expect(rpc.call).toHaveBeenCalledWith("main", "panelRuntime.registerClient", [
       host.registration,
     ]);
-    expect(rpc.call).toHaveBeenCalledWith("main", "events.subscribe", [
-      "panel:runtimeLeaseChanged",
-    ]);
+    expect(rpc.stream).toHaveBeenCalledWith(
+      "main",
+      "events.watch",
+      [["panel:runtimeLeaseChanged"], expect.any(String)],
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        bodyIdleTimeoutMs: null,
+      })
+    );
     expect(recover).toBeTypeOf("function");
 
     await recover!();
@@ -84,7 +112,7 @@ describe("HeadlessHost lifecycle guards", () => {
       "panelRuntime.registerClient",
       [{ ...host.registration, loadOnLeaseAssignment: false }],
     ]);
-    expect(rpc.call.mock.calls.filter((call) => call[1] === "events.subscribe")).toHaveLength(2);
+    expect(rpc.stream).toHaveBeenCalledTimes(2);
     expect(reconcile).toHaveBeenCalledTimes(2);
     await host.stop("test");
     expect(close).toHaveBeenCalled();
@@ -164,21 +192,26 @@ describe("HeadlessHost lifecycle guards", () => {
   it("drops a queued load after its lease was released", async () => {
     const host = new HeadlessHost(config());
     const tracker = new LeaseTracker("headless-test");
+    const slotId = asPanelSlotId("panel:tree/panel-1");
+    const runtimeEntityId = asPanelEntityId("panel:nav-entry-1");
     tracker.reconcile({
       version: { epoch: "boot", counter: 1 },
       leases: [
         {
-          slotId: "panel-1",
-          runtimeEntityId: "panel:entry-1",
+          slotId,
+          runtimeEntityId,
           clientSessionId: "headless-test",
           hostConnectionId: "headless-test",
           connectionId: "lease-1",
           holderLabel: "Headless",
+          platform: "headless",
+          supportsCdp: true,
+          loadOnLeaseAssignment: true,
           acquiredAt: 1,
         },
       ],
     });
-    tracker.drop("panel-1");
+    tracker.drop(slotId);
     const getPanelLoadInfo = vi.fn();
     Object.assign(host as unknown as Record<string, unknown>, {
       tracker,
@@ -187,12 +220,10 @@ describe("HeadlessHost lifecycle guards", () => {
       panelInit: { getPanelLoadInfo },
     });
 
-    await (
-      host as unknown as { processIntent(intent: unknown): Promise<void> }
-    ).processIntent({
+    await (host as unknown as { processIntent(intent: unknown): Promise<void> }).processIntent({
       kind: "load",
-      slotId: "panel-1",
-      runtimeEntityId: "panel:entry-1",
+      slotId,
+      runtimeEntityId,
       connectionId: "lease-1",
     });
 

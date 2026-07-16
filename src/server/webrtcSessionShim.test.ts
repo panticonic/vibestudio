@@ -57,7 +57,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     h.shim.on("message", (data) => got.push((data as Buffer).toString()));
     const auth: WsClientMessage = {
       type: "ws:auth",
-      contractVersion: 1,
+      contractVersion: 2,
       token: "grant",
       connectionId: "c1",
     };
@@ -74,12 +74,14 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     const result: WsServerMessage = {
       type: "ws:auth-result",
       success: true,
-      contractVersion: 1,
+      contractVersion: 2,
       callerId: "panel:c1",
       callerKind: "panel",
       connectionId: "c1",
       serverBootId: "boot-1",
       sessionDirty: false,
+      deviceCredential: { deviceId: "device-1", refreshToken: "secret-1" },
+      pairingContext: { workspaceId: "workspace-1" },
     };
     h.shim.send(JSON.stringify(result));
     expect(h.control[0]!.frame).toMatchObject({
@@ -88,6 +90,8 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
       success: true,
       callerId: "panel:c1",
       serverBootId: "boot-1",
+      deviceCredential: { deviceId: "device-1", refreshToken: "secret-1" },
+      pairingContext: { workspaceId: "workspace-1" },
     });
   });
 
@@ -108,7 +112,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     });
   });
 
-  it("translates ws:routed / ws:event / routed-response-error frames", () => {
+  it("translates routed and routed-response-error frames", () => {
     const h = harness();
     const env = {
       from: "main",
@@ -119,9 +123,6 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     };
     h.shim.send(JSON.stringify({ type: "ws:routed", envelope: env } satisfies WsServerMessage));
     h.shim.send(
-      JSON.stringify({ type: "ws:event", event: "x", payload: 7 } satisfies WsServerMessage)
-    );
-    h.shim.send(
       JSON.stringify({
         type: "ws:routed-response-error",
         targetId: "do:x",
@@ -131,14 +132,12 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
         errorCode: "TARGET_NOT_REACHABLE",
       } satisfies WsServerMessage)
     );
-    expect(h.control.map((w) => w.frame.t)).toEqual(["routed", "event", "routed-response-error"]);
+    expect(h.control.map((w) => w.frame.t)).toEqual(["routed", "routed-response-error"]);
   });
 
   it("passes lane = sid on every control write (per-session scheduler fairness)", () => {
     const h = harness();
-    h.shim.send(
-      JSON.stringify({ type: "ws:event", event: "x", payload: 7 } satisfies WsServerMessage)
-    );
+    h.shim.send(JSON.stringify({ type: "ws:routed", envelope: {} } as WsServerMessage));
     h.shim.close(4091, "lease revoked");
     expect(h.control.length).toBeGreaterThanOrEqual(2);
     for (const write of h.control) expect(write.lane).toBe("s1");
@@ -163,7 +162,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     expect(h.control[0]!.frame).toMatchObject({ t: "rpc", sid: "s1" });
   });
 
-  it("close() writes a terminal closed-frame for lease-revoke codes and fires close handlers", () => {
+  it("close() writes a terminal closed-frame and fires close only after it drains", async () => {
     const h = harness();
     const closeArgs: unknown[][] = [];
     h.shim.on("close", (...args) => closeArgs.push(args));
@@ -174,14 +173,52 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
       code: 4091,
       terminal: true,
     });
+    expect(h.shim.readyState).toBe(2);
+    expect(closeArgs).toHaveLength(0);
+    await flush();
     expect(closeArgs[0]![0]).toBe(4091);
     expect(h.closedSids).toEqual(["s1"]);
     // After close, the shim is no longer OPEN and drops further sends.
     expect(h.shim.readyState).toBe(3);
-    h.shim.send(
-      JSON.stringify({ type: "ws:event", event: "late", payload: 1 } satisfies WsServerMessage)
-    );
+    h.shim.send(JSON.stringify({ type: "ws:routed", envelope: {} } as WsServerMessage));
     expect(h.control).toHaveLength(1);
+  });
+
+  it("drains an RPC response before its terminal close and close event", async () => {
+    const writes: Array<{ frame: SessionControlFrame; resolve: () => void }> = [];
+    const pipe: PipeChannels = {
+      writeControl: (data) =>
+        new Promise<void>((resolve) => {
+          writes.push({
+            frame: decodeControlFrame(new TextDecoder().decode(data)),
+            resolve,
+          });
+        }),
+      writeBulkFrame: async () => undefined,
+      dropBulkStream: () => undefined,
+      bulkPendingBytes: () => 0,
+    };
+    const closed: number[] = [];
+    const shim = new SessionWebSocketShim("s1", pipe, () => undefined);
+    shim.on("close", () => closed.push(1));
+
+    shim.send(
+      JSON.stringify({
+        type: "ws:rpc",
+        envelope: { message: { type: "response", requestId: "revoke", result: true } },
+      } as WsServerMessage)
+    );
+    shim.close(4001, "Token revoked");
+
+    expect(writes.map((write) => write.frame.t)).toEqual(["rpc", "closed"]);
+    expect(closed).toEqual([]);
+    writes[0]!.resolve();
+    await flush();
+    expect(closed).toEqual([]);
+    writes[1]!.resolve();
+    await flush();
+    expect(closed).toEqual([1]);
+    expect(shim.readyState).toBe(3);
   });
 
   it("remoteClosed() (client/pipe drop) fires close handlers without writing a frame", () => {
@@ -200,7 +237,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     const handler = (): void => void got.push(1);
     h.shim.on("message", handler);
     h.shim.off("message", handler);
-    h.shim.deliverInbound({ type: "ws:auth", contractVersion: 1, token: "t" });
+    h.shim.deliverInbound({ type: "ws:auth", contractVersion: 2, token: "t" });
     expect(got).toHaveLength(0);
   });
 });
