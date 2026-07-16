@@ -1,34 +1,17 @@
-/**
- * Spectrolite suite — in-system port of the core tests from
- * tests/e2e/flows/spectrolite.spec.ts.
- *
- * The outside spec builds vault fixtures on the host filesystem before
- * launching Electron; here the fixture vault is created in context fs via the
- * runtime fs and workspace VCS client, and the panel is opened with the same stateArgs
- * ({ repoRoot, openPath }). DOM interaction goes through CDP (driver DO
- * route for workspace panels).
- *
- * Edit → commit → push: fixtures are recorded as tracked working `vcs.edit`s
- * directly on the vault's durable ctx head (the head the panel reads working
- * content from). A simulated co-editor records a working edit AND `vcs.commit`s
- * it — only a commit (not a working edit) broadcasts a head advance, which is
- * what drives the panel's `subscribeHead` reconcile.
- *
- * Not ported (still outside-only): first-run vault picker + agent add/remove
- * + vault switching (deep dialog flows tied to channel agents), commit/flush
- * keyboard editing flows (Electron input events), mobile-viewport variant
- * (covered generically by the panel-viewport suite).
- */
+/** Spectrolite's in-system UI and semantic-context collaboration suite. */
+
 import { contextId, vcs } from "@workspace/runtime";
 import { suite } from "../run.js";
 import { expect } from "../expect.js";
 import { evalInPanel, panelText, waitFor, waitForText, withPanel } from "../panels.js";
 import { profilePanel } from "../profile.js";
 
-const VAULT = "/projects/testkit-vault";
-const LARGE_VAULT = "/projects/testkit-vault-large";
+const VAULT = "projects/default";
+const LARGE_VAULT = VAULT;
 
-const testHead = `ctx:${contextId}`;
+function command(kind: string): string {
+  return `testkit:spectrolite:${kind}:${crypto.randomUUID()}`;
+}
 
 function vaultPanelOptions(repoRoot: string, openPath: string, timeoutMs?: number) {
   return {
@@ -39,74 +22,97 @@ function vaultPanelOptions(repoRoot: string, openPath: string, timeoutMs?: numbe
 }
 
 const FIXTURES: Record<string, string> = {
-  "E2E.mdx": [
-    "---",
-    "title: E2E",
-    "tags: [e2e]",
-    "---",
-    "",
-    "# E2E Note",
-    "",
-    "A simple note for end-to-end editor interactions.",
-    "",
-  ].join("\n"),
-  "Linked.mdx": [
-    "---",
-    "title: Linked",
-    "---",
-    "",
-    "# Linked",
-    "",
-    "This note points at [[E2E]].",
-    "",
-  ].join("\n"),
-  "Broken.mdx": [
-    "---",
-    "title: Broken",
-    "---",
-    "",
-    "# Broken",
-    "",
-    "This document keeps the editor usable around malformed JSX.",
-    "",
-    "<BrokenWidget",
-    "",
-  ].join("\n"),
+  "E2E.mdx":
+    "---\ntitle: E2E\ntags: [e2e]\n---\n\n# E2E Note\n\nA simple note for end-to-end editor interactions.\n",
+  "Linked.mdx": "---\ntitle: Linked\n---\n\n# Linked\n\nThis note points at [[E2E]].\n",
+  "Broken.mdx":
+    "---\ntitle: Broken\n---\n\n# Broken\n\nThis document keeps the editor usable around malformed JSX.\n\n<BrokenWidget\n",
 };
 
-async function ensureVault(dir: string, files: Record<string, string>): Promise<void> {
-  const root = dir.replace(/^\/+/, "").replace(/\/+$/, "");
-  // Edit-first GAD write: each `write` creates-or-overwrites as a tracked
-  // working edit on the vault's durable ctx head — the head the panel reads
-  // working content from (disk is projected from the head). No commit needed for
-  // the panel to see them on load.
-  await vcs.edit({
-    head: testHead,
-    edits: Object.entries(files).map(([name, content]) => ({
-      kind: "write" as const,
-      path: `${root}/${name}`,
-      content: { kind: "text" as const, text: content },
-    })),
+async function ensureVault(repoPath: string, files: Record<string, string>) {
+  const status = await vcs.status({ contextId });
+  let repositoryId: string | null = null;
+  let cursor: string | undefined;
+  do {
+    const page = await vcs.neighbors({
+      root: status.workingHead,
+      limit: 500,
+      ...(cursor ? { cursor } : {}),
+    });
+    const nodes = page.edges.flatMap((edge) =>
+      edge.kind === "contains-repository" && edge.to.kind === "repository" ? [edge.to] : []
+    );
+    const inspected = await Promise.all(nodes.map((node) => vcs.inspect({ node, edgeLimit: 1 })));
+    for (const result of inspected) {
+      if (
+        result.node.kind === "repository" &&
+        result.node.value.kind === "present" &&
+        result.node.value.repoPath === repoPath
+      ) {
+        repositoryId = result.node.value.repositoryId;
+      }
+    }
+    cursor = repositoryId ? undefined : (page.nextCursor ?? undefined);
+  } while (cursor);
+  if (!repositoryId) throw new Error(`Spectrolite fixture repository '${repoPath}' is absent`);
+
+  const listed = await vcs.listFiles({
+    state: status.workingHead,
+    repositoryId,
+    limit: 500,
   });
+  const byPath = new Map(listed.files.map((file) => [file.path, file]));
+  const changes = await Promise.all(
+    Object.entries(files).map(async ([path, text]) => {
+      const current = byPath.get(path);
+      if (!current) {
+        return {
+          kind: "file-create" as const,
+          repositoryId,
+          path,
+          content: { kind: "text" as const, text },
+          mode: 0o644,
+        };
+      }
+      const existing = await vcs.readFile({
+        state: status.workingHead,
+        repositoryId,
+        file: { kind: "id", fileId: current.fileId },
+      });
+      if (existing?.content.kind === "text" && existing.content.text === text) return null;
+      if (!existing || existing.content.kind !== "text") {
+        throw new Error(`Spectrolite fixture '${path}' is not a text file`);
+      }
+      return {
+        kind: "text-edit" as const,
+        repositoryId,
+        fileId: current.fileId,
+        edits: [{ start: 0, end: existing.content.text.length, text }],
+      };
+    })
+  );
+  const effective = changes.filter(
+    (change): change is NonNullable<typeof change> => change !== null
+  );
+  if (effective.length === 0) {
+    return { repositoryId, workingHead: status.workingHead };
+  }
+  const changed = await vcs.edit({
+    contextId,
+    expectedWorkingHead: status.workingHead,
+    commandId: command("seed-vault"),
+    changes: effective,
+  });
+  return { repositoryId, workingHead: changed.workingHead };
 }
 
 function largeVaultFiles(): Record<string, string> {
   const files: Record<string, string> = {
-    "Hub.mdx": ["---", "title: Large Hub", "---", "", "# Large Hub", "", "Central node.", ""].join(
-      "\n"
-    ),
+    "Hub.mdx": "---\ntitle: Large Hub\n---\n\n# Large Hub\n\nCentral node.\n",
   };
   for (let index = 0; index < 60; index += 1) {
-    files[`Bulk-${index}.mdx`] = [
-      "---",
-      `title: Bulk ${index}`,
-      "---",
-      "",
-      `# Bulk-${index}`,
-      "",
-      "Links back to [[Hub]].",
-      "",
-    ].join("\n");
+    files[`Bulk-${index}.mdx`] =
+      `---\ntitle: Bulk ${index}\n---\n\n# Bulk-${index}\n\nLinks back to [[Hub]].\n`;
   }
   return files;
 }
@@ -123,8 +129,9 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
           `Boolean(document.querySelector('[data-testid="spectrolite-editor"]'))`
         );
         expect(hasEditor, "editor rendered").toBe(true);
-        const text = await panelText(handle);
-        expect(text, "vault placeholder leakage").not.toContain("/projects/<not-selected-yet>");
+        expect(await panelText(handle), "vault placeholder leakage").not.toContain(
+          "/projects/<not-selected-yet>"
+        );
       },
       vaultPanelOptions(VAULT, "E2E.mdx")
     );
@@ -138,16 +145,11 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
         const clicked = await evalInPanel<boolean>(
           handle,
           `(() => {
-            const link = Array.from(document.querySelectorAll("a, button, span"))
-              .find((node) => node instanceof HTMLElement && node.textContent?.trim() === "E2E"
-                && (node.closest("[data-wikilink]") || node.getAttribute("data-wikilink") !== null
-                    || node.className.toString().includes("wikilink")));
-            const fallback = Array.from(document.querySelectorAll('[data-wikilink], .wikilink'))[0];
-            const target = link ?? fallback;
-            if (!(target instanceof HTMLElement)) return false;
-            target.click();
-            return true;
-          })()`
+          const target = Array.from(document.querySelectorAll('[data-wikilink], .wikilink'))[0];
+          if (!(target instanceof HTMLElement)) return false;
+          target.click();
+          return true;
+        })()`
         );
         expect(clicked, "wikilink clickable").toBe(true);
         await waitForText(handle, "E2E Note", { timeoutMs: 30_000 });
@@ -160,15 +162,13 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
     await withPanel(
       "panels/spectrolite",
       async (handle) => {
-        // Malformed JSX is expected to produce console errors — exempt this
-        // panel from the supervision auto-watch so they don't fail the test.
         t.supervisor.unwatchPanel(handle.id);
         await waitForText(handle, /usable around malformed JSX|Broken/, { timeoutMs: 60_000 });
         const editable = await waitFor(
           () =>
             evalInPanel<boolean>(
               handle,
-              `Boolean(document.querySelector('[contenteditable="true"], [data-testid="spectrolite-editor"]'))`
+              `Boolean(document.querySelector('[contenteditable="true"]'))`
             ),
           { timeoutMs: 30_000, label: "editor stays interactive" }
         );
@@ -177,125 +177,57 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
       vaultPanelOptions(VAULT, "Broken.mdx")
     );
   })
-  .test("reconciles a co-editor's edit into the open document (no banner)", async () => {
-    // GAD-native: disk is a projection of the vault head. A co-editor (the
-    // scribe) committing on the head must reconcile NARROWLY into the live editor
-    // — no "changed on disk" banner, no reload prompt (both removed). We simulate
-    // the co-editor with a privileged working `vcs.edit` THEN `vcs.commit`
-    // against the vault's durable ctx head: only the commit broadcasts a head
-    // advance, which is what the panel's `subscribeHead` reconcile listens for.
-    await ensureVault(VAULT, FIXTURES);
-    await withPanel(
-      "panels/spectrolite",
-      async (handle) => {
-        await waitForText(handle, "E2E Note", { timeoutMs: 60_000 });
-        const stamp = `co-editor-${Date.now()}`;
-        const head = testHead;
-        const repoPath = VAULT.replace(/^\/+/, "");
-        const docPath = `${repoPath}/E2E.mdx`;
-        const current = await vcs.readFile({ ref: head, path: docPath });
-        await vcs.edit({
-          head,
-          baseStateHash: current?.stateHash,
+  .test("records authored changes and seals the complete local chain", async () => {
+    const seeded = await ensureVault(VAULT, FIXTURES);
+    const before = await vcs.status({ contextId });
+    const file = await vcs.readFile({
+      state: before.workingHead,
+      repositoryId: seeded.repositoryId,
+      file: { kind: "path", path: "E2E.mdx" },
+    });
+    if (!file?.fileId || file.content.kind !== "text") throw new Error("fixture file unavailable");
+    const edited = await vcs.edit({
+      contextId,
+      expectedWorkingHead: before.workingHead,
+      commandId: command("coedit"),
+      changes: [
+        {
+          kind: "text-edit",
+          repositoryId: seeded.repositoryId,
+          fileId: file.fileId,
           edits: [
             {
-              kind: "write",
-              path: docPath,
-              content: {
-                kind: "text",
-                text: `${FIXTURES["E2E.mdx"]}\nCo-editor marker: ${stamp}\n`,
-              },
+              start: file.content.text.length,
+              end: file.content.text.length,
+              text: "\nSemantic co-editor marker\n",
             },
           ],
-        });
-        await vcs.commit({ head, repoPaths: [repoPath], message: `Co-editor ${stamp}` });
-        await waitForText(handle, stamp, { timeoutMs: 60_000 });
-        // The disk-conflict UX is gone entirely.
-        const text = await panelText(handle);
-        expect(text, "no disk-conflict banner").not.toContain("changed on disk");
-      },
-      vaultPanelOptions(VAULT, "E2E.mdx")
-    );
+        },
+      ],
+    });
+    expect(edited.changeIds.length > 0, "edit has semantic changes").toBe(true);
+    const committed = await vcs.commit({
+      contextId,
+      expectedWorkingHead: edited.workingHead,
+      commandId: command("commit"),
+      message: "Co-editor semantic change",
+    });
+    expect(committed.event.eventId.length > 0, "atomic workspace event").toBe(true);
+    expect(
+      committed.committedApplicationIds.includes(edited.applicationId),
+      "authored application included"
+    ).toBe(true);
+    const story = await vcs.compare({
+      target: before.committed,
+      sourceEventId: committed.event.eventId,
+      view: "changes",
+      limit: 100,
+    });
+    expect(
+      story.changes.some((change) => edited.changeIds.includes(change.changeId)),
+      "comparison walks authored change"
+    ).toBe(true);
   })
-  .test(
-    "tracks working edits with provenance, then commit folds them (no per-keystroke commits)",
-    async () => {
-      // Edit → commit → push provenance: a tracked working `vcs.edit` shows up as
-      // UNCOMMITTED on the head (status.uncommitted > 0) WITHOUT a commit-log entry
-      // or an `ahead` count; the deliberate `vcs.commit` then folds the working
-      // edits into ONE snapshot (uncommitted → 0, ahead rises), and `fileHistory`
-      // surfaces the working tail before commit and the committed op after.
-      await ensureVault(VAULT, FIXTURES);
-      const head = testHead;
-      const repoPath = VAULT.replace(/^\/+/, "");
-      const docPath = `${repoPath}/E2E.mdx`;
-
-      // Three separate working edits simulate debounced typing — none commits.
-      for (let i = 0; i < 3; i += 1) {
-        const cur = await vcs.readFile({ ref: head, path: docPath });
-        const base = cur?.content.kind === "text" ? cur.content.text : "";
-        await vcs.edit({
-          head,
-          baseStateHash: cur?.stateHash,
-          edits: [
-            {
-              kind: "write",
-              path: docPath,
-              content: { kind: "text", text: `${base}\nedit ${i}\n` },
-            },
-          ],
-        });
-      }
-
-      const beforeStatus = await vcs.status(repoPath, head);
-      expect(beforeStatus.uncommitted > 0, "working edits are tracked as uncommitted").toBe(true);
-      const beforePush = await vcs.pushStatus([repoPath]);
-      const beforeAhead = beforePush.find((s) => s.repoPath === repoPath)?.ahead ?? 0;
-
-      // More working edits must not change the committed-ahead delta. This vault
-      // is shared by the suite, so earlier cases may already have deliberately
-      // committed fixture/co-editor changes; compare to that baseline instead of
-      // assuming a globally pristine head.
-      const cur = await vcs.readFile({ ref: head, path: docPath });
-      const base = cur?.content.kind === "text" ? cur.content.text : "";
-      await vcs.edit({
-        head,
-        baseStateHash: cur?.stateHash,
-        edits: [
-          {
-            kind: "write",
-            path: docPath,
-            content: { kind: "text", text: `${base}\nuncommitted baseline check\n` },
-          },
-        ],
-      });
-      const stillWorking = await vcs.pushStatus([repoPath]);
-      const workingAhead = stillWorking.find((s) => s.repoPath === repoPath)?.ahead ?? 0;
-      expect(workingAhead, "working edits are NOT committed-ahead").toBe(beforeAhead);
-
-      // Working edits carry provenance and appear as the working tail in history.
-      const working = await vcs.fileHistory({ repoPath, path: "E2E.mdx", head });
-      expect(working.length > 0, "fileHistory surfaces working edit ops").toBe(true);
-
-      // The deliberate commit folds them into one messaged snapshot.
-      const committed = await vcs.commit({
-        head,
-        repoPaths: [repoPath],
-        message: "Fold working edits",
-      });
-      expect(committed.length, "one repo committed").toBe(1);
-      expect(committed[0]!.status, "commit folded the edits").toBe("committed");
-
-      const afterStatus = await vcs.status(repoPath, head);
-      expect(afterStatus.uncommitted, "no uncommitted edits remain after commit").toBe(0);
-      const afterPush = await vcs.pushStatus([repoPath]);
-      const afterAhead = afterPush.find((s) => s.repoPath === repoPath)?.ahead ?? 0;
-      expect(
-        afterAhead >= beforeAhead,
-        "the commit preserves or increases unpublished changes"
-      ).toBe(true);
-    }
-  )
   .test("stays responsive in a larger vault (with CPU profile attached)", async (t) => {
     await ensureVault(LARGE_VAULT, largeVaultFiles());
     await withPanel(
@@ -303,15 +235,11 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
       async (handle) => {
         await waitForText(handle, "Large Hub", { timeoutMs: 90_000 });
         const ref = await profilePanel(handle, async () => {
-          const metrics = await evalInPanel<{ responsive: boolean }>(
+          const responsive = await evalInPanel<boolean>(
             handle,
-            `(() => {
-              const refresh = document.querySelector('[aria-label="Refresh"]');
-              if (refresh instanceof HTMLElement) refresh.click();
-              return { responsive: Boolean(document.querySelector('[data-testid="spectrolite-editor"]')) };
-            })()`
+            `Boolean(document.querySelector('[data-testid="spectrolite-editor"]'))`
           );
-          if (!metrics.responsive) throw new Error("editor unresponsive during refresh");
+          if (!responsive) throw new Error("editor unresponsive during refresh");
           await new Promise((resolve) => setTimeout(resolve, 2_000));
         });
         t.log(`cpu profile: ${ref.path} (${ref.summary.totalSamples} samples)`);

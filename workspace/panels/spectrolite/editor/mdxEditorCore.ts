@@ -72,8 +72,6 @@ function isEmptyTopLevel(node: LexicalNode): boolean {
 export class MdxEditorCore implements CoEditEditor {
   private baseCanonical = "";
   private baseBlocks: Block[] = [];
-  private attributionSink: ((blockIds: string[], actor: { id: string; kind: string } | null) => void) | null =
-    null;
 
   constructor(
     readonly editor: LexicalEditor,
@@ -163,7 +161,11 @@ export class MdxEditorCore implements CoEditEditor {
   }
 
   getBlocks(): EditorBlock[] {
-    return this.contentBlocks().blocks.map((b) => ({ id: b.id, signature: b.signature, text: b.text }));
+    return this.contentBlocks().blocks.map((b) => ({
+      id: b.id,
+      signature: b.signature,
+      text: b.text,
+    }));
   }
 
   getLiveBlockIds(): Set<string> {
@@ -211,9 +213,7 @@ export class MdxEditorCore implements CoEditEditor {
   applyContained(op: ContainedApply): void {
     this.editor.update(
       () => {
-        const target = op.oldId
-          ? $getNodeByKey(op.oldId)
-          : this.nodeAtContentIndex(op.oldIndex);
+        const target = op.oldId ? $getNodeByKey(op.oldId) : this.nodeAtContentIndex(op.oldIndex);
         if (!target) return;
         const fresh = this.importFragment(op.newText);
         for (const node of fresh) target.insertBefore(node);
@@ -269,18 +269,8 @@ export class MdxEditorCore implements CoEditEditor {
   }
 
   // -------------------------------------------------------------------------
-  // Presence + user-edit subscription
+  // User-edit subscription
   // -------------------------------------------------------------------------
-
-  setAttributionSink(
-    fn: (blockIds: string[], actor: { id: string; kind: string } | null) => void
-  ): void {
-    this.attributionSink = fn;
-  }
-
-  markAttribution(blockIds: string[], actor: { id: string; kind: string } | null): void {
-    this.attributionSink?.(blockIds, actor);
-  }
 
   onUserEdit(cb: () => void): () => void {
     return this.editor.registerUpdateListener(({ tags, dirtyElements, dirtyLeaves }) => {

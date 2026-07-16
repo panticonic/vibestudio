@@ -1,32 +1,29 @@
 /**
  * Per-vault context binding + path mapping.
  *
- * By default a vault binds to a STABLE per-vault context head: `contextId = vault-<hash>`
+ * By default a vault binds to a STABLE per-vault context: `contextId = vault-<hash>`
  * derived from the vault's workspace-relative root. Opening a panel under that
  * contextId resolves every `vcs.*` call (and the scribe it spawns) to the same
- * durable `ctx:vault-<hash>` head — so reopening a vault resumes its notes, and
+ * exact committed event and working state — so reopening a vault resumes its notes, and
  * `main` is touched only by an explicit Publish. Switching vault = reopening the
  * panel under the new vault's contextId (`reopen({ contextId })`), never a
- * runtime `repoRoot` swap (which can't move the head).
+ * runtime `repoRoot` swap (which cannot rebind semantic context authority).
  *
  * An embedding caller may deliberately pin a vault to a shared context by
  * supplying the same explicit `contextId` in panel stateArgs. That is useful
  * for collaborative/testing hosts which already own the context and must not
- * be silently moved to a different head.
+ * be silently rebound to a different semantic context.
  *
  * The vault is a *subdirectory* of the single workspace tree, but `vcs.*` paths
  * are workspace-root-relative. So a note shown as `E2E.mdx` in a vault rooted at
  * `projects/default` is `vcsPath = projects/default/E2E.mdx`. Every boundary
- * (reads/writes, listFiles, head advances, wikilinks, mentions) routes through
+ * (reads/writes, listFiles, semantic state observations, wikilinks, mentions) routes through
  * one {@link VaultPathMapping}.
  */
 
 /** Strip leading/trailing slashes + backslashes; collapse to posix. */
 export function normalizeVaultPath(p: string): string {
-  return p
-    .replace(/\\/g, "/")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
+  return p.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
 /**

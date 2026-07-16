@@ -14,46 +14,32 @@ export function getPublishPresentation(
   snapshot: PublishSnapshot,
   dirtyCount: number
 ): PublishPresentation {
-  const count = snapshot.ahead;
-  const uncommittedCount = Math.max(snapshot.uncommitted, dirtyCount);
+  const count = snapshot.pendingChanges;
+  const uncommittedCount = Math.max(count, dirtyCount);
   const hasUncommitted = uncommittedCount > 0;
-  const localChangesLabel = formatLocalChanges(count, uncommittedCount);
-  const publishBlocked = snapshot.deleted;
-  const hasChanges = !publishBlocked && localChangesLabel !== null;
-
-  let statusLabel = "Published";
-  if (snapshot.deleted) {
-    statusLabel = "Repo deleted";
-  } else if (snapshot.diverged) {
-    statusLabel = localChangesLabel ? `Needs sync, ${localChangesLabel}` : "Needs sync";
-  } else if (localChangesLabel) {
-    statusLabel = sentenceCase(localChangesLabel);
-  }
+  const ahead = snapshot.relationship === "ahead";
+  const needsSync = snapshot.relationship === "behind" || snapshot.relationship === "diverged";
+  const hasChanges = hasUncommitted || ahead;
+  const local = hasUncommitted
+    ? `${uncommittedCount} local change${uncommittedCount === 1 ? "" : "s"}`
+    : null;
+  const statusLabel = needsSync
+    ? local
+      ? `Needs sync, ${local}`
+      : "Needs sync"
+    : local
+      ? local[0]!.toUpperCase() + local.slice(1)
+      : ahead
+        ? "Ready to publish"
+        : "Published";
 
   return {
     count,
     uncommittedCount,
     hasUncommitted,
     hasChanges,
-    publishBlocked,
+    publishBlocked: false,
     syncBlockedByUncommitted: hasUncommitted,
     statusLabel,
   };
-}
-
-function formatLocalChanges(count: number, uncommittedCount: number): string | null {
-  if (count > 0 && uncommittedCount > 0) {
-    return `${count} unpublished, ${uncommittedCount} uncommitted`;
-  }
-  if (count > 0) {
-    return `${count} unpublished change${count === 1 ? "" : "s"}`;
-  }
-  if (uncommittedCount > 0) {
-    return `uncommitted change${uncommittedCount === 1 ? "" : "s"}`;
-  }
-  return null;
-}
-
-function sentenceCase(value: string): string {
-  return value.length === 0 ? value : value[0]!.toUpperCase() + value.slice(1);
 }

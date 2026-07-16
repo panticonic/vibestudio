@@ -66,7 +66,6 @@
   display: inline-block;
 }
 
-
 .spectrolite-empty-card {
   max-width: 440px;
   text-align: center;
@@ -74,34 +73,6 @@
   border: 1px dashed var(--gray-6);
   border-radius: var(--radius-4);
   background: var(--gray-a1);
-}
-
-.spectrolite-conflict-preview {
-  margin: 0;
-  max-height: 160px;
-  overflow: auto;
-  padding: var(--space-2);
-  border: 1px solid var(--amber-6);
-  border-radius: var(--radius-2);
-  background: var(--amber-a2);
-  color: var(--gray-12);
-  font-family: var(--font-mono, monospace);
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-}
-
-.spectrolite-publish-conflicts {
-  max-height: 180px;
-  overflow: auto;
-}
-
-.spectrolite-publish-conflict-row {
-  min-width: 0;
-  padding: 4px var(--space-2);
-  border: 1px solid var(--amber-5);
-  border-radius: var(--radius-2);
-  background: var(--amber-a2);
 }
 
 /* ---------- vault picker ---------- */
@@ -308,13 +279,25 @@
 /* ---------- slide-over panels ---------- */
 
 @keyframes spectrolite-slide-in-left {
-  from { transform: translateX(-24px); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
+  from {
+    transform: translateX(-24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 @keyframes spectrolite-slide-in-right {
-  from { transform: translateX(24px); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 .spectrolite-side-panel--left {
@@ -384,23 +367,6 @@
 
 .spectrolite-content--dark {
   color: var(--gray-12);
-}
-
-/* Presence: a block the scribe just edited flashes a subtle marker, then fades. */
-@keyframes spectrolite-scribe-touch-fade {
-  from {
-    background: var(--iris-3);
-    box-shadow: inset 2px 0 0 var(--iris-9);
-  }
-  to {
-    background: transparent;
-    box-shadow: inset 2px 0 0 transparent;
-  }
-}
-
-.spectrolite-content .spectrolite-scribe-touch {
-  animation: spectrolite-scribe-touch-fade 2.2s ease-out forwards;
-  border-radius: var(--radius-2);
 }
 
 /* Live same-block collision cards: a quiet bottom-right stack. */

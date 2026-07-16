@@ -112,32 +112,6 @@ export class BrowserDataDO extends DurableObjectBase {
     }
   }
 
-  protected override migrate(fromVersion: number, _toVersion: number): void {
-    if (fromVersion < 2) {
-      this.sql.exec(`DROP TRIGGER IF EXISTS history_ai`);
-      this.sql.exec(`DROP TRIGGER IF EXISTS history_ad`);
-      this.sql.exec(`DROP TRIGGER IF EXISTS history_au`);
-      this.sql.exec(`DROP TABLE IF EXISTS history_fts`);
-      this.sql.exec(`DROP TABLE IF EXISTS history_visits`);
-      this.sql.exec(`DROP TABLE IF EXISTS history`);
-    }
-    if (fromVersion < 3) {
-      this.sql.exec(`DROP TABLE IF EXISTS bookmarks`);
-      this.sql.exec(`DROP TABLE IF EXISTS autofill`);
-      this.sql.exec(`DROP TABLE IF EXISTS search_engines`);
-    }
-    if (fromVersion < 4) {
-      // Pre-release: no compatibility layer. Replace the flat import_log with the
-      // import_runs/import_run_summaries model and recreate the credential/metadata
-      // tables that gained source-provenance columns.
-      this.sql.exec(`DROP TABLE IF EXISTS import_log`);
-      this.sql.exec(`DROP TABLE IF EXISTS passwords`);
-      this.sql.exec(`DROP TABLE IF EXISTS autofill`);
-      this.sql.exec(`DROP TABLE IF EXISTS permissions`);
-      this.sql.exec(`DROP TABLE IF EXISTS favicons`);
-    }
-  }
-
   @rpc
   getBookmarks(folderPath = "/") {
     return this.sql

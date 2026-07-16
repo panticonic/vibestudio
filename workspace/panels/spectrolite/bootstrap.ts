@@ -8,7 +8,7 @@
 
 import { rpc } from "@workspace/runtime";
 import { parseDoTargetId } from "@workspace/runtime/workerd-client";
-import { launchAgentIntoChannel } from "@workspace/agentic-core";
+import { launchAgentIntoChannel, unsubscribeAgentFromChannel } from "@workspace/agentic-core";
 
 const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 
@@ -22,7 +22,7 @@ export interface InstalledAgentRecord {
 
 export function resolveContextId(
   fromStateArgs: string | undefined,
-  fromRuntime: string | undefined,
+  fromRuntime: string | undefined
 ): string | undefined {
   const id = fromStateArgs ?? fromRuntime;
   if (typeof id !== "string") return undefined;
@@ -32,7 +32,7 @@ export function resolveContextId(
 
 export function appendInstalledAgent(
   existing: InstalledAgentRecord[] | undefined,
-  agent: InstalledAgentRecord,
+  agent: InstalledAgentRecord
 ): InstalledAgentRecord[] {
   return [...(existing ?? []), agent];
 }
@@ -55,7 +55,9 @@ export interface CreateAndSubscribeArgs {
   replay?: boolean;
 }
 
-export async function createAndSubscribeAgent(args: CreateAndSubscribeArgs): Promise<{ ok: boolean; participantId?: string }> {
+export async function createAndSubscribeAgent(
+  args: CreateAndSubscribeArgs
+): Promise<{ ok: boolean; participantId?: string }> {
   if (!args.channelContextId) {
     throw new Error("Cannot subscribe an agent DO without a context ID");
   }
@@ -86,7 +88,7 @@ export async function getChannelDOParticipants(channelId: string): Promise<Chann
   const channelService = await rpc.call<{ kind: string; targetId?: string }>(
     "main",
     "workers.resolveService",
-    [CHANNEL_SERVICE_PROTOCOL, channelId],
+    [CHANNEL_SERVICE_PROTOCOL, channelId]
   );
   if (channelService.kind !== "durable-object" || !channelService.targetId) {
     throw new Error("Channel service must resolve to a Durable Object service");
@@ -94,7 +96,7 @@ export async function getChannelDOParticipants(channelId: string): Promise<Chann
   const participants = await rpc.call<ChannelParticipant[]>(
     channelService.targetId,
     "getParticipants",
-    [],
+    []
   );
   // Delegate to the canonical parser in `@workspace/runtime/workerd-client`
   // rather than maintaining a local copy. If upstream evolves the
@@ -109,14 +111,14 @@ export async function unsubscribeDOFromChannel(
   source: string,
   className: string,
   objectKey: string,
-  channelId: string,
+  channelId: string
 ): Promise<void> {
-  const target = await rpc.call<{ targetId: string }>(
-    "main",
-    "workers.resolveDurableObject",
-    [source, className, objectKey],
-  );
-  await rpc.call(target.targetId, "unsubscribeChannel", [channelId]);
+  await unsubscribeAgentFromChannel(rpc, {
+    source,
+    className,
+    key: objectKey,
+    channelId,
+  });
 }
 
 export interface WorkerSourceEntry {

@@ -7,10 +7,10 @@ import {
   collectBrowserAddressSuggestionsFromPanels,
   mergeBrowserAddressSuggestions,
   normalizeBrowserAddressSuggestions,
-  formatRepoChip,
   isBrowserPanelSource,
   isOpenPanelBrowserUrl,
   parseAddressInput,
+  parsePanelBuildCoordinate,
   panelSourceFromBrowserUrl,
   splitTextByMatchRanges,
 } from "./panelChrome.js";
@@ -28,6 +28,17 @@ function makePanel(source: string): Panel {
     children: [],
     snapshot,
     artifacts: { buildState: "ready" },
+  };
+}
+
+function makePanelAtRef(source: string, ref: string): Panel {
+  const panel = makePanel(source);
+  return {
+    ...panel,
+    snapshot: {
+      ...panel.snapshot,
+      options: { ...panel.snapshot.options, ref },
+    },
   };
 }
 
@@ -95,19 +106,37 @@ describe("panelChrome", () => {
     expect(
       buildPanelChromeState({
         panel: makePanel("panels/chat"),
-        repo: { unitPath: "panels/chat", head: "main", stateHash: "abcdef1234567890", dirty: true },
       })
     ).toMatchObject({
       kind: "panel",
       displayAddress: "panels/chat",
-      repo: { head: "main", dirty: true },
     });
   });
 
-  it("formats repo metadata compactly", () => {
+  it("parses the complete panel build-coordinate vocabulary", () => {
+    expect(parsePanelBuildCoordinate()).toEqual({ kind: "main" });
+    expect(parsePanelBuildCoordinate("ctx:review")).toEqual({
+      kind: "context",
+      contextId: "review",
+    });
+    expect(parsePanelBuildCoordinate(`state:${"b".repeat(64)}`)).toEqual({
+      kind: "content",
+      workspaceStateHash: `state:${"b".repeat(64)}`,
+    });
+    expect(() => parsePanelBuildCoordinate("feature-branch")).toThrow(
+      /Unsupported panel build coordinate/
+    );
+    expect(() => parsePanelBuildCoordinate("ctx:not canonical")).toThrow(
+      /Unsupported panel build coordinate/
+    );
+  });
+
+  it("labels content-addressed build coordinates instead of displaying bare hashes", () => {
     expect(
-      formatRepoChip({ unitPath: "panels/chat", head: "main", stateHash: "abcdef123", dirty: true })
-    ).toBe("panels/chat @ main @ abcdef123 @ dirty");
+      buildPanelChromeState({
+        panel: makePanelAtRef("panels/chat", `state:${"c".repeat(64)}`),
+      }).displayAddress
+    ).toBe("panels/chat @ content state cccccccccc…");
   });
 
   it("normalizes and ranks browser address suggestions", () => {

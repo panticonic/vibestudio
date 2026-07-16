@@ -28,7 +28,14 @@
  * the diff/source toggle so they can edit the JSX by hand.
  */
 
-import { Component as ReactComponent, useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
+import {
+  Component as ReactComponent,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import type { JsxEditorProps } from "@workspace/mdx-editor-core";
 import { Box, Card, Code, Flex, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon, Pencil1Icon } from "@radix-ui/react-icons";
@@ -42,9 +49,11 @@ import { WikiLink as SpectroliteWikiLink } from "./components";
 // Inline MDX is compiled as an isolated module. Publish the host component so
 // the compiled module renders the same context-aware wikilink as the rest of
 // Spectrolite instead of a preview-only imitation.
-(globalThis as typeof globalThis & {
-  __spectroliteWikiLinkComponent__?: typeof SpectroliteWikiLink;
-}).__spectroliteWikiLinkComponent__ = SpectroliteWikiLink;
+(
+  globalThis as typeof globalThis & {
+    __spectroliteWikiLinkComponent__?: typeof SpectroliteWikiLink;
+  }
+).__spectroliteWikiLinkComponent__ = SpectroliteWikiLink;
 
 const sandbox = createPanelSandboxConfig(rpc);
 const BASE_LIVE_JSX_IMPORTS = { "@workspace/agentic-chat": "latest" } as const;
@@ -52,8 +61,9 @@ const BASE_LIVE_JSX_IMPORTS = { "@workspace/agentic-chat": "latest" } as const;
 // PascalCase component names exported by @workspace/agentic-chat that we
 // inject unconditionally into the live-compile wrapper. The set mirrors
 // the chat panel's MDX component surface so docs are portable.
-const importedNames = Object.keys(mdxComponents as Record<string, unknown>)
-  .filter((n) => /^[A-Z]/.test(n));
+const importedNames = Object.keys(mdxComponents as Record<string, unknown>).filter((n) =>
+  /^[A-Z]/.test(n)
+);
 const importList = importedNames.join(", ");
 
 interface MdastJsxLike {
@@ -138,7 +148,9 @@ export function LiveJsxEditor(props: JsxEditorProps & LiveJsxEditorOwnProps) {
     setError(null);
     setComponent(null);
     if (!source.trim()) {
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+      };
     }
     const compileImports = {
       ...BASE_LIVE_JSX_IMPORTS,
@@ -156,7 +168,9 @@ export function LiveJsxEditor(props: JsxEditorProps & LiveJsxEditorOwnProps) {
         setError(result.error ?? "compile failed");
       }
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [wrapped, tagName, source, dependencies]);
 
   if (error) {
@@ -166,7 +180,9 @@ export function LiveJsxEditor(props: JsxEditorProps & LiveJsxEditorOwnProps) {
   if (!Component) {
     return (
       <Box style={{ opacity: 0.6 }}>
-        <Text size="1" color="gray">Rendering &lt;{tagName}&gt;…</Text>
+        <Text size="1" color="gray">
+          Rendering &lt;{tagName}&gt;…
+        </Text>
       </Box>
     );
   }
@@ -192,10 +208,16 @@ function LiveJsxErrorCard({ tagName, error }: { tagName: string; error: string }
       <Flex direction="column" gap="1">
         <Flex align="center" gap="1">
           <ExclamationTriangleIcon color="red" />
-          <Text size="1" color="red" weight="medium">&lt;{tagName}&gt;</Text>
-          <Text size="1" color="gray">— preview failed</Text>
+          <Text size="1" color="red" weight="medium">
+            &lt;{tagName}&gt;
+          </Text>
+          <Text size="1" color="gray">
+            — preview failed
+          </Text>
         </Flex>
-        <Code size="1" style={{ whiteSpace: "pre-wrap" }}>{error}</Code>
+        <Code size="1" style={{ whiteSpace: "pre-wrap" }}>
+          {error}
+        </Code>
         <Text size="1" color="gray">
           <Pencil1Icon /> Use the diff/source toggle to edit the JSX by hand.
         </Text>

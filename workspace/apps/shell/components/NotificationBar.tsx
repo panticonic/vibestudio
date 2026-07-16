@@ -21,6 +21,7 @@ import {
   ChevronRightIcon,
 } from "@radix-ui/react-icons";
 import { useShellEvent } from "../shell/useShellEvent";
+import { useDirectShellEvent } from "../shell/useDirectShellEvent";
 import { app, extensions, notification, panel, workspaceUnits } from "../shell/client";
 import type { NotificationPayload } from "@vibestudio/shared/events";
 import { assertPresent } from "../utils/assertPresent";
@@ -96,17 +97,19 @@ export function NotificationBar() {
   const timerCleanups = useRef<Map<string, () => void>>(new Map());
   const barRef = useRef<HTMLDivElement>(null);
 
-  // Handle incoming notifications
-  useShellEvent(
-    "notification:show",
-    useCallback((payload: NotificationPayload) => {
-      setNotifications((prev) => {
-        const next = new Map(prev);
-        next.set(payload.id, payload);
-        return next;
-      });
-    }, [])
-  );
+  const showNotification = useCallback((payload: NotificationPayload) => {
+    setNotifications((prev) => {
+      const next = new Map(prev);
+      next.set(payload.id, payload);
+      return next;
+    });
+  }, []);
+
+  // Host notifications are watched broadcasts; server notifications addressed
+  // to this account arrive on the authenticated session. Keep the delivery
+  // contracts explicit instead of folding direct events into EventsClient.
+  useShellEvent("notification:show", showNotification);
+  useDirectShellEvent("notification:show", showNotification);
 
   const dismissNotification = useCallback((id: string) => {
     setNotifications((prev) => {
@@ -130,16 +133,15 @@ export function NotificationBar() {
     void notification.reportAction(id, "dismiss");
   }, []);
 
-  // Handle dismiss requests
-  useShellEvent(
-    "notification:dismiss",
-    useCallback(
-      (payload: { id: string }) => {
-        dismissNotification(payload.id);
-      },
-      [dismissNotification]
-    )
+  const handleDismissRequest = useCallback(
+    (payload: { id: string }) => {
+      dismissNotification(payload.id);
+    },
+    [dismissNotification]
   );
+
+  useShellEvent("notification:dismiss", handleDismissRequest);
+  useDirectShellEvent("notification:dismiss", handleDismissRequest);
 
   const handleAction = useCallback(
     async (notificationId: string, action: NonNullable<NotificationPayload["actions"]>[number]) => {

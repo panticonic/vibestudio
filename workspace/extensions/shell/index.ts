@@ -124,24 +124,25 @@ declare module "@vibestudio/extension" {
   }
 }
 
-/**
- * Build the branch-display string for a context-scoped session from
- * `vcs.contextStatus` (§4.1): the (shortened) context head plus a `*` dirty
- * marker when any repo carries uncommitted edits. Best-effort — returns
- * undefined on any failure (an unauthorized cross-context read, no active
- * context, etc.), so the header simply shows no branch.
- */
-async function contextBranchDisplay(
+/** Build a compact semantic-state label for a context-scoped session. */
+async function contextRevisionDisplay(
   ctx: ExtensionContext,
   contextId: string
 ): Promise<string | undefined> {
   try {
-    const rows = await ctx.rpc.call<Array<{ uncommitted?: boolean }>>("main", "vcs.contextStatus", {
-      contextId,
-    });
-    const dirty = Array.isArray(rows) && rows.some((r) => r?.uncommitted);
+    const status = await ctx.rpc.call<{
+      workingHead:
+        | { kind: "event"; eventId: string }
+        | { kind: "application"; applicationId: string };
+      workingCounts: { workUnits: number };
+    }>("main", "vcs.status", { contextId });
     const short = contextId.length > 12 ? `${contextId.slice(0, 8)}…` : contextId;
-    return `ctx:${short}${dirty ? " *" : ""}`.slice(0, 120);
+    const head =
+      status.workingHead.kind === "event"
+        ? status.workingHead.eventId
+        : status.workingHead.applicationId;
+    const work = status.workingCounts.workUnits;
+    return `ctx:${short} @ ${head.slice(0, 10)}${work > 0 ? ` · ${work} work` : ""}`.slice(0, 120);
   } catch {
     return undefined;
   }
@@ -154,6 +155,22 @@ export async function activate(ctx: ExtensionContext) {
   // adapters; extensions add/replace entries via registerLaunchAdapter.
   const launchAdapters = new LaunchAdapterRegistry();
   const launchAdapterOwners = new Map<string, string>();
+  const launchCleanups = new Map<string, { extension: string; method: string; args: unknown[] }>();
+  const runLaunchCleanup = (sessionId: string): void => {
+    const cleanup = launchCleanups.get(sessionId);
+    if (!cleanup) return;
+    launchCleanups.delete(sessionId);
+    void ctx.extensions
+      .invoke(cleanup.extension, cleanup.method, cleanup.args)
+      .catch((err: unknown) => {
+        ctx.log.warn?.("launch adapter cleanup failed", {
+          sessionId,
+          extension: cleanup.extension,
+          method: cleanup.method,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+  };
   const freshContextTokens = new Map<
     string,
     { contextId: string; callerId: string; expiresAt: number }
@@ -161,12 +178,18 @@ export async function activate(ctx: ExtensionContext) {
   let snug!: SnugServer;
   const sessions = new SessionManager(
     {
-      onExit: (sessionId) => snug.unregister(sessionId),
-      onDispose: (sessionId) => snug.unregister(sessionId),
+      onExit: (sessionId) => {
+        snug.unregister(sessionId);
+        runLaunchCleanup(sessionId);
+      },
+      onDispose: (sessionId) => {
+        snug.unregister(sessionId);
+        runLaunchCleanup(sessionId);
+      },
     },
     {
       detectAgent: (argv) => launchAdapters.detect(argv),
-      resolveContextBranch: (contextId) => contextBranchDisplay(ctx, contextId),
+      resolveContextRevision: (contextId) => contextRevisionDisplay(ctx, contextId),
     }
   );
   // Resolve the cwd-confinement root for a request: the context's materialized
@@ -426,49 +449,70 @@ export async function activate(ctx: ExtensionContext) {
         command: _command,
         contextId: _ctxId,
         contextAttachToken: _contextAttachToken,
+        launchIntent: _launchIntent,
         ...openReq
       } = parsed;
       // Launch-adapter enrichment (§4.3): for a context-scoped session whose
       // resolved argv matches an adapter with a handler, invoke the handler
       // BEFORE approval/spawn so its env/argv rewrites are what the user
-      // approves and what runs. No context, no match, or a null/failed handler
-      // ⇒ launch untouched (today's detection/tagging only).
+      // approves and what runs. No context, no match, or a null handler launches
+      // untouched; a matched handler failure aborts loudly.
       let handlerEnv: Record<string, string> = {};
+      let pendingCleanup: { extension: string; method: string; args: unknown[] } | undefined;
+      let snugToken: string | undefined;
       if (parsed.contextId) {
         const argv = [command, ...args];
         const handler = launchAdapters.matchHandler(argv);
         if (handler) {
           try {
             const rewrite = (await ctx.extensions.invoke(handler.extension, handler.method, [
-              { contextId: parsed.contextId, argv, cwd, env: parsed.env },
-            ])) as { env?: Record<string, string>; argv?: string[] } | null | undefined;
+              {
+                contextId: parsed.contextId,
+                argv,
+                cwd,
+                env: parsed.env,
+                ...(parsed.launchIntent ? { intent: parsed.launchIntent } : {}),
+              },
+            ])) as
+              | {
+                  env?: Record<string, string>;
+                  argv?: string[];
+                  cleanup?: { method: string; args: unknown[] };
+                }
+              | null
+              | undefined;
             if (rewrite?.argv && rewrite.argv.length > 0) {
               const [nextCommand, ...nextArgs] = rewrite.argv;
               command = nextCommand ?? command;
               args = nextArgs;
             }
             if (rewrite?.env) handlerEnv = rewrite.env;
+            if (rewrite?.cleanup) {
+              pendingCleanup = { extension: handler.extension, ...rewrite.cleanup };
+            }
           } catch (err) {
-            ctx.log.debug?.("launch adapter handler failed; launching untouched", {
+            ctx.log.warn?.("launch adapter handler failed", {
               extension: handler.extension,
               method: handler.method,
               error: err instanceof Error ? err.message : String(err),
             });
+            throw err;
           }
         }
       }
-      await requireApproval(
-        ctx,
-        "open",
-        buildOpenApproval({
-          command,
-          args,
-          cwd,
-          label: parsed.label,
-        })
-      );
-      const { env, token } = snug.envForSession(cleanEnv({ ...parsed.env, ...handlerEnv }));
       try {
+        await requireApproval(
+          ctx,
+          "open",
+          buildOpenApproval({
+            command,
+            args,
+            cwd,
+            label: parsed.label,
+          })
+        );
+        const { env, token } = snug.envForSession(cleanEnv({ ...parsed.env, ...handlerEnv }));
+        snugToken = token;
         const launch = await prepareVscodeShellIntegrationLaunch({
           command,
           args,
@@ -486,9 +530,21 @@ export async function activate(ctx: ExtensionContext) {
           owner
         );
         snug.register(token, result.sessionId);
+        if (pendingCleanup) launchCleanups.set(result.sessionId, pendingCleanup);
         return result;
       } catch (err) {
-        snug.discardPending(token);
+        if (snugToken) snug.discardPending(snugToken);
+        if (pendingCleanup) {
+          await ctx.extensions
+            .invoke(pendingCleanup.extension, pendingCleanup.method, pendingCleanup.args)
+            .catch((cleanupError: unknown) => {
+              ctx.log.warn?.("launch adapter cleanup failed", {
+                extension: pendingCleanup?.extension,
+                method: pendingCleanup?.method,
+                error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+              });
+            });
+        }
         throw err;
       }
     },

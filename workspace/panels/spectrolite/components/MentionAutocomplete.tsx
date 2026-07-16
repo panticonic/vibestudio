@@ -76,7 +76,9 @@ function tryReplaceSelection(replacement: string): boolean {
   range.setEndAfter(node);
   sel.removeAllRanges();
   sel.addRange(range);
-  (target as HTMLElement).dispatchEvent?.(new InputEvent("input", { bubbles: true, inputType: "insertText", data: replacement }));
+  (target as HTMLElement).dispatchEvent?.(
+    new InputEvent("input", { bubbles: true, inputType: "insertText", data: replacement })
+  );
   return true;
 }
 
@@ -92,8 +94,8 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
     const q = open.query.toLowerCase();
     if (!q) return candidates.slice(0, 8);
     return candidates
-      .filter((c) =>
-        c.handle.toLowerCase().includes(q) || (c.name?.toLowerCase().includes(q) ?? false),
+      .filter(
+        (c) => c.handle.toLowerCase().includes(q) || (c.name?.toLowerCase().includes(q) ?? false)
       )
       .slice(0, 8);
   }, [open, candidates]);
@@ -212,7 +214,7 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
 
       // Update query as the user types more characters
       if (current && event.key.length === 1 && /[A-Za-z0-9_.-]/.test(event.key)) {
-        setOpen((prev) => prev ? { ...prev, query: prev.query + event.key } : prev);
+        setOpen((prev) => (prev ? { ...prev, query: prev.query + event.key } : prev));
         return;
       }
       if (current && event.key === "Backspace") {
@@ -224,7 +226,13 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
         return;
       }
       // Whitespace or other punctuation closes the popover without action
-      if (current && event.key !== "Shift" && event.key !== "Meta" && event.key !== "Control" && event.key !== "Alt") {
+      if (
+        current &&
+        event.key !== "Shift" &&
+        event.key !== "Meta" &&
+        event.key !== "Control" &&
+        event.key !== "Alt"
+      ) {
         setOpen(null);
       }
     };
@@ -239,11 +247,10 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
   // horizontally so the popover never crosses the viewport edge.
   const popoverWidth = 280;
   const popoverHeight = Math.min(filtered.length * 36 + 16, 280);
-  const visualVh = (typeof window !== "undefined" ? window.visualViewport?.height : null) ?? window.innerHeight;
+  const visualVh =
+    (typeof window !== "undefined" ? window.visualViewport?.height : null) ?? window.innerHeight;
   const flipAbove = caretRect.bottom + popoverHeight + 12 > visualVh;
-  const top = flipAbove
-    ? Math.max(8, caretRect.top - popoverHeight - 4)
-    : caretRect.bottom + 4;
+  const top = flipAbove ? Math.max(8, caretRect.top - popoverHeight - 4) : caretRect.bottom + 4;
   const rawLeft = caretRect.left;
   const left = Math.max(8, Math.min(rawLeft, window.innerWidth - popoverWidth - 8));
   return (
@@ -282,8 +289,14 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
                 onMouseEnter={() => setSelectedIndex(idx)}
               >
                 <PersonIcon />
-                <Code variant="ghost" size="1">@{c.handle}</Code>
-                {c.name ? <Text size="1" color="gray">{c.name}</Text> : null}
+                <Code variant="ghost" size="1">
+                  @{c.handle}
+                </Code>
+                {c.name ? (
+                  <Text size="1" color="gray">
+                    {c.name}
+                  </Text>
+                ) : null}
               </Flex>
             );
           })}

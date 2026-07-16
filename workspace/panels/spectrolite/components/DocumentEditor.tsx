@@ -5,8 +5,8 @@
  * pipeline). On ready it builds the per-document {@link DocController}
  * (commit-on-quiescence + narrow remote reconcile) and the {@link UndoCoordinator}
  * (one ⌘Z stack over Lexical-native undo + GAD revert), then `load`s the doc
- * from the vault head via `vcs` — there are NO disk reads, NO polling, NO flush,
- * and NO disk-conflict banners.
+ * from the vault's exact semantic working state via `vcs` — there are NO disk reads,
+ * NO polling, NO flush, and NO disk-conflict banners.
  *
  * Per-JSX-node live render goes through {@link LiveJsxEditor}; component
  * view-state (`useDocState`) is private and lives in the panel-local
@@ -19,12 +19,11 @@ import { Box, Flex, Text } from "@radix-ui/themes";
 import { $getNodeByKey, $getRoot, type LexicalNode } from "lexical";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { importMdastTreeToLexical } from "@workspace/mdx-editor-core";
-import { vcs } from "@workspace/runtime";
 import { buildMdxConfig, type BuiltMdxConfig } from "../editor/mdxConfig";
 import { MdxLexicalEditor, type LexicalUndoHandle } from "../editor/MdxLexicalEditor";
 import type { MdxEditorCore } from "../editor/mdxEditorCore";
 import { splitMdxBlocks } from "../editor/parseBlocks";
-import { DocController, type DocVcs, type EditResult } from "../coedit/docController";
+import { DocController, type DocVcs } from "../coedit/docController";
 import { UndoCoordinator } from "../coedit/undoCoordinator";
 import { knownJsxDescriptors } from "../mdx/runtime";
 import { LiveJsxEditor } from "../mdx/LiveJsxEditor";
@@ -47,27 +46,6 @@ export interface DocumentEditorProps {
 
 /** A canonical-derived recompute is debounced — full serialization isn't free. */
 const RECOMPUTE_MS = 350;
-/** How long a scribe-attributed block stays highlighted. */
-const ATTRIBUTION_FLASH_MS = 2200;
-
-function singleRepoEditResult(
-  result: Awaited<ReturnType<typeof vcs.edit>>,
-  repoPath: string,
-  operation: string
-): EditResult {
-  const repo = result.repos?.find((candidate) => candidate.repoPath === repoPath);
-  const stateHash = result.stateHash ?? repo?.stateHash;
-  if (!stateHash) {
-    throw new Error(`${operation} returned no state hash for ${repoPath}`);
-  }
-  return {
-    stateHash,
-    committed: false,
-    status: "uncommitted",
-    changedPaths: repo?.changedPaths ?? result.changedPaths,
-  };
-}
-
 export function DocumentEditor({
   relPath,
   theme,
@@ -138,39 +116,27 @@ export function DocumentEditor({
   const onReady = useMemo(
     () => (core: MdxEditorCore, lexicalUndo: LexicalUndoHandle) => {
       coreRef.current = core;
-      const vaultRepo = app.publish.getRepo();
-      const docVcs: DocVcs = {
-        readFile: (input) => vcs.readFile(input),
-        edit: async (input) => singleRepoEditResult(await vcs.edit(input), vaultRepo, "vcs.edit"),
-        commit: (input) => vcs.commit(input),
-        subscribeHead: (head, onAdvance) => vcs.subscribeHead(head, onAdvance),
-        subscribeWorking: (head, onAdvance) => vcs.subscribeWorking(head, onAdvance),
-      };
+      const semanticVcs = app.semanticVcs;
+      if (!semanticVcs) {
+        setError("This vault is not bound to a writable VCS context");
+        return;
+      }
+      const docVcs: DocVcs = semanticVcs;
 
       const undo = new UndoCoordinator({
         lexical: lexicalUndo,
-        // Per-repo VCS: revert must name the vault's repo (the single repo this
-        // panel edits). repoPath is required on `vcs.revert`.
-        revert: async (target) =>
-          singleRepoEditResult(
-            await vcs.revert({ ...target, repoPath: vaultRepo }),
-            vaultRepo,
-            "vcs.revert"
-          ),
-        onRevertIssued: (stateHash) => controllerRef.current?.expectHistoric(stateHash),
+        revert: async (changeIds) => {
+          const result = await semanticVcs.revert(changeIds);
+          return { changeIds: result.changeIds };
+        },
       });
       undoRef.current = undo;
 
       const controller = new DocController({
         editor: core,
         vcs: docVcs,
-        vaultHead: app.vaultHead,
-        // Per-repo VCS: `vcs.commit` is scoped to the vault's single repo.
-        vaultRepo,
-        viewState: app.viewState,
         splitBlocks: (markdown) => splitMdxBlocks(markdown),
         onCollisions: (collisions, path) => app.pushCollisions(collisions, path),
-        onConflict: (path) => app.onSaveConflict(path),
         onSaveError: (path, err) => {
           // A working-edit record (or teardown flush) failed and can't retry —
           // keep the path marked unsaved (the edit may not be durable).
@@ -189,8 +155,7 @@ export function DocumentEditor({
       controllerRef.current = controller;
       // The deliberate commit (Publish / Send-to-scribe) — carries a message.
       app.registerCommitActiveDoc((message) => controller.commitNow(message));
-      // Re-read this doc at the current head after a Sync/rebase (the re-pinned
-      // base may have moved without advancing the head).
+      // Re-read after semantic Sync advances the context to a new exact state.
       app.registerReloadActiveDoc(() => controller.load(vcsPath));
 
       // A user-chosen collision resolution: replace the live blocks with the
@@ -223,20 +188,6 @@ export function DocumentEditor({
           }
           for (const target of targets) target.remove();
         });
-      });
-
-      // Presence: flash the blocks a remote actor just touched.
-      core.setAttributionSink((blockIds, actor) => {
-        if (!actor || actor.kind === "panel") return;
-        for (const key of blockIds) {
-          const el = core.editor.getElementByKey(key);
-          if (!el) continue;
-          el.classList.add("spectrolite-scribe-touch");
-          window.setTimeout(
-            () => el.classList.remove("spectrolite-scribe-touch"),
-            ATTRIBUTION_FLASH_MS
-          );
-        }
       });
 
       void controller

@@ -30,6 +30,7 @@ export default defineConfig({
     exclude: [
       "**/node_modules/**",
       "dist",
+      "workspace/.context-projections",
       "workspace/.contexts",
       "apps/mobile/**",
       "workspace/apps/mobile/**",

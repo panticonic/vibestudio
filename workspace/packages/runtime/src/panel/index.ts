@@ -27,8 +27,8 @@ export type {
 } from "../types.js";
 export type {
   DurableObjectServiceClient,
-  ResolvedUserlandService,
-  UserlandServiceInfo,
+  ResolvedWorkspaceService,
+  WorkspaceServiceInfo,
   WorkerSourceInfo,
 } from "../shared/workerd.js";
 export type * from "../shared/gad.js";
@@ -176,7 +176,7 @@ export type {
   GitHttpClient,
 } from "../shared/credentials.js";
 export type * from "../shared/git.js";
-export type { VcsClient, VcsStatusResult } from "../shared/vcsClient.js";
+export type * from "../shared/vcsClient.js";
 export type {
   CreateWebhookIngressSubscriptionRequest,
   RotateWebhookIngressSecretRequest,
@@ -209,9 +209,11 @@ import { getStateArgs, setStateArgs, setStateArgsForPanel } from "./stateArgs.js
 /**
  * Reopen THIS panel in place under a (possibly new) context + state args — a
  * snapshot replacement, not a child. The canonical way to rebind a panel to a
- * different durable context head (e.g. switching vault → `ctx:vault-<hash>`):
+ * different durable semantic context (e.g. switching vault →
+ * `ctx:vault-<hash>`):
  * unlike `panel.stateArgs.set`, this moves the panel's `contextId`, which fixes
- * which `ctx:` vcs head every subsequent `vcs.*` / agent spawn resolves to.
+ * which exact context working head every subsequent `vcs.*` / agent spawn resolves
+ * against.
  * Defaults `source` to the current panel's source.
  */
 async function reopen(

@@ -19,7 +19,12 @@ describe("MdxEditorCore (headless Lexical + vendored pipeline)", () => {
     core.setCanonical("# Linked\n\nThis note points at [[E2E]].");
 
     expect(core.getCanonical()).toContain("[[E2E]]");
-    expect(core.getBlocks().map((block) => block.text).join("\n")).toContain("[[E2E]]");
+    expect(
+      core
+        .getBlocks()
+        .map((block) => block.text)
+        .join("\n")
+    ).toContain("[[E2E]]");
   });
 
   it("exposes top-level content blocks with stable node-key ids", () => {

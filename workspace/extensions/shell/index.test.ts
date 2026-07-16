@@ -17,7 +17,7 @@ async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "a
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   // Materialize a per-context folder on demand, mirroring the host capability.
   const ensureContextFolder = vi.fn(async (contextId: string) => {
-    const dir = join(root, ".contexts", contextId);
+    const dir = join(root, ".context-projections", "v5", contextId);
     await mkdir(dir, { recursive: true });
     return { dir };
   });
@@ -37,7 +37,7 @@ async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "a
         id: "ws",
         name: "ws",
         path: root,
-        contextsPath: join(root, ".contexts"),
+        contextProjectionsPath: join(root, ".context-projections", "v5"),
       }),
       ensureContextFolder,
     },
@@ -448,7 +448,7 @@ describe("@workspace-extensions/shell", () => {
     expect(ensureContextFolder).toHaveBeenCalledWith("ctx-1");
     const info = await api.get(sessionId);
     expect(info.contextId).toBe("ctx-1");
-    expect(info.command.cwd).toBe(join(root, ".contexts", "ctx-1"));
+    expect(info.command.cwd).toBe(join(root, ".context-projections", "v5", "ctx-1"));
   });
 
   it("approval-gates attaching to an existing context before materializing it", async () => {
@@ -535,10 +535,19 @@ describe("@workspace-extensions/shell", () => {
     });
     // argv carries "claude" so the adapter matches; the handler rewrites it to a
     // runnable node invocation before spawn.
-    const { sessionId } = await api.open({ command: "node", args: ["claude"], contextId: "ctx-2" });
+    const { sessionId } = await api.open({
+      command: "node",
+      args: ["claude"],
+      contextId: "ctx-2",
+      launchIntent: { channelId: "channel-2" },
+    });
     await api.awaitExit(sessionId);
     expect(invoke).toHaveBeenCalledWith("@workspace-extensions/claude-code", "prepareLaunch", [
-      expect.objectContaining({ contextId: "ctx-2", argv: ["node", "claude"] }),
+      expect.objectContaining({
+        contextId: "ctx-2",
+        argv: ["node", "claude"],
+        intent: { channelId: "channel-2" },
+      }),
     ]);
     const info = await api.get(sessionId);
     // The handler's argv rewrite is what actually spawned.
@@ -549,6 +558,55 @@ describe("@workspace-extensions/shell", () => {
     ]);
     const scrollback = await api.getScrollback(sessionId);
     expect(scrollback.text).toContain("1");
+  });
+
+  it("runs a launch adapter's cleanup exactly once when its terminal exits", async () => {
+    const { api, invoke, invocationCurrent } = await makeApi("allow");
+    invoke.mockResolvedValueOnce({
+      env: { INJECTED: "1" },
+      argv: ["node", "-e", "process.exit(0)"],
+      cleanup: { method: "release", args: [{ entityId: "entity-1" }] },
+    });
+    invocationCurrent.mockReturnValueOnce({
+      caller: { callerId: "@workspace-extensions/claude-code", callerKind: "extension" },
+    });
+    await api.registerLaunchAdapter({
+      id: "test:claude-lifecycle",
+      match: { pattern: "\\bclaude\\b" },
+      handler: { extension: "@workspace-extensions/claude-code", method: "adaptLaunch" },
+    });
+
+    const { sessionId } = await api.open({ command: "node", args: ["claude"], contextId: "ctx-2" });
+    await api.awaitExit(sessionId);
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("@workspace-extensions/claude-code", "release", [
+        { entityId: "entity-1" },
+      ]);
+    });
+    expect(invoke.mock.calls.filter((call) => call[1] === "release")).toHaveLength(1);
+  });
+
+  it("runs launch cleanup when approval rejects after preparation", async () => {
+    const { api, invoke, invocationCurrent } = await makeApi(["allow", "deny"]);
+    invoke.mockResolvedValueOnce({
+      argv: ["node", "-e", "process.exit(0)"],
+      cleanup: { method: "release", args: [{ entityId: "entity-denied" }] },
+    });
+    invocationCurrent.mockReturnValueOnce({
+      caller: { callerId: "@workspace-extensions/claude-code", callerKind: "extension" },
+    });
+    await api.registerLaunchAdapter({
+      id: "test:claude-denied",
+      match: { pattern: "\\bclaude\\b" },
+      handler: { extension: "@workspace-extensions/claude-code", method: "adaptLaunch" },
+    });
+
+    await expect(
+      api.open({ command: "node", args: ["claude"], contextId: "ctx-denied" })
+    ).rejects.toThrow();
+    expect(invoke).toHaveBeenCalledWith("@workspace-extensions/claude-code", "release", [
+      { entityId: "entity-denied" },
+    ]);
   });
 
   it("does not run launch-adapter handlers for non-context sessions", async () => {
@@ -570,7 +628,7 @@ describe("@workspace-extensions/shell", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("launches untouched when a launch-adapter handler throws", async () => {
+  it("fails loudly when a matched launch-adapter handler throws", async () => {
     const { api, invoke, log, invocationCurrent } = await makeApi("allow");
     invoke.mockRejectedValueOnce(new Error("boom"));
     invocationCurrent.mockReturnValueOnce({
@@ -581,15 +639,17 @@ describe("@workspace-extensions/shell", () => {
       match: { pattern: "\\bclaude\\b" },
       handler: { extension: "@workspace-extensions/claude-code", method: "prepareLaunch" },
     });
-    const { sessionId } = await api.open({
-      command: "node",
-      args: ["-e", "process.exit(0)", "claude"],
-      contextId: "ctx-3",
-    });
-    await api.awaitExit(sessionId);
-    const info = await api.get(sessionId);
-    expect(info.command.argv).toEqual(["node", "-e", "process.exit(0)", "claude"]);
-    expect(log.debug).toHaveBeenCalled();
+    await expect(
+      api.open({
+        command: "node",
+        args: ["-e", "process.exit(0)", "claude"],
+        contextId: "ctx-3",
+      })
+    ).rejects.toThrow("boom");
+    expect(log.warn).toHaveBeenCalledWith(
+      "launch adapter handler failed",
+      expect.objectContaining({ method: "prepareLaunch", error: "boom" })
+    );
   });
 
   it("approval-gates snug open before creating an open-url handoff", async () => {

@@ -11,7 +11,6 @@ import {
   ArrowRightIcon,
   ReloadIcon,
   StopIcon,
-  ExclamationTriangleIcon,
   GlobeIcon,
 } from "@radix-ui/react-icons";
 import { Badge, Box, Flex, IconButton, Text, TextField, Tooltip } from "@radix-ui/themes";
@@ -95,30 +94,7 @@ export function TitleBar({
     lazyStatusNavigation: statusNavigation,
   } = useNavigation();
   const [connectionSettingsOpen, setConnectionSettingsOpen] = useState(false);
-  const [degradedEventChannels, setDegradedEventChannels] = useState<Set<string>>(() => new Set());
   const isMobile = useIsMobile();
-
-  useEffect(() => {
-    const degraded = (event: Event) => {
-      const name = (event as CustomEvent<{ event?: string }>).detail?.event;
-      if (!name) return;
-      setDegradedEventChannels((current) => new Set(current).add(name));
-    };
-    const restored = (event: Event) => {
-      const name = (event as CustomEvent<string>).detail;
-      setDegradedEventChannels((current) => {
-        const next = new Set(current);
-        next.delete(name);
-        return next;
-      });
-    };
-    window.addEventListener("shell-event-subscription-degraded", degraded);
-    window.addEventListener("shell-event-subscription-restored", restored);
-    return () => {
-      window.removeEventListener("shell-event-subscription-degraded", degraded);
-      window.removeEventListener("shell-event-subscription-restored", restored);
-    };
-  }, []);
 
   const handleNavigationToggle = () => {
     const nextMode: NavigationMode = navigationMode === "stack" ? "tree" : "stack";
@@ -246,14 +222,6 @@ export function TitleBar({
               </IconButton>
             </Tooltip>
             <ThemeSettings />
-            {degradedEventChannels.size > 0 ? (
-              <Tooltip content="Some live updates are reconnecting…">
-                <ExclamationTriangleIcon
-                  color="var(--amber-11)"
-                  aria-label="Live updates reconnecting"
-                />
-              </Tooltip>
-            ) : null}
             <ConnectionStatusBadge onOpenSettings={() => setConnectionSettingsOpen(true)} />
           </Flex>
         </Flex>
@@ -433,14 +401,6 @@ export function TitleBar({
           style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
         >
           <ThemeSettings />
-          {degradedEventChannels.size > 0 ? (
-            <Tooltip content="Some live updates are reconnecting…">
-              <ExclamationTriangleIcon
-                color="var(--amber-11)"
-                aria-label="Live updates reconnecting"
-              />
-            </Tooltip>
-          ) : null}
           <ConnectionStatusBadge onOpenSettings={() => setConnectionSettingsOpen(true)} />
           {!isMac && <Box style={{ width: "138px" }} />}
         </Flex>
@@ -748,7 +708,7 @@ function PanelAddressBar({
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void panel
-        .getAddressOptions(source, chromeState.ref)
+        .getAddressOptions(source)
         .then((options) => {
           if (!cancelled) setAddressOptions(options);
         })
@@ -760,7 +720,7 @@ function PanelAddressBar({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [chromeState.ref, pathValue]);
+  }, [pathValue]);
 
   useEffect(() => {
     const focusAddress = () => {
@@ -770,8 +730,6 @@ function PanelAddressBar({
     window.addEventListener("shell-focus-address", focusAddress);
     return () => window.removeEventListener("shell-focus-address", focusAddress);
   }, []);
-
-  const dirty = addressOptions?.repo?.dirty ?? chromeState.repo?.dirty ?? false;
 
   const submit = (event?: KeyboardEvent<HTMLInputElement>) => {
     const value = pathValue.trim();
@@ -939,12 +897,6 @@ function PanelAddressBar({
           style={{ width: "100%" }}
         />
       </Box>
-
-      {dirty && (
-        <Badge size="1" color="orange" style={{ flexShrink: 0 }}>
-          dirty
-        </Badge>
-      )}
     </Flex>
   );
 }

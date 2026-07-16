@@ -208,6 +208,10 @@ export class ShellContentOverlayView {
     return this.visible && this.view != null && !this.view.webContents.isDestroyed();
   }
 
+  getVisibleView(): WebContentsView | null {
+    return this.isVisible() ? this.view : null;
+  }
+
   /** Re-raise above the panels (called after every native layer reconcile). */
   bringToFront(): void {
     if (!this.window || !this.view || this.view.webContents.isDestroyed() || !this.visible) return;

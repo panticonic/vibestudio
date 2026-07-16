@@ -41,7 +41,14 @@ describe("reconcileBlocks", () => {
     const r = reconcileBlocks(current("A", "BC"), incoming("A", "B", "C"), NONE);
     expect(r.collisions).toEqual([]);
     expect(r.ops).toEqual([
-      { kind: "structural", fromIndex: 1, toIndex: 1, oldIds: ["c1"], newTexts: ["B", "C"], beforeId: null },
+      {
+        kind: "structural",
+        fromIndex: 1,
+        toIndex: 1,
+        oldIds: ["c1"],
+        newTexts: ["B", "C"],
+        beforeId: null,
+      },
     ]);
   });
 
@@ -58,7 +65,14 @@ describe("reconcileBlocks", () => {
     const r = reconcileBlocks(current("A", "B", "C"), incoming("A", "C"), NONE);
     expect(r.collisions).toEqual([]);
     expect(r.ops).toEqual([
-      { kind: "structural", fromIndex: 1, toIndex: 1, oldIds: ["c1"], newTexts: [], beforeId: "c2" },
+      {
+        kind: "structural",
+        fromIndex: 1,
+        toIndex: 1,
+        oldIds: ["c1"],
+        newTexts: [],
+        beforeId: "c2",
+      },
     ]);
   });
 
@@ -98,7 +112,14 @@ describe("reconcileBlocks", () => {
     const r = reconcileBlocks(current("A", "B", "C"), incoming("A2", "B", "C2"), new Set(["c0"]));
     expect(r.ops).toEqual([{ kind: "contained", oldId: "c2", oldIndex: 2, newText: "C2" }]);
     expect(r.collisions).toEqual([
-      { fromIndex: 0, toIndex: 0, oldIds: ["c0"], oldTexts: ["A"], newTexts: ["A2"], liveIds: ["c0"] },
+      {
+        fromIndex: 0,
+        toIndex: 0,
+        oldIds: ["c0"],
+        oldTexts: ["A"],
+        newTexts: ["A2"],
+        liveIds: ["c0"],
+      },
     ]);
   });
 
@@ -112,11 +133,7 @@ describe("reconcileBlocks", () => {
   });
 
   it("multiple disjoint non-live edits all auto-apply", () => {
-    const r = reconcileBlocks(
-      current("A", "B", "C", "D"),
-      incoming("A2", "B", "C2", "D"),
-      NONE
-    );
+    const r = reconcileBlocks(current("A", "B", "C", "D"), incoming("A2", "B", "C2", "D"), NONE);
     expect(r.collisions).toEqual([]);
     expect(r.ops).toEqual([
       { kind: "contained", oldId: "c0", oldIndex: 0, newText: "A2" },

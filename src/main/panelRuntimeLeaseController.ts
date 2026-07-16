@@ -27,12 +27,7 @@ import {
   PANEL_UI_IDLE_UNLOAD_MS_HEADLESS,
   PANEL_UI_MAX_LOADED_HEADLESS,
 } from "@vibestudio/shared/constants";
-import {
-  getCurrentSnapshot,
-  getPanelContextId,
-  getPanelRef,
-  getPanelSource,
-} from "@vibestudio/shared/panel/accessors";
+import { getCurrentSnapshot, getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { assertPresent } from "../lintHelpers";
 import type { PanelPinStoreApi } from "./panelPinStore.js";
@@ -83,7 +78,8 @@ export class PanelRuntimeLeaseController {
     { runtimeEntityId: string; connectionId: string }
   >();
   private readonly stateArgsPushUnsubs = new Map<string, () => void>();
-  private readonly viewBuildFailures = new Map<string, string>();
+  /** Slots whose lease is being acquired by a local load operation. */
+  private readonly locallyLoadingSlots = new Set<string>();
   private readonly explicitTitlePanelIds = new Set<string>();
   private lastAppliedServerPanelTreeRevision = 0;
   private currentViewRevision = 0;
@@ -334,11 +330,20 @@ export class PanelRuntimeLeaseController {
     if (disposition.kind !== "assigned") return;
     const lease = disposition.lease;
     const view = this.deps.getPanelView();
+    // A local load owns view creation from lease acquisition through commit.
+    // The broadcast is still applied to the registry, but must not start a
+    // parallel creator for the same view.
+    if (this.locallyLoadingSlots.has(slotId)) {
+      this.connectionBySlot.set(slotId, {
+        runtimeEntityId: lease.runtimeEntityId,
+        connectionId: lease.connectionId,
+      });
+      return;
+    }
     if (view && !view.hasView(slotId)) {
       try {
         const panel = this.deps.registry.getPanel(slotId);
         if (panel) {
-          this.viewBuildFailures.delete(slotId);
           await this.loadAssignedLeaseIntoView(slotId, getCurrentSnapshot(panel), lease);
           this.resources.track(slotId);
           await this.resources.enforceCap(slotId);
@@ -346,7 +351,6 @@ export class PanelRuntimeLeaseController {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         log.warn(`[handleRuntimeLeaseChanged] Failed to load assigned panel ${slotId}: ${message}`);
-        this.viewBuildFailures.set(slotId, message);
         this.releaseLocalPanelRuntime(slotId, "unload");
         this.markPanelLoadError(slotId, message);
       }
@@ -370,27 +374,6 @@ export class PanelRuntimeLeaseController {
     );
   }
 
-  async awaitViewBuilt(panelId: string, timeoutMs?: number): Promise<void> {
-    const view = this.deps.getPanelView();
-    if (!view || view.hasView(panelId)) return;
-    const failure = await new Promise<string | null | "built">((resolve) => {
-      const start = Date.now();
-      const tick = () => {
-        if (view.hasView(panelId)) return resolve("built");
-        const recorded = this.viewBuildFailures.get(panelId);
-        if (recorded !== undefined) return resolve(recorded);
-        if (timeoutMs !== undefined && Date.now() - start > timeoutMs) return resolve(null);
-        setTimeout(tick, 16);
-      };
-      tick();
-    });
-    if (failure === "built") return;
-    if (failure === null)
-      throw new Error(`Timed out waiting for panel view to be created: ${panelId}`);
-    this.viewBuildFailures.delete(panelId);
-    throw new Error(failure);
-  }
-
   markPanelLoadError(panelId: string, message: string): void {
     const panel = this.deps.registry.getPanel(panelId);
     if (!panel) return;
@@ -412,18 +395,6 @@ export class PanelRuntimeLeaseController {
     await this.loadSnapshotIntoView(panelId, getCurrentSnapshot(panel), leaseMode);
   }
 
-  async buildPanelLoadUrl(
-    panelId: string,
-    leaseMode: "acquire" | "takeOver" = "acquire"
-  ): Promise<string | null> {
-    const panel = this.deps.registry.getPanel(panelId);
-    if (!panel) return null;
-    const source = getPanelSource(panel);
-    if (source.startsWith("browser:")) return source.slice("browser:".length);
-    await this.acquireRuntimeLease(panelId, leaseMode);
-    return this.buildPanelUrl(source, getPanelContextId(panel), getPanelRef(panel));
-  }
-
   async loadSnapshotIntoView(
     panelId: string,
     snapshot: PanelSnapshot,
@@ -431,31 +402,37 @@ export class PanelRuntimeLeaseController {
   ): Promise<void> {
     const view = this.deps.getPanelView();
     if (!view) return;
-    this.destroyViewIfPartitionChanged(view, panelId, snapshot);
-    const navigateInPlace = view.hasView(panelId);
-    if (snapshot.source.startsWith("browser:")) {
-      const url = snapshot.source.slice("browser:".length);
+    this.locallyLoadingSlots.add(panelId);
+    try {
+      this.destroyViewIfPartitionChanged(view, panelId, snapshot);
       await this.acquireRuntimeLease(panelId, leaseMode);
-      if (navigateInPlace && view.createViewForBrowser) {
+      if (snapshot.source.startsWith("browser:")) {
+        const url = snapshot.source.slice("browser:".length);
+        if (!view.createViewForBrowser) {
+          throw new Error("Panel host cannot create browser views");
+        }
         await view.createViewForBrowser(panelId, url, snapshot.contextId);
         this.recordViewMutation();
-      } else if (!navigateInPlace) {
-        await this.awaitViewBuilt(panelId);
+        this.deps.registry.updateArtifacts(panelId, { buildState: "ready", htmlPath: url });
+        this.deps.registry.notifyPanelTreeUpdate();
+        this.resources.track(panelId);
+        await this.resources.enforceCap(panelId);
+        return;
       }
-      this.deps.registry.updateArtifacts(panelId, { buildState: "ready", htmlPath: url });
-      this.deps.registry.notifyPanelTreeUpdate();
-      return;
-    }
 
-    await this.acquireRuntimeLease(panelId, leaseMode);
-    const panelUrl = this.buildPanelUrl(snapshot.source, snapshot.contextId, snapshot.options.ref);
-    if (navigateInPlace) {
+      const panelUrl = this.buildPanelUrl(
+        snapshot.source,
+        snapshot.contextId,
+        snapshot.options.ref
+      );
       await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
       this.recordViewMutation();
-    } else {
-      await this.awaitViewBuilt(panelId);
+      this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl);
+      this.resources.track(panelId);
+      await this.resources.enforceCap(panelId);
+    } finally {
+      this.locallyLoadingSlots.delete(panelId);
     }
-    this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl);
   }
 
   beginNavigation(panelId: string): void {

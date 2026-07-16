@@ -30,6 +30,7 @@ import {
   ReloadIcon,
 } from "@radix-ui/react-icons";
 import { rpc } from "@workspace/runtime";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { useIsMobile, usePaletteCommands } from "@workspace/react";
 import { AboutThemeRoot } from "@workspace/about-shared/ui";
 
@@ -68,7 +69,7 @@ interface LogStats {
 }
 
 interface AppendEvent {
-  payload: { records: LogRecord[] };
+  records: LogRecord[];
 }
 
 /** An item in the rendered stream: a log line or a restart divider. */
@@ -375,9 +376,10 @@ function ServerLogsPage() {
   useEffect(() => {
     let cancelled = false;
     let off: (() => void) | null = null;
+    const events = new EventsClient(rpc);
 
     const handleAppend = (ev: AppendEvent) => {
-      const recs = ev?.payload?.records;
+      const recs = ev?.records;
       if (Array.isArray(recs) && recs.length > 0) ingest(recs);
     };
 
@@ -385,8 +387,8 @@ function ServerLogsPage() {
       try {
         setError(null);
         // 1. Subscribe first so nothing is missed between seed and stream.
-        off = rpc.on("event:server-log:append", handleAppend as (ev: unknown) => void);
-        await rpc.call("main", "events.subscribe", ["server-log:append"]);
+        off = events.on("server-log:append", handleAppend);
+        await events.subscribe("server-log:append");
 
         // 2. Seed with the recent buffer.
         const seed = await rpc.call<LogEnvelope>("main", "serverLog.tail", [500]);
@@ -417,7 +419,7 @@ function ServerLogsPage() {
     return () => {
       cancelled = true;
       if (off) off();
-      void rpc.call("main", "events.unsubscribe", ["server-log:append"]).catch(() => {});
+      void events.unsubscribeAll().catch(() => {});
     };
   }, [ingest, bootNonce]);
 

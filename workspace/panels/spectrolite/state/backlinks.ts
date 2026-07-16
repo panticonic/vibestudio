@@ -37,14 +37,15 @@ export async function findBacklinks(
   root: string,
   activePath: string,
   candidatePaths: string[],
-  options: FindBacklinksOptions = {},
+  options: FindBacklinksOptions = {}
 ): Promise<Backlink[]> {
   const targetName = basenameNoExt(activePath);
   const fullTarget = activePath.replace(/\.mdx$/, "");
   const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_BACKLINK_CONCURRENCY));
   const candidates = candidatePaths.filter((path) => path !== activePath);
-  const read: BacklinkReader = options.readFile
-    ?? (async (relPath) => {
+  const read: BacklinkReader =
+    options.readFile ??
+    (async (relPath) => {
       try {
         return await fs.readFile(`${root}/${relPath}`, "utf-8");
       } catch {
@@ -55,7 +56,10 @@ export async function findBacklinks(
   async function scan(path: string): Promise<Backlink | null> {
     const content = await read(path);
     if (content === null) return null;
-    if (!content.includes("[[") || (!content.includes(targetName) && !content.includes(fullTarget))) {
+    if (
+      !content.includes("[[") ||
+      (!content.includes(targetName) && !content.includes(fullTarget))
+    ) {
       return null;
     }
     const targets = extractWikilinks(content);
@@ -64,7 +68,11 @@ export async function findBacklinks(
       return trimmed === targetName || trimmed === fullTarget || trimmed.endsWith(`/${targetName}`);
     });
     if (!hit) return null;
-    const lineMatch = content.split("\n").find((line) => line.includes("[[") && (line.includes(targetName) || line.includes(fullTarget)));
+    const lineMatch = content
+      .split("\n")
+      .find(
+        (line) => line.includes("[[") && (line.includes(targetName) || line.includes(fullTarget))
+      );
     return { fromPath: path, snippet: lineMatch?.trim().slice(0, 120) ?? "" };
   }
 

@@ -447,24 +447,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     // Re-registers the panel principal and issues a fresh connection grant.
     await this.shellCore.getPanelInit(asPanelSlotId(panelId));
 
-    // Browser panels: skip build. Acquire-only — the reactive host builds the
-    // view from the assigned-lease broadcast. A view that's still present is a
-    // navigate-in-place, so drive the existing renderer directly.
+    // Browser panels skip the workspace build, but loading is still owned by
+    // the operation that acquires the runtime lease. Lease broadcasts reflect
+    // remote assignments; they are not a completion signal for local work.
     if (getPanelSource(panel).startsWith("browser:")) {
-      const url = getPanelSource(panel).slice("browser:".length);
-      const view = this.getPanelView();
-      const navigateInPlace = Boolean(view?.hasView(panelId));
-      await this.runtime.acquireRuntimeLease(panelId, "acquire");
-      if (navigateInPlace) {
-        if (view?.createViewForBrowser) {
-          await view.createViewForBrowser(panelId, url, getPanelContextId(panel));
-          this.runtime.recordViewMutation();
-        }
-      } else {
-        await this.runtime.awaitViewBuilt(panelId);
-      }
-      this.registry.updateArtifacts(panelId, { buildState: "ready", htmlPath: url });
-      this.registry.notifyPanelTreeUpdate();
+      await this.runtime.loadPanelIntoView(panelId);
       return this.lifecycleResult(panelId, "rebuild", "browser_loaded", {
         loaded: Boolean(this.getPanelView()?.hasView(panelId)),
       });
@@ -478,15 +465,14 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
     this.panelHttpServer?.invalidateBuild(getPanelSource(panel));
 
-    const view = this.getPanelView();
-    const navigateInPlace = Boolean(view?.hasView(panelId));
-    // buildPanelLoadUrl acquires the lease (triggering the reactive build).
-    const panelUrl = await this.runtime.buildPanelLoadUrl(panelId);
-    if (navigateInPlace && panelUrl && view) {
-      await view.createViewForPanel(panelId, panelUrl, getPanelContextId(panel));
-      this.runtime.recordViewMutation();
-    } else if (view) {
-      await this.runtime.awaitViewBuilt(panelId);
+    await this.runtime.loadPanelIntoView(panelId);
+    const refreshed = this.registry.getPanel(panelId);
+    if (refreshed?.artifacts.buildState === "building") {
+      this.registry.updateArtifacts(panelId, {
+        ...refreshed.artifacts,
+        buildProgress: "Rebuilding panel...",
+      });
+      this.registry.notifyPanelTreeUpdate();
     }
     return this.lifecycleResult(panelId, "rebuild", "rebuild_requested", {
       loaded: Boolean(this.getPanelView()?.hasView(panelId)),
@@ -1159,22 +1145,15 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     this.runtime.ensureStateArgsPush(result.panelId);
     const panel = this.registry.getPanel(result.panelId);
     const source = result.source ?? (panel ? getPanelSource(panel) : undefined);
-    const view = this.getPanelView();
-
     if (opts.browserUrl) {
-      // Acquire-only: the assigned-lease broadcast drives the native build via
-      // handleRuntimeLeaseChanged → loadAssignedLeaseIntoView (reactive host).
-      if (view?.createViewForBrowser && !view.hasView(result.panelId)) {
-        try {
-          await this.runtime.acquireRuntimeLease(result.panelId, "acquire");
-          await this.runtime.awaitViewBuilt(result.panelId);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!/running on|leased by/i.test(message))
-            this.runtime.markPanelLoadError(result.panelId, message);
-          this.runtime.releaseLocalPanelRuntime(result.panelId, "unload");
-          throw error;
-        }
+      try {
+        await this.runtime.loadPanelIntoView(result.panelId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/running on|leased by/i.test(message))
+          this.runtime.markPanelLoadError(result.panelId, message);
+        this.runtime.releaseLocalPanelRuntime(result.panelId, "unload");
+        throw error;
       }
       this.registry.updateArtifacts(result.panelId, {
         htmlPath: opts.browserUrl,
@@ -1188,14 +1167,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       return;
     }
 
-    // Acquire-only: acquiring the lease triggers the reactive build. We resolve
-    // the panel URL for the artifact record but no longer createView* directly.
-    let panelUrl: string | null;
+    let panelUrl: string | null = null;
     try {
-      panelUrl = await this.runtime.buildPanelLoadUrl(result.panelId);
-      if (view && !view.hasView(result.panelId)) {
-        await this.runtime.awaitViewBuilt(result.panelId);
-      }
+      await this.runtime.loadPanelIntoView(result.panelId);
+      panelUrl = this.getPanelUrlForId(result.panelId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/running on|leased by/i.test(message))

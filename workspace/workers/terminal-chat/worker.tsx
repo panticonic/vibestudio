@@ -1,6 +1,7 @@
 import React from "react";
 import { render, Box, Text, type Instance } from "ink";
 import { rpc, DurableObjectBase } from "@workspace/runtime/worker";
+import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import { HeadlessSession } from "@workspace/agentic-session";
 import { createInkTerminalSession, type InkTerminalSession } from "@workspace/terminal-shim";
 import {
@@ -75,10 +76,9 @@ export class TerminalChatWorker extends DurableObjectBase {
       <Centered>
         <Text color="green">Vibestudio Chat</Text>
         <Text dimColor>Connecting to agent…</Text>
-      </Centered>,
+      </Centered>
     );
     this.ctx.waitUntil?.(this.instance.waitUntilExit());
-    this.setAlarm(HEARTBEAT_MS);
 
     try {
       const rpc = this.rpc;
@@ -88,6 +88,8 @@ export class TerminalChatWorker extends DurableObjectBase {
           clientId: rpc.selfId,
           rpc: {
             call: <R,>(t: string, m: string, a: unknown[]) => rpc.call<R>(t, m, a),
+            stream: (t: string, m: string, a: unknown[], options?: { signal?: AbortSignal }) =>
+              rpc.stream(t, m, a, options),
             on: (event: string, listener: (event: { payload: unknown }) => void) =>
               rpc.on(event, listener),
             selfId: rpc.selfId,
@@ -117,7 +119,7 @@ export class TerminalChatWorker extends DurableObjectBase {
           <Text color="red">Could not connect to the agent.</Text>
           <Text dimColor>{message}</Text>
           <Text dimColor>Ctrl+N to retry · Ctrl+A for approvals</Text>
-        </Centered>,
+        </Centered>
       );
     }
   }
@@ -176,12 +178,21 @@ export class TerminalChatWorker extends DurableObjectBase {
   private forwardFrame(stream: "stdout" | "stderr", bytes: Uint8Array): void {
     const frame = encodeFrame(this.sessionId, stream, bytes, this.seq++);
     this.deliver = this.deliver.then(() =>
-      this.rpc.call(this.hostPrincipalId, HOST_METHODS.onFrame, [frame]).catch(() => {}),
+      this.rpc.call(this.hostPrincipalId, HOST_METHODS.onFrame, [frame]).catch(() => {})
     );
   }
 
-  async alarm(): Promise<void> {
-    if (this.active) this.setAlarm(HEARTBEAT_MS);
+  private nextHeartbeat(): DoAlarmSchedule | null {
+    return this.active ? { wakeAt: Date.now() + HEARTBEAT_MS } : null;
+  }
+
+  protected override nextAlarmAfterRequest(): DoAlarmSchedule | null {
+    return this.nextHeartbeat();
+  }
+
+  override async alarm(): Promise<DoAlarmSchedule | null> {
+    await super.alarm();
+    return this.nextHeartbeat();
   }
 }
 
@@ -189,7 +200,7 @@ export default {
   async fetch(): Promise<Response> {
     return new Response(
       "TerminalChatWorker — a terminal-renderable DO. Launch via the terminal-browser host app.",
-      { headers: { "Content-Type": "text/plain" } },
+      { headers: { "Content-Type": "text/plain" } }
     );
   },
 };

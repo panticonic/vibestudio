@@ -283,7 +283,6 @@ describe("createServerPanelTreeBridge reload", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
@@ -377,7 +376,6 @@ describe("createServerPanelTreeBridge reload", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
@@ -476,7 +474,6 @@ describe("createServerPanelTreeBridge reload", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
@@ -652,7 +649,6 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
@@ -831,7 +827,6 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
@@ -926,7 +921,6 @@ describe("createServerPanelTreeBridge self-heal", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: { resolveHostForSlot: vi.fn(() => null) },
@@ -1001,7 +995,6 @@ describe("createServerPanelTreeBridge self-heal", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: { resolveHostForSlot: vi.fn(() => null) },

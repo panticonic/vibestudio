@@ -46,7 +46,15 @@ export interface SidePanelProps {
   children: ReactNode;
 }
 
-export function SidePanel({ open, onOpenChange, side, title, testId, width = "min(38vw, 380px)", children }: SidePanelProps) {
+export function SidePanel({
+  open,
+  onOpenChange,
+  side,
+  title,
+  testId,
+  width = "min(38vw, 380px)",
+  children,
+}: SidePanelProps) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Content
@@ -73,15 +81,31 @@ export function SidePanel({ open, onOpenChange, side, title, testId, width = "mi
         <VisuallyHidden>
           <Dialog.Title>{title}</Dialog.Title>
         </VisuallyHidden>
-        <Flex align="center" justify="between" px="3" py="2" className="spectrolite-side-panel-header">
-          <Heading size="2" truncate>{title}</Heading>
+        <Flex
+          align="center"
+          justify="between"
+          px="3"
+          py="2"
+          className="spectrolite-side-panel-header"
+        >
+          <Heading size="2" truncate>
+            {title}
+          </Heading>
           <Dialog.Close>
             <IconButton size="2" variant="ghost" color="gray" aria-label="Close">
               <Cross2Icon />
             </IconButton>
           </Dialog.Close>
         </Flex>
-        <Box style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <Box
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
           {children}
         </Box>
       </Dialog.Content>
@@ -89,9 +113,22 @@ export function SidePanel({ open, onOpenChange, side, title, testId, width = "mi
   );
 }
 
-export function FilesDrawer({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function FilesDrawer({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   return (
-    <SidePanel open={open} onOpenChange={onOpenChange} side="left" title="Files" testId="spectrolite-files-drawer" width="min(38vw, 360px)">
+    <SidePanel
+      open={open}
+      onOpenChange={onOpenChange}
+      side="left"
+      title="Files"
+      testId="spectrolite-files-drawer"
+      width="min(38vw, 360px)"
+    >
       <Box style={{ flex: 1, minHeight: 0 }}>
         <FileTree onOpened={() => onOpenChange(false)} />
       </Box>
@@ -99,7 +136,13 @@ export function FilesDrawer({ open, onOpenChange }: { open: boolean; onOpenChang
   );
 }
 
-export function BacklinksDrawer({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function BacklinksDrawer({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const activeTitle = useAppState((s) => s.activePath);
   return (
     <SidePanel
@@ -117,10 +160,23 @@ export function BacklinksDrawer({ open, onOpenChange }: { open: boolean; onOpenC
   );
 }
 
-export function SettingsDrawer({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function SettingsDrawer({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const app = useApp();
   return (
-    <SidePanel open={open} onOpenChange={onOpenChange} side="right" title="Workspace" testId="spectrolite-workspace-settings-drawer" width="min(36vw, 420px)">
+    <SidePanel
+      open={open}
+      onOpenChange={onOpenChange}
+      side="right"
+      title="Workspace"
+      testId="spectrolite-workspace-settings-drawer"
+      width="min(36vw, 420px)"
+    >
       <Box style={{ flex: 1, minHeight: 0, overflowY: "auto" }} p="4">
         <WorkspaceSettingsContent
           onSwitchVault={() => {
@@ -150,8 +206,12 @@ export function WorkspaceSettingsContent({ onSwitchVault }: { onSwitchVault: () 
           data-testid="spectrolite-settings-switch-vault"
         >
           <Flex direction="column" align="start" style={{ flex: 1, textAlign: "left" }}>
-            <Text size="2" weight="medium">{repoRoot.replace(/^\//, "")}</Text>
-            <Text size="1" color="gray">Switch to a different vault</Text>
+            <Text size="2" weight="medium">
+              {repoRoot.replace(/^\//, "")}
+            </Text>
+            <Text size="1" color="gray">
+              Switch to a different vault
+            </Text>
           </Flex>
           <ChevronRightIcon />
         </Button>
@@ -177,17 +237,19 @@ function PublishSummary() {
   const snapshot = useSyncExternalStore(
     (cb) => app.publish.subscribe(cb),
     () => app.publish.getSnapshot(),
-    () => app.publish.getSnapshot(),
+    () => app.publish.getSnapshot()
   );
   const dirtyCount = useAppState((s) => s.dirtyPaths.length);
   const presentation = getPublishPresentation(snapshot, dirtyCount);
   return (
-    <Flex align="center" gap="2" justify="between" data-testid="spectrolite-vcs-head">
+    <Flex align="center" gap="2" justify="between" data-testid="spectrolite-vcs-state">
       <Flex direction="column">
         <Text size="2" weight="medium">
           {presentation.statusLabel}
         </Text>
-        <Text size="1" color="gray">Changes stay on this vault's head until you publish.</Text>
+        <Text size="1" color="gray">
+          Changes stay local to this vault context until you publish.
+        </Text>
       </Flex>
       <Button
         size="2"
@@ -206,7 +268,11 @@ function PublishSummary() {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <Flex direction="column" gap="2">
-      <Heading size="1" color="gray" style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}>
+      <Heading
+        size="1"
+        color="gray"
+        style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
+      >
         {title}
       </Heading>
       <Box>{children}</Box>

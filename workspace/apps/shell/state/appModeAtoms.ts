@@ -1,6 +1,6 @@
 import { atom } from "jotai";
 import type { WorkspaceEntry } from "@vibestudio/shared/types";
-import { app, remoteCred, workspace } from "../shell/client.js";
+import { app, workspace } from "../shell/client.js";
 
 // =============================================================================
 // Workspace State
@@ -112,22 +112,9 @@ export const removeRecentWorkspaceAtom = atom(null, async (_get, set, name: stri
  */
 export const chooseWorkspaceAtom = atom(null, async (_get, _set, name: string) => {
   try {
-    const result = (await workspace.select(name)) as
-      | { pairing?: { deepLink?: string }; workspaceName?: string }
-      | undefined;
-    const deepLink = result?.pairing?.deepLink;
-    if (deepLink) {
-      // Remote hub selection returns a child-workspace invite. Persist and
-      // relaunch onto that child instead of reconnecting to the old workspace.
-      const exchanged = await remoteCred.pair(
-        deepLink,
-        result?.workspaceName ? `Desktop · ${result.workspaceName}` : undefined
-      );
-      if (!exchanged.ok) {
-        throw new Error(exchanged.message ?? "The remote workspace could not be paired");
-      }
-    }
-    // App will relaunch, no need to update state
+    // The Electron hub-control adapter durably stores the exact returned child
+    // route and relaunches. Chrome never exchanges or reconstructs credentials.
+    await workspace.select(name);
   } catch (error) {
     console.error("Failed to choose workspace:", error);
     throw error;

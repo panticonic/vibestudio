@@ -204,6 +204,10 @@ export class ShellOverlayView {
     return this.visible && this.view != null && !this.view.webContents.isDestroyed();
   }
 
+  getVisibleView(): WebContentsView | null {
+    return this.isVisible() ? this.view : null;
+  }
+
   bringToFront(): void {
     if (!this.window || !this.view || this.view.webContents.isDestroyed() || !this.visible) return;
     this.window.contentView.removeChildView(this.view);

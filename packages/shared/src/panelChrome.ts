@@ -5,12 +5,10 @@ import { tryParsePanelLocationLink, type PanelLocation } from "./panelLocation.j
 
 export type PanelSourceKind = "panel" | "browser";
 
-export interface PanelRepoState {
-  unitPath?: string;
-  head?: string | null;
-  stateHash?: string | null;
-  dirty?: boolean;
-}
+export type PanelBuildCoordinate =
+  | { kind: "main" }
+  | { kind: "context"; contextId: string }
+  | { kind: "content"; workspaceStateHash: string };
 
 export interface PanelChromeState {
   panelId: string;
@@ -23,7 +21,6 @@ export interface PanelChromeState {
   browserUrl?: string;
   resolvedUrl?: string;
   ref?: string;
-  repo?: PanelRepoState;
   isLoading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
@@ -38,7 +35,6 @@ export interface PanelSourceSuggestion {
 export interface PanelAddressOptions {
   source: string;
   suggestions: PanelSourceSuggestion[];
-  repo?: PanelRepoState;
 }
 
 export interface BrowserAddressSuggestion {
@@ -207,14 +203,32 @@ export function parseAddressInput(input: string): AddressInputResult | null {
   return { type: "search", query: trimmed };
 }
 
-export function formatRepoChip(repo?: PanelRepoState): string | null {
-  if (!repo) return null;
-  const parts: string[] = [];
-  if (repo.unitPath) parts.push(repo.unitPath);
-  if (repo.head) parts.push(repo.head);
-  if (repo.stateHash) parts.push(repo.stateHash.slice(0, 12));
-  if (repo.dirty) parts.push("dirty");
-  return parts.length > 0 ? parts.join(" @ ") : null;
+export function parsePanelBuildCoordinate(ref?: string): PanelBuildCoordinate {
+  const value = ref?.trim();
+  if (!value || value === "main") return { kind: "main" };
+  if (/^ctx:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value)) {
+    return { kind: "context", contextId: value.slice(4) };
+  }
+  if (/^state:[0-9a-f]{64}$/.test(value)) {
+    return { kind: "content", workspaceStateHash: value };
+  }
+  throw new Error(`Unsupported panel build coordinate: ${JSON.stringify(ref)}`);
+}
+
+function compactIdentity(value: string, prefix: string): string {
+  const body = value.startsWith(`${prefix}:`) ? value.slice(prefix.length + 1) : value;
+  return body.length > 10 ? `${body.slice(0, 10)}…` : body;
+}
+
+export function formatPanelBuildCoordinate(coordinate: PanelBuildCoordinate): string {
+  switch (coordinate.kind) {
+    case "main":
+      return "main";
+    case "context":
+      return `context ${coordinate.contextId}`;
+    case "content":
+      return `content state ${compactIdentity(coordinate.workspaceStateHash, "state")}`;
+  }
 }
 
 export function collectPanelSourceSuggestions(nodes: WorkspaceNode[]): PanelSourceSuggestion[] {
@@ -518,13 +532,13 @@ export function buildAddressAutocompleteItems(args: {
 }
 
 function getRefDisplay(ref?: string): string | undefined {
-  return ref?.trim() || undefined;
+  const value = ref?.trim();
+  return value ? formatPanelBuildCoordinate(parsePanelBuildCoordinate(value)) : undefined;
 }
 
 export function buildPanelChromeState(args: {
   panel: Panel;
   navigation?: PanelNavigationState;
-  repo?: PanelRepoState;
 }): PanelChromeState {
   const navigation = args.navigation ?? args.panel.navigation ?? {};
   const snapshot: PanelSnapshot = getCurrentSnapshot(args.panel);
@@ -533,7 +547,8 @@ export function buildPanelChromeState(args: {
   const kind = getPanelSourceKind(source);
   const displayAddress = getPanelDisplayAddress(args.panel, navigation);
   const history = getPanelHistoryState(args.panel);
-  const ref = getRefDisplay(getPanelRef(args.panel));
+  const ref = getPanelRef(args.panel)?.trim() || undefined;
+  const refDisplay = getRefDisplay(ref);
 
   return {
     panelId: args.panel.id,
@@ -541,12 +556,12 @@ export function buildPanelChromeState(args: {
     kind,
     source,
     contextId: snapshot.contextId,
-    displayAddress: ref && kind === "panel" ? `${displayAddress} @ ${ref}` : displayAddress,
+    displayAddress:
+      refDisplay && kind === "panel" ? `${displayAddress} @ ${refDisplay}` : displayAddress,
     editableAddress: getPanelEditableAddress(args.panel, navigation),
     browserUrl,
     resolvedUrl: navigation.url ?? snapshot.resolvedUrl ?? browserUrl,
     ref,
-    repo: args.repo,
     isLoading: Boolean(navigation.isLoading),
     canGoBack: Boolean(navigation.canGoBack || history.canGoBack),
     canGoForward: Boolean(navigation.canGoForward || history.canGoForward),
@@ -555,8 +570,6 @@ export function buildPanelChromeState(args: {
 
 export interface AddressProviderRepoAdapter {
   sourceTree(): Promise<{ children: WorkspaceNode[] }>;
-  findUnitForPath(source: string): Promise<{ unitPath: string; relativePath: string } | null>;
-  unitStatus(unitPath: string): Promise<PanelRepoState & { unitPath: string }>;
 }
 
 export interface AddressProviderBrowserDataAdapter {
@@ -573,10 +586,9 @@ function isPanelOrAboutSource(suggestion: PanelSourceSuggestion): boolean {
 
 export async function getSharedPanelAddressOptions(args: {
   source: string;
-  ref?: string;
   repoProvider?: AddressProviderRepoAdapter | null;
 }): Promise<PanelAddressOptions> {
-  const { source, ref, repoProvider } = args;
+  const { source, repoProvider } = args;
   if (!repoProvider) return { source, suggestions: [] };
 
   const tree = await repoProvider.sourceTree();
@@ -585,23 +597,7 @@ export async function getSharedPanelAddressOptions(args: {
     source,
     50
   );
-  try {
-    const unit = await repoProvider.findUnitForPath(source);
-    if (!unit) return { source, suggestions };
-    const status = await repoProvider.unitStatus(unit.unitPath);
-    return {
-      source,
-      suggestions,
-      repo: {
-        unitPath: status.unitPath,
-        head: ref || status.head,
-        stateHash: status.stateHash,
-        dirty: status.dirty,
-      },
-    };
-  } catch {
-    return { source, suggestions };
-  }
+  return { source, suggestions };
 }
 
 export async function getSharedBrowserAddressOptions(args: {

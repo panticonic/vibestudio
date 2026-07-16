@@ -10,7 +10,7 @@
  * when a file of that language is first expanded — the "fine-grained" shiki
  * pattern — while a template-literal `import()` would defeat static analysis.
  *
- * Guardrails (narrow-host-vcs-plan §5.1): every step is best-effort. A missing
+ * Guardrails (provenance-aware-diff-merge-plan §9): every step is best-effort. A missing
  * or failed grammar, a highlighter that never loads, an incompatible regex — any
  * of these fall back to plain text and NEVER block review. Callers render plain
  * text first and upgrade to tokens only if/when highlighting succeeds.

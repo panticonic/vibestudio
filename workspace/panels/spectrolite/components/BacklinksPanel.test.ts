@@ -79,7 +79,12 @@ describe("findBacklinks", () => {
     writeDoc(root, "A.mdx", "See [[Target]].\n");
     writeDoc(root, "B.mdx", "See [[Target]].\n");
 
-    const backlinks = await findBacklinks(root, "Target.mdx", ["Target.mdx", "C.mdx", "A.mdx", "B.mdx"], { concurrency: 2 });
+    const backlinks = await findBacklinks(
+      root,
+      "Target.mdx",
+      ["Target.mdx", "C.mdx", "A.mdx", "B.mdx"],
+      { concurrency: 2 }
+    );
     expect(backlinks.map((link) => link.fromPath)).toEqual(["C.mdx", "A.mdx", "B.mdx"]);
   });
 });

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { extractWikilinks, resolveWikilinkTarget, wikilinksFromJsx, wikilinksToJsx } from "./wikilink";
+import {
+  extractWikilinks,
+  resolveWikilinkTarget,
+  wikilinksFromJsx,
+  wikilinksToJsx,
+} from "./wikilink";
 
 describe("wikilink transforms", () => {
   it("round-trips simple and aliased links", () => {
@@ -14,7 +19,7 @@ describe("wikilink transforms", () => {
   it("does not transform frontmatter or fenced code blocks", () => {
     const source = [
       "---",
-      "title: \"[[Literal Title]]\"",
+      'title: "[[Literal Title]]"',
       "---",
       "",
       "```md",
@@ -32,7 +37,7 @@ describe("wikilink transforms", () => {
   });
 
   it("does not transform CRLF frontmatter", () => {
-    const source = "---\r\ntitle: \"[[Literal Title]]\"\r\n---\r\n\r\n[[Real Link]]";
+    const source = '---\r\ntitle: "[[Literal Title]]"\r\n---\r\n\r\n[[Real Link]]';
     const jsx = wikilinksToJsx(source);
 
     expect(jsx).toContain('title: "[[Literal Title]]"');
@@ -41,7 +46,7 @@ describe("wikilink transforms", () => {
   });
 
   it("preserves escaped target text across a write", () => {
-    const source = "[[A & B < C > D \"quoted\"]]";
+    const source = '[[A & B < C > D "quoted"]]';
     expect(wikilinksFromJsx(wikilinksToJsx(source))).toBe(source);
   });
 
@@ -64,11 +69,15 @@ describe("wikilink transforms", () => {
 
 describe("wikilink lookup", () => {
   it("resolves the shortest matching path", () => {
-    expect(resolveWikilinkTarget("Today", ["archive/2025/Today.mdx", "Today.mdx"])).toBe("Today.mdx");
+    expect(resolveWikilinkTarget("Today", ["archive/2025/Today.mdx", "Today.mdx"])).toBe(
+      "Today.mdx"
+    );
   });
 
   it("extracts raw and JSX wikilinks", () => {
-    const links = extractWikilinks('[[A]] <WikiLink target="B &amp; C" /> <WikiLink target="D">Alias</WikiLink>');
+    const links = extractWikilinks(
+      '[[A]] <WikiLink target="B &amp; C" /> <WikiLink target="D">Alias</WikiLink>'
+    );
     expect(links).toEqual(["A", "B & C", "D"]);
   });
 });

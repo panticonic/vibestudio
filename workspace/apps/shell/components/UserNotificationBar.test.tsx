@@ -9,7 +9,10 @@ const shellClient = vi.hoisted(() => ({
   openChannel: vi.fn(),
   acknowledge: vi.fn(),
 }));
-const eventHandlers = vi.hoisted(
+const watchedEventHandlers = vi.hoisted(
+  () => new Map<string, (payload: Record<string, unknown>) => void>()
+);
+const directEventHandlers = vi.hoisted(
   () => new Map<string, (payload: Record<string, unknown>) => void>()
 );
 
@@ -18,7 +21,12 @@ vi.mock("../shell/client", () => ({
 }));
 vi.mock("../shell/useShellEvent", () => ({
   useShellEvent: (event: string, callback: (payload: Record<string, unknown>) => void) => {
-    eventHandlers.set(event, callback);
+    watchedEventHandlers.set(event, callback);
+  },
+}));
+vi.mock("../shell/useDirectShellEvent", () => ({
+  useDirectShellEvent: (event: string, callback: (payload: Record<string, unknown>) => void) => {
+    directEventHandlers.set(event, callback);
   },
 }));
 vi.mock("@radix-ui/themes", () => ({
@@ -88,7 +96,8 @@ function channelNotification(
 
 describe("UserNotificationBar", () => {
   beforeEach(() => {
-    eventHandlers.clear();
+    watchedEventHandlers.clear();
+    directEventHandlers.clear();
     shellClient.list.mockReset().mockResolvedValue([]);
     shellClient.openChannel.mockReset().mockResolvedValue({ id: "panel-chat" });
     shellClient.acknowledge.mockReset().mockResolvedValue(true);
@@ -111,9 +120,10 @@ describe("UserNotificationBar", () => {
     await waitFor(() => expect(shellClient.list).toHaveBeenCalledTimes(1));
     shellClient.list.mockResolvedValue([channelNotification("live")]);
 
-    eventHandlers.get("user-notifications-changed")?.({ changedAt: 20 });
+    directEventHandlers.get("user-notifications-changed")?.({ changedAt: 20 });
 
     expect(await screen.findByText("Conversation live")).toBeTruthy();
+    expect(watchedEventHandlers.has("user-notifications-changed")).toBe(false);
   });
 
   it("opens a channel before acknowledging its generic notification", async () => {

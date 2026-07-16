@@ -1,9 +1,10 @@
 /**
  * Block reconciliation — the co-edit classifier.
  *
- * When the scribe (or any actor) advances the vault head, the editor must fold
- * the new canonical document into the live Lexical state **narrowly**, never via
- * a whole-doc reset. This module decides, per top-level block, what to do —
+ * When the scribe (or any actor) advances the vault's semantic working state, the
+ * editor must apply the newly integrated document to live Lexical state
+ * **narrowly**, never via a whole-doc reset. This module decides, per top-level
+ * block, what to do —
  * implementing decisions 3, 4, and section C of the plan:
  *
  *  1. **Collision check first, fail-safe.** A change that touches a block the

@@ -167,11 +167,17 @@ describe("panel navigation: capability grants and retire hooks", () => {
         onRetire: async (record) => {
           retiredRecords.push(record);
         },
+        releaseEntity: async () => ({ status: "ready" }),
       },
       contextBoundary: { approvalQueue, grantStore, contextExists: () => false },
       contextFolders: {
         ensureContextFolder: vi.fn(async (contextId: string) => `/tmp/contexts/${contextId}`),
         removeContext: vi.fn(async () => {}),
+      },
+      semanticContexts: {
+        ensureContext: vi.fn(async () => {}),
+        dropContext: vi.fn(async () => {}),
+        forkContext: vi.fn(async () => {}),
       },
     });
 

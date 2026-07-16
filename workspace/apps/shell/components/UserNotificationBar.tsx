@@ -6,6 +6,7 @@ import {
   type ShellChannelInvite,
   type ShellUserNotification,
 } from "../shell/client";
+import { useDirectShellEvent } from "../shell/useDirectShellEvent";
 import { useShellEvent } from "../shell/useShellEvent";
 
 function errorMessage(error: unknown): string {
@@ -45,7 +46,7 @@ export function UserNotificationBar() {
     };
   }, [refresh]);
 
-  useShellEvent(
+  useDirectShellEvent(
     "user-notifications-changed",
     useCallback(() => void refresh(), [refresh])
   );

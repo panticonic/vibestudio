@@ -15,14 +15,7 @@
  * `DocStateContext.Provider` mounted in `DocumentEditor`.
  */
 
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ComponentType,
-} from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ComponentType } from "react";
 import { Card, Flex, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { compileComponent, type SandboxOptions } from "@workspace/eval";
@@ -78,15 +71,19 @@ export function LiveEval({ code, imports }: EvalProps) {
       loadImport: sandbox.loadImport,
     };
     const wrapped = EVAL_PRELUDE + code;
-    void compileComponent(wrapped, opts as Parameters<typeof compileComponent>[1]).then((result) => {
-      if (cancelled) return;
-      if (result.success && result.Component) {
-        setComponent(() => result.Component as ComponentType);
-      } else {
-        setError(result.error ?? "compile failed");
+    void compileComponent(wrapped, opts as Parameters<typeof compileComponent>[1]).then(
+      (result) => {
+        if (cancelled) return;
+        if (result.success && result.Component) {
+          setComponent(() => result.Component as ComponentType);
+        } else {
+          setError(result.error ?? "compile failed");
+        }
       }
-    });
-    return () => { cancelled = true; };
+    );
+    return () => {
+      cancelled = true;
+    };
   }, [code, mergedImports]);
 
   if (error) {
@@ -94,13 +91,19 @@ export function LiveEval({ code, imports }: EvalProps) {
       <Card>
         <Flex align="center" gap="2">
           <ExclamationTriangleIcon color="red" />
-          <Text size="1" color="red">{error}</Text>
+          <Text size="1" color="red">
+            {error}
+          </Text>
         </Flex>
       </Card>
     );
   }
   if (!Component) {
-    return <Text size="1" color="gray">Compiling…</Text>;
+    return (
+      <Text size="1" color="gray">
+        Compiling…
+      </Text>
+    );
   }
   return <Component />;
 }

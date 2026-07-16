@@ -72,7 +72,6 @@ export function installFallbackShellBridge(
   const url = new URL(serverUrl);
   const transport = createWsTransport({
     viewId: entityId,
-    eventPanelId: slotId,
     wsPort: Number.parseInt(url.port, 10) || (url.protocol === "https:" ? 443 : 80),
     wsUrl: serverRpcWsUrl(serverUrl),
     authToken: token,
