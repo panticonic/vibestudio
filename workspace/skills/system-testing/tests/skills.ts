@@ -54,11 +54,12 @@ async function orchestrateHeadlessDiagnosis(
 The child must be a real subagent in your runtime tree, not a hypothetical example. Once it is launched, finish this setup turn with FIXTURE_READY.`,
       "create a real stalled child fixture"
     );
+    const remainingTimeMs = context.remainingTimeMs();
     fixture = await waitForStalledChildTool(
       session,
-      context.testTimeoutMs === undefined
+      remainingTimeMs === undefined
         ? 60_000
-        : Math.min(60_000, Math.max(5_000, Math.floor(context.testTimeoutMs / 4)))
+        : Math.max(1, Math.min(60_000, Math.floor(remainingTimeMs / 4)))
     );
     await context.sendAndWait(
       session,

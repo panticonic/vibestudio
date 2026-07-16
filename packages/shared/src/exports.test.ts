@@ -24,25 +24,11 @@ function sourceFiles(dir: string): string[] {
 function sharedImports(file: string): string[] {
   const text = fs.readFileSync(file, "utf8");
   if (!text.includes("@vibestudio/shared/")) return [];
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  const imports: string[] = [];
-  const record = (node: ts.Expression | undefined): void => {
-    if (node && ts.isStringLiteralLike(node) && node.text.startsWith("@vibestudio/shared/")) {
-      imports.push(`./${node.text.slice("@vibestudio/shared/".length)}`);
-    }
-  };
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-      record(node.moduleSpecifier);
-    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-      record(node.arguments[0]);
-    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
-      record(node.argument.literal);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return imports;
+  return ts
+    .preProcessFile(text, true, true)
+    .importedFiles.map((reference) => reference.fileName)
+    .filter((specifier) => specifier.startsWith("@vibestudio/shared/"))
+    .map((specifier) => `./${specifier.slice("@vibestudio/shared/".length)}`);
 }
 
 function exportedTarget(subpath: string, exportsMap: Record<string, string>): string | undefined {

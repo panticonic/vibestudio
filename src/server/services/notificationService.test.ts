@@ -35,7 +35,12 @@ describe("server notification service", () => {
 
     await expect(
       service.handler(
-        { caller: createVerifiedCaller("do:workers/gad-store:GadWorkspaceDO:gad", "do") },
+        {
+          caller: createVerifiedCaller(
+            "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+            "do"
+          ),
+        },
         "signalUserInbox",
         ["usr_alice"]
       )

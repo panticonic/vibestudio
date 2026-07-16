@@ -9,6 +9,8 @@ import {
   finalMessageHasNumericField,
   incompleteToolCalls,
   noFailedInvocations,
+  requireEvalResultEvidence,
+  requireVcsEvidence,
 } from "./_helpers.js";
 
 function executionWithProjectedInvocation(
@@ -140,6 +142,25 @@ describe("system-testing validation helpers", () => {
     expect(failedToolCalls(result).map((call) => call.name)).toEqual(["eval"]);
   });
 
+  it("accepts focused agent VCS tools as canonical operation evidence", () => {
+    const result = executionWithProjectedInvocation("complete", "success", false);
+    const invocation = result.messages[1]!.invocation!;
+    invocation.name = "vcs";
+    invocation.arguments = { operation: "compare", sourceEventId: "event:source" };
+    expect(requireVcsEvidence(result, ["vcs.compare"])).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+    expect(requireVcsEvidence(result, ["vcs.integrate"]).passed).toBe(false);
+
+    invocation.name = "provenance";
+    invocation.arguments = { target: "command:1" };
+    expect(requireVcsEvidence(result, ["vcs.inspect", "vcs.neighbors"])).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+  });
+
   it("classifies pending invocations as incomplete", () => {
     expect(
       incompleteToolCalls(executionWithInvocation("pending")).map((call) => call.name)
@@ -217,5 +238,18 @@ describe("system-testing validation helpers", () => {
       passed: true,
       reason: "Observed failed tool calls: eval:No CDP-capable host is available",
     });
+  });
+
+  it("requires protocol evidence from successful eval results", () => {
+    const result = executionWithInvocationResult("complete", {
+      kind: "mutated",
+      decisionIds: ["decision-1"],
+    });
+
+    expect(requireEvalResultEvidence(result, ["mutated", "decisionIds"])).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+    expect(requireEvalResultEvidence(result, ["sourceBasis"]).passed).toBe(false);
   });
 });

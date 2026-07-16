@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "@workspace/agentic-core";
 import { TestRunner } from "./test-runner.js";
 import type { HeadlessRunner } from "./runner.js";
+import { CONTENT_WORKSPACE_REPO_FIXTURE, type TestCase } from "./types.js";
 
 const TEST_MODEL = "openai-codex:gpt-5.3-codex-spark";
 const modelEvidence = () => ({
@@ -33,6 +34,19 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
+function remoteRpcFailure(message: string, handle: string): Error {
+  return Object.assign(new Error(message), {
+    name: "RemoteRpcError",
+    code: "InternalFailure",
+    errorKind: "application",
+    errorData: {
+      code: "InternalFailure",
+      message,
+      handle,
+    },
+  });
+}
+
 describe("TestRunner", () => {
   it("adds pending invocation and lifecycle context to headless timeouts", async () => {
     const lifecycleMessage = {
@@ -62,14 +76,23 @@ describe("TestRunner", () => {
       },
     } satisfies ChatMessage;
     const messages = [lifecycleMessage, diagnosticMessage];
+    const cleanupOrder: string[] = [];
     let waitSignal: AbortSignal | undefined;
+    let terminalWaitingReasons: readonly string[] | undefined;
     const session = {
       channelId: "chat-timeout",
+      agentTargetId: "agent-target-timeout",
       messages,
-      sendAndWait: vi.fn((_prompt: string, opts?: { signal?: AbortSignal }) => {
-        waitSignal = opts?.signal;
-        return new Promise(() => undefined);
-      }),
+      sendAndWait: vi.fn(
+        (
+          _prompt: string,
+          opts?: { signal?: AbortSignal; terminalWaitingReasons?: readonly string[] }
+        ) => {
+          waitSignal = opts?.signal;
+          terminalWaitingReasons = opts?.terminalWaitingReasons;
+          return new Promise(() => undefined);
+        }
+      ),
       captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
       snapshot: vi.fn(() => ({
         channelId: "chat-timeout",
@@ -84,7 +107,12 @@ describe("TestRunner", () => {
         connected: true,
         duration: 10,
       })),
-      close: vi.fn(async () => undefined),
+      interrupt: vi.fn(async () => {
+        cleanupOrder.push("interrupt");
+      }),
+      close: vi.fn(async () => {
+        cleanupOrder.push("close");
+      }),
     };
     const runner = {
       modelRef: TEST_MODEL,
@@ -111,11 +139,17 @@ describe("TestRunner", () => {
       'Last diagnostic: code=message_empty "No assistant response".'
     );
     expect(waitSignal?.aborted).toBe(true);
-    expect(runner.collectDiagnostics).toHaveBeenCalledWith({
-      channelId: "chat-timeout",
-      error: expect.objectContaining({ message: execution.error }),
-    });
+    expect(terminalWaitingReasons).toEqual([
+      "model_credential_required",
+      "model_credential_reconnect_required",
+    ]);
+    expect(runner.collectDiagnostics).toHaveBeenCalledWith({ channelId: "chat-timeout" });
     expect(session.close).toHaveBeenCalledWith({ waitForRemoteCleanup: true });
+    expect(session.interrupt).toHaveBeenCalledWith("agent-target-timeout", {
+      timeoutMs: 10_000,
+      signal: expect.any(AbortSignal),
+    });
+    expect(cleanupOrder).toEqual(["interrupt", "close"]);
     expect(session.captureModelExecutionEvidence).toHaveBeenCalledOnce();
     expect(execution.modelExecutionEvidence).toEqual(modelEvidence());
     expect(execution.provenance).toEqual({
@@ -166,8 +200,61 @@ describe("TestRunner", () => {
     expect(result.passed).toBe(false);
     expect(execution.error).toBe("fetch failed");
     expect(execution.diagnostics).toMatchObject({
-      diagnosticCollectionError: "diagnostics fetch failed",
+      diagnosticCollectionFailure: {
+        phase: "diagnostic:collection",
+        error: { name: "Error", message: "diagnostics fetch failed" },
+      },
     });
+    expect(execution.diagnostics).not.toHaveProperty("diagnosticCollectionError");
+  });
+
+  it("preserves typed fixture setup failures without changing error semantics", async () => {
+    const failure = remoteRpcFailure(
+      "[vcs.importSnapshot] fixture publication failed",
+      "diagnostic:vcs:fixture-setup"
+    );
+    const childRunner = {
+      modelRef: TEST_MODEL,
+      prepareWorkspaceRepoFixture: vi.fn(async () => {
+        throw failure;
+      }),
+      collectDiagnostics: vi.fn(async () => ({ generatedAt: "now" })),
+    };
+    const runner = {
+      ...childRunner,
+      forTest: vi.fn(() => childRunner),
+    } as unknown as HeadlessRunner;
+
+    const { result, execution } = await new TestRunner(runner).runOne({
+      name: "fixture-setup-failure",
+      category: "test",
+      description: "typed fixture setup failure",
+      prompt: "use the fixture",
+      workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+      validate: () => ({ passed: true }),
+    });
+
+    expect(result).toEqual({
+      passed: false,
+      reason: "Error: [vcs.importSnapshot] fixture publication failed",
+    });
+    expect(execution.error).toBe("[vcs.importSnapshot] fixture publication failed");
+    expect(execution.failure).toEqual({
+      phase: "workspace-fixture-setup",
+      error: {
+        name: "RemoteRpcError",
+        message: "[vcs.importSnapshot] fixture publication failed",
+        code: "InternalFailure",
+        errorKind: "application",
+        errorData: {
+          code: "InternalFailure",
+          message: "[vcs.importSnapshot] fixture publication failed",
+          handle: "diagnostic:vcs:fixture-setup",
+        },
+        diagnosticHandles: ["diagnostic:vcs:fixture-setup"],
+      },
+    });
+    expect(childRunner.collectDiagnostics).toHaveBeenCalledWith({ channelId: undefined });
   });
 
   it("reports failed tool calls without converting a passing task into a failed test", async () => {
@@ -354,6 +441,66 @@ describe("TestRunner", () => {
     );
   });
 
+  it("shares one timeout budget across every orchestrated phase", async () => {
+    let now = 10_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const timeout = vi.spyOn(globalThis, "setTimeout");
+    const session = {
+      channelId: "chat-budget",
+      messages: [] as ChatMessage[],
+      sendAndWait: vi.fn(async () => undefined),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
+      snapshot: vi.fn(() => ({
+        messages: [],
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 10,
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const runner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({})),
+    } as unknown as HeadlessRunner;
+
+    try {
+      const { result } = await new TestRunner(runner, { testTimeoutMs: 1_000 }).runOne({
+        name: "orchestrated-budget",
+        category: "test",
+        description: "one shared deadline",
+        prompt: "unused",
+        orchestrate: async ({ runner: orchestrationRunner, remainingTimeMs, sendAndWait }) => {
+          const target = await orchestrationRunner.spawn();
+          expect(remainingTimeMs()).toBe(1_000);
+          await sendAndWait(target, "first", "phase one");
+          now += 250;
+          expect(remainingTimeMs()).toBe(750);
+          await sendAndWait(target, "second", "phase two");
+          return {
+            messages: [],
+            duration: 250,
+            snapshot: target.snapshot(),
+          };
+        },
+        validate: () => ({ passed: true }),
+      });
+
+      expect(result.passed).toBe(true);
+      expect(
+        timeout.mock.calls
+          .map((call) => call[1])
+          .filter((delay): delay is number => typeof delay === "number")
+      ).toEqual([1_000, 750]);
+    } finally {
+      dateNow.mockRestore();
+      timeout.mockRestore();
+    }
+  });
+
   it("serializes overlapping shared resources without blocking disjoint tests", async () => {
     let activeGit = 0;
     let maxActiveGit = 0;
@@ -421,6 +568,173 @@ describe("TestRunner", () => {
     expect(unrelatedRanWhileGitActive).toBe(true);
   });
 
+  it("runs exactly owned workspace repository fixtures concurrently", async () => {
+    let activeSetups = 0;
+    let maxActiveSetups = 0;
+    const bothStarted = deferred<void>();
+    const session = () => ({
+      channelId: crypto.randomUUID(),
+      messages: [] as ChatMessage[],
+      sendAndWait: vi.fn(async () => undefined),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
+      snapshot: vi.fn(() => ({
+        channelId: "fixture-channel",
+        messages: [],
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 1,
+      })),
+      close: vi.fn(async () => undefined),
+    });
+    const runner = {
+      modelRef: TEST_MODEL,
+      forTest: vi.fn((testName: string) => ({
+        modelRef: TEST_MODEL,
+        prepareWorkspaceRepoFixture: vi.fn(async () => {
+          activeSetups += 1;
+          maxActiveSetups = Math.max(maxActiveSetups, activeSetups);
+          if (activeSetups === 2) bothStarted.resolve();
+          await bothStarted.promise;
+          activeSetups -= 1;
+          return {
+            kind: "content" as const,
+            section: "projects" as const,
+            testName,
+            contextId: `context:${testName}`,
+            repoName: `system-test-${testName}`,
+            repositoryId: `repository:system-test-${testName}`,
+            repoPath: `projects/system-test-${testName}`,
+            seedFilePaths: [],
+            importWorkUnitId: `work:import:${testName}`,
+            importChangeIds: [`change:import:${testName}`],
+            taskBaseEventId: "event:main",
+          };
+        }),
+        spawn: vi.fn(async () => session()),
+        collectDiagnostics: vi.fn(async () => ({})),
+        cleanupWorkspaceRepoFixture: vi.fn(async () => ({
+          publishedFixtureRemoved: null,
+          unexpectedPublishedRepositoriesRemoved: [],
+          counteractedChangeIds: [],
+        })),
+      })),
+    } as unknown as HeadlessRunner;
+    const tester = new TestRunner(runner, { testTimeoutMs: 1_000 });
+    const fixtureTest = (name: string): TestCase => ({
+      name,
+      category: "test",
+      description: name,
+      prompt: name,
+      workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+      validate: () => ({ passed: true }),
+    });
+
+    const suite = await tester.runSuite([fixtureTest("alpha"), fixtureTest("beta")], {
+      concurrency: 2,
+    });
+
+    expect(suite.passed).toBe(2);
+    expect(maxActiveSetups).toBe(2);
+  });
+
+  it("cancellation finishes the ordinary session and fixture cleanup path", async () => {
+    const cleanupOrder: string[] = [];
+    const session = {
+      channelId: "chat-cancelled-fixture",
+      agentTargetId: "target-cancelled-fixture",
+      messages: [] as ChatMessage[],
+      sendAndWait: vi.fn(
+        async (_prompt: string, opts?: { signal?: AbortSignal }): Promise<never> =>
+          await new Promise<never>((_resolve, reject) => {
+            const rejectCancelled = () => reject(new Error("agent wait aborted"));
+            if (opts?.signal?.aborted) rejectCancelled();
+            else opts?.signal?.addEventListener("abort", rejectCancelled, { once: true });
+          })
+      ),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
+      snapshot: vi.fn(() => ({
+        channelId: "chat-cancelled-fixture",
+        agentEntityId: "agent-cancelled-fixture",
+        agentTargetId: "target-cancelled-fixture",
+        agentContextId: "ctx-cancelled-fixture",
+        messages: [],
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 10,
+      })),
+      interrupt: vi.fn(async () => {
+        cleanupOrder.push("interrupt");
+      }),
+      close: vi.fn(async () => {
+        cleanupOrder.push("close");
+      }),
+    };
+    const fixtureState = {
+      kind: "content" as const,
+      section: "projects" as const,
+      testName: "cancelled-fixture",
+      contextId: "context:cancelled-fixture",
+      repoName: "system-test-cancelled-fixture",
+      repositoryId: "repository:system-test-cancelled-fixture",
+      repoPath: "projects/system-test-cancelled-fixture",
+      seedFilePaths: [],
+      importWorkUnitId: "work:import:cancelled-fixture",
+      importChangeIds: ["change:import:cancelled-fixture"],
+      taskBaseEventId: "event:main",
+    };
+    const childRunner = {
+      modelRef: TEST_MODEL,
+      prepareWorkspaceRepoFixture: vi.fn(async () => fixtureState),
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({})),
+      cleanupWorkspaceRepoFixture: vi.fn(async () => {
+        cleanupOrder.push("fixture");
+        return {
+          publishedFixtureRemoved: {
+            repositoryId: fixtureState.repositoryId,
+            repoPath: fixtureState.repoPath,
+          },
+          unexpectedPublishedRepositoriesRemoved: [],
+          counteractedChangeIds: [fixtureState.importChangeIds[0]!],
+        };
+      }),
+    };
+    const runner = {
+      ...childRunner,
+      forTest: vi.fn(() => childRunner),
+    } as unknown as HeadlessRunner;
+    const tester = new TestRunner(runner, { testTimeoutMs: 60_000 });
+    const running = tester.runSuite([
+      {
+        name: "cancelled-fixture",
+        category: "test",
+        description: "cancelled fixture",
+        prompt: "wait forever",
+        workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+        validate: () => ({ passed: true }),
+      },
+    ]);
+    await vi.waitFor(() => expect(session.sendAndWait).toHaveBeenCalledOnce());
+
+    tester.cancel();
+    const suite = await running;
+
+    expect(tester.cancelled).toBe(true);
+    expect(suite).toMatchObject({ total: 1, errored: 1 });
+    expect(suite.results[0]!.execution.error).toContain("System-test run cancelled");
+    expect(suite.results[0]!.execution.diagnostics?.["workspaceRepoFixture"]).toMatchObject({
+      repositoryId: fixtureState.repositoryId,
+      publishedFixtureRemoved: { repoPath: fixtureState.repoPath },
+    });
+    expect(cleanupOrder).toEqual(["interrupt", "close", "fixture"]);
+  });
+
   it("surfaces workspace repo fixture teardown failures as infrastructure failures", async () => {
     const messages = [
       {
@@ -452,11 +766,17 @@ describe("TestRunner", () => {
       close: vi.fn(async () => undefined),
     };
     const fixtureState = {
+      kind: "content" as const,
+      section: "projects" as const,
       testName: "fixture-test",
+      contextId: "context:fixture-test",
       repoName: "system-test-fixture-test-1234",
-      repoNamePrefix: "system-test-fixture-test-",
-      reposBefore: ["meta"],
-      staleReposRemoved: [],
+      repositoryId: "repository:system-test-fixture-test-1234",
+      repoPath: "projects/system-test-fixture-test-1234",
+      seedFilePaths: [],
+      importWorkUnitId: "work:import:fixture-test",
+      importChangeIds: ["change:import:fixture-test"],
+      taskBaseEventId: "event:main",
     };
     const childRunner = {
       modelRef: TEST_MODEL,
@@ -464,7 +784,10 @@ describe("TestRunner", () => {
       collectDiagnostics: vi.fn(async () => ({})),
       prepareWorkspaceRepoFixture: vi.fn(async () => fixtureState),
       cleanupWorkspaceRepoFixture: vi.fn(async () => {
-        throw new Error("delete approval transport failed");
+        throw remoteRpcFailure(
+          "delete approval transport failed",
+          "diagnostic:vcs:fixture-cleanup"
+        );
       }),
     };
     const runner = {
@@ -477,7 +800,7 @@ describe("TestRunner", () => {
       category: "test",
       description: "fixture lifecycle",
       prompt: "create a project",
-      workspaceRepoFixture: true,
+      workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
       validate: () => ({ passed: true }),
     });
 
@@ -491,8 +814,25 @@ describe("TestRunner", () => {
     expect(execution.cleanupErrors).toEqual([
       "workspace-repo-fixture: delete approval transport failed",
     ]);
+    expect(execution.cleanupFailures).toEqual([
+      {
+        phase: "workspace-fixture-cleanup",
+        error: {
+          name: "RemoteRpcError",
+          message: "delete approval transport failed",
+          code: "InternalFailure",
+          errorKind: "application",
+          errorData: {
+            code: "InternalFailure",
+            message: "delete approval transport failed",
+            handle: "diagnostic:vcs:fixture-cleanup",
+          },
+          diagnosticHandles: ["diagnostic:vcs:fixture-cleanup"],
+        },
+      },
+    ]);
     expect(runner.forTest).toHaveBeenCalledWith("fixture-test", {
-      workspaceRepoFixture: true,
+      workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     });
   });
 

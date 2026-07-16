@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cliConfigRoot,
   cliCredentialPath,
+  hubIdentityPath,
   workspaceIdentityPath,
 } from "../scripts/cli/lib/config-paths.mjs";
 
@@ -16,8 +17,9 @@ describe("CLI config paths", () => {
     const root = path.join("/tmp/vibestudio-xdg", "vibestudio");
     expect(cliConfigRoot()).toBe(root);
     expect(cliCredentialPath()).toBe(path.join(root, "cli-credentials.json"));
+    expect(hubIdentityPath()).toBe(path.join(root, "server-auth", "webrtc", "identity.pem"));
     expect(workspaceIdentityPath("dev")).toBe(
-      path.join(root, "workspaces", "dev", "state", "webrtc", "identity.pem")
+      path.join(root, "workspaces", "dev", "reach", "webrtc", "identity.pem")
     );
   });
 });

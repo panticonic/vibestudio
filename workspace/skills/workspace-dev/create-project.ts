@@ -1,26 +1,13 @@
-import { fs, vcs } from "@workspace/runtime";
+import { contextId, fs, vcs } from "@workspace/runtime";
 
 // ---------------------------------------------------------------------------
-// writeProjectFiles — GAD-native scaffold write. Follows the edit → commit →
-// push model: record the new files as working edits (vcs.edit), fold them into
-// a messaged snapshot (vcs.commit), then build-gate the new repo into main
-// (vcs.push). Disk is a projection of the head, never written behind GAD's back.
+// writeProjectFiles — one atomic repository lifecycle edit, followed by one
+// whole-chain commit and protected publication.
 // ---------------------------------------------------------------------------
-
-/** Encode bytes as base64 for GAD binary file content. */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
 
 /**
- * Create a set of new project files rooted at `dir`, then commit + push them.
- * GAD addresses files by full path (no parent directories to create). `dir` is
- * the new project's repo path, so commit/push are scoped to it.
+ * Create a repository and all of its initial files as one semantic mutation,
+ * then commit and publish the resulting workspace event.
  */
 async function writeProjectFiles(
   dir: string,
@@ -28,42 +15,54 @@ async function writeProjectFiles(
   message: string
 ): Promise<void> {
   const root = dir.replace(/^\/+/, "").replace(/\/+$/, "");
-  const edits = Object.entries(files).map(([filePath, content]) => ({
-    kind: "create" as const,
-    path: `${root}/${filePath.replace(/^\/+/, "")}`,
-    content:
-      typeof content === "string"
-        ? { kind: "text" as const, text: content }
-        : { kind: "bytes" as const, base64: bytesToBase64(content) },
-  }));
-  // edit → commit → push: record the working edits, seal the snapshot, then
-  // build-gate the new repo into main.
-  await vcs.edit({ edits });
-  await vcs.commit({ message, repoPaths: [root] });
-  const push = await vcs.push({ repoPaths: [root] });
-  if (push.status === "build-failed") {
-    const diagnostics = push.reports
-      .flatMap((report) =>
-        report.builds.flatMap((build) =>
-          build.diagnostics.map(
-            (diagnostic) =>
-              `${diagnostic.file}:${diagnostic.line}:${diagnostic.column} ${diagnostic.message}`
-          )
-        )
-      )
-      .slice(0, 8);
-    throw new Error(
-      `Created and committed ${root} in the current context, but it was not published to main because the build gate failed${
-        diagnostics.length > 0 ? `:\n${diagnostics.join("\n")}` : "."
-      } Fix the diagnostics and push again before opening the main build.`
-    );
+  const command = (operation: string) =>
+    `workspace-dev:${operation}:${contextId}:${crypto.randomUUID()}`;
+  const beforeCreate = await vcs.status({ contextId });
+  const created = await vcs.edit({
+    contextId,
+    expectedWorkingHead: beforeCreate.workingHead,
+    commandId: command("create-repository"),
+    intentSummary: message,
+    changes: [
+      {
+        kind: "repository-create",
+        repoPath: root,
+        files: Object.entries(files)
+          .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+          .map(([filePath, content]) => ({
+            path: filePath.replace(/^\/+/, ""),
+            content:
+              typeof content === "string"
+                ? { kind: "text" as const, text: content }
+                : { kind: "bytes" as const, base64: bytesToBase64(content) },
+            mode: 0o644,
+          })),
+      },
+    ],
+  });
+  const committed = await vcs.commit({
+    contextId,
+    expectedWorkingHead: created.workingHead,
+    commandId: command("commit"),
+    message,
+  });
+  if (committed.event.kind !== "event") {
+    throw new Error("VCS commit did not return a committed event");
   }
-  if (push.status === "diverged") {
-    const repos = push.divergences.map((divergence) => divergence.repoPath).join(", ");
-    throw new Error(
-      `Created and committed ${root} in the current context, but it was not published because main diverged for ${repos || root}. Merge or rebase explicitly, then push before opening the main build.`
-    );
+  await vcs.push({
+    contextId,
+    expectedCommittedEventId: committed.event.eventId,
+    expectedMainEventId: beforeCreate.mainEventId,
+    commandId: command("publish"),
+  });
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
   }
+  return btoa(binary);
 }
 
 const TYPE_DIRS: Record<string, string> = {
@@ -483,7 +482,7 @@ export default {
       break;
   }
 
-  // Write the scaffold, then commit + push the new repo (edit → commit → push).
+  // Create the repository, then commit + push it (edit → commit → push).
   await writeProjectFiles(projectPath, files, `Scaffold ${projectType} ${name}`);
 
   return { created: projectPath, files: Object.keys(files) };
@@ -491,6 +490,7 @@ export default {
 
 const COPY_SKIP_DIRS = new Set([
   ".cache",
+  ".context-projections",
   ".contexts",
   ".databases",
   ".gad",

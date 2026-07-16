@@ -12,6 +12,7 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { mirrorMethods, MIRROR_POLICY } from "@vibestudio/service-schemas/mirror";
@@ -33,8 +34,6 @@ const MAX_PAGE_BYTES = 3_000_000;
 const MAX_PAGE_FILES = 500;
 
 export function createMirrorService(deps: MirrorServiceDeps): ServiceDefinition {
-  const authorizedAgentStates = new Map<string, string>();
-
   function contextIdForTargets(ctx: ServiceContext, requestedContextId: string): string {
     if (ctx.caller.runtime.kind !== "agent") return requestedContextId;
     const binding = ctx.caller.agentBinding;
@@ -47,14 +46,15 @@ export function createMirrorService(deps: MirrorServiceDeps): ServiceDefinition 
     return binding.contextId;
   }
 
-  function authorizeObjects(ctx: ServiceContext, stateHash: string): void {
+  async function authorizeObjects(ctx: ServiceContext, stateHash: string): Promise<void> {
     if (ctx.caller.runtime.kind !== "agent") return;
     const binding = ctx.caller.agentBinding;
     if (!binding) {
       throw new Error("mirror: agent caller has no entity binding");
     }
-    if (authorizedAgentStates.get(stateHash) !== binding.contextId) {
-      throw new Error("mirror.objects stateHash is not authorized for this agent context");
+    const targets = await deps.contextRepoTargets(binding.contextId);
+    if (!targets.some((target) => target.stateHash === stateHash)) {
+      throw new Error("mirror.objects stateHash is not reachable from this agent context");
     }
   }
 
@@ -67,18 +67,12 @@ export function createMirrorService(deps: MirrorServiceDeps): ServiceDefinition 
     handler: defineServiceHandler("mirror", mirrorMethods, {
       targets: async (ctx, [{ contextId }]) => {
         const scopedContextId = contextIdForTargets(ctx, contextId);
-        const targets = await deps.contextRepoTargets(scopedContextId);
-        if (ctx.caller.runtime.kind === "agent") {
-          for (const target of targets) {
-            authorizedAgentStates.set(target.stateHash, scopedContextId);
-          }
-        }
-        return targets;
+        return deps.contextRepoTargets(scopedContextId);
       },
       objects: async (ctx, [input]) => {
-        authorizeObjects(ctx, input.stateHash);
+        await authorizeObjects(ctx, input.stateHash);
         let files = await deps.listStateFiles(input.stateHash);
-        files.sort((a, b) => a.path.localeCompare(b.path));
+        files.sort((a, b) => compareUtf16CodeUnits(a.path, b.path));
         if (input.paths && input.paths.length > 0) {
           const want = new Set(input.paths);
           files = files.filter((f) => want.has(f.path));

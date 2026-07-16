@@ -1,4 +1,4 @@
-import type { TestCase } from "../types.js";
+import { CONTENT_WORKSPACE_REPO_FIXTURE, type TestCase } from "../types.js";
 import {
   completedToolNames,
   finalMessageHasAll,
@@ -172,7 +172,7 @@ export const workerTests: TestCase[] = [
     name: "worker-env",
     description: "Create a worker with environment variables",
     category: "workers",
-    workspaceRepoFixture: true,
+    workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
       "Exercise worker environment configuration with a disposable worker you author in the harness-owned workspace namespace. Expose and call one fixed method that returns only the named non-secret probe binding, prove the running worker observed the configured value, and retire it. Finish with WORKER_ENV_OK or WORKER_ENV_UNOBSERVABLE.",
     validate: (result) =>

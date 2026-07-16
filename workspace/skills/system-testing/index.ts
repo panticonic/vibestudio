@@ -19,6 +19,10 @@ export type {
 } from "./cli.js";
 export { summarizeFailures, summarizeEntry } from "./diagnostics.js";
 export type { FailureDiagnostic, FailureReport, DiagnosticLimits } from "./diagnostics.js";
+export {
+  BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
+  CONTENT_WORKSPACE_REPO_FIXTURE,
+} from "./types.js";
 export type {
   TestCase,
   TestResult,
@@ -26,7 +30,11 @@ export type {
   TestExecutionResult,
   TestOrchestrationContext,
   ExpectedToolFailure,
+  StructuredSystemTestError,
+  SystemTestFailure,
+  SystemTestJsonValue,
   ToolFailureSummary,
+  WorkspaceRepoFixtureSpec,
 } from "./types.js";
 export type { SessionSnapshot } from "@workspace/agentic-session";
 

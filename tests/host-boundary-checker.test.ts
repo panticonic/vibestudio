@@ -9,6 +9,7 @@ import {
   collectWorkspaceFindings,
   defaultReason,
   isAllowlisted,
+  isProductSealedWorkspaceImport,
   isTestContext,
   isWorkspaceImportScope,
   looksPathLike,
@@ -38,7 +39,7 @@ describe("isWorkspaceImportScope", () => {
       "@workspace-apps/shell",
       "@workspace-panels/foo",
       "@workspace-about/x",
-      "@workspace-workers/gad-store",
+      "@workspace/semantic-control-plane",
       "@workspace-skills/y",
       "@workspace-extensions/browser-data",
       "@workspace-packages/z",
@@ -119,9 +120,9 @@ describe("collectFindings — import-violation category", () => {
   it("flags static imports, re-exports, dynamic imports and require() into workspace", () => {
     const text = [
       `import a from "@workspace/agentic-protocol";`,
-      `export { b } from "@workspace-workers/gad-store";`,
+      `export { b } from "@workspace/semantic-control-plane";`,
       `const c = await import("@workspace-apps/shell");`,
-      `const d = require("../../workspace/workers/gad-store/index.js");`,
+      `const d = require("../../workspace/packages/semantic-control-plane/src/index.js");`,
     ].join("\n");
     const result = findings(text);
     expect(result.filter((f) => f.category === "import-violation")).toHaveLength(4);
@@ -132,11 +133,28 @@ describe("collectFindings — import-violation category", () => {
     const text = [
       `import type A from "@workspace/x";`,
       `import { type B } from "@workspace-apps/shell";`,
-      `export type { C } from "@workspace-workers/gad-store";`,
+      `export type { C } from "@workspace/semantic-control-plane";`,
     ].join("\n");
     const result = findings(text);
     expect(result).toHaveLength(3);
     expect(result.every((f) => f.category === "import-violation")).toBe(true);
+  });
+
+  it("allows only the product-sealed internal bundle entry to import the control plane", () => {
+    expect(
+      isProductSealedWorkspaceImport(
+        "src/server/internalDOs/index.ts",
+        "@workspace/semantic-control-plane"
+      )
+    ).toBe(true);
+    expect(
+      collectFindings({
+        text: `export { GadWorkspaceDO } from "@workspace/semantic-control-plane";`,
+        absFile: "/repo/src/server/internalDOs/index.ts",
+        root: ROOT,
+      })
+    ).toEqual([]);
+    expect(findings(`import x from "@workspace/semantic-control-plane";`)).toHaveLength(1);
   });
 
   it("does not flag ordinary imports", () => {

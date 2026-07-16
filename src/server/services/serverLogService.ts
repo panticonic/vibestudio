@@ -4,7 +4,7 @@
  *
  * Streaming: appended records are batched (~100 ms) and emitted as the
  * `server-log:append` event, so any events-capable caller (panel, worker,
- * DO, shell) can live-tail with `events.subscribe("server-log:append")`.
+ * DO, shell) can live-tail with `events.watch(["server-log:append"])`.
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";

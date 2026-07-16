@@ -10,7 +10,7 @@ const ROOTS = [
   "workspace/packages/agentic-do",
   "workspace/packages/agentic-protocol",
   "workspace/packages/pubsub/src",
-  "workspace/workers/gad-store",
+  "workspace/packages/semantic-control-plane/src",
   "workspace/workers/pubsub-channel",
   "workspace/workers/test-agent",
 ] as const;

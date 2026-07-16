@@ -23,6 +23,7 @@
     "paths": {
       "@vibestudio/browser-data": ["packages/browser-data/src/index.ts"],
       "@vibestudio/browser-data/client": ["packages/browser-data/src/client.ts"],
+      "@vibestudio/content-addressing": ["packages/content-addressing/src/index.ts"],
       "@vibestudio/credential-client": ["packages/credential-client/src/index.ts"],
       "@vibestudio/credential-client/*": ["packages/credential-client/src/*"],
       "@vibestudio/dev-log": ["packages/dev-log/src/index.ts"],
@@ -35,6 +36,7 @@
       "@vibestudio/git": ["packages/git/src/index.ts"],
       "@vibestudio/git/formatting": ["packages/git/src/formatting.ts"],
       "@vibestudio/identity/*": ["packages/identity/src/*"],
+      "@vibestudio/trajectory-identity": ["packages/trajectory-identity/src/index.ts"],
       "@vibestudio/process-adapter": ["packages/process-adapter/src/index.ts"],
       "@vibestudio/rpc": ["packages/rpc/src/index.ts"],
       "@vibestudio/rpc/*": ["packages/rpc/src/*"],
@@ -49,7 +51,13 @@
       "@vibestudio/unit-host": ["packages/unit-host/src/index.ts"],
       "@vibestudio/types": ["packages/types/src/index.ts"],
       "@vibestudio/workspace/*": ["packages/workspace/src/*"],
-      "@vibestudio/workspace-contracts/*": ["packages/workspace-contracts/src/*"]
+      "@vibestudio/workspace-contracts/*": ["packages/workspace-contracts/src/*"],
+      "@workspace/agentic-protocol": [
+        "workspace/packages/agentic-protocol/src/index.ts"
+      ],
+      "@workspace/semantic-control-plane": [
+        "workspace/packages/semantic-control-plane/src/index.ts"
+      ]
     }
   },
   "include": ["src/**/*", "packages/**/*"],

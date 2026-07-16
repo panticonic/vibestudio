@@ -23,6 +23,8 @@ import {
   mkdirSync,
   symlinkSync,
   lstatSync,
+  readFileSync,
+  statSync,
   utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,6 +65,350 @@ function makeStubFolderManager(root: string): ContextFolderManager {
   } as unknown as ContextFolderManager;
 }
 
+/** Test adapter for cases that seed an already-projected managed file on disk.
+ * It proves the caller constructed semantic authority without conflating these
+ * sandbox tests with semantic mutation behavior, which has its own full mock. */
+function makeProjectedReadBridge(root: string): FsVcsBridge {
+  const unsupported = async (): Promise<never> => {
+    throw new Error("semantic mutation is outside this projection-read test");
+  };
+  let contextId: string | null = null;
+  const repoPathOf = (repositoryId: string) => repositoryId.slice("repository:".length);
+  const state = () => ({ kind: "application" as const, applicationId: `application:${contextId}` });
+  const repoPaths = ["skills/onboarding", "skills/system-testing"];
+  const authorityPath = (repositoryId: string, filePath: string) => {
+    if (!contextId) throw new Error("working state was not resolved before file lookup");
+    return path.join(root, contextId, repoPathOf(repositoryId), filePath);
+  };
+  return {
+    isTracked: async (relPath) =>
+      ["packages", "panels", "projects", "agents", "skills", "workers", "extensions", "meta"].some(
+        (root) => relPath === root || relPath.startsWith(`${root}/`)
+      ),
+    edit: unsupported,
+    move: unsupported,
+    copy: unsupported,
+    status: async ({ contextId: requestedContextId }) => {
+      contextId = requestedContextId;
+      return {
+        contextId,
+        committed: { kind: "event", eventId: `event:${contextId}` },
+        workingHead: state(),
+        clean: false,
+        mainEventId: "event:main",
+        mainRelation: "ahead",
+        workingCounts: { applications: 1, workUnits: 0, changes: 0 },
+      };
+    },
+    neighbors: async ({ root: requestedState }) => {
+      if (requestedState.kind !== "event" && requestedState.kind !== "application") {
+        throw new Error("expected state root");
+      }
+      return {
+        root: requestedState,
+        edges: repoPaths.map((repoPath) => ({
+          kind: "contains-repository" as const,
+          from: requestedState,
+          to: {
+            kind: "repository" as const,
+            state: requestedState,
+            repositoryId: `repository:${repoPath}`,
+          },
+        })),
+        nextCursor: null,
+      };
+    },
+    inspect: async ({ node }) => {
+      if (node.kind !== "repository") throw new Error("expected repository inspection");
+      const repoPath = repoPathOf(node.repositoryId);
+      return {
+        root: node,
+        node: {
+          kind: "repository" as const,
+          state: node.state,
+          value: {
+            kind: "present" as const,
+            repositoryId: node.repositoryId,
+            repoPath,
+            manifestId: `manifest:${repoPath}`,
+          },
+        },
+        edges: [],
+        hasMoreEdges: false,
+      };
+    },
+    readFile: async (input) => {
+      const filePath =
+        input.file.kind === "path" ? input.file.path : input.file.fileId.split("/").at(-1)!;
+      const absolute = authorityPath(input.repositoryId, filePath);
+      const bytes = readFileSync(absolute);
+      const stat = statSync(absolute);
+      return {
+        repositoryId: input.repositoryId,
+        repoPath: repoPathOf(input.repositoryId),
+        fileId: `file:${repoPathOf(input.repositoryId)}/${filePath}`,
+        path: filePath,
+        content: { kind: "bytes", base64: bytes.toString("base64") },
+        contentHash: `test-projection:${bytes.toString("base64")}`,
+        mode: stat.mode & 0o777,
+      };
+    },
+    listFiles: async ({ state: requestedState, repositoryId }) => {
+      const repoPath = repoPathOf(repositoryId);
+      const repoRoot = path.join(root, contextId!, repoPath);
+      const filePath = "SKILL.md";
+      const absolute = path.join(repoRoot, filePath);
+      const text = existsSync(absolute) ? readFileSync(absolute, "utf8") : "";
+      return {
+        state: requestedState,
+        repositoryId,
+        files: existsSync(absolute)
+          ? [
+              {
+                fileId: `file:${repoPath}/${filePath}`,
+                path: filePath,
+                contentHash: `blob:${repoPath}/${filePath}`,
+                mode: 0o644,
+                contentKind: "text",
+                byteLength: statSync(absolute).size,
+                coordinateExtent: text.length,
+              },
+            ]
+          : [],
+        nextCursor: null,
+      };
+    },
+    ensureMaterialized: async () => {},
+    isMaterialized: async () => true,
+  };
+}
+
+function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
+  const files = new Map<string, FsVcsContent>();
+  const applyCalls: Array<{ repoPath: string; edits: FsVcsEditOp[] }> = [];
+  const moveCalls: import("@vibestudio/service-schemas/vcs").VcsMoveInput[] = [];
+  const copyCalls: import("@vibestudio/service-schemas/vcs").VcsCopyInput[] = [];
+  const readCalls: import("@vibestudio/service-schemas/vcs").VcsReadFileInput[] = [];
+  const heads = new Map<string, number>();
+  const repoPathOf = (repositoryId: string) => repositoryId.slice("repository:".length);
+  const keyFor = (contextId: string, repoPath: string, filePath: string) =>
+    `${contextId}/${repoPath}/${filePath}`;
+  const contextFromState = (state: import("@vibestudio/service-schemas/vcs").VcsStateNodeRef) =>
+    state.kind === "event"
+      ? state.eventId.slice("event:".length)
+      : state.applicationId.slice("application:".length).split(":").slice(0, -1).join(":");
+  const stateFor = (contextId: string) => {
+    const sequence = heads.get(contextId) ?? 0;
+    return sequence === 0
+      ? { kind: "event" as const, eventId: `event:${contextId}` }
+      : { kind: "application" as const, applicationId: `application:${contextId}:${sequence}` };
+  };
+  const advance = (contextId: string) => {
+    heads.set(contextId, (heads.get(contextId) ?? 0) + 1);
+    return stateFor(contextId);
+  };
+  const fileKeyForId = (contextId: string, fileId: string) =>
+    [...files.keys()].find(
+      (key) =>
+        key.startsWith(`${contextId}/`) && `file:${key.slice(contextId.length + 1)}` === fileId
+    );
+  const mutationResult = (contextId: string, kind: string) => ({
+    contextId,
+    workUnitId: `work:${kind}:${heads.get(contextId) ?? 0}`,
+    applicationId: `application:${kind}:${heads.get(contextId) ?? 0}`,
+    changeCount: 1,
+    changeIds: [`change:${kind}:${heads.get(contextId) ?? 0}`],
+    incorporatedChangeCount: 0,
+    incorporatedChangeIds: [],
+    workingHead: advance(contextId),
+  });
+  const isScratch = (rel: string) =>
+    rel === ".tmp" || rel.startsWith(".tmp/") || rel === ".testkit" || rel.startsWith(".testkit/");
+
+  const bridge: FsVcsBridge = {
+    isTracked: async (rel) => rel.length > 0 && !isScratch(rel),
+    ensureMaterialized: async () => {},
+    isMaterialized: async () => true,
+    status: async ({ contextId }) => ({
+      contextId,
+      committed: { kind: "event", eventId: `event:${contextId}` },
+      workingHead: stateFor(contextId),
+      clean: (heads.get(contextId) ?? 0) === 0,
+      mainEventId: "event:main",
+      mainRelation: "ahead",
+      workingCounts: {
+        applications: heads.get(contextId) ?? 0,
+        workUnits: heads.get(contextId) ?? 0,
+        changes: heads.get(contextId) ?? 0,
+      },
+    }),
+    neighbors: async ({ root }) => {
+      if (root.kind !== "event" && root.kind !== "application") {
+        throw new Error("expected state root");
+      }
+      return {
+        root,
+        edges: repositoryPaths.map((repoPath) => ({
+          kind: "contains-repository" as const,
+          from: root,
+          to: {
+            kind: "repository" as const,
+            state: root,
+            repositoryId: `repository:${repoPath}`,
+          },
+        })),
+        nextCursor: null,
+      };
+    },
+    inspect: async ({ node }) => {
+      if (node.kind !== "repository") throw new Error("expected repository inspection");
+      const repoPath = repoPathOf(node.repositoryId);
+      return {
+        root: node,
+        node: {
+          kind: "repository" as const,
+          state: node.state,
+          value: {
+            kind: "present" as const,
+            repositoryId: node.repositoryId,
+            repoPath,
+            manifestId: `manifest:${repoPath}`,
+          },
+        },
+        edges: [],
+        hasMoreEdges: false,
+      };
+    },
+    listFiles: async ({ state, repositoryId }) => {
+      const contextId = contextFromState(state);
+      const repoPath = repoPathOf(repositoryId);
+      const prefix = `${contextId}/${repoPath}/`;
+      return {
+        state,
+        repositoryId,
+        files: [...files.entries()]
+          .filter(([key]) => key.startsWith(prefix))
+          .map(([key, content]) => {
+            const filePath = key.slice(prefix.length);
+            const byteLength =
+              content.kind === "text"
+                ? Buffer.byteLength(content.text)
+                : Buffer.from(content.base64, "base64").byteLength;
+            return {
+              fileId: `file:${repoPath}/${filePath}`,
+              path: filePath,
+              contentHash: `blob:${repoPath}/${filePath}`,
+              mode: 0o644,
+              contentKind: content.kind,
+              byteLength,
+              coordinateExtent: content.kind === "text" ? content.text.length : byteLength,
+            };
+          }),
+        nextCursor: null,
+      };
+    },
+    readFile: async (input) => {
+      readCalls.push(input);
+      const contextId = contextFromState(input.state);
+      const repoPath = repoPathOf(input.repositoryId);
+      const filePath =
+        input.file.kind === "path"
+          ? input.file.path
+          : input.file.fileId.slice(`file:${repoPath}/`.length);
+      const content = files.get(keyFor(contextId, repoPath, filePath));
+      if (!content) return null;
+      return {
+        repositoryId: input.repositoryId,
+        fileId: `file:${repoPath}/${filePath}`,
+        repoPath,
+        path: filePath,
+        contentHash: `blob:${repoPath}/${filePath}`,
+        mode: 0o644,
+        content,
+      };
+    },
+    edit: async (input) => {
+      for (const change of input.changes) {
+        if (change.kind === "repository-create") {
+          throw new Error("repository creation is outside this filesystem fixture");
+        }
+        const repoPath = repoPathOf(change.repositoryId);
+        if (change.kind === "file-create") {
+          files.set(keyFor(input.contextId, repoPath, change.path), change.content);
+          applyCalls.push({
+            repoPath,
+            edits: [{ kind: "write", path: change.path, content: change.content }],
+          });
+          continue;
+        }
+        const key = fileKeyForId(input.contextId, change.fileId);
+        if (!key) throw Object.assign(new Error(`missing ${change.fileId}`), { code: "ENOENT" });
+        const filePath = key.slice(`${input.contextId}/${repoPath}/`.length);
+        if (change.kind === "file-delete") {
+          files.delete(key);
+          applyCalls.push({
+            repoPath,
+            edits: [{ kind: "delete", path: filePath }],
+          });
+        } else if (change.kind === "file-mode") {
+          applyCalls.push({
+            repoPath,
+            edits: [{ kind: "chmod", path: filePath, mode: change.mode }],
+          });
+        } else {
+          const existingContent = files.get(key);
+          const content =
+            change.kind === "binary-replace"
+              ? ({ kind: "bytes", base64: change.base64 } as const)
+              : ({
+                  kind: "text",
+                  text: change.edits.reduce(
+                    (text, edit) => text.slice(0, edit.start) + edit.text + text.slice(edit.end),
+                    existingContent?.kind === "text" ? existingContent.text : ""
+                  ),
+                } as const);
+          files.set(key, content);
+          applyCalls.push({
+            repoPath,
+            edits: [{ kind: "write", path: filePath, content }],
+          });
+        }
+      }
+      return mutationResult(input.contextId, "edit");
+    },
+    move: async (input) => {
+      moveCalls.push(input);
+      for (const move of input.moves) {
+        if (move.kind !== "file") throw new Error("repository moves are outside this fixture");
+        const sourceKey = fileKeyForId(input.contextId, move.fileId);
+        if (!sourceKey)
+          throw Object.assign(new Error(`missing ${move.fileId}`), { code: "ENOENT" });
+        const content = files.get(sourceKey)!;
+        files.delete(sourceKey);
+        files.set(
+          keyFor(input.contextId, repoPathOf(move.destinationRepositoryId), move.destinationPath),
+          content
+        );
+      }
+      return mutationResult(input.contextId, "move");
+    },
+    copy: async (input) => {
+      copyCalls.push(input);
+      for (const copy of input.copies) {
+        const sourceContextId = contextFromState(copy.source.state);
+        const sourceKey = fileKeyForId(sourceContextId, copy.source.fileId);
+        if (!sourceKey) throw Object.assign(new Error("missing copy source"), { code: "ENOENT" });
+        files.set(
+          keyFor(input.contextId, repoPathOf(copy.destination.repositoryId), copy.destination.path),
+          files.get(sourceKey)!
+        );
+      }
+      return mutationResult(input.contextId, "copy");
+    },
+  };
+  return { bridge, applyCalls, moveCalls, copyCalls, readCalls, files };
+}
+
 function makeWorkerCtx(callerId: string): ServiceContext {
   return { caller: createVerifiedCaller(callerId, "worker") };
 }
@@ -90,7 +436,6 @@ function makeAgentCtx(entityId: string, contextId: string): ServiceContext {
       contextId,
       channelId: "chan-1",
       agentId: `agent:${entityId}`,
-      userId: "usr_test",
     }),
   };
 }
@@ -103,7 +448,9 @@ describe("FsService", () => {
   beforeEach(() => {
     tmpRoot = mkdtempSync(path.join(tmpdir(), "vibestudio-fsservice-"));
     entityCache = new EntityCache();
-    service = new FsService(makeStubFolderManager(tmpRoot), entityCache);
+    service = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+      contextAuthority: { kind: "semantic", bridge: makeProjectedReadBridge(tmpRoot) },
+    });
   });
 
   afterEach(() => {
@@ -356,7 +703,7 @@ describe("FsService", () => {
       ).resolves.toBe("linked");
     });
 
-    it("rejects escaping targets and GAD workspace-repo link entries", async () => {
+    it("rejects escaping targets and managed workspace link entries", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-link-policy");
 
@@ -365,7 +712,7 @@ describe("FsService", () => {
       ).rejects.toThrow(/traversal/i);
       await expect(
         service.handleCall(ctx, "symlink", ["/.tmp/target.txt", "/projects/demo/target-link.txt"])
-      ).rejects.toThrow(/GAD workspace-repo/i);
+      ).rejects.toThrow(/managed workspace/i);
     });
   });
 
@@ -384,6 +731,7 @@ describe("FsService", () => {
 
     it("grants unrestricted host fs only to an extension holding the explicit host-fs capability", async () => {
       const capableService = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "scratch-only" },
         hostFsCapableExtensions: ["@workspace-extensions/fs-test"],
       });
       const ctx = makeExtensionCtx("@workspace-extensions/fs-test");
@@ -743,47 +1091,61 @@ describe("FsService", () => {
     entityCache._onActivate(record);
   }
 
-  // ─── GAD reroute (tracked context mutations commit through GAD) ────────────
-  describe("GAD reroute", () => {
+  describe("explicit context filesystem authority", () => {
+    it("keeps scratch direct while refusing every managed path without semantic authority", async () => {
+      const scratchOnly = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "scratch-only" },
+      });
+      const ctx = makeWorkerCtx("do:scratch-only");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-scratch-only");
+
+      await scratchOnly.handleCall(ctx, "writeFile", ["/.tmp/note.txt", "scratch"]);
+      await expect(
+        scratchOnly.handleCall(ctx, "readFile", ["/.tmp/note.txt", "utf8"])
+      ).resolves.toBe("scratch");
+
+      mkdirSync(path.join(tmpRoot, "ctx-scratch-only", "packages", "lib"), {
+        recursive: true,
+      });
+      writeFileSync(
+        path.join(tmpRoot, "ctx-scratch-only", "packages", "lib", "projected.ts"),
+        "must not leak"
+      );
+
+      for (const [method, args] of [
+        ["readFile", ["/packages/lib/projected.ts", "utf8"]],
+        ["realpath", ["/packages/lib/projected.ts"]],
+        ["writeFile", ["/packages/lib/new.ts", "no"]],
+        ["copyFile", ["/.tmp/note.txt", "/packages/lib/imported.ts"]],
+        ["rename", ["/.tmp/note.txt", "/packages/lib/moved.ts"]],
+        ["ensureMaterialized", ["packages/lib"]],
+        ["grep", ["needle", { path: "/" }]],
+      ] as const) {
+        await expect(scratchOnly.handleCall(ctx, method, [...args])).rejects.toMatchObject({
+          code: "ESEMANTICAUTHORITY",
+        });
+      }
+
+      expect(existsSync(path.join(tmpRoot, "ctx-scratch-only", "packages", "lib", "new.ts"))).toBe(
+        false
+      );
+      expect(
+        existsSync(path.join(tmpRoot, "ctx-scratch-only", "packages", "lib", "imported.ts"))
+      ).toBe(false);
+    });
+  });
+
+  // ─── Semantic VCS reroute ─────────────────────────────────────────────────
+  describe("semantic VCS reroute", () => {
     function makeMockBridge() {
-      const files = new Map<string, FsVcsContent>(); // `${contextId}/${repoPath}/${repoRel}` -> content
-      const applyCalls: Array<{ contextId: string; repoPath: string; edits: FsVcsEditOp[] }> = [];
-      const isScratch = (rel: string) =>
-        rel === ".tmp" ||
-        rel.startsWith(".tmp/") ||
-        rel === ".testkit" ||
-        rel.startsWith(".testkit/");
-      const keyFor = (contextId: string, repoPath: string, rel: string) =>
-        `${contextId}/${repoPath}/${rel}`;
-      const bridge: FsVcsBridge = {
-        isTracked: async (rel) => rel.length > 0 && !isScratch(rel),
-        ensureMaterialized: async () => {},
-        isMaterialized: async () => true,
-        edit: async (
-          contextId: string,
-          repoPath: import("./runtime/entitySpec.js").RepoPath,
-          edits: FsVcsEditOp[]
-        ) => {
-          applyCalls.push({ contextId, repoPath, edits });
-          for (const e of edits) {
-            const key = keyFor(contextId, repoPath, e.path);
-            if (e.kind === "write") files.set(key, e.content);
-            else if (e.kind === "delete") files.delete(key);
-          }
-        },
-        readFile: async (contextId, repoPath, rel) =>
-          files.get(keyFor(contextId, repoPath, rel)) ?? null,
-        listFiles: async (contextId) =>
-          [...files.keys()]
-            .filter((k) => k.startsWith(`${contextId}/`))
-            .map((k) => k.slice(contextId.length + 1)),
-      };
-      return { bridge, applyCalls, files };
+      return makeCanonicalSemanticBridge(["panels/app", "packages/lib", "skills/x"]);
     }
 
-    it("routes a tracked-path writeFile through GAD, not raw disk", async () => {
+    it("routes a managed write through semantic state, not raw disk", async () => {
       const { bridge, applyCalls, files } = makeMockBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-gad");
 
@@ -806,9 +1168,42 @@ describe("FsService", () => {
       expect(existsSync(path.join(tmpRoot, "ctx-gad", "panels", "app", "index.ts"))).toBe(false);
     });
 
-    it("leaves scratch-path writes (.tmp) on direct disk, never through GAD", async () => {
+    it("reads managed file bytes from the exact semantic state, not stale materialization", async () => {
+      const { bridge, readCalls, files } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:semantic-read");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-semantic-read");
+
+      await svc.handleCall(ctx, "writeFile", [
+        "/packages/lib/authority.txt",
+        "authoritative semantic bytes",
+      ]);
+      const projected = path.join(tmpRoot, "ctx-semantic-read", "packages", "lib", "authority.txt");
+      mkdirSync(path.dirname(projected), { recursive: true });
+      writeFileSync(projected, "stale projected bytes");
+      expect(files.get("ctx-semantic-read/packages/lib/authority.txt")).toEqual({
+        kind: "text",
+        text: "authoritative semantic bytes",
+      });
+
+      const actual = await svc.handleCall(ctx, "readFile", ["/packages/lib/authority.txt", "utf8"]);
+      expect(readCalls).toHaveLength(1);
+      expect(actual).toBe("authoritative semantic bytes");
+      expect(readCalls[0]).toMatchObject({
+        state: { kind: "application", applicationId: "application:ctx-semantic-read:1" },
+        repositoryId: "repository:packages/lib",
+        file: { kind: "path", path: "authority.txt" },
+      });
+      expect(readFileSync(projected, "utf8")).toBe("stale projected bytes");
+    });
+
+    it("leaves scratch-path writes (.tmp) on direct disk", async () => {
       const { bridge, applyCalls } = makeMockBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-scratch");
 
@@ -819,9 +1214,33 @@ describe("FsService", () => {
       expect(existsSync(path.join(tmpRoot, "ctx-scratch", tmp.replace(/^\//, "")))).toBe(true);
     });
 
-    it("routes a tracked-path delete through GAD", async () => {
+    it("rejects managed empty-directory mkdir instead of reporting nonexistent state", async () => {
+      const { bridge, applyCalls } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:managed-mkdir");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-managed-mkdir");
+
+      await expect(
+        svc.handleCall(ctx, "mkdir", ["/packages/lib/empty", { recursive: true }])
+      ).rejects.toMatchObject({ code: "ENOTSUP" });
+      expect(applyCalls).toHaveLength(0);
+      expect(existsSync(path.join(tmpRoot, "ctx-managed-mkdir", "packages", "lib", "empty"))).toBe(
+        false
+      );
+
+      await expect(svc.handleCall(ctx, "mkdir", ["/.tmp/real", { recursive: true }])).resolves.toBe(
+        "/.tmp"
+      );
+      expect(existsSync(path.join(tmpRoot, "ctx-managed-mkdir", ".tmp", "real"))).toBe(true);
+    });
+
+    it("routes a managed delete through semantic state", async () => {
       const { bridge, applyCalls, files } = makeMockBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-del");
 
@@ -833,9 +1252,165 @@ describe("FsService", () => {
       expect(applyCalls.at(-1)!.edits).toEqual([{ kind: "delete", path: "a.ts" }]);
     });
 
-    it("unlinks a scratch symlink entry without deleting its tracked target through GAD", async () => {
+    it("implements managed truncate with exact byte semantics", async () => {
+      const { bridge, files } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:truncate");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-truncate");
+
+      await svc.handleCall(ctx, "writeFile", ["/packages/lib/value.txt", "aéz"]);
+      await svc.handleCall(ctx, "truncate", ["/packages/lib/value.txt", 2]);
+      expect(files.get("ctx-truncate/packages/lib/value.txt")).toEqual({
+        kind: "bytes",
+        base64: Buffer.from("aéz").subarray(0, 2).toString("base64"),
+      });
+
+      await svc.handleCall(ctx, "writeFile", ["/packages/lib/value.txt", "a"]);
+      await svc.handleCall(ctx, "truncate", ["/packages/lib/value.txt", 3]);
+      expect(files.get("ctx-truncate/packages/lib/value.txt")).toEqual({
+        kind: "bytes",
+        base64: Buffer.from([0x61, 0, 0]).toString("base64"),
+      });
+
+      await expect(
+        svc.handleCall(ctx, "truncate", ["/packages/lib/missing.txt", 0])
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("routes a tracked rename through one identity-preserving move transaction", async () => {
+      const { bridge, moveCalls, applyCalls, files } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-move");
+      await svc.handleCall(ctx, "writeFile", ["/packages/lib/a.ts", "identity"]);
+
+      await svc.handleCall(ctx, "rename", ["/packages/lib/a.ts", "/panels/app/a.ts"]);
+
+      expect(moveCalls).toHaveLength(1);
+      expect(moveCalls[0]).toMatchObject({
+        contextId: "ctx-move",
+        expectedWorkingHead: { kind: "application", applicationId: "application:ctx-move:1" },
+        moves: [
+          {
+            kind: "file",
+            repositoryId: "repository:packages/lib",
+            fileId: "file:packages/lib/a.ts",
+            destinationRepositoryId: "repository:panels/app",
+            destinationPath: "a.ts",
+          },
+        ],
+      });
+      expect(applyCalls).toHaveLength(1);
+      expect(files.has("ctx-move/packages/lib/a.ts")).toBe(false);
+      expect(files.get("ctx-move/panels/app/a.ts")).toEqual({ kind: "text", text: "identity" });
+    });
+
+    it("routes a tracked copy through exact copy-of provenance instead of a write", async () => {
+      const { bridge, copyCalls, applyCalls, files } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-copy");
+      await svc.handleCall(ctx, "writeFile", ["/packages/lib/a.ts", "ancestry"]);
+
+      await svc.handleCall(ctx, "copyFile", ["/packages/lib/a.ts", "/panels/app/a.ts"]);
+
+      expect(copyCalls).toHaveLength(1);
+      expect(copyCalls[0]).toMatchObject({
+        contextId: "ctx-copy",
+        expectedWorkingHead: { kind: "application", applicationId: "application:ctx-copy:1" },
+        copies: [
+          {
+            source: {
+              state: { kind: "application", applicationId: "application:ctx-copy:1" },
+              repositoryId: "repository:packages/lib",
+              fileId: "file:packages/lib/a.ts",
+            },
+            destination: {
+              repositoryId: "repository:panels/app",
+              path: "a.ts",
+            },
+          },
+        ],
+      });
+      expect(applyCalls).toHaveLength(1);
+      expect(files.get("ctx-copy/packages/lib/a.ts")).toEqual({ kind: "text", text: "ancestry" });
+      expect(files.get("ctx-copy/panels/app/a.ts")).toEqual({ kind: "text", text: "ancestry" });
+    });
+
+    it("maps a missing managed copy source to ENOENT", async () => {
+      const { bridge, copyCalls } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-copy-missing");
+
+      await expect(
+        svc.handleCall(ctx, "copyFile", ["/packages/lib/missing.ts", "/panels/app/a.ts"])
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(copyCalls).toHaveLength(0);
+    });
+
+    it("propagates exact resolver failures instead of treating them as absence", async () => {
+      const { bridge, applyCalls } = makeMockBridge();
+      const failure = Object.assign(new Error("semantic authority unavailable"), {
+        code: "EAUTHORITY",
+      });
+      bridge.listFiles = async () => {
+        throw failure;
+      };
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-resolver-failure");
+
+      await expect(
+        svc.handleCall(ctx, "writeFile", ["/packages/lib/a.ts", "content"])
+      ).rejects.toBe(failure);
+      expect(applyCalls).toHaveLength(0);
+    });
+
+    it("creates a managed file from scratch bytes through one semantic edit", async () => {
       const { bridge, applyCalls, files } = makeMockBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-import");
+
+      await svc.handleCall(ctx, "writeFile", ["/.tmp/external.ts", "external\n"]);
+      await svc.handleCall(ctx, "copyFile", ["/.tmp/external.ts", "/packages/lib/external.ts"]);
+
+      expect(applyCalls).toEqual([
+        {
+          repoPath: "packages/lib",
+          edits: [
+            {
+              kind: "write",
+              path: "external.ts",
+              content: { kind: "bytes", base64: Buffer.from("external\n").toString("base64") },
+            },
+          ],
+        },
+      ]);
+      expect(files.get("ctx-import/packages/lib/external.ts")).toEqual({
+        kind: "bytes",
+        base64: Buffer.from("external\n").toString("base64"),
+      });
+    });
+
+    it("unlinks a scratch symlink entry without deleting its managed target", async () => {
+      const { bridge, applyCalls, files } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-link-delete");
 
@@ -854,9 +1429,11 @@ describe("FsService", () => {
       expect(() => lstatSync(path.join(root, ".tmp", "tracked-link"))).toThrow();
     });
 
-    it("keeps disk-only leaf symlinks under tracked paths out of GAD delete routing", async () => {
+    it("keeps disk-only leaf symlinks out of semantic delete routing", async () => {
       const { bridge, applyCalls } = makeMockBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-tracked-links");
       const repoRoot = path.join(tmpRoot, "ctx-tracked-links", "packages", "lib");
@@ -880,7 +1457,9 @@ describe("FsService", () => {
 
     it("rejects renaming a symlink entry into a tracked destination", async () => {
       const { bridge, applyCalls } = makeMockBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-link-rename");
       const root = path.join(tmpRoot, "ctx-link-rename");
@@ -889,7 +1468,7 @@ describe("FsService", () => {
 
       await expect(
         svc.handleCall(ctx, "rename", ["/.tmp/source-link", "/packages/lib/link"])
-      ).rejects.toThrow(/cannot move or replace a symbolic link.*GAD-tracked destination/s);
+      ).rejects.toThrow(/cannot move or replace a symbolic link.*managed destination/s);
 
       expect(lstatSync(path.join(root, ".tmp", "source-link")).isSymbolicLink()).toBe(true);
       expect(applyCalls).toHaveLength(0);
@@ -897,7 +1476,9 @@ describe("FsService", () => {
 
     it("directly renames a disk-only symlink from a malformed reserved path to scratch", async () => {
       const { bridge, applyCalls } = makeMockBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-reserved-link-rename");
       const root = path.join(tmpRoot, "ctx-reserved-link-rename");
@@ -912,71 +1493,58 @@ describe("FsService", () => {
       expect(applyCalls).toHaveLength(0);
     });
 
-    it("commits an atomic-write rename (.tmp → tracked) through GAD and drops the temp", async () => {
+    it("refuses scratch-to-managed rename because replacement uses an exact semantic edit", async () => {
       const { bridge, files } = makeMockBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-atomic");
 
       const tmp = (await svc.handleCall(ctx, "mktemp", ["w"])) as string;
       await svc.handleCall(ctx, "writeFile", [tmp, "final\n"]);
-      await svc.handleCall(ctx, "rename", [tmp, "/skills/x/SKILL.md"]);
+      await expect(svc.handleCall(ctx, "rename", [tmp, "/skills/x/SKILL.md"])).rejects.toThrow(
+        /cannot infer managed replacement intent/
+      );
 
-      expect(files.get("ctx-atomic/skills/x/SKILL.md")).toEqual({
-        kind: "bytes",
-        base64: Buffer.from("final\n").toString("base64"),
-      });
-      expect(existsSync(path.join(tmpRoot, "ctx-atomic", tmp.replace(/^\//, "")))).toBe(false);
+      expect(files.has("ctx-atomic/skills/x/SKILL.md")).toBe(false);
+      expect(existsSync(path.join(tmpRoot, "ctx-atomic", tmp.replace(/^\//, "")))).toBe(true);
     });
 
-    it("rejects opening a tracked path for writing (must go through GAD)", async () => {
+    it("rejects opening a managed path for writing", async () => {
       const { bridge } = makeMockBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-open");
 
       await expect(svc.handleCall(ctx, "open", ["/panels/app/index.ts", "w"])).rejects.toThrow(
-        /must commit through GAD/
+        /must use the write\/edit tool or vcs\.edit/
       );
     });
 
     // ─── Per-repo edit routing (section taxonomy) ─────────────────────────
     function makeRoutedBridge() {
-      const files = new Map<string, FsVcsContent>(); // `${contextId}/${repoPath}/${repoRel}` -> content
-      const applyCalls: Array<{ repoPath: string; edits: FsVcsEditOp[] }> = [];
-      const isScratch = (rel: string) =>
-        rel === ".tmp" ||
-        rel.startsWith(".tmp/") ||
-        rel === ".testkit" ||
-        rel.startsWith(".testkit/");
-      const keyFor = (contextId: string, repoPath: string, rel: string) =>
-        `${contextId}/${repoPath}/${rel}`;
-      const bridge: FsVcsBridge = {
-        isTracked: async (rel) => rel.length > 0 && !isScratch(rel),
-        ensureMaterialized: async () => {},
-        isMaterialized: async () => true,
-        edit: async (
-          contextId: string,
-          repoPath: import("./runtime/entitySpec.js").RepoPath,
-          edits: FsVcsEditOp[]
-        ) => {
-          applyCalls.push({ repoPath, edits });
-          for (const e of edits) {
-            const key = keyFor(contextId, repoPath, e.path);
-            if (e.kind === "write") files.set(key, e.content);
-            else if (e.kind === "delete") files.delete(key);
-          }
-        },
-        readFile: async (contextId, repoPath, rel) =>
-          files.get(keyFor(contextId, repoPath, rel)) ?? null,
-        listFiles: async () => [],
+      const fixture = makeCanonicalSemanticBridge([
+        "packages/lib",
+        "projects/scratch",
+        "projects/missing",
+        "projects/file-roundtrip-test",
+        "meta",
+      ]);
+      return {
+        bridge: fixture.bridge,
+        applyCalls: fixture.applyCalls,
+        files: fixture.files,
       };
-      return { bridge, applyCalls, files };
     }
 
-    it("routes a write to its owning repo (prefix stripped) and applies on that repo head", async () => {
+    it("routes a write to its owning repository identity and exact working state", async () => {
       const { bridge, applyCalls, files } = makeRoutedBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-r");
 
@@ -992,7 +1560,9 @@ describe("FsService", () => {
 
     it("keeps ordinary relative root write/rename/copy operations on context-local scratch disk", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-root-scratch");
 
@@ -1017,7 +1587,9 @@ describe("FsService", () => {
 
     it("rejects malformed paths beneath reserved workspace source roots", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-reserved-root");
 
@@ -1031,7 +1603,9 @@ describe("FsService", () => {
 
     it("routes in-sandbox symlink aliases to the canonical workspace repo", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-repo-alias");
 
@@ -1057,7 +1631,9 @@ describe("FsService", () => {
 
     it("rejects non-canonical workspace source-root casing", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-source-case");
 
@@ -1069,7 +1645,9 @@ describe("FsService", () => {
 
     it("rejects writes that name a workspace repo root instead of a file inside it", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-root");
 
@@ -1081,7 +1659,9 @@ describe("FsService", () => {
 
     it("preserves fs.rm force semantics for a missing tracked file", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-rm-force");
 
@@ -1093,7 +1673,9 @@ describe("FsService", () => {
 
     it("preserves recursive fs.rm force semantics for a missing tracked subtree", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-rm-force-recursive");
 
@@ -1105,7 +1687,9 @@ describe("FsService", () => {
 
     it("canonicalizes a dotted project filename into a repo-shaped path", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-dotted");
 
@@ -1127,37 +1711,26 @@ describe("FsService", () => {
     });
   });
 
-  describe("sparse materialization (demand + loud assertion)", () => {
+  describe("exact context projection (demand + loud assertion)", () => {
     function makeMaterializeBridge(opts: { materialize: boolean }) {
       const calls: Array<{ contextId: string; repos: string[] | "all" }> = [];
       const present = new Set<string>();
-      const isScratch = (rel: string) =>
-        rel === ".tmp" ||
-        rel.startsWith(".tmp/") ||
-        rel === ".vibestudio" ||
-        rel.startsWith(".vibestudio/") ||
-        rel === ".testkit" ||
-        rel.startsWith(".testkit/");
-      const bridge: FsVcsBridge = {
-        isTracked: async (rel) => rel.length > 0 && !isScratch(rel),
-        edit: async () => {},
-        readFile: async () => null,
-        listFiles: async () => [],
-        ensureMaterialized: async (contextId, repos) => {
-          calls.push({ contextId, repos });
-          if (opts.materialize) {
-            if (repos === "all") present.add("*");
-            else for (const r of repos) present.add(r);
-          }
-        },
-        isMaterialized: async (_contextId, repo) => present.has("*") || present.has(repo),
+      const bridge = makeCanonicalSemanticBridge(["packages/lib", "panels/foo"]).bridge;
+      bridge.ensureMaterialized = async (contextId, repos) => {
+        calls.push({ contextId, repos });
+        if (!opts.materialize) return;
+        if (repos === "all") present.add("*");
+        else for (const repo of repos) present.add(repo);
       };
+      bridge.isMaterialized = async (_contextId, repo) => present.has("*") || present.has(repo);
       return { bridge, calls };
     }
 
     it("does not materialize platform scratch paths before direct reads", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-scratch-read");
 
@@ -1171,7 +1744,9 @@ describe("FsService", () => {
 
     it("keeps fs.mktemp paths usable for read/stat/exists with a VCS bridge installed", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-mktemp-read");
 
@@ -1188,7 +1763,9 @@ describe("FsService", () => {
       mkdirSync(path.join(tmpRoot, "ctx-s", "packages", "lib"), { recursive: true });
       writeFileSync(path.join(tmpRoot, "ctx-s", "packages", "lib", "x.ts"), "x\n");
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-s");
 
@@ -1208,7 +1785,9 @@ describe("FsService", () => {
       // result, which for a missing dir is ENOENT (the code callers handle),
       // rather than a bespoke ENOMATERIALIZE that breaks them.
       const { bridge } = makeMaterializeBridge({ materialize: false });
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-s2");
 
@@ -1217,7 +1796,9 @@ describe("FsService", () => {
 
     it("a root grep demands 'all' (the only legitimate blanket case)", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-s3");
 
@@ -1233,7 +1814,9 @@ describe("FsService", () => {
       mkdirSync(path.join(tmpRoot, "ctx-glob-demand", "panels", "foo"), { recursive: true });
       writeFileSync(path.join(tmpRoot, "ctx-glob-demand", "panels", "foo", "a.ts"), "x\n");
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-glob-demand");
 
@@ -1244,7 +1827,9 @@ describe("FsService", () => {
 
     it("ensureMaterialized RPC declares a narrow scope (a single repo)", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-s4");
 
@@ -1255,7 +1840,9 @@ describe("FsService", () => {
 
     it("ensureMaterialized RPC ignores direct-disk scratch paths", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
-      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-s5");
 

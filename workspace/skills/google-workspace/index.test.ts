@@ -41,9 +41,9 @@ const googleCredential: StoredCredentialSummary = {
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar",
   ],
+  lifecycle: { state: "active", canRefresh: true },
   metadata: {
     providerId: "google-workspace",
-    oauthRefreshTokenStored: "true",
   },
 };
 
@@ -244,18 +244,18 @@ describe("google-workspace skill facade", () => {
     expect(runtimeMock.credentials.connect).not.toHaveBeenCalled();
   });
 
-  it("warns when a stored Google credential predates durable refresh-token storage", async () => {
+  it("warns when a stored Google credential cannot renew itself", async () => {
     runtimeMock.credentials.listStoredCredentials.mockResolvedValue([
       {
         ...googleCredential,
-        metadata: { providerId: "google-workspace" },
+        lifecycle: { state: "active", canRefresh: false },
       },
     ]);
 
     const status = await getGoogleOnboardingStatus();
 
     expect(status.stage).toBe("connected");
-    expect(status.warnings.join(" ")).toContain("does not report a stored refresh token");
+    expect(status.warnings.join(" ")).toContain("has no stored refresh token");
   });
 
   it("returns structured verification failure when the credential proxy reports expiry", async () => {

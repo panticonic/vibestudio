@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => {
   const files = new Map<string, string | Uint8Array>();
   const dirs = new Set<string>();
+  const status = vi.fn();
   const edit = vi.fn();
   const commit = vi.fn();
   const push = vi.fn();
-  return { files, dirs, edit, commit, push };
+  return { files, dirs, status, edit, commit, push };
 });
 
 function normalize(p: string): string {
@@ -29,10 +30,12 @@ function addFile(p: string, content: string | Uint8Array): void {
 
 vi.mock("@workspace/runtime", () => ({
   vcs: {
+    status: mocks.status,
     edit: mocks.edit,
     commit: mocks.commit,
     push: mocks.push,
   },
+  contextId: "ctx:test",
   fs: {
     async exists(p: string): Promise<boolean> {
       const normalized = normalize(p);
@@ -80,52 +83,41 @@ vi.mock("@workspace/runtime", () => ({
 function resetRuntimeMocks(): void {
   mocks.files.clear();
   mocks.dirs.clear();
+  mocks.status.mockReset();
   mocks.edit.mockReset();
   mocks.commit.mockReset();
   mocks.push.mockReset();
-  // edit → commit → push scaffold: `writeProjectFiles` records the create ops
-  // as working edits, then commits and pushes the new repo. The edit mock
-  // records each created file so assertions can inspect the projected content.
+  mocks.status.mockResolvedValue({
+    workingHead: { kind: "application", applicationId: "application:working" },
+    mainEventId: "event:main",
+  });
   mocks.edit.mockImplementation(
     async (input: {
-      edits: Array<{
+      changes: Array<{
         kind: string;
-        path: string;
-        content?: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
+        repoPath: string;
+        files: Array<{
+          path: string;
+          content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
+        }>;
       }>;
     }) => {
-      for (const edit of input.edits) {
-        if ((edit.kind === "create" || edit.kind === "write") && edit.content) {
-          const value =
-            edit.content.kind === "text"
-              ? edit.content.text
-              : Uint8Array.from(atob(edit.content.base64), (c) => c.charCodeAt(0));
-          addFile(edit.path, value);
-        }
+      const change = input.changes[0]!;
+      for (const file of change.files) {
+        addFile(
+          `${change.repoPath}/${file.path}`,
+          file.content.kind === "text"
+            ? file.content.text
+            : Uint8Array.from(atob(file.content.base64), (character) => character.charCodeAt(0))
+        );
       }
       return {
-        head: "ctx:test",
-        stateHash: "state:test",
-        committed: false as const,
-        status: "uncommitted" as const,
-        editSeq: 1,
-        changedPaths: input.edits.map((edit) => edit.path),
+        workingHead: { kind: "application", applicationId: "application:created" },
       };
     }
   );
-  mocks.commit.mockResolvedValue([
-    {
-      repoPath: "workers/new",
-      head: "ctx:test",
-      stateHash: "state:test",
-      eventId: "e",
-      headHash: "h",
-      editCount: 1,
-      status: "committed" as const,
-      changedPaths: [],
-    },
-  ]);
-  mocks.push.mockResolvedValue({ status: "pushed", repoPaths: ["workers/new"], reports: [] });
+  mocks.commit.mockResolvedValue({ event: { kind: "event", eventId: "event:committed" } });
+  mocks.push.mockResolvedValue({ eventId: "event:committed", mainEventId: "event:committed" });
 }
 
 describe("createProject", () => {
@@ -148,11 +140,28 @@ describe("createProject", () => {
       "# Scratch Notes\n\nPlain workspace project.\n"
     );
     expect(mocks.files.has("projects/scratch-notes/package.json")).toBe(false);
-    expect(mocks.commit).toHaveBeenCalledWith({
-      message: "Scaffold project scratch-notes",
-      repoPaths: ["projects/scratch-notes"],
-    });
-    expect(mocks.push).toHaveBeenCalledWith({ repoPaths: ["projects/scratch-notes"] });
+    expect(mocks.commit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedWorkingHead: { kind: "application", applicationId: "application:created" },
+      })
+    );
+    expect(mocks.edit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedWorkingHead: { kind: "application", applicationId: "application:working" },
+        changes: [
+          expect.objectContaining({
+            kind: "repository-create",
+            repoPath: "projects/scratch-notes",
+          }),
+        ],
+      })
+    );
+    expect(mocks.push).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedCommittedEventId: "event:committed",
+        expectedMainEventId: "event:main",
+      })
+    );
   });
 
   it("rejects removed agent scaffolding", async () => {
@@ -161,7 +170,7 @@ describe("createProject", () => {
     await expect(createProject({ projectType: "agent", name: "helper" })).rejects.toThrow(
       /panel, package, skill, project, worker/
     );
-    expect(mocks.edit).not.toHaveBeenCalled();
+    expect(mocks.commit).not.toHaveBeenCalled();
   });
 
   it("declares the generated panel entry explicitly", async () => {
@@ -192,42 +201,15 @@ describe("createProject", () => {
     await expect(
       createProject({ projectType: "panel", name: "valid-name", title: 'Broken " title' })
     ).rejects.toThrow(/Project title/);
-    expect(mocks.edit).not.toHaveBeenCalled();
+    expect(mocks.commit).not.toHaveBeenCalled();
   });
 
-  it("does not report a scaffold as published when the build gate rejects it", async () => {
-    mocks.push.mockResolvedValueOnce({
-      status: "build-failed",
-      reports: [
-        {
-          repoPath: "panels/broken",
-          unitName: "@workspace-panels/broken",
-          kind: "panel",
-          role: "pushed",
-          required: true,
-          status: "failed",
-          builds: [
-            {
-              target: "runtime",
-              diagnostics: [
-                {
-                  source: "esbuild",
-                  severity: "error",
-                  file: "panels/broken/index.tsx",
-                  line: 3,
-                  column: 7,
-                  message: "Could not resolve import",
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
+  it("does not report a scaffold as published when protected publication is refused", async () => {
+    mocks.push.mockRejectedValueOnce(new Error("ApprovalDenied: protected publication refused"));
     const { createProject } = await import("./create-project.js");
 
     await expect(createProject({ projectType: "panel", name: "broken" })).rejects.toThrow(
-      /not published to main.*panels\/broken\/index\.tsx:3:7 Could not resolve import/s
+      /ApprovalDenied: protected publication refused/
     );
   });
 });
@@ -235,28 +217,17 @@ describe("createProject", () => {
 describe("forkProject", () => {
   beforeEach(resetRuntimeMocks);
 
-  it("does not report a fork as committed when publication diverges", async () => {
+  it("does not report a fork as committed when protected publication is refused", async () => {
     addFile(
       "packages/source/package.json",
       JSON.stringify({ name: "@workspace/source", exports: { ".": "./index.ts" } })
     );
     addFile("packages/source/index.ts", "export const source = true;\n");
-    mocks.push.mockResolvedValueOnce({
-      status: "diverged",
-      divergences: [
-        {
-          repoPath: "packages/new",
-          base: "base",
-          mainTip: "main",
-          upstreamCommits: [],
-          mergeable: "clean",
-        },
-      ],
-    });
+    mocks.push.mockRejectedValueOnce(new Error("RevisionChanged: main advanced"));
     const { forkProject } = await import("./create-project.js");
 
     await expect(forkProject({ from: "packages/source", to: "packages/new" })).rejects.toThrow(
-      /not published because main diverged.*packages\/new/s
+      /RevisionChanged: main advanced/
     );
   });
 
@@ -292,11 +263,10 @@ describe("forkProject", () => {
 
     expect(result.committed).toBe(true);
     expect(result.files).toContain("new-worker.ts");
-    // The fork wrote all files through one vcs.edit, then committed + pushed.
-    expect(mocks.edit).toHaveBeenCalledTimes(1);
+    // Managed writes authored the local chain, then one commit + push finished it.
     expect(mocks.commit).toHaveBeenCalledTimes(1);
     expect(mocks.push).toHaveBeenCalledTimes(1);
-    // The fork wrote its files through one edit-first GAD transition.
+    // The repository lifecycle transition seeded the projected files.
     expect(JSON.parse(mocks.files.get("workers/new/package.json") as string)).toMatchObject({
       name: "@workspace-workers/new",
       vibestudio: {

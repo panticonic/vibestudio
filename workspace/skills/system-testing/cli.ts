@@ -1,14 +1,11 @@
 import { rpc, workers, workspace } from "@workspace/runtime";
+import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { summarizeEntry, summarizeFailures, type DiagnosticLimits } from "./diagnostics.js";
 import { HeadlessRunner } from "./runner.js";
 import { allTests } from "./stages.js";
 import { TestRunner } from "./test-runner.js";
 import type { TestCase, TestSuiteResult, TestSuiteResultEntry } from "./types.js";
-import {
-  SYSTEM_TEST_AGENT_MODEL,
-  SYSTEM_TEST_FALLBACK_MODEL,
-  SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
-} from "./config.js";
+import { SYSTEM_TEST_AGENT_MODEL, systemTestModelRoute } from "./config.js";
 
 export const SYSTEM_TEST_RUN_SCHEMA_VERSION = 1 as const;
 
@@ -38,7 +35,7 @@ export interface SystemTestRunOptions {
 
 export interface SystemTestRunProgress {
   runId: string;
-  status: "running" | "completed" | "errored";
+  status: "running" | "completed" | "cancelled" | "errored";
   startedAt: string;
   updatedAt: string;
   total: number;
@@ -277,95 +274,39 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
   const inspectionTimer = options.onInspectionUpdate
     ? setInterval(() => publishInBackground("inspection", publishInspection()), 5_000)
     : undefined;
-  let cancellationRecord: SystemTestRunRecord | null = null;
+  let resolveTerminalRecord!: (record: SystemTestRunRecord | void) => void;
+  const terminalRecord = new Promise<SystemTestRunRecord | void>((resolve) => {
+    resolveTerminalRecord = resolve;
+  });
   options.registerCancellationCleanup?.(async () => {
-    if (cancellationRecord) return cancellationRecord;
-    const captured = await runner.captureAll();
-    await runner.closeAll();
-    const results = [...completedEntries];
-    const completedNames = new Set(results.map((entry) => entry.test.name));
-    for (const active of running.values()) {
-      if (completedNames.has(active.name)) continue;
-      const test = selected.find((candidate) => candidate.name === active.name);
-      if (!test) continue;
-      const snapshots = captured
-        .filter((row) => row.testName === active.name)
-        .map((row) => row.snapshot);
-      const snapshot = snapshots[0];
-      const error = `System-test run cancelled while "${active.name}" was running`;
-      results.push({
-        test: {
-          name: test.name,
-          category: test.category,
-          description: test.description,
-          prompt: test.prompt,
-        },
-        result: { passed: false, reason: error },
-        execution: {
-          messages: snapshot ? [...snapshot.messages] : [],
-          duration: Math.max(0, Date.now() - Date.parse(active.startedAt)),
-          error,
-          ...(snapshot
-            ? {
-                snapshot,
-                modelExecutionEvidence: snapshot.modelExecutionEvidence,
-                provenance: snapshotProvenance(snapshot),
-              }
-            : {}),
-          diagnostics: {
-            cancelled: true,
-            interruptedSessionCount: snapshots.length,
-            interruptedSessions: snapshots,
-          },
-          toolFailures: snapshots.flatMap((item) =>
-            item.invocations
-              .filter((invocation) => /failed|error|cancel/i.test(invocation.status))
-              .map((invocation) => ({
-                id: invocation.id,
-                name: invocation.name,
-                status: invocation.status,
-                ...(invocation.error ? { error: invocation.error } : {}),
-                source: "snapshot" as const,
-              }))
-          ),
-        },
-      });
-    }
-    const suite = suiteFromEntries(
-      results,
-      Math.max(0, listSystemTests().length - selected.length),
-      Date.now() - Date.parse(startedAt)
-    );
-    const completedAt = new Date().toISOString();
-    cancellationRecord = {
-      schemaVersion: SYSTEM_TEST_RUN_SCHEMA_VERSION,
-      runId: options.runId,
-      status: "cancelled",
-      startedAt,
-      updatedAt: completedAt,
-      completedAt,
-      config: runConfig(options, selected, model, concurrency, testTimeoutMs, runner),
-      provenance,
-      summary: summarizeRun(options.runId, suite, "cancelled"),
-      suite,
-    };
-    return cancellationRecord;
+    tester.cancel(new Error(`System-test run ${options.runId} cancelled`));
+    return await terminalRecord;
   });
   let suite: TestSuiteResult;
   try {
     suite = await runSelectedByCategory(tester, selected, concurrency);
+  } catch (error) {
+    resolveTerminalRecord();
+    throw error;
   } finally {
     if (inspectionTimer !== undefined) clearInterval(inspectionTimer);
   }
   suite.skipped = Math.max(0, listSystemTests().length - selected.length);
-  const summary = summarizeRun(options.runId, suite, "completed");
-  await publishProgress("completed");
+  const status = tester.cancelled ? "cancelled" : "completed";
+  const summary = summarizeRun(options.runId, suite, status);
+  if (tester.cancelled) queued.clear();
+  try {
+    await publishProgress(status);
+  } catch (error) {
+    resolveTerminalRecord();
+    throw error;
+  }
 
   const completedAt = new Date().toISOString();
-  return {
+  const record: SystemTestRunRecord = {
     schemaVersion: SYSTEM_TEST_RUN_SCHEMA_VERSION,
     runId: options.runId,
-    status: "completed",
+    status,
     startedAt,
     updatedAt: completedAt,
     completedAt,
@@ -374,6 +315,8 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
     summary,
     suite,
   };
+  resolveTerminalRecord(record);
+  return record;
 }
 
 function boundedLiveEntry(entry: TestSuiteResultEntry): TestSuiteResultEntry {
@@ -496,6 +439,7 @@ export async function systemTestDoctor(
   await capture(
     "model",
     async () => {
+      const modelRoute = systemTestModelRoute(expectedModel);
       const service = await workers.resolveService("vibestudio.models.v1", null);
       if (service.kind !== "durable-object" || !service.targetId) {
         throw new Error("vibestudio.models.v1 did not resolve to a Durable Object");
@@ -504,7 +448,10 @@ export async function systemTestDoctor(
         defaultModel?: string;
         catalog?: { models?: Array<{ ref?: string; availability?: { state?: string } }> };
       };
-      const required = [expectedModel, SYSTEM_TEST_FALLBACK_MODEL];
+      const required = [
+        modelRoute.primaryModel,
+        ...(modelRoute.fallbackModel ? [modelRoute.fallbackModel] : []),
+      ];
       const availability = required.map((modelRef) => {
         const selected = settings.catalog?.models?.find((model) => model.ref === modelRef);
         return { model: modelRef, availability: selected?.availability?.state ?? "unknown" };
@@ -517,10 +464,13 @@ export async function systemTestDoctor(
       }
       return {
         primary: availability[0],
-        usageLimitFallback: {
-          ...availability[1],
-          thinkingLevel: SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
-        },
+        usageLimitFallback:
+          modelRoute.fallbackModel === null
+            ? null
+            : {
+                ...availability[1],
+                thinkingLevel: modelRoute.fallbackThinkingLevel,
+              },
       };
     },
     "system-test agent models are configured and credentialed"
@@ -600,7 +550,7 @@ function runConfig(
 function snapshotProvenance(snapshot: import("@workspace/agentic-session").SessionSnapshot) {
   return {
     channelId: snapshot.channelId,
-    branchId: snapshot.channelId ? `branch:channel:${snapshot.channelId}` : null,
+    branchId: snapshot.channelId ? logIdForChannel(snapshot.channelId) : null,
     agentEntityId: snapshot.agentEntityId,
     agentTargetId: snapshot.agentTargetId,
     contextId: snapshot.agentContextId,

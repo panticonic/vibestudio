@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  rpcCall: vi.fn(async () => ({ artifactId: "build-1" })),
+  rpcCall: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ artifactId: "build-1" })),
   runSuite: vi.fn(),
+  cancelTestRunner: vi.fn(),
+  testerCancelled: false,
   runnerArgs: [] as unknown[],
   testerOptions: null as Record<string, unknown> | null,
-  captureAll: vi.fn(async () => []),
   snapshotAll: vi.fn(() => []),
-  closeAll: vi.fn(async () => undefined),
   modelPolicySnapshot: vi.fn(() => ({
     primaryModel: "openai-codex:gpt-5.3-codex-spark",
     activeModel: "openai-codex:gpt-5.3-codex-spark",
@@ -16,12 +16,14 @@ const mocks = vi.hoisted(() => ({
     fallbackOn: "usage_limit_terminal" as const,
     activations: [],
   })),
+  resolveService: vi.fn(),
+  listUnits: vi.fn(),
 }));
 
 vi.mock("@workspace/runtime", () => ({
   rpc: { call: mocks.rpcCall },
-  workers: { resolveService: vi.fn() },
-  workspace: { units: { list: vi.fn() } },
+  workers: { resolveService: mocks.resolveService },
+  workspace: { units: { list: mocks.listUnits } },
 }));
 
 vi.mock("./runner.js", () => ({
@@ -29,14 +31,8 @@ vi.mock("./runner.js", () => ({
     constructor(...args: unknown[]) {
       mocks.runnerArgs = args;
     }
-    captureAll() {
-      return mocks.captureAll();
-    }
     snapshotAll() {
       return mocks.snapshotAll();
-    }
-    closeAll() {
-      return mocks.closeAll();
     }
     modelPolicySnapshot() {
       return mocks.modelPolicySnapshot();
@@ -60,6 +56,13 @@ vi.mock("./test-runner.js", () => ({
       const result = await mocks.runSuite(tests, opts);
       for (const entry of result.results ?? []) await onTestResult?.(entry, result);
       return result;
+    }
+    cancel() {
+      mocks.testerCancelled = true;
+      mocks.cancelTestRunner();
+    }
+    get cancelled() {
+      return mocks.testerCancelled;
     }
   },
 }));
@@ -90,19 +93,77 @@ vi.mock("./stages.js", () => ({
   ],
 }));
 
-import { failedSystemTestNames, listSystemTests, runSystemTests } from "./cli.js";
-import { SYSTEM_TEST_AGENT_MODEL } from "./config.js";
+import {
+  failedSystemTestNames,
+  inspectSystemTestRun,
+  listSystemTests,
+  runSystemTests,
+  systemTestDoctor,
+  systemTestTrajectory,
+  type SystemTestRunRecord,
+} from "./cli.js";
+import { SYSTEM_TEST_AGENT_MODEL, SYSTEM_TEST_FALLBACK_MODEL } from "./config.js";
 
 describe("system-testing CLI-neutral API", () => {
   beforeEach(() => {
-    mocks.rpcCall.mockClear();
+    mocks.rpcCall.mockReset().mockResolvedValue({ artifactId: "build-1" });
     mocks.runSuite.mockReset();
+    mocks.cancelTestRunner.mockReset();
+    mocks.testerCancelled = false;
     mocks.runnerArgs = [];
     mocks.testerOptions = null;
-    mocks.captureAll.mockReset().mockResolvedValue([]);
     mocks.snapshotAll.mockReset().mockReturnValue([]);
-    mocks.closeAll.mockReset().mockResolvedValue(undefined);
     mocks.modelPolicySnapshot.mockClear();
+    mocks.resolveService.mockReset();
+    mocks.listUnits.mockReset();
+  });
+
+  function configureHealthyDoctorModels(
+    models: Array<{ ref: string; availability: { state: string } }>
+  ): void {
+    mocks.resolveService.mockResolvedValue({
+      kind: "durable-object",
+      targetId: "do:models",
+    });
+    mocks.listUnits.mockResolvedValue([{ name: "workers/agent-worker", status: "running" }]);
+    mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
+      const method = args[1];
+      if (method === "getDefaultModel") return { catalog: { models } };
+      return {};
+    });
+  }
+
+  it("doctors only an explicitly selected model when the run has no fallback", async () => {
+    configureHealthyDoctorModels([
+      { ref: "anthropic:test-model", availability: { state: "ready" } },
+      { ref: SYSTEM_TEST_FALLBACK_MODEL, availability: { state: "unavailable" } },
+    ]);
+
+    const result = await systemTestDoctor("anthropic:test-model");
+
+    expect(result.ok).toBe(true);
+    expect(result.checks.find((check) => check.name === "model")).toMatchObject({
+      ok: true,
+      data: {
+        primary: { model: "anthropic:test-model", availability: "ready" },
+        usageLimitFallback: null,
+      },
+    });
+  });
+
+  it("doctors both models in the default usage-limit fallback route", async () => {
+    configureHealthyDoctorModels([
+      { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
+      { ref: SYSTEM_TEST_FALLBACK_MODEL, availability: { state: "unavailable" } },
+    ]);
+
+    const result = await systemTestDoctor();
+
+    expect(result.ok).toBe(false);
+    expect(result.checks.find((check) => check.name === "model")).toMatchObject({
+      ok: false,
+      detail: `model ${SYSTEM_TEST_FALLBACK_MODEL} is not usable (unavailable)`,
+    });
   });
 
   it("lists stable exact test descriptors", () => {
@@ -126,6 +187,130 @@ describe("system-testing CLI-neutral API", () => {
         orchestrated: false,
       },
     ]);
+  });
+
+  it("exposes structured failures through inspect and trajectory views", () => {
+    const setupFailure = {
+      phase: "workspace-fixture-setup",
+      error: {
+        name: "RemoteRpcError",
+        message: "fixture setup failed",
+        code: "InternalFailure",
+        errorKind: "application",
+        errorData: { code: "InternalFailure", handle: "diagnostic:vcs:inspectable" },
+        diagnosticHandles: ["diagnostic:vcs:inspectable"],
+      },
+    };
+    const primaryFailure = {
+      phase: "agent-turn",
+      error: {
+        name: "RemoteRpcError",
+        message: "agent turn failed",
+        code: "InternalFailure",
+        errorData: { handle: "diagnostic:agent:primary" },
+        diagnosticHandles: ["diagnostic:agent:primary"],
+      },
+    };
+    const cleanupFailure = {
+      phase: "session-close",
+      error: {
+        name: "RemoteRpcError",
+        message: "session close failed",
+        code: "InternalFailure",
+        errorData: { handle: "diagnostic:agent:cleanup" },
+        diagnosticHandles: ["diagnostic:agent:cleanup"],
+      },
+    };
+    const setupEntry = {
+      test: { name: "alpha", category: "smoke", description: "alpha test", prompt: "alpha" },
+      result: { passed: false, reason: "Error: fixture setup failed" },
+      execution: {
+        messages: [],
+        duration: 12,
+        error: "fixture setup failed",
+        failure: setupFailure,
+      },
+    };
+    const primaryEntry = {
+      test: {
+        name: "alphabet",
+        category: "filesystem",
+        description: "alphabet test",
+        prompt: "alphabet",
+      },
+      result: { passed: false, reason: "Error: agent turn failed" },
+      execution: {
+        messages: [],
+        duration: 13,
+        error: "agent turn failed",
+        failure: primaryFailure,
+        cleanupErrors: ["close: session close failed"],
+        cleanupFailures: [cleanupFailure],
+      },
+    };
+    const record: SystemTestRunRecord = {
+      schemaVersion: 1,
+      runId: "st_structured_failure",
+      status: "completed",
+      startedAt: "2026-07-14T00:00:00.000Z",
+      updatedAt: "2026-07-14T00:00:01.000Z",
+      completedAt: "2026-07-14T00:00:01.000Z",
+      config: {
+        contextId: "ctx-1",
+        names: ["alpha", "alphabet"],
+        all: false,
+        modelPolicy: mocks.modelPolicySnapshot(),
+        concurrency: 1,
+      },
+      provenance: {},
+      summary: {
+        runId: "st_structured_failure",
+        status: "completed",
+        total: 2,
+        passed: 0,
+        failed: 0,
+        errored: 2,
+        toolFailureCount: 0,
+        testsWithToolFailures: 0,
+        skipped: 0,
+        durationMs: 25,
+        failedTests: ["alpha", "alphabet"],
+        testsWithUnexpectedToolFailures: [],
+      },
+      suite: {
+        total: 2,
+        passed: 0,
+        failed: 0,
+        errored: 2,
+        skipped: 0,
+        duration: 25,
+        results: [setupEntry, primaryEntry],
+      },
+    };
+
+    expect(inspectSystemTestRun(record)).toMatchObject({
+      diagnostics: {
+        failures: [
+          { failure: setupFailure },
+          { failure: primaryFailure, cleanupFailures: [cleanupFailure] },
+        ],
+      },
+    });
+    expect(systemTestTrajectory(record, "alpha")).toMatchObject({ failure: setupFailure });
+    expect(systemTestTrajectory(record, "alphabet")).toMatchObject({
+      failure: primaryFailure,
+      cleanupFailures: [cleanupFailure],
+    });
+    expect(systemTestTrajectory(record, "alpha", { full: true })).toMatchObject({
+      execution: { failure: setupFailure },
+    });
+    expect(systemTestTrajectory(record, "alphabet", { full: true })).toMatchObject({
+      execution: { failure: primaryFailure, cleanupFailures: [cleanupFailure] },
+    });
+    const inspection = JSON.stringify(inspectSystemTestRun(record));
+    expect(inspection).toContain("diagnostic:vcs:inspectable");
+    expect(inspection).toContain("diagnostic:agent:primary");
+    expect(inspection).toContain("diagnostic:agent:cleanup");
   });
 
   it("runs an exact name without substring expansion and records configuration", async () => {
@@ -345,30 +530,9 @@ describe("system-testing CLI-neutral API", () => {
     }
   });
 
-  it("returns an inspectable partial record from cancellation cleanup", async () => {
+  it("waits for the runner-owned cleanup before returning a cancellation record", async () => {
     let resolveSuite!: (value: unknown) => void;
     mocks.runSuite.mockImplementation(() => new Promise((resolve) => (resolveSuite = resolve)));
-    mocks.captureAll.mockResolvedValue([
-      {
-        testName: "alpha",
-        snapshot: {
-          channelId: "headless-alpha",
-          agentEntityId: "agent-alpha",
-          agentTargetId: "target-alpha",
-          agentContextId: "ctx-alpha",
-          messages: [],
-          invocations: [{ id: "call-1", name: "eval", status: "failed", error: "boom" }],
-          debugEvents: [],
-          cleanupErrors: [],
-          participants: {},
-          localMethodNames: [],
-          connected: true,
-          duration: 5,
-          title: null,
-          modelExecutionEvidence: { totalCalls: 1, calls: [] },
-        },
-      },
-    ] as never);
     let cleanup: (() => Promise<unknown>) | undefined;
     const running = runSystemTests({
       runId: "st_cancelled",
@@ -380,7 +544,38 @@ describe("system-testing CLI-neutral API", () => {
     });
     await vi.waitFor(() => expect(cleanup).toBeTypeOf("function"));
 
-    const record = await cleanup!();
+    let cleanupSettled = false;
+    const cleaning = cleanup!().then((record) => {
+      cleanupSettled = true;
+      return record;
+    });
+    await Promise.resolve();
+    expect(mocks.cancelTestRunner).toHaveBeenCalledOnce();
+    expect(cleanupSettled).toBe(false);
+
+    resolveSuite({
+      total: 1,
+      passed: 0,
+      failed: 0,
+      errored: 1,
+      skipped: 0,
+      duration: 5,
+      results: [
+        {
+          test: { name: "alpha", category: "smoke", description: "alpha test", prompt: "alpha" },
+          result: { passed: false, reason: "System-test run cancelled" },
+          execution: {
+            messages: [],
+            duration: 5,
+            error: "System-test run cancelled",
+            provenance: { channelId: "headless-alpha" },
+            toolFailures: [{ name: "eval", error: "boom", source: "snapshot" }],
+          },
+        },
+      ],
+    });
+
+    const record = await cleaning;
     expect(record).toMatchObject({
       runId: "st_cancelled",
       status: "cancelled",
@@ -397,18 +592,7 @@ describe("system-testing CLI-neutral API", () => {
         ],
       },
     });
-    expect(mocks.captureAll).toHaveBeenCalledBefore(mocks.closeAll);
-
-    resolveSuite({
-      total: 0,
-      passed: 0,
-      failed: 0,
-      errored: 0,
-      skipped: 0,
-      duration: 1,
-      results: [],
-    });
-    await running;
+    await expect(running).resolves.toEqual(record);
   });
 
   it("rejects unknown exact names", async () => {

@@ -151,7 +151,7 @@ function getCredentialEmail(credential: StoredCredentialSummary | undefined): st
 }
 
 function hasDurableRefreshToken(credential: StoredCredentialSummary | undefined): boolean {
-  return credential?.metadata?.["oauthRefreshTokenStored"] === "true";
+  return credential?.lifecycle.canRefresh === true;
 }
 
 function explainGoogleCredentialError(error: unknown): string {
@@ -224,7 +224,7 @@ function buildStatus(input: {
   };
   if (primary && !hasDurableRefreshToken(primary)) {
     status.warnings.push(
-      "This Google Workspace credential does not report a stored refresh token. " +
+      "This Google Workspace credential has no stored refresh token. " +
         "It may expire after restart or token expiry; reconnect Google Workspace with connectGoogle({ force: true })."
     );
   }

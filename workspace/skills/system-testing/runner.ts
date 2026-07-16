@@ -1,12 +1,20 @@
 import { HeadlessSession, type SessionSnapshot } from "@workspace/agentic-session";
 import type { ConnectionConfig } from "@workspace/agentic-core";
-import { gad, rpc, vcs } from "@workspace/runtime";
+import { blobstore, gad, rpc, vcs } from "@workspace/runtime";
 import {
   SYSTEM_TEST_AGENT_MODEL,
   SYSTEM_TEST_FALLBACK_FAILURE_CODE,
   SYSTEM_TEST_FALLBACK_MODEL,
   SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
+  systemTestModelRoute,
 } from "./config.js";
+import { systemTestFailure } from "./structured-error.js";
+import {
+  WorkspaceRepoFixtureLifecycle,
+  type WorkspaceRepoFixtureCleanup,
+  type WorkspaceRepoFixtureSpec,
+  type WorkspaceRepoFixtureState,
+} from "./workspace-repo-fixture.js";
 
 // This runner is eval'd server-side (in the orchestrating agent's EvalDO), so it
 // uses the portable client surface — NOT panel-only `getStateArgs`/`slotId`.
@@ -33,19 +41,7 @@ Keep evidence bounded. Report summaries, counts, ids, byte lengths, exact error 
 
 Every final response should be concise, include the requested marker tokens exactly when applicable, and mention any problems encountered while setting up or running the test. Never just refer to files or artifacts; describe what the evidence shows and include the concrete mismatch/error in the response.`;
 
-export interface WorkspaceRepoFixtureState {
-  testName: string;
-  repoName: string;
-  repoNamePrefix: string;
-  reposBefore: string[];
-  staleReposRemoved: string[];
-}
-
-export interface WorkspaceRepoFixtureCleanup {
-  reposRemoved: string[];
-  escapedRepos: string[];
-  reposAfter: string[];
-}
+export type { WorkspaceRepoFixtureCleanup, WorkspaceRepoFixtureState };
 
 interface ModelPolicyActivation {
   at: string;
@@ -73,10 +69,8 @@ export class HeadlessRunner {
     sessionPolicies: Map<HeadlessSession, ModelPolicyState>;
   };
   private readonly testName: string | null;
-  private readonly workspaceRepoFixture: {
-    repoName: string;
-    repoNamePrefix: string;
-  } | null;
+  private readonly workspaceRepoFixture: (WorkspaceRepoFixtureSpec & { repoName: string }) | null;
+  private readonly workspaceRepoFixtureLifecycle: WorkspaceRepoFixtureLifecycle | null;
 
   /**
    * Model is per-agent, so each spawned headless agent is created with the
@@ -97,23 +91,34 @@ export class HeadlessRunner {
   ) {
     this.contextId = contextId;
     const primaryModel = opts?.model ?? SYSTEM_TEST_AGENT_MODEL;
+    const modelRoute = systemTestModelRoute(primaryModel);
     this.shared = shared ?? {
       sessions: new Set(),
       testNames: new Map(),
       sessionPolicies: new Map(),
       modelPolicy: {
-        primaryModel,
+        ...modelRoute,
         activeModel: primaryModel,
-        fallbackModel: primaryModel === SYSTEM_TEST_AGENT_MODEL ? SYSTEM_TEST_FALLBACK_MODEL : null,
-        fallbackThinkingLevel:
-          primaryModel === SYSTEM_TEST_AGENT_MODEL ? SYSTEM_TEST_FALLBACK_THINKING_LEVEL : null,
-        fallbackOn:
-          primaryModel === SYSTEM_TEST_AGENT_MODEL ? SYSTEM_TEST_FALLBACK_FAILURE_CODE : null,
         activations: [],
       },
     };
     this.testName = testName;
     this.workspaceRepoFixture = workspaceRepoFixture;
+    this.workspaceRepoFixtureLifecycle = workspaceRepoFixture
+      ? new WorkspaceRepoFixtureLifecycle(
+          {
+            vcs,
+            blobstore,
+            createContext: () =>
+              rpc.call<{ contextId: string }>("main", "runtime.createContext", [{}]),
+            destroyContext: (contextId) =>
+              rpc.call<void>("main", "runtime.destroyContext", [{ contextId, recursive: true }]),
+          },
+          testName ?? "unknown",
+          workspaceRepoFixture.repoName,
+          workspaceRepoFixture
+        )
+      : null;
   }
 
   /** Exact provider:model ref every spawned test agent must execute. */
@@ -136,12 +141,15 @@ export class HeadlessRunner {
   }
 
   /** A concurrency-safe runner view that associates every spawned session with one test. */
-  forTest(testName: string, opts?: { workspaceRepoFixture?: boolean }): HeadlessRunner {
-    const repoNamePrefix = `system-test-${slugifyTestName(testName)}-`;
+  forTest(
+    testName: string,
+    opts?: { workspaceRepoFixture?: WorkspaceRepoFixtureSpec }
+  ): HeadlessRunner {
+    const repoNameStem = `system-test-${slugifyTestName(testName)}-`;
     const workspaceRepoFixture = opts?.workspaceRepoFixture
       ? {
-          repoNamePrefix,
-          repoName: `${repoNamePrefix}${crypto.randomUUID().slice(0, 8)}`,
+          repoName: `${repoNameStem}${crypto.randomUUID().slice(0, 8)}`,
+          ...opts.workspaceRepoFixture,
         }
       : null;
     return new HeadlessRunner(
@@ -154,52 +162,23 @@ export class HeadlessRunner {
   }
 
   /**
-   * Remove only stale repos carrying this test's reserved fixture prefix, then
-   * snapshot the published repo set. Repos outside the reserved namespace are
-   * never removed by setup.
+   * Create one exact task context and commit its typed repository fixture only
+   * on that local line. The scenario publishes it explicitly when sharing is
+   * part of the user-visible workflow.
    */
   async prepareWorkspaceRepoFixture(): Promise<WorkspaceRepoFixtureState> {
-    const fixture = this.requireWorkspaceRepoFixture();
-    const staleRepos = (await this.listMainRepoPaths()).filter((repoPath) =>
-      repoBasename(repoPath).startsWith(fixture.repoNamePrefix)
-    );
-    for (const repoPath of staleRepos) {
-      await vcs.deleteRepo({ repoPath, force: true });
-    }
-    return {
-      testName: this.testName ?? "unknown",
-      repoName: fixture.repoName,
-      repoNamePrefix: fixture.repoNamePrefix,
-      reposBefore: await this.listMainRepoPaths(),
-      staleReposRemoved: staleRepos,
-    };
+    return this.requireWorkspaceRepoFixtureLifecycle().prepare();
   }
 
   /**
-   * Remove every published repo in the reserved fixture namespace. Newly
-   * published repos outside that namespace are reported and deliberately left
+   * Retire the exact fixture identity. If it reached main, delete only that
+   * identity; other task-authored published repositories are reported and left
    * intact, avoiding accidental deletion of concurrent user work.
    */
   async cleanupWorkspaceRepoFixture(
     state: WorkspaceRepoFixtureState
   ): Promise<WorkspaceRepoFixtureCleanup> {
-    const currentRepos = await this.listMainRepoPaths();
-    const ownedRepos = currentRepos.filter((repoPath) =>
-      repoBasename(repoPath).startsWith(state.repoNamePrefix)
-    );
-    const ownedSet = new Set(ownedRepos);
-    const before = new Set(state.reposBefore);
-    const escapedRepos = currentRepos.filter(
-      (repoPath) => !before.has(repoPath) && !ownedSet.has(repoPath)
-    );
-    for (const repoPath of ownedRepos) {
-      await vcs.deleteRepo({ repoPath, force: true });
-    }
-    return {
-      reposRemoved: ownedRepos,
-      escapedRepos,
-      reposAfter: await this.listMainRepoPaths(),
-    };
+    return this.requireWorkspaceRepoFixtureLifecycle().cleanup(state);
   }
 
   /**
@@ -223,7 +202,7 @@ export class HeadlessRunner {
      * across tests or through the orchestrating panel. Use "parent" only when a
      * test explicitly needs the orchestrator's context.
      */
-    context?: "isolated" | "parent";
+    context?: "isolated" | "task" | "parent";
     /**
      * Test-only harness mode: advertise panel-local UI methods from the
      * headless client so spawned agents can exercise inline_ui/action-bar tool
@@ -234,12 +213,24 @@ export class HeadlessRunner {
     const policy = this.shared.modelPolicy;
     const model = policy.activeModel;
     const usingFallbackModel = model === SYSTEM_TEST_FALLBACK_MODEL;
+    const contextMode = opts?.context ?? (this.workspaceRepoFixture ? "task" : "isolated");
+    const taskContextId = this.workspaceRepoFixtureLifecycle?.taskContextId ?? null;
+    if (contextMode === "task" && !taskContextId) {
+      throw new Error(
+        "Workspace repository fixture must be prepared before spawning its task agent"
+      );
+    }
+    const agentContextId =
+      contextMode === "parent"
+        ? this.contextId
+        : contextMode === "task"
+          ? taskContextId
+          : undefined;
     const fixturePrompt = this.workspaceRepoFixture
-      ? `\n\nHarness-owned workspace fixture: if this task creates or forks a disposable ` +
-        `workspace repo, use the exact repo basename ${JSON.stringify(
-          this.workspaceRepoFixture.repoName
-        )} whenever the API asks for its name. This is isolation metadata only; ` +
-        `choose the normal documented product workflow and do not substitute fixture-specific APIs.`
+      ? `\n\nHarness-owned test scope: the exact disposable repository ${JSON.stringify(
+          `${this.workspaceRepoFixture.section}/${this.workspaceRepoFixture.repoName}`
+        )} is already present in this context. It is the only repository owned by this test; ` +
+        `all other repositories are outside the fixture scope.`
       : "";
     const session = await HeadlessSession.createWithAgent({
       config: {
@@ -249,7 +240,7 @@ export class HeadlessRunner {
       rpcCall: (t: string, m: string, args: unknown[]) => rpcConfig.call(t, m, args),
       source: opts?.source ?? "workers/agent-worker",
       className: opts?.className ?? "AiChatWorker",
-      ...(opts?.context === "parent" ? { contextId: this.contextId } : {}),
+      ...(agentContextId ? { contextId: agentContextId } : {}),
       includeSyntheticPanelUiMethods: opts?.syntheticPanelUiTools === true,
       // The model rides the spawned agent's CREATION config (per-agent, seeded
       // from stateArgs.agentConfig) so it inherits the orchestrator's model.
@@ -321,32 +312,8 @@ export class HeadlessRunner {
     return session;
   }
 
-  /** Retire every still-live test agent. Registered with EvalDO cancellation. */
-  async closeAll(): Promise<void> {
-    const sessions = [...this.shared.sessions];
-    await Promise.allSettled(sessions.map((session) => session.close()));
-    for (const session of sessions) this.shared.sessionPolicies.delete(session);
-  }
-
-  /** Capture every active/retained session before cancellation tears down its participant. */
-  async captureAll(): Promise<Array<{ testName: string | null; snapshot: SessionSnapshot }>> {
-    const rows: Array<{ testName: string | null; snapshot: SessionSnapshot }> = [];
-    for (const session of this.shared.sessions) {
-      try {
-        await session.captureModelExecutionEvidence();
-      } catch {
-        // snapshot() retains the concrete evidence error for diagnostics.
-      }
-      rows.push({
-        testName: this.shared.testNames.get(session) ?? null,
-        snapshot: session.snapshot(),
-      });
-    }
-    return rows;
-  }
-
-  /** Non-blocking live snapshots for CLI inspection. Unlike captureAll this
-   * does not issue evidence RPCs, so observing a run cannot perturb it. */
+  /** Non-blocking live snapshots for CLI inspection. Observation never issues
+   * evidence RPCs, so it cannot perturb the run it describes. */
   snapshotAll(): Array<{ testName: string | null; snapshot: SessionSnapshot }> {
     return [...this.shared.sessions].map((session) => ({
       testName: this.shared.testNames.get(session) ?? null,
@@ -357,22 +324,19 @@ export class HeadlessRunner {
   async collectDiagnostics(opts?: {
     channelId?: string | null;
     branchId?: string | null;
-    error?: unknown;
   }): Promise<Record<string, unknown>> {
     const channelId = opts?.channelId ?? null;
     const diagnostics: Record<string, unknown> = {
       generatedAt: new Date().toISOString(),
       contextId: this.contextId,
       channelId,
-      error:
-        opts?.error instanceof Error ? opts.error.message : opts?.error ? String(opts.error) : null,
     };
     try {
       diagnostics["buildProvenance"] = await rpc.call("main", "build.inspectBuildProvenance", [
         "@workspace-skills/system-testing",
       ]);
     } catch (err) {
-      diagnostics["buildProvenanceError"] = err instanceof Error ? err.message : String(err);
+      diagnostics["buildProvenanceFailure"] = systemTestFailure("diagnostic:build-provenance", err);
     }
     if (channelId) {
       try {
@@ -384,7 +348,7 @@ export class HeadlessRunner {
           storageLimit: 25,
         });
       } catch (err) {
-        diagnostics["agentHealthError"] = err instanceof Error ? err.message : String(err);
+        diagnostics["agentHealthFailure"] = systemTestFailure("diagnostic:agent-health", err);
       }
     }
     return diagnostics;
@@ -399,15 +363,12 @@ export class HeadlessRunner {
     return this.workspaceRepoFixture;
   }
 
-  private async listMainRepoPaths(): Promise<string[]> {
-    const refs = await rpc.call<Array<{ repoPath?: unknown }>>("main", "refs.listMains", []);
-    return [
-      ...new Set(
-        refs
-          .map((ref) => ref.repoPath)
-          .filter((repoPath): repoPath is string => typeof repoPath === "string")
-      ),
-    ].sort();
+  private requireWorkspaceRepoFixtureLifecycle(): WorkspaceRepoFixtureLifecycle {
+    this.requireWorkspaceRepoFixture();
+    if (!this.workspaceRepoFixtureLifecycle) {
+      throw new Error("Workspace repository fixture lifecycle is unavailable");
+    }
+    return this.workspaceRepoFixtureLifecycle;
   }
 }
 
@@ -418,8 +379,4 @@ function slugifyTestName(testName: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 56);
   return slug || "case";
-}
-
-function repoBasename(repoPath: string): string {
-  return repoPath.slice(repoPath.lastIndexOf("/") + 1);
 }

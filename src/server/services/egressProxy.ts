@@ -10,6 +10,7 @@ import type {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 import type { AuditLog } from "@vibestudio/credential-client/audit";
 import type {
@@ -20,6 +21,7 @@ import type {
   CredentialGrantAction,
   CredentialUseGrant,
 } from "@vibestudio/credential-client/types";
+import { isOAuthRefreshRecipeComplete } from "@vibestudio/credential-client/credentialStatus";
 import {
   credentialCarrierStripHeaders,
   findMatchingUrlAudience,
@@ -119,8 +121,14 @@ interface ForwardResult {
   bytesOut: number;
 }
 
+interface ProvisionalResponse {
+  commit(): Promise<ForwardResult>;
+  discard(): Promise<void>;
+}
+
 interface RequestExecutionResult<T> extends ForwardResult {
   payload: T;
+  provisional?: ProvisionalResponse;
 }
 
 class ForwardRejection extends Error {
@@ -156,6 +164,7 @@ export type StreamFrame =
       message: string;
       code?: string;
       errorKind: import("@vibestudio/rpc").RpcErrorKind;
+      errorData?: import("@vibestudio/rpc").RpcErrorData;
     };
 
 interface CircuitState {
@@ -870,26 +879,38 @@ export class EgressProxy {
           params.method
         );
         targetUrl = prepared.targetUrl;
+        let result: RequestExecutionResult<T> | undefined;
         try {
-          const result = await params.execute(targetUrl, prepared.headers, authorization);
+          result = await params.execute(targetUrl, prepared.headers, authorization);
           statusCode = result.statusCode;
           bytesIn = result.bytesIn;
           bytesOut = result.bytesOut;
           if (
             statusCode === 401 &&
             !refreshedAfterAuthFailure &&
-            (await this.forceRefreshAuthorizationCredential(authorization))
+            this.canForceRefreshCredential(authorization.credential)
           ) {
+            await result.provisional?.discard();
+            result = undefined;
+            await this.forceRefreshAuthorizationCredential(authorization);
             refreshedAfterAuthFailure = true;
             retries += 1;
             if (attempt === maxAttempts) maxAttempts += 1;
             continue;
           }
           if (retryStatuses && isRetryableStatus(statusCode) && attempt < maxAttempts) {
+            await result.provisional?.discard();
+            result = undefined;
             retries += 1;
             recordCircuitFailure(this.circuits, executionKey);
             await delay(backoffDelayMs(attempt));
             continue;
+          }
+          if (result.provisional) {
+            const committed = await result.provisional.commit();
+            statusCode = committed.statusCode;
+            bytesIn = committed.bytesIn;
+            bytesOut = committed.bytesOut;
           }
           if (statusCode >= 500) {
             recordCircuitFailure(this.circuits, executionKey);
@@ -899,6 +920,7 @@ export class EgressProxy {
           breakerState = getCircuitState(this.circuits, executionKey);
           return result.payload;
         } catch (error) {
+          await result?.provisional?.discard().catch(() => undefined);
           lastError = error;
           if (
             attempt < maxAttempts &&
@@ -1145,7 +1167,11 @@ export class EgressProxy {
     if (!credential.id || !credential.expiresAt || credential.expiresAt > Date.now() + 30_000) {
       return credential;
     }
-    if (!credential.refreshToken || !this.deps.credentialLifecycle) {
+    if (
+      !credential.refreshToken ||
+      !isOAuthRefreshRecipeComplete(credential.oauthRefresh) ||
+      !this.deps.credentialLifecycle
+    ) {
       return credential;
     }
     try {
@@ -1166,6 +1192,7 @@ export class EgressProxy {
     return (
       !!credential?.id &&
       !!credential.refreshToken &&
+      isOAuthRefreshRecipeComplete(credential.oauthRefresh) &&
       typeof this.deps.credentialLifecycle?.refreshCredential === "function"
     );
   }
@@ -1550,7 +1577,7 @@ export class EgressProxy {
             upstreamUrl,
             forwardHeaders
           );
-          return { ...result, payload: undefined };
+          return result;
         },
       });
     } catch (error) {
@@ -1607,8 +1634,8 @@ export class EgressProxy {
     head: Buffer,
     targetUrl: URL,
     headers: OutgoingHttpHeaders
-  ): Promise<ForwardResult> {
-    return new Promise<ForwardResult>((resolve, reject) => {
+  ): Promise<RequestExecutionResult<void>> {
+    return new Promise<RequestExecutionResult<void>>((resolve, reject) => {
       const requestUrl = websocketHttpUrlFor(targetUrl);
       const requestFn = requestUrl.protocol === "https:" ? httpsRequest : httpRequest;
       const defaultPort = requestUrl.protocol === "https:" ? 443 : 80;
@@ -1616,10 +1643,24 @@ export class EgressProxy {
       let settled = false;
       let activeRequest: ReturnType<typeof httpRequest> | null = null;
 
-      const settle = (result: ForwardResult) => {
+      const onDownstreamUnavailable = () => {
+        activeRequest?.destroy();
+      };
+      const cleanupRequestListeners = () => {
+        socket.off("error", onDownstreamUnavailable);
+        socket.off("close", onDownstreamUnavailable);
+      };
+      const settle = (result: RequestExecutionResult<void>, keepRequestListeners = false) => {
         if (settled) return;
         settled = true;
+        if (!keepRequestListeners) cleanupRequestListeners();
         resolve(result);
+      };
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanupRequestListeners();
+        reject(error);
       };
 
       const startAttempt = (family?: 4, fallbackFrom?: unknown) => {
@@ -1673,41 +1714,98 @@ export class EgressProxy {
               });
             },
           });
-          settle({ statusCode, bytesIn: 0, bytesOut: 0 });
+          settle({ statusCode, bytesIn: 0, bytesOut: 0, payload: undefined });
         });
 
         upstreamRequest.on("response", (upstreamResponse) => {
           const statusCode = upstreamResponse.statusCode ?? 502;
-          let diagnosticBodyBytes = 0;
-          const diagnosticBodyChunks: Buffer[] = [];
-          socket.write(
-            serializeRawHttpResponseHead(
-              statusCode,
-              websocketNonUpgradeResponseHeaders(upstreamResponse.headers)
-            )
-          );
-          upstreamResponse.on("data", (chunk: Buffer | string) => {
-            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-            if (diagnosticBodyBytes < WEBSOCKET_DIAGNOSTIC_BODY_LIMIT) {
-              const remaining = WEBSOCKET_DIAGNOSTIC_BODY_LIMIT - diagnosticBodyBytes;
-              diagnosticBodyChunks.push(buffer.subarray(0, remaining));
-              diagnosticBodyBytes += Math.min(buffer.byteLength, remaining);
+          let state: "pending" | "committing" | "finished" = "pending";
+          let finalResult: ForwardResult = { statusCode, bytesIn: 0, bytesOut: 0 };
+          let commitPromise: Promise<ForwardResult> | null = null;
+          const onPendingResponseError = () => undefined;
+          upstreamResponse.on("error", onPendingResponseError);
+
+          const discard = async (): Promise<void> => {
+            if (state === "finished") return;
+            if (state === "committing") {
+              await commitPromise?.catch(() => undefined);
+              return;
             }
-            socket.write(chunk);
-          });
-          upstreamResponse.on("end", () => {
-            this.logWebSocketUpgradeDiagnostic("upstream_response", {
-              reason: "upstream_non_upgrade_response",
+            state = "finished";
+            cleanupRequestListeners();
+            upstreamResponse.off("error", onPendingResponseError);
+            upstreamResponse.destroy();
+            upstreamRequest.destroy();
+          };
+
+          const commit = (): Promise<ForwardResult> => {
+            if (state === "finished") return Promise.resolve(finalResult);
+            if (commitPromise) return commitPromise;
+            state = "committing";
+            upstreamResponse.off("error", onPendingResponseError);
+            commitPromise = (async () => {
+              let headCommitted = false;
+              let bodyBytes = 0;
+              let diagnosticBodyBytes = 0;
+              const diagnosticBodyChunks: Buffer[] = [];
+              const onData = (chunk: Buffer | string) => {
+                const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                bodyBytes += buffer.byteLength;
+                if (diagnosticBodyBytes < WEBSOCKET_DIAGNOSTIC_BODY_LIMIT) {
+                  const remaining = WEBSOCKET_DIAGNOSTIC_BODY_LIMIT - diagnosticBodyBytes;
+                  const diagnosticChunk = buffer.subarray(0, remaining);
+                  diagnosticBodyChunks.push(diagnosticChunk);
+                  diagnosticBodyBytes += diagnosticChunk.byteLength;
+                }
+              };
+              try {
+                if (socket.destroyed) {
+                  upstreamResponse.destroy();
+                  return finalResult;
+                }
+                socket.write(
+                  serializeRawHttpResponseHead(
+                    statusCode,
+                    websocketNonUpgradeResponseHeaders(upstreamResponse.headers)
+                  )
+                );
+                headCommitted = true;
+                upstreamResponse.on("data", onData);
+                await pipeline(upstreamResponse, socket);
+              } catch (error) {
+                upstreamResponse.destroy();
+                if (!headCommitted) throw error;
+              } finally {
+                upstreamResponse.off("data", onData);
+                cleanupRequestListeners();
+                state = "finished";
+              }
+              finalResult = { statusCode, bytesIn: bodyBytes, bytesOut: 0 };
+              if (headCommitted) {
+                this.logWebSocketUpgradeDiagnostic("upstream_response", {
+                  reason: "upstream_non_upgrade_response",
+                  statusCode,
+                  target: diagnosticWebSocketTarget(targetUrl),
+                  requestHeaders,
+                  responseHeaders: diagnosticResponseHeaders(upstreamResponse.headers),
+                  body: Buffer.concat(diagnosticBodyChunks).toString("utf8"),
+                });
+              }
+              return finalResult;
+            })();
+            return commitPromise;
+          };
+
+          settle(
+            {
               statusCode,
-              target: diagnosticWebSocketTarget(targetUrl),
-              requestHeaders,
-              responseHeaders: diagnosticResponseHeaders(upstreamResponse.headers),
-              body: Buffer.concat(diagnosticBodyChunks).toString("utf8"),
-            });
-            socket.end();
-            settle({ statusCode, bytesIn: 0, bytesOut: 0 });
-          });
-          upstreamResponse.on("error", reject);
+              bytesIn: 0,
+              bytesOut: 0,
+              payload: undefined,
+              provisional: { commit, discard },
+            },
+            true
+          );
         });
 
         upstreamRequest.on("error", (error) => {
@@ -1737,15 +1835,14 @@ export class EgressProxy {
               ? { fallbackFrom: diagnosticThrownError(fallbackFrom) }
               : {}),
           });
-          reject(error);
+          fail(error);
         });
 
         upstreamRequest.end();
       };
 
-      socket.on("error", () => {
-        activeRequest?.destroy();
-      });
+      socket.on("error", onDownstreamUnavailable);
+      socket.on("close", onDownstreamUnavailable);
       startAttempt();
     });
   }

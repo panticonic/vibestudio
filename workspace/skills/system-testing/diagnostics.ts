@@ -1,5 +1,10 @@
 import type { ChatMessage } from "@workspace/agentic-core";
-import type { TestSuiteResult, TestSuiteResultEntry, ToolFailureSummary } from "./types.js";
+import type {
+  SystemTestFailure,
+  TestSuiteResult,
+  TestSuiteResultEntry,
+  ToolFailureSummary,
+} from "./types.js";
 
 export interface DiagnosticInvocation {
   id?: string;
@@ -91,6 +96,7 @@ export interface FailureDiagnostic {
   prompt: string;
   validationReason: string | null;
   sessionError: string | null;
+  failure: SystemTestFailure | null;
   durationMs: number;
   modelExecution: {
     totalCalls: number;
@@ -112,14 +118,25 @@ export interface FailureDiagnostic {
   toolFailures: ToolFailureSummary[];
   debugEvents: string[];
   cleanupErrors: string[];
+  cleanupFailures: SystemTestFailure[];
   workspaceRepoFixture: {
     testName: string | null;
+    contextId: string | null;
+    kind: string | null;
+    section: string | null;
     repoName: string | null;
-    repoNamePrefix: string | null;
-    staleReposRemoved: string[];
-    reposRemoved: string[];
-    escapedRepos: string[];
-    reposAfter: string[];
+    repositoryId: string | null;
+    repoPath: string | null;
+    seedFilePaths: string[];
+    importWorkUnitId: string | null;
+    taskBaseEventId: string | null;
+    importChangeCount: number;
+    publishedFixtureRemoved: { repositoryId: string; repoPath: string } | null;
+    unexpectedPublishedRepositoriesRemoved: Array<{
+      repositoryId: string;
+      repoPath: string;
+    }>;
+    counteractedChangeCount: number;
   } | null;
   participants: Array<{
     id: string;
@@ -199,10 +216,12 @@ function summarizeFailure(
   const debugEvents = (snapshot?.debugEvents ?? [])
     .slice(-limits.debugEvents)
     .map((event) => clip(safeJson(event), limits.text));
-  const cleanupErrors = [
-    ...(entryExecution["cleanupErrors"] ?? []),
-    ...(snapshot?.cleanupErrors ?? []).map((error) => `${error.phase}: ${error.message}`),
-  ].map((error) => clip(String(error), limits.text));
+  // TestRunner normalizes raw session cleanup errors into the execution-level
+  // list alongside fixture and harness cleanup. The snapshot retains the raw
+  // session events as evidence; combining both here reports one failure twice.
+  const cleanupErrors = (entryExecution["cleanupErrors"] ?? []).map((error) =>
+    clip(String(error), limits.text)
+  );
   const participants = Object.entries(snapshot?.participants ?? {}).map(([id, participant]) => ({
     id,
     name: participant.name,
@@ -221,6 +240,7 @@ function summarizeFailure(
     prompt: clip(entry.test.prompt, limits.text),
     validationReason: clipOptional(entry.result.reason, limits.text) ?? null,
     sessionError: clipOptional(entryExecution["error"], limits.text) ?? null,
+    failure: entryExecution["failure"] ?? null,
     durationMs: entryExecution["duration"],
     modelExecution: summarizeModelExecution(
       entryExecution["modelExecutionEvidence"] ?? snapshot?.modelExecutionEvidence
@@ -236,6 +256,7 @@ function summarizeFailure(
       })),
     debugEvents,
     cleanupErrors,
+    cleanupFailures: entryExecution["cleanupFailures"] ?? [],
     workspaceRepoFixture: summarizeWorkspaceRepoFixture(entryExecution["diagnostics"]),
     participants,
     likelyIssue: entry.result.passed
@@ -261,14 +282,51 @@ function summarizeWorkspaceRepoFixture(
           .slice(0, 20)
           .map((value) => clip(value, 240))
       : [];
+  const repository = (value: unknown): { repositoryId: string; repoPath: string } | null => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const candidate = value as Record<string, unknown>;
+    if (
+      typeof candidate["repositoryId"] !== "string" ||
+      typeof candidate["repoPath"] !== "string"
+    ) {
+      return null;
+    }
+    return {
+      repositoryId: clip(candidate["repositoryId"], 240),
+      repoPath: clip(candidate["repoPath"], 240),
+    };
+  };
+  const repositories = (value: unknown): Array<{ repositoryId: string; repoPath: string }> =>
+    Array.isArray(value)
+      ? value
+          .map(repository)
+          .filter(
+            (candidate): candidate is { repositoryId: string; repoPath: string } =>
+              candidate !== null
+          )
+          .slice(0, 20)
+      : [];
   return {
     testName: stringOrNull("testName"),
+    contextId: stringOrNull("contextId"),
+    kind: stringOrNull("kind"),
+    section: stringOrNull("section"),
     repoName: stringOrNull("repoName"),
-    repoNamePrefix: stringOrNull("repoNamePrefix"),
-    staleReposRemoved: strings("staleReposRemoved"),
-    reposRemoved: strings("reposRemoved"),
-    escapedRepos: strings("escapedRepos"),
-    reposAfter: strings("reposAfter"),
+    repositoryId: stringOrNull("repositoryId"),
+    repoPath: stringOrNull("repoPath"),
+    seedFilePaths: strings("seedFilePaths"),
+    importWorkUnitId: stringOrNull("importWorkUnitId"),
+    taskBaseEventId: stringOrNull("taskBaseEventId"),
+    importChangeCount: Array.isArray(record["importChangeIds"])
+      ? record["importChangeIds"].length
+      : 0,
+    publishedFixtureRemoved: repository(record["publishedFixtureRemoved"]),
+    unexpectedPublishedRepositoriesRemoved: repositories(
+      record["unexpectedPublishedRepositoriesRemoved"]
+    ),
+    counteractedChangeCount: Array.isArray(record["counteractedChangeIds"])
+      ? record["counteractedChangeIds"].length
+      : 0,
   };
 }
 

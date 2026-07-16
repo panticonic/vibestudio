@@ -55,9 +55,9 @@ const googleCredential: StoredCredentialSummary = {
     valueTemplate: "Bearer {token}",
   },
   scopes: ["https://www.googleapis.com/auth/drive"],
+  lifecycle: { state: "active", canRefresh: true },
   metadata: {
     providerId: "google-workspace",
-    oauthRefreshTokenStored: "true",
   },
 };
 

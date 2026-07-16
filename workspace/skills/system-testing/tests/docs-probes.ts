@@ -1,4 +1,10 @@
-import type { TestCase, TestExecutionResult, TestResult } from "../types.js";
+import {
+  CONTENT_WORKSPACE_REPO_FIXTURE,
+  type TestCase,
+  type TestExecutionResult,
+  type TestResult,
+  type WorkspaceRepoFixtureSpec,
+} from "../types.js";
 import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
 
 function hasEvidence(result: TestExecutionResult, tokens: readonly string[]): TestResult {
@@ -12,14 +18,16 @@ function appliedDocsProbe(
   description: string,
   task: string,
   expected: string[],
-  options?: { workspaceRepoFixture?: boolean }
+  options?: { workspaceRepoFixture?: WorkspaceRepoFixtureSpec }
 ): TestCase {
   return {
     name,
     description,
     category: "docs-probes",
     prompt: [task, `Finish with: ${expected.join(", ")}.`].join("\n"),
-    ...(options?.workspaceRepoFixture ? { workspaceRepoFixture: true } : {}),
+    ...(options?.workspaceRepoFixture
+      ? { workspaceRepoFixture: options.workspaceRepoFixture }
+      : {}),
     validate: (result) => hasEvidence(result, expected),
   };
 }
@@ -42,7 +50,7 @@ export const docsProbeTests: TestCase[] = [
     "Create, publish, and inspect a real isolated panel",
     "Create, publish, and inspect a tiny isolated panel project.",
     ["DOC_WORKSPACE_DEV_LOOP_OK", "published", "opened"],
-    { workspaceRepoFixture: true }
+    { workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE }
   ),
   appliedDocsProbe(
     "docs-worker-fork-rpc-plan",
