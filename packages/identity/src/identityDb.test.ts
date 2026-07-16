@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { IdentityDb } from "./identityDb.js";
 
 describe("identity package schema cut", () => {
@@ -42,11 +43,11 @@ describe("identity package schema cut", () => {
     const before = fs.readFileSync(databasePath);
 
     expect(() => new IdentityDb({ path: databasePath, readOnly: false })).toThrow(
-      /schema version is 0, expected 5/
+      /schema version is 0, expected 10/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
     expect(() => new IdentityDb({ path: databasePath, readOnly: true })).toThrow(
-      /schema version is 0, expected 5/
+      /schema version is 0, expected 10/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
 
@@ -87,9 +88,7 @@ describe("identity package schema cut", () => {
       createdAt: 1,
     });
 
-    expect(identity.revokeUser("usr_alice", 10, ["ws_beta", "ws_alpha", "ws_alpha"])).toBe(
-      true
-    );
+    expect(identity.revokeUser("usr_alice", 10, ["ws_beta", "ws_alpha", "ws_alpha"])).toBe(true);
     expect(identity.listUserRevocationCleanup("usr_alice")).toEqual([
       { userId: "usr_alice", workspaceId: "ws_alpha", attempts: 0 },
       { userId: "usr_alice", workspaceId: "ws_beta", attempts: 0 },
@@ -110,5 +109,112 @@ describe("identity package schema cut", () => {
       { userId: "usr_alice", workspaceId: "ws_beta", attempts: 0 },
     ]);
     restarted.close();
+  });
+
+  it("owns invite and promoted device control rooms in the pairing transaction", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-control-rooms-"));
+    roots.push(root);
+    const databasePath = path.join(root, "identity.db");
+    const central = new CentralDataManager({ databasePath });
+    const workspaceId = central.addWorkspace("test").workspaceId;
+    central.close();
+    const identity = new IdentityDb({ path: databasePath, readOnly: false, now: () => 1_000 });
+    identity.insertUser({
+      id: "usr_alice",
+      handle: "alice",
+      displayName: "Alice",
+      role: "member",
+      createdAt: 1,
+    });
+    const codeHash = "a".repeat(64);
+    identity.insertPairingInvite({
+      code: codeHash,
+      room: "control-room",
+      userId: "usr_alice",
+      workspaceId,
+      intent: "pair-device",
+      createdAt: 1_000,
+      expiresAt: 61_000,
+    });
+    expect(identity.getInviteControlRoom(codeHash)).toEqual({
+      kind: "invite",
+      room: "control-room",
+      codeHash,
+      expiresAt: 61_000,
+    });
+    const conflictingCodeHash = "e".repeat(64);
+    expect(() =>
+      identity.insertPairingInvite({
+        code: conflictingCodeHash,
+        room: "control-room",
+        userId: "usr_alice",
+        workspaceId,
+        intent: "pair-device",
+        createdAt: 1_000,
+        expiresAt: 61_000,
+      })
+    ).toThrow();
+    expect(identity.getPairingCode(conflictingCodeHash)).toBeNull();
+
+    const device = {
+      deviceId: `dev_${"d".repeat(24)}`,
+      refreshTokenHash: "b".repeat(64),
+      userId: "usr_alice",
+      label: "Phone",
+      createdAt: 1_000,
+    };
+    const refreshToken = "r".repeat(43);
+    const completed = identity.completePairing({
+      code: codeHash,
+      createDevice: () => ({ device, refreshToken }),
+    });
+    expect(completed).toEqual({
+      device,
+      refreshToken,
+      controlRoom: "control-room",
+      workspaceId,
+    });
+    expect(identity.getPairingCode(codeHash)).toBeNull();
+    expect(identity.listControlRooms()).toEqual([
+      { kind: "device", room: "control-room", deviceId: device.deviceId },
+    ]);
+    expect(
+      identity.completePairing({
+        code: codeHash,
+        createDevice: () => {
+          throw new Error("a consumed code must not issue another credential");
+        },
+      })
+    ).toBeNull();
+
+    expect(identity.revokeDevice(device.deviceId, 2_000)?.revokedAt).toBe(2_000);
+    expect(identity.listControlRooms()).toEqual([]);
+    identity.close();
+  });
+
+  it("expires a pairing code and its invite room together", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-control-expiry-"));
+    roots.push(root);
+    const databasePath = path.join(root, "identity.db");
+    const central = new CentralDataManager({ databasePath });
+    const workspaceId = central.addWorkspace("test").workspaceId;
+    central.close();
+    const identity = new IdentityDb({ path: databasePath, readOnly: false });
+    const codeHash = "d".repeat(64);
+    identity.insertPairingInvite({
+      code: codeHash,
+      room: "expiring-room",
+      workspaceId,
+      intent: "root-bootstrap",
+      createdAt: 1,
+      expiresAt: 10,
+    });
+
+    expect(identity.deleteExpiredPairingInvites(10)).toEqual([
+      { kind: "invite", room: "expiring-room", codeHash, expiresAt: 10 },
+    ]);
+    expect(identity.getPairingCode(codeHash)).toBeNull();
+    expect(identity.listControlRooms()).toEqual([]);
+    identity.close();
   });
 });

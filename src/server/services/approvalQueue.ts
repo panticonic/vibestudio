@@ -79,7 +79,7 @@ interface ApprovalQueueRequestBase {
   requesterCategory?: ApprovalRequesterCategory;
   operation?: ApprovalOperationDescriptor;
   /**
-   * Host-computed diff-review payload (narrow-host-vcs-plan §5.1), forwarded
+   * Host-computed diff-review payload (provenance-aware-diff-merge-plan §9), forwarded
    * verbatim onto the pending approval. Set by the main-advance gate for
    * capability (advance/delete/restore) and unit-batch (meta) prompts.
    */
@@ -706,7 +706,7 @@ export function createApprovalQueue(deps: {
           }
         : undefined;
       if (
-        req.capability === "workspace-repo-write" ||
+        req.capability === "workspace-main-advance" ||
         req.capability === "workspace-project-import" ||
         req.capability === "workspace-shared-git-remote"
       ) {

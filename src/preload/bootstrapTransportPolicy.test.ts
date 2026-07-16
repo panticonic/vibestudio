@@ -24,10 +24,22 @@ describe("bootstrap transport policy", () => {
     ).not.toThrow();
     expect(() =>
       assertBootstrapRpcMessageAllowed("main", {
-        type: "request",
-        method: "events.subscribe",
+        type: "stream-request",
+        method: "events.watch",
       })
     ).not.toThrow();
+  });
+
+  it("rejects using the wrong RPC shape for an otherwise allowed method", () => {
+    expect(() =>
+      assertBootstrapRpcMessageAllowed("main", { type: "request", method: "events.watch" })
+    ).toThrow(/not allowed/);
+    expect(() =>
+      assertBootstrapRpcMessageAllowed("main", {
+        type: "stream-request",
+        method: "workspace.hostTargets.beginLaunch",
+      })
+    ).toThrow(/not allowed/);
   });
 
   it("rejects arbitrary shell RPC methods and non-main targets", () => {

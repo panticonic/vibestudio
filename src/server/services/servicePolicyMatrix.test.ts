@@ -31,7 +31,7 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
@@ -88,12 +88,18 @@ async function collectPolicyMatrix(): Promise<PolicyMatrix> {
     .filter((file) => /Service(Def)?\.ts$/.test(file) && !file.includes(".test."))
     .sort();
 
+  // Module transformation dominates this guardrail's cold path. Loading every
+  // independent service module serially made that setup count against the first
+  // test's five-second budget under a busy full-suite worker.
+  const modules = await Promise.all(
+    files.map(
+      async (file) =>
+        (await import(/* @vite-ignore */ join(servicesDir, file))) as Record<string, unknown>
+    )
+  );
+
   const defs = new Map<string, ServiceDefinition>();
-  for (const file of files) {
-    const mod = (await import(/* @vite-ignore */ join(servicesDir, file))) as Record<
-      string,
-      unknown
-    >;
+  for (const mod of modules) {
     for (const [exportName, exported] of Object.entries(mod)) {
       if (typeof exported !== "function" || !exportName.startsWith("create")) continue;
       let result: unknown;
@@ -126,9 +132,17 @@ async function collectPolicyMatrix(): Promise<PolicyMatrix> {
   return matrix;
 }
 
+let matrix: PolicyMatrix;
+
+beforeAll(async () => {
+  // Service discovery is suite setup shared by every assertion below. Keeping
+  // it outside an individual test prevents cold Vite transforms from being
+  // misreported as a snapshot assertion timeout in the full host suite.
+  matrix = await collectPolicyMatrix();
+});
+
 describe("service policy matrix", () => {
-  it("matches the checked-in golden snapshot (any policy change is a reviewable diff)", async () => {
-    const matrix = await collectPolicyMatrix();
+  it("matches the checked-in golden snapshot (any policy change is a reviewable diff)", () => {
     if (process.env["UPDATE_GOLDEN"]) {
       writeFileSync(goldenPath, `${JSON.stringify(matrix, null, 2)}\n`);
     }
@@ -138,15 +152,13 @@ describe("service policy matrix", () => {
     expect(matrix).toEqual(golden);
   });
 
-  it("every service declares a non-empty service-level policy (no implicit-open service)", async () => {
-    const matrix = await collectPolicyMatrix();
+  it("every service declares a non-empty service-level policy (no implicit-open service)", () => {
     for (const [name, entry] of Object.entries(matrix)) {
       expect(entry.service.length, `${name} has an empty service policy`).toBeGreaterThan(0);
     }
   });
 
-  it("runtime.setTitle's declared per-method policy is exactly panel/app/worker/do (declared == enforced)", async () => {
-    const matrix = await collectPolicyMatrix();
+  it("runtime.setTitle's declared per-method policy is exactly panel/app/worker/do (declared == enforced)", () => {
     // Fix 2: the handler no longer re-gates caller kind; this per-method policy
     // is the SOLE gate. If someone widens/narrows it, this — and the snapshot — fail.
     expect(matrix["runtime"]?.methods["setTitle"]).toEqual(["app", "do", "panel", "worker"]);
@@ -159,8 +171,7 @@ describe("service policy matrix", () => {
   // escalation over the eval path. Computed against the REAL registered service
   // definitions, accounting for the `do`→worker/panel widening rule in
   // callerKindAllowedByPolicy (agent gets NO such widening).
-  it("every (service, method) reachable by `agent` is also reachable by `do` (agent ⊆ do)", async () => {
-    const matrix = await collectPolicyMatrix();
+  it("every (service, method) reachable by `agent` is also reachable by `do` (agent ⊆ do)", () => {
     const violations: string[] = [];
     let agentReachable = 0;
     for (const [service, entry] of Object.entries(matrix)) {

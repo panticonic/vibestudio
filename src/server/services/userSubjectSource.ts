@@ -6,7 +6,7 @@
  * It reads the shared identity DB (via `deviceAuthStore`/`userStore`) and the
  * Node-side `EntityCache` lineage mirror to map:
  *   - `shell:<deviceId>`   → owning user (`deviceAuthStore.userFor` → device→user FK)
- *   - `agent:<entityId>`   → the spawning user carried on the credential binding
+ *   - `agent:<entityId>`   → the current owner of that live session entity
  *   - `panel:`/`do:`/`worker:` → the lineage owner (`resolveUserSubject`, §6),
  *     enriched with the live account handle
  *   - the local-console bootstrap principals (`electron-main`/`headless-host`) →
@@ -92,8 +92,11 @@ export function createUserSubjectSource(deps: {
           return subjectFor(userId);
         }
         case "agent": {
-          const userId = agentBinding?.userId;
+          const userId = agentBinding
+            ? entityCache.resolveActive(agentBinding.entityId)?.ownerUserId
+            : undefined;
           if (!userId) return null;
+          if (userId === "system") return { userId: "system", handle: "system" };
           return subjectFor(userId);
         }
         case "panel":

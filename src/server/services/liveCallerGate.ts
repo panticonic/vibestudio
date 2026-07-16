@@ -3,6 +3,10 @@ import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { MembershipStore } from "@vibestudio/identity/membership";
 import type { UserStore } from "@vibestudio/identity/userStore";
 import type { DeviceAuthStore } from "../hostCore/deviceAuthStore.js";
+import {
+  bindingForLiveAgentEntity,
+  ownerForLiveAgentEntity,
+} from "../hostCore/auth/agentEntity.js";
 
 /**
  * Build the per-frame identity gate for a workspace child. Authentication is
@@ -35,8 +39,25 @@ export function createLiveCallerGate(deps: {
     return issuer?.ownerUserId === userId;
   };
   return (caller, authorizedBy) => {
+    const liveAgentOwner = (): string | null => {
+      const binding = caller.agentBinding;
+      if (!binding || caller.runtime.id !== `agent:${binding.entityId}`) return null;
+      const credential = deps.deviceAuthStore.getAgentCredential(binding.agentId);
+      if (
+        !credential ||
+        credential.revokedAt !== undefined ||
+        (credential.expiresAt !== undefined && credential.expiresAt < now()) ||
+        credential.entityId !== binding.entityId
+      ) {
+        return null;
+      }
+      const entity = deps.entityCache.resolveActive(binding.entityId);
+      if (!bindingForLiveAgentEntity(entity, binding.agentId)) return null;
+      return ownerForLiveAgentEntity(entity);
+    };
     const subject = caller.subject;
     if (subject?.userId === "system") {
+      if (caller.runtime.kind === "agent") return liveAgentOwner() === "system";
       if (caller.runtime.kind === "server") return true;
       if (caller.runtime.kind === "extension") {
         return deps.isLiveExtension(caller.runtime.id);
@@ -60,16 +81,7 @@ export function createLiveCallerGate(deps: {
     }
 
     if (caller.runtime.kind === "agent") {
-      const binding = caller.agentBinding;
-      if (!binding || binding.userId !== user.id) return false;
-      const credential = deps.deviceAuthStore.getAgentCredential(binding.agentId);
-      return (
-        credential !== null &&
-        credential.revokedAt === undefined &&
-        (credential.expiresAt === undefined || credential.expiresAt >= now()) &&
-        credential.entityId === binding.entityId &&
-        credential.userId === user.id
-      );
+      return liveAgentOwner() === user.id;
     }
 
     if (

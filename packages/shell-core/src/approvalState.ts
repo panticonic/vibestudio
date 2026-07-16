@@ -2,8 +2,6 @@ import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 
 export const SHELL_APPROVAL_PENDING_CHANGED_EVENT = "shell-approval:pending-changed" as const;
-export const SHELL_APPROVAL_PENDING_CHANGED_CHANNEL =
-  `event:${SHELL_APPROVAL_PENDING_CHANGED_EVENT}` as const;
 
 export type ApprovalPendingChangedPayload = { pending: PendingApproval[] };
 export type ApprovalStateSource = "event" | "refresh";

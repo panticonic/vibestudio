@@ -16,14 +16,12 @@ import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
 import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 import {
   createApprovalStateController,
-  SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
 } from "@vibestudio/shell-core/approvalState";
 import {
   account,
   blobstore,
   events,
-  onRpcEvent,
   panel,
   shellApproval,
   shellPresence,
@@ -121,7 +119,7 @@ export function ConsentApprovalBar() {
       subscribePendingChanged: () => events.subscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT),
       unsubscribePendingChanged: () => events.unsubscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT),
       onPendingChanged: (listener) =>
-        onRpcEvent(SHELL_APPROVAL_PENDING_CHANGED_CHANNEL, (event) => listener(event.payload)),
+        events.on(SHELL_APPROVAL_PENDING_CHANGED_EVENT, (payload) => listener(payload)),
       filter: filterRuntimeApprovals,
       onChange: (pending) => setPendingAccess(pending),
       onError: (err, phase) => {

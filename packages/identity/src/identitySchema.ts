@@ -1,7 +1,7 @@
 import type { CanonicalSqliteSchema } from "@vibestudio/sqlite";
 
 /** Identity and machine-control share one file and therefore one atomic schema. */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 5;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 10;
 
 export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
   version: IDENTITY_DATABASE_SCHEMA_VERSION,
@@ -46,20 +46,11 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
       sql: `CREATE TABLE agent_credentials (
         agent_id TEXT PRIMARY KEY,
         token_hash TEXT NOT NULL,
-        entity_id TEXT NOT NULL,
-        context_id TEXT NOT NULL,
-        channel_id TEXT NOT NULL,
-        scopes TEXT,
-        user_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL UNIQUE,
         created_at INTEGER NOT NULL,
         expires_at INTEGER,
         revoked_at INTEGER
       )`,
-    },
-    {
-      type: "index",
-      name: "agent_credentials_by_entity",
-      sql: "CREATE INDEX agent_credentials_by_entity ON agent_credentials(entity_id)",
     },
     {
       type: "table",
@@ -75,12 +66,17 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
     },
     {
       type: "table",
-      name: "pairing_receipts",
-      sql: `CREATE TABLE pairing_receipts (
-        code TEXT PRIMARY KEY,
-        device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-        workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
-        expires_at INTEGER NOT NULL
+      name: "control_rooms",
+      sql: `CREATE TABLE control_rooms (
+        room TEXT PRIMARY KEY,
+        invite_code_hash TEXT UNIQUE REFERENCES pairing_codes(code) ON DELETE CASCADE,
+        device_id TEXT UNIQUE REFERENCES devices(device_id) ON DELETE CASCADE,
+        invite_expires_at INTEGER,
+        CHECK (
+          (invite_code_hash IS NOT NULL AND device_id IS NULL AND invite_expires_at IS NOT NULL AND invite_expires_at > 0)
+          OR
+          (invite_code_hash IS NULL AND device_id IS NOT NULL AND invite_expires_at IS NULL)
+        )
       )`,
     },
     {
@@ -143,15 +139,25 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
     },
     {
       type: "table",
-      name: "hub_runtime",
-      sql: `CREATE TABLE hub_runtime (
+      name: "hub_process_lease",
+      sql: `CREATE TABLE hub_process_lease (
         singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        owner_boot_id TEXT NOT NULL,
         gateway_port INTEGER NOT NULL,
         pid INTEGER NOT NULL,
-        server_id TEXT NOT NULL,
-        server_boot_id TEXT NOT NULL,
-        started_at INTEGER NOT NULL,
-        version TEXT NOT NULL
+        acquired_at INTEGER NOT NULL,
+        heartbeat_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL CHECK(expires_at > heartbeat_at)
+      )`,
+    },
+    {
+      type: "table",
+      name: "ephemeral_workspace_cleanup",
+      sql: `CREATE TABLE ephemeral_workspace_cleanup (
+        cleanup_id TEXT PRIMARY KEY,
+        disk_name TEXT NOT NULL UNIQUE,
+        source_owner_boot_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
       )`,
     },
   ],

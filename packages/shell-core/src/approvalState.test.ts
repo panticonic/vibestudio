@@ -4,7 +4,6 @@ import {
   createApprovalStateController,
   pendingApprovalSignature,
   pendingApprovalsFromEventPayload,
-  SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
 } from "./approvalState.js";
 
 function approval(approvalId: string): PendingApproval {
@@ -16,7 +15,7 @@ function approval(approvalId: string): PendingApproval {
     repoPath: "panels/test",
     effectiveVersion: "ev",
     requestedAt: 1,
-    capability: "workspace-repo-write",
+    capability: "workspace-main-advance",
     title: "Write files",
     resource: { type: "git-repo", label: "Repository", value: "panels/test" },
   };
@@ -28,7 +27,6 @@ describe("approvalState", () => {
     expect(pendingApprovalsFromEventPayload({ pending })).toBe(pending);
     expect(pendingApprovalsFromEventPayload({ pending: "nope" })).toBeNull();
     expect(pendingApprovalSignature(pending)).toBe("capability:a1|capability:a2");
-    expect(SHELL_APPROVAL_PENDING_CHANGED_CHANNEL).toBe("event:shell-approval:pending-changed");
   });
 
   it("subscribes before refresh so pushed snapshots can drive state without polling", async () => {

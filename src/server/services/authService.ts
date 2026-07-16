@@ -15,7 +15,7 @@ import {
   AGENT_SECRET_PATTERN,
   AGENT_TOKEN_PATTERN,
   type DeviceAuthStore,
-  type IssuedDeviceCredential,
+  type PairedDeviceCredential,
 } from "../hostCore/deviceAuthStore.js";
 import {
   DEVICE_ID_PATTERN,
@@ -38,6 +38,10 @@ import { refreshPrincipalGrantResponse } from "../hostCore/auth/principalGrants.
 import { sendAuthError } from "../hostCore/auth/httpErrors.js";
 import { authError, authErrorCode } from "../hostCore/auth/errors.js";
 import { createCapabilityAuthorizer, type CapabilityAuthorizer } from "./capabilityAuthorizer.js";
+import {
+  bindingForLiveAgentEntity,
+  ownerForLiveAgentEntity,
+} from "../hostCore/auth/agentEntity.js";
 
 export const RefreshShellBodySchema = z
   .object({
@@ -86,95 +90,88 @@ function sendJson(
   res.end(JSON.stringify(payload));
 }
 
-/**
- * Redeem a device-pairing credential presented as a session token — the
- * over-the-pipe equivalent of the loopback HTTP `/complete-pairing` +
- * `/refresh-shell` endpoints (which a remote WebRTC client cannot reach):
- *   - a QR pairing `code` (fresh device) → `completePairing` → a newly issued
- *     device credential (returned so the auth-result hands it to the client to
- *     persist), or
- *   - `refresh:<deviceId>:<refreshToken>` (returning device) → `validateRefresh`.
- * Both resolve to the device's `shell:<deviceId>` principal. Returns null when
- * the token is neither (handleAuth then rejects it as an invalid token). Wired
- * into `RpcServer`'s `redeemPairingCredential` dep so it runs ONLY after the
- * grant/bearer checks miss.
- */
-export function createPairingRedeemer(deps: {
+interface DeviceCredentialRedeemerDeps {
   deviceAuthStore: DeviceAuthStore;
   tokenManager: TokenManager;
-  /**
-   * Redeem a code through the hub, the sole identity writer. Workspace children
-   * never consume pairing rows or issue device records themselves.
-   */
-  redeemPairingCode: (
-    code: string,
-    input: { label?: string; platform?: string }
-  ) => Promise<IssuedDeviceCredential>;
   touchDevice?: (deviceId: string) => Promise<void>;
   resolveUser: (userId: string) => User | null;
-}) {
-  const REFRESH_PREFIX = "refresh:";
-  const AGENT_PREFIX = "agent:";
+}
+
+interface WorkspaceCredentialRedeemerDeps extends DeviceCredentialRedeemerDeps {
+  resolveRuntimeEntity: (entityId: string) => EntityRecord | null | Promise<EntityRecord | null>;
+}
+
+const REFRESH_PREFIX = "refresh:";
+const AGENT_PREFIX = "agent:";
+
+async function redeemReturningDevice(deps: DeviceCredentialRedeemerDeps, token: string) {
+  if (!token.startsWith(REFRESH_PREFIX)) return null;
+  const rest = token.slice(REFRESH_PREFIX.length);
+  const sep = rest.indexOf(":");
+  if (sep <= 0) return null;
+  const deviceId = rest.slice(0, sep);
+  const refreshToken = rest.slice(sep + 1);
+  if (!DEVICE_ID_PATTERN.test(deviceId) || !DEVICE_REFRESH_TOKEN_PATTERN.test(refreshToken)) {
+    return null;
+  }
+  try {
+    const device = deps.deviceAuthStore.validateRefresh(deviceId, refreshToken);
+    const user = deps.resolveUser(device.userId);
+    if (!user || user.revokedAt !== undefined) return null;
+    await deps.touchDevice?.(deviceId);
+    deps.tokenManager.ensureToken(shellCallerId(deviceId), "shell");
+    return {
+      callerId: shellCallerId(deviceId),
+      callerKind: "shell" as const,
+      subject: { userId: user.id, handle: user.handle },
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function redeemAgentCredential(deps: WorkspaceCredentialRedeemerDeps, token: string) {
+  if (!token.startsWith(AGENT_PREFIX)) return null;
+  const parsed = parseAgentToken(token);
+  if (!parsed) return null;
+  const authenticated = deps.deviceAuthStore.validateAgentToken(parsed.agentId, parsed.secret);
+  if (!authenticated) return null;
+  const entity = await deps.resolveRuntimeEntity(authenticated.entityId);
+  const agentBinding = bindingForLiveAgentEntity(entity, authenticated.agentId);
+  const ownerUserId = ownerForLiveAgentEntity(entity);
+  if (!agentBinding || !ownerUserId) return null;
+  const subject =
+    ownerUserId === SYSTEM_USER_ID
+      ? { userId: SYSTEM_USER_ID, handle: SYSTEM_USER_ID }
+      : (() => {
+          const user = deps.resolveUser(ownerUserId);
+          return user && user.revokedAt === undefined
+            ? { userId: user.id, handle: user.handle }
+            : null;
+        })();
+  if (!subject) return null;
+  const callerId = agentCallerId(authenticated.entityId);
+  deps.tokenManager.ensureToken(callerId, "agent", { agentBinding });
+  return {
+    callerId,
+    callerKind: "agent" as const,
+    agentBinding,
+    subject,
+  };
+}
+
+/** Stable hub ingress: returning devices and new pairing invites only. */
+export function createHubCredentialRedeemer(
+  deps: DeviceCredentialRedeemerDeps & {
+    redeemPairingCode: (
+      code: string,
+      input: { label?: string; platform?: string }
+    ) => Promise<PairedDeviceCredential>;
+  }
+) {
   return async (token: string, ctx: { clientLabel?: string; clientPlatform?: string }) => {
-    if (token.startsWith(AGENT_PREFIX)) {
-      // `agent:<agentId>:<secret>` — an entity-scoped agent credential (§3.2).
-      // Redeems to the `agent:<entityId>` principal, kind `agent`, and carries a
-      // host-verified binding onto the connection (stamped by handleAuth, never
-      // from client input).
-      const parsed = parseAgentToken(token);
-      if (!parsed) return null;
-      const binding = deps.deviceAuthStore.validateAgentToken(parsed.agentId, parsed.secret);
-      if (!binding) return null;
-      const user = deps.resolveUser(binding.userId);
-      if (!user || user.revokedAt !== undefined) return null;
-      const callerId = agentCallerId(binding.entityId);
-      const agentBinding = {
-        entityId: binding.entityId,
-        contextId: binding.contextId,
-        channelId: binding.channelId,
-        agentId: binding.agentId,
-        // The human whose lineage spawned the agent (WP0 §3.3) — inherited
-        // subject, carried onto the connection for attribution.
-        userId: binding.userId,
-      };
-      deps.tokenManager.ensureToken(callerId, "agent", { agentBinding });
-      return {
-        callerId,
-        callerKind: "agent" as const,
-        agentBinding,
-        subject: { userId: user.id, handle: user.handle },
-      };
-    }
-    if (token.startsWith(REFRESH_PREFIX)) {
-      const rest = token.slice(REFRESH_PREFIX.length);
-      const sep = rest.indexOf(":");
-      if (sep <= 0) return null;
-      const deviceId = rest.slice(0, sep);
-      const refreshToken = rest.slice(sep + 1);
-      if (!DEVICE_ID_PATTERN.test(deviceId) || !DEVICE_REFRESH_TOKEN_PATTERN.test(refreshToken)) {
-        return null;
-      }
-      try {
-        const device = deps.deviceAuthStore.validateRefresh(deviceId, refreshToken);
-        const user = deps.resolveUser(device.userId);
-        if (!user || user.revokedAt !== undefined) return null;
-        await deps.touchDevice?.(deviceId);
-        deps.tokenManager.ensureToken(shellCallerId(deviceId), "shell");
-        return {
-          callerId: shellCallerId(deviceId),
-          callerKind: "shell" as const,
-          subject: { userId: user.id, handle: user.handle },
-        };
-      } catch {
-        return null;
-      }
-    }
-    // Neither an agent nor a refresh credential: treat the token as a QR pairing
-    // code and attempt redemption directly. A stale/unknown code throws
-    // PAIRING_CODE_INVALID_OR_EXPIRED — surface the specific auth error CLASS to
-    // the server log (never the code itself) so an expired invite is diagnosable
-    // instead of collapsing into a generic "Invalid token" with no trace. Returns
-    // null on failure so handleAuth still fails the connection closed.
+    if (token.startsWith(REFRESH_PREFIX)) return redeemReturningDevice(deps, token);
+    if (token.startsWith(AGENT_PREFIX)) return null;
     try {
       const credential = await deps.redeemPairingCode(token, {
         label: ctx.clientLabel,
@@ -190,6 +187,7 @@ export function createPairingRedeemer(deps: {
           deviceId: credential.deviceId,
           refreshToken: credential.refreshToken,
         },
+        pairingContext: { workspaceId: credential.workspaceId },
         subject: { userId: user.id, handle: user.handle },
       };
     } catch (error) {
@@ -201,6 +199,15 @@ export function createPairingRedeemer(deps: {
       );
       return null;
     }
+  };
+}
+
+/** Workspace ingress: already-issued devices and workspace-scoped agents only. */
+export function createWorkspaceCredentialRedeemer(deps: WorkspaceCredentialRedeemerDeps) {
+  return async (token: string) => {
+    if (token.startsWith(REFRESH_PREFIX)) return redeemReturningDevice(deps, token);
+    if (token.startsWith(AGENT_PREFIX)) return redeemAgentCredential(deps, token);
+    return null;
   };
 }
 
@@ -229,9 +236,8 @@ function parseAgentToken(token: string): { agentId: string; secret: string } | n
 // =============================================================================
 
 /**
- * Synthetic subject for in-process/bootstrap spawns with no human on the
- * connection (WP0 §5.4). Agents minted by the `server` principal attribute to
- * `system` rather than a real account; excluded from presence/account joins.
+ * Synthetic owner used by in-process/bootstrap entities with no human account.
+ * Agent redemption derives this from the live entity like any other owner.
  */
 const SYSTEM_USER_ID = "system";
 
@@ -260,8 +266,8 @@ const REVOCABLE_DEPUTY_KINDS: ReadonlySet<EntityRecord["kind"]> = new Set([
  * approving/committing on a revoked account.
  *
  * Runs in the OWNING workspace child (which holds the entity store + runtime).
- * The hub's identity teardown (`UserStore.revokeUser`) — account/devices/agent-
- * creds/membership cascade — is a SEPARATE step; the revoke flow drives this per
+ * The hub's identity teardown (`UserStore.revokeUser`) — account/device/
+ * membership state — is a SEPARATE step; the revoke flow drives this per
  * workspace child after the account is flagged revoked. See the followups for
  * the one-line `revokeUser` wiring seam (index.ts / hub own that trigger).
  */
@@ -300,11 +306,7 @@ export function createAuthService(deps: {
   agentCredentialWriter?: {
     mint(input: {
       entityId: string;
-      contextId: string;
-      channelId: string;
-      userId: string;
       ttlMs?: number;
-      scopes?: string[];
     }): Promise<{ agentId: string; agentToken: string }>;
     revoke(agentId: string): Promise<boolean>;
   };
@@ -356,6 +358,12 @@ export function createAuthService(deps: {
     if (record.kind !== "session") {
       throw new Error(`auth.${methodName} target entity must be a session`);
     }
+    if (!bindingForLiveAgentEntity(record, "credential-check")) {
+      throw new Error(`auth.${methodName} target session has no exact live agent binding`);
+    }
+    if (!ownerForLiveAgentEntity(record)) {
+      throw new Error(`auth.${methodName} target session has no owner`);
+    }
     return record;
   }
 
@@ -402,13 +410,10 @@ export function createAuthService(deps: {
         if (ctx.caller.runtime.kind !== "server") {
           assertAgentCredentialOwner("mintAgentCredential", ctx.caller.runtime.id, record);
         }
-        return await deps.agentCredentialWriter.mint({
-          ...input,
-          contextId: record.contextId,
-          // The agent inherits the spawning caller's subject (WP0 §3.3); a
-          // subject-less server/bootstrap spawn attributes to `system` (§5.4).
-          userId: ctx.caller.subject?.userId ?? SYSTEM_USER_ID,
-        });
+        const issued = await deps.agentCredentialWriter.mint(input);
+        // A rotated entity credential gets a fresh ephemeral bearer as well.
+        deps.tokenManager.revokeToken(agentCallerId(record.id));
+        return issued;
       },
       revokeAgentCredential: async (ctx, [agentId]) => {
         if (!deps.agentCredentialWriter) throw new Error("Hub identity writer is not configured");
@@ -472,25 +477,23 @@ export function createAuthService(deps: {
         try {
           const body = RefreshAgentBodySchema.parse(await readJson(req));
           const parsed = parseAgentToken(body.agentToken);
-          const binding = parsed
+          const authenticated = parsed
             ? deps.deviceAuthStore.validateAgentToken(parsed.agentId, parsed.secret)
             : null;
-          if (!binding) {
+          const entity = authenticated
+            ? await deps.resolveRuntimeEntity?.(authenticated.entityId)
+            : null;
+          const agentBinding = authenticated
+            ? bindingForLiveAgentEntity(entity ?? null, authenticated.agentId)
+            : null;
+          if (!authenticated || !agentBinding || !ownerForLiveAgentEntity(entity ?? null)) {
             sendJson(res, 401, {
               error: "Invalid or expired agent credential",
               code: "INVALID_AGENT_CREDENTIAL",
             });
             return;
           }
-          const callerId = agentCallerId(binding.entityId);
-          const agentBinding = {
-            entityId: binding.entityId,
-            contextId: binding.contextId,
-            channelId: binding.channelId,
-            agentId: binding.agentId,
-            // Inherited spawning-user subject (WP0 §3.3).
-            userId: binding.userId,
-          };
+          const callerId = agentCallerId(authenticated.entityId);
           const token = deps.tokenManager.ensureToken(callerId, "agent", { agentBinding });
           sendJson(
             res,
@@ -499,10 +502,10 @@ export function createAuthService(deps: {
               token,
               callerId,
               callerKind: "agent",
-              entityId: binding.entityId,
-              contextId: binding.contextId,
-              channelId: binding.channelId,
-              agentId: binding.agentId,
+              entityId: agentBinding.entityId,
+              contextId: agentBinding.contextId,
+              channelId: agentBinding.channelId,
+              agentId: agentBinding.agentId,
               serverId: deps.deviceAuthStore.getServerId(),
               serverBootId: deps.getServerBootId(),
               workspaceId: deps.getWorkspaceId(),

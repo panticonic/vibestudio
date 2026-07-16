@@ -1,4 +1,4 @@
-/** Canonical wire contract for live account profiles and self-service personalization. */
+/** Canonical child-workspace contract for read-only live account projections. */
 
 import { z } from "zod";
 import type { MethodAccessDescriptor, ServicePolicy } from "@vibestudio/shared/servicePolicy";
@@ -10,7 +10,6 @@ const ACCOUNT_READ_POLICY: ServicePolicy = {
 };
 
 const READ_ACCESS: MethodAccessDescriptor = { sensitivity: "read" };
-const WRITE_ACCESS: MethodAccessDescriptor = { sensitivity: "write" };
 
 export const MAX_AVATAR_DATA_URI_BYTES = 256 * 1024;
 export const ACCOUNT_AVATAR_DATA_URI_PATTERN =
@@ -95,12 +94,5 @@ export const accountMethods = defineServiceMethods({
     returns: z.array(accountProfileSchema),
     policy: ACCOUNT_READ_POLICY,
     access: READ_ACCESS,
-  },
-  updateProfile: {
-    description:
-      "Update personalization (displayName/avatar/color/handle). Self, or root for others. The hub is the sole identity writer.",
-    args: z.tuple([accountProfileUpdateSchema]),
-    returns: accountProfileSchema,
-    access: WRITE_ACCESS,
   },
 });

@@ -25,21 +25,43 @@ export interface CentralDataManagerOptions {
   now?: () => number;
 }
 
-export interface HubRuntimeRecord {
+/**
+ * The fenced ownership record for the one hub allowed to mutate machine
+ * control state. `ownerBootId` is a process-instance identity, not a PID: PIDs
+ * are host-local and reusable, while this lease may live on shared storage.
+ */
+export interface HubProcessLeaseRecord {
+  ownerBootId: string;
   gatewayPort: number;
   pid: number;
-  serverId: string;
-  serverBootId: string;
-  startedAt: number;
-  version: string;
+  acquiredAt: number;
+  heartbeatAt: number;
+  expiresAt: number;
 }
 
 export interface EphemeralWorkspaceRecord extends WorkspaceEntry {
+  ownerBootId: string;
   diskName?: string;
+}
+
+export interface EphemeralWorkspaceCleanupRecord {
+  cleanupId: string;
+  diskName: string;
+  sourceOwnerBootId: string;
+  createdAt: number;
+}
+
+export interface EphemeralWorkspaceRemovalRecord {
+  workspace: EphemeralWorkspaceRecord;
+  cleanup: EphemeralWorkspaceCleanupRecord | null;
 }
 
 function mintWorkspaceId(): string {
   return `ws_${randomBytes(18).toString("base64url")}`;
+}
+
+function mintEphemeralCleanupId(): string {
+  return `cleanup_${randomBytes(18).toString("base64url")}`;
 }
 
 const EPHEMERAL_WORKSPACE_KEY = "ephemeral_workspace";
@@ -47,6 +69,7 @@ const EPHEMERAL_WORKSPACE_KEY = "ephemeral_workspace";
 function parseEphemeralWorkspaceMarker(value: SQLOutputValue): {
   workspaceId: string;
   name: string;
+  ownerBootId: string;
   diskName?: string;
 } {
   if (typeof value !== "string") throw new Error("Invalid ephemeral workspace marker type");
@@ -55,17 +78,25 @@ function parseEphemeralWorkspaceMarker(value: SQLOutputValue): {
     !parsed ||
     typeof parsed !== "object" ||
     Array.isArray(parsed) ||
-    (Object.keys(parsed).length !== 2 && Object.keys(parsed).length !== 3) ||
+    (Object.keys(parsed).length !== 3 && Object.keys(parsed).length !== 4) ||
     typeof (parsed as { workspaceId?: unknown }).workspaceId !== "string" ||
     typeof (parsed as { name?: unknown }).name !== "string" ||
+    typeof (parsed as { ownerBootId?: unknown }).ownerBootId !== "string" ||
     ((parsed as { diskName?: unknown }).diskName !== undefined &&
       (typeof (parsed as { diskName?: unknown }).diskName !== "string" ||
         !/^dev-[0-9a-f]{8}$/.test((parsed as { diskName: string }).diskName))) ||
-    Object.keys(parsed).some((key) => !["workspaceId", "name", "diskName"].includes(key))
+    Object.keys(parsed).some(
+      (key) => !["workspaceId", "name", "ownerBootId", "diskName"].includes(key)
+    )
   ) {
     throw new Error("Invalid ephemeral workspace marker schema");
   }
-  return parsed as { workspaceId: string; name: string; diskName?: string };
+  return parsed as {
+    workspaceId: string;
+    name: string;
+    ownerBootId: string;
+    diskName?: string;
+  };
 }
 
 function rowToWorkspace(row: Record<string, SQLOutputValue>): WorkspaceEntry {
@@ -76,14 +107,25 @@ function rowToWorkspace(row: Record<string, SQLOutputValue>): WorkspaceEntry {
   };
 }
 
-function rowToHubRuntime(row: Record<string, SQLOutputValue>): HubRuntimeRecord {
+function rowToHubProcessLease(row: Record<string, SQLOutputValue>): HubProcessLeaseRecord {
   return {
+    ownerBootId: row["owner_boot_id"] as string,
     gatewayPort: row["gateway_port"] as number,
     pid: row["pid"] as number,
-    serverId: row["server_id"] as string,
-    serverBootId: row["server_boot_id"] as string,
-    startedAt: row["started_at"] as number,
-    version: row["version"] as string,
+    acquiredAt: row["acquired_at"] as number,
+    heartbeatAt: row["heartbeat_at"] as number,
+    expiresAt: row["expires_at"] as number,
+  };
+}
+
+function rowToEphemeralWorkspaceCleanup(
+  row: Record<string, SQLOutputValue>
+): EphemeralWorkspaceCleanupRecord {
+  return {
+    cleanupId: row["cleanup_id"] as string,
+    diskName: row["disk_name"] as string,
+    sourceOwnerBootId: row["source_owner_boot_id"] as string,
+    createdAt: row["created_at"] as number,
   };
 }
 
@@ -95,8 +137,7 @@ export class CentralDataManager {
 
   constructor(options: CentralDataManagerOptions = {}) {
     const databasePath =
-      options.databasePath ??
-      path.join(getCentralDataPath(), "server-auth", "identity.db");
+      options.databasePath ?? path.join(getCentralDataPath(), "server-auth", "identity.db");
     this.now = options.now ?? Date.now;
     fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(databasePath);
@@ -156,10 +197,11 @@ export class CentralDataManager {
    * crash-recovery marker. A persistent workspace can never be adopted or
    * overwritten as ephemeral.
    */
-  addEphemeralWorkspace(name: string): EphemeralWorkspaceRecord {
+  addEphemeralWorkspace(name: string, ownerBootId: string): EphemeralWorkspaceRecord {
     const normalized = name.trim();
     if (!normalized) throw new Error("Ephemeral workspace name is required");
     return this.transaction(() => {
+      this.assertHubProcessLease(ownerBootId);
       if (
         this.stmt("SELECT 1 AS one FROM hub_preferences WHERE key = ?").get(EPHEMERAL_WORKSPACE_KEY)
       ) {
@@ -176,18 +218,28 @@ export class CentralDataManager {
       if (!row) throw new Error("Ephemeral workspace registration returned no row");
       this.stmt("INSERT INTO hub_preferences (key, value) VALUES (?, ?)").run(
         EPHEMERAL_WORKSPACE_KEY,
-        JSON.stringify({ workspaceId, name: normalized })
+        JSON.stringify({ workspaceId, name: normalized, ownerBootId })
       );
-      return rowToWorkspace(row);
+      return { ...rowToWorkspace(row), ownerBootId };
     });
   }
 
-  /** Record the random on-disk child name before spawn for crash cleanup. */
-  setEphemeralWorkspaceDiskName(workspaceId: string, diskName: string): void {
+  /**
+   * Fence and rotate the random on-disk child name before spawn. The marker is
+   * advanced atomically under the process lease and the predecessor becomes a
+   * durable cleanup ticket, so no contender can mistake a live checkout for
+   * its own crash residue.
+   */
+  rotateEphemeralWorkspaceDiskName(
+    ownerBootId: string,
+    workspaceId: string,
+    diskName: string
+  ): EphemeralWorkspaceCleanupRecord | null {
     if (!/^dev-[0-9a-f]{8}$/.test(diskName)) {
       throw new Error("Invalid ephemeral workspace disk name");
     }
-    this.transaction(() => {
+    return this.transaction(() => {
+      this.assertHubProcessLease(ownerBootId);
       const row = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
         EPHEMERAL_WORKSPACE_KEY
       );
@@ -196,10 +248,16 @@ export class CentralDataManager {
       if (marker.workspaceId !== workspaceId) {
         throw new Error("Ephemeral workspace marker does not match the running workspace");
       }
+      if (marker.ownerBootId !== ownerBootId) {
+        throw new Error("Ephemeral workspace marker is owned by another hub process lease");
+      }
       this.stmt("UPDATE hub_preferences SET value = ? WHERE key = ?").run(
         JSON.stringify({ ...marker, diskName }),
         EPHEMERAL_WORKSPACE_KEY
       );
+      return marker.diskName && marker.diskName !== diskName
+        ? this.queueEphemeralWorkspaceCleanup(marker.diskName, marker.ownerBootId)
+        : null;
     });
   }
 
@@ -213,6 +271,7 @@ export class CentralDataManager {
     return {
       workspaceId: marker.workspaceId,
       name: marker.name,
+      ownerBootId: marker.ownerBootId,
       lastOpened: workspace?.lastOpened ?? 0,
       ...(marker.diskName ? { diskName: marker.diskName } : {}),
     };
@@ -222,29 +281,153 @@ export class CentralDataManager {
    * Delete the marked ephemeral workspace and every owned row atomically.
    * Called both during graceful shutdown and at the next startup after a crash.
    */
-  removeEphemeralWorkspace(): EphemeralWorkspaceRecord | null {
+  removeEphemeralWorkspace(
+    leaseOwnerBootId: string,
+    expectedWorkspaceOwnerBootId: string
+  ): EphemeralWorkspaceRemovalRecord | null {
     return this.transaction(() => {
+      this.assertHubProcessLease(leaseOwnerBootId);
       const markerRow = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
         EPHEMERAL_WORKSPACE_KEY
       );
       if (!markerRow) return null;
       const marker = parseEphemeralWorkspaceMarker(markerRow["value"]!);
+      if (marker.ownerBootId !== expectedWorkspaceOwnerBootId) return null;
       const workspaceRow = this.stmt(
         "SELECT * FROM workspaces WHERE workspace_id = ? AND name = ?"
       ).get(marker.workspaceId, marker.name);
+      const cleanup = marker.diskName
+        ? this.queueEphemeralWorkspaceCleanup(marker.diskName, marker.ownerBootId)
+        : null;
       this.stmt("DELETE FROM membership WHERE workspace_id = ?").run(marker.workspaceId);
       this.stmt("DELETE FROM user_revocation_cleanup WHERE workspace_id = ?").run(
         marker.workspaceId
       );
       this.stmt("DELETE FROM workspaces WHERE workspace_id = ?").run(marker.workspaceId);
       this.stmt("DELETE FROM hub_preferences WHERE key = ?").run(EPHEMERAL_WORKSPACE_KEY);
-      return workspaceRow
-        ? {
-            ...rowToWorkspace(workspaceRow),
-            ...(marker.diskName ? { diskName: marker.diskName } : {}),
-          }
-        : null;
+      return {
+        workspace: {
+          ...(workspaceRow
+            ? rowToWorkspace(workspaceRow)
+            : { workspaceId: marker.workspaceId, name: marker.name, lastOpened: 0 }),
+          ownerBootId: marker.ownerBootId,
+          ...(marker.diskName ? { diskName: marker.diskName } : {}),
+        },
+        cleanup,
+      };
     });
+  }
+
+  listEphemeralWorkspaceCleanups(ownerBootId: string): EphemeralWorkspaceCleanupRecord[] {
+    this.assertHubProcessLease(ownerBootId);
+    return this.stmt("SELECT * FROM ephemeral_workspace_cleanup ORDER BY created_at, cleanup_id")
+      .all()
+      .map(rowToEphemeralWorkspaceCleanup);
+  }
+
+  assertEphemeralWorkspaceCleanup(
+    ownerBootId: string,
+    cleanup: EphemeralWorkspaceCleanupRecord
+  ): void {
+    this.assertHubProcessLease(ownerBootId);
+    const row = this.stmt(
+      `SELECT 1 AS one FROM ephemeral_workspace_cleanup
+       WHERE cleanup_id = ? AND disk_name = ? AND source_owner_boot_id = ? AND created_at = ?`
+    ).get(cleanup.cleanupId, cleanup.diskName, cleanup.sourceOwnerBootId, cleanup.createdAt);
+    if (!row) throw new Error(`Unknown or stale ephemeral cleanup ticket ${cleanup.cleanupId}`);
+  }
+
+  completeEphemeralWorkspaceCleanup(
+    ownerBootId: string,
+    cleanup: EphemeralWorkspaceCleanupRecord
+  ): boolean {
+    this.assertHubProcessLease(ownerBootId);
+    return (
+      this.stmt(
+        `DELETE FROM ephemeral_workspace_cleanup
+         WHERE cleanup_id = ? AND disk_name = ? AND source_owner_boot_id = ? AND created_at = ?`
+      ).run(cleanup.cleanupId, cleanup.diskName, cleanup.sourceOwnerBootId, cleanup.createdAt)
+        .changes === 1
+    );
+  }
+
+  /**
+   * Acquire the singleton process lease, replacing it only after its durable
+   * heartbeat has expired. The returned record is the fenced predecessor whose
+   * subordinate ephemeral resources the new owner may recover.
+   */
+  claimHubProcessLease(input: {
+    ownerBootId: string;
+    gatewayPort: number;
+    pid: number;
+    ttlMs: number;
+  }): HubProcessLeaseRecord | null {
+    const ownerBootId = input.ownerBootId.trim();
+    if (!ownerBootId) throw new Error("Hub process lease ownerBootId is required");
+    if (
+      !Number.isInteger(input.gatewayPort) ||
+      input.gatewayPort < 1 ||
+      input.gatewayPort > 65_535
+    ) {
+      throw new Error("Hub process lease gatewayPort is invalid");
+    }
+    if (!Number.isInteger(input.pid) || input.pid < 1) {
+      throw new Error("Hub process lease pid is invalid");
+    }
+    if (!Number.isInteger(input.ttlMs) || input.ttlMs < 1) {
+      throw new Error("Hub process lease ttlMs must be a positive integer");
+    }
+    return this.transaction(() => {
+      const now = this.now();
+      const row = this.stmt("SELECT * FROM hub_process_lease WHERE singleton = 1").get();
+      const previous = row ? rowToHubProcessLease(row) : null;
+      if (previous && previous.expiresAt > now) {
+        throw new Error(
+          `Hub process lease is owned by ${previous.ownerBootId} until ${previous.expiresAt}`
+        );
+      }
+      this.stmt(
+        `INSERT INTO hub_process_lease
+           (singleton, owner_boot_id, gateway_port, pid, acquired_at, heartbeat_at, expires_at)
+         VALUES (1, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(singleton) DO UPDATE SET
+           owner_boot_id = excluded.owner_boot_id,
+           gateway_port = excluded.gateway_port,
+           pid = excluded.pid,
+           acquired_at = excluded.acquired_at,
+           heartbeat_at = excluded.heartbeat_at,
+           expires_at = excluded.expires_at`
+      ).run(ownerBootId, input.gatewayPort, input.pid, now, now, now + input.ttlMs);
+      return previous;
+    });
+  }
+
+  /** Renew only the caller's still-live lease. A late or displaced owner is fenced. */
+  renewHubProcessLease(ownerBootId: string, ttlMs: number): boolean {
+    if (!Number.isInteger(ttlMs) || ttlMs < 1) {
+      throw new Error("Hub process lease ttlMs must be a positive integer");
+    }
+    const now = this.now();
+    const result = this.stmt(
+      `UPDATE hub_process_lease
+       SET heartbeat_at = ?, expires_at = ?
+       WHERE singleton = 1 AND owner_boot_id = ? AND expires_at > ?`
+    ).run(now, now + ttlMs, ownerBootId, now);
+    return result.changes === 1;
+  }
+
+  /** Compare-and-release: a stale process can never clear its successor's lease. */
+  releaseHubProcessLease(ownerBootId: string): boolean {
+    return (
+      this.stmt("DELETE FROM hub_process_lease WHERE singleton = 1 AND owner_boot_id = ?").run(
+        ownerBootId
+      ).changes === 1
+    );
+  }
+
+  getHubProcessLease(): HubProcessLeaseRecord | null {
+    const row = this.stmt("SELECT * FROM hub_process_lease WHERE singleton = 1").get();
+    return row ? rowToHubProcessLease(row) : null;
   }
 
   /**
@@ -287,37 +470,6 @@ export class CentralDataManager {
   getLastOpenedWorkspace(): WorkspaceEntry | null {
     const row = this.stmt("SELECT * FROM workspaces ORDER BY last_opened DESC, name LIMIT 1").get();
     return row ? rowToWorkspace(row) : null;
-  }
-
-  setHubRuntime(record: HubRuntimeRecord): void {
-    this.stmt(
-      `INSERT INTO hub_runtime
-         (singleton, gateway_port, pid, server_id, server_boot_id, started_at, version)
-       VALUES (1, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(singleton) DO UPDATE SET
-         gateway_port = excluded.gateway_port,
-         pid = excluded.pid,
-         server_id = excluded.server_id,
-         server_boot_id = excluded.server_boot_id,
-         started_at = excluded.started_at,
-         version = excluded.version`
-    ).run(
-      record.gatewayPort,
-      record.pid,
-      record.serverId,
-      record.serverBootId,
-      record.startedAt,
-      record.version
-    );
-  }
-
-  clearHubRuntime(): void {
-    this.stmt("DELETE FROM hub_runtime WHERE singleton = 1").run();
-  }
-
-  getHubRuntime(): HubRuntimeRecord | null {
-    const row = this.stmt("SELECT * FROM hub_runtime WHERE singleton = 1").get();
-    return row ? rowToHubRuntime(row) : null;
   }
 
   /** Store the authenticated user's own resume target. */
@@ -370,6 +522,46 @@ export class CentralDataManager {
       this.statements.set(sql, statement);
     }
     return statement;
+  }
+
+  /** Fail closed unless this exact process instance owns the live control lease. */
+  assertHubProcessLease(ownerBootId: string): void {
+    const now = this.now();
+    const row = this.stmt(
+      `SELECT 1 AS one FROM hub_process_lease
+       WHERE singleton = 1 AND owner_boot_id = ? AND expires_at > ?`
+    ).get(ownerBootId, now);
+    if (!row) {
+      throw new Error(`Hub process ${ownerBootId} does not own the active machine-control lease`);
+    }
+  }
+
+  private queueEphemeralWorkspaceCleanup(
+    diskName: string,
+    sourceOwnerBootId: string
+  ): EphemeralWorkspaceCleanupRecord {
+    const existing = this.stmt("SELECT * FROM ephemeral_workspace_cleanup WHERE disk_name = ?").get(
+      diskName
+    );
+    if (existing) {
+      const record = rowToEphemeralWorkspaceCleanup(existing);
+      if (record.sourceOwnerBootId !== sourceOwnerBootId) {
+        throw new Error(`Ephemeral cleanup disk ${diskName} has conflicting ownership`);
+      }
+      return record;
+    }
+    const record: EphemeralWorkspaceCleanupRecord = {
+      cleanupId: mintEphemeralCleanupId(),
+      diskName,
+      sourceOwnerBootId,
+      createdAt: this.now(),
+    };
+    this.stmt(
+      `INSERT INTO ephemeral_workspace_cleanup
+         (cleanup_id, disk_name, source_owner_boot_id, created_at)
+       VALUES (?, ?, ?, ?)`
+    ).run(record.cleanupId, record.diskName, record.sourceOwnerBootId, record.createdAt);
+    return record;
   }
 
   private transaction<T>(fn: () => T): T {

@@ -3,10 +3,9 @@ import type { ApprovalDecisionId } from "@vibestudio/shared/approvalContract";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 import {
-  SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
 } from "@vibestudio/shell-core/approvalState";
-import { eventsMethods } from "@vibestudio/service-schemas/events";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
@@ -29,9 +28,8 @@ export function createApprovalsClient(rpc: RpcClient): ApprovalsClient {
     shellApprovalMethods,
     (service, method, args) => rpc.call("main", `${service}.${method}`, args)
   );
-  const events = createTypedServiceClient("events", eventsMethods, (service, method, args) =>
-    rpc.call("main", `${service}.${method}`, args)
-  );
+  const events = new EventsClient(rpc);
+  let changeListeners = 0;
   return {
     async list() {
       const pending = await shellApproval.listPending();
@@ -44,15 +42,24 @@ export function createApprovalsClient(rpc: RpcClient): ApprovalsClient {
       await shellApproval.resolveUserland(approvalId, choice);
     },
     onChange(listener) {
-      void events
-        .subscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT)
-        .catch((error: unknown) =>
-          console.warn("[terminal-browser] approval event subscribe failed:", error)
-        );
-      const unsubscribe = rpc.on(SHELL_APPROVAL_PENDING_CHANGED_CHANNEL, () => listener());
+      const stopListening = events.on(SHELL_APPROVAL_PENDING_CHANGED_EVENT, () => listener());
+      changeListeners += 1;
+      if (changeListeners === 1) {
+        void events
+          .subscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT)
+          .catch((error: unknown) =>
+            console.warn("[terminal-browser] approval event watch failed:", error)
+          );
+      }
+      let disposed = false;
       return () => {
-        unsubscribe();
-        void events.unsubscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT).catch(() => {});
+        if (disposed) return;
+        disposed = true;
+        stopListening();
+        changeListeners = Math.max(0, changeListeners - 1);
+        if (changeListeners === 0) {
+          void events.unsubscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT).catch(() => {});
+        }
       };
     },
   };

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RpcClient } from "@vibestudio/rpc";
+import { encodeEventWatchRecord } from "@vibestudio/shared/events";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { createApprovalsClient } from "./approvalsClient.js";
 
@@ -76,20 +77,43 @@ function metaChangeAppApproval(): PendingApproval {
 }
 
 function fakeRpc(pending: PendingApproval[]) {
-  const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
   const rpc = {
     call: vi.fn(async (_target: string, method: string, _args: unknown[]) => {
       if (method === "shellApproval.listPending") return pending;
       return undefined;
     }),
-    on: vi.fn((event: string, listener: (payload: unknown) => void) => {
-      const set = listeners.get(event) ?? new Set();
-      set.add(listener);
-      listeners.set(event, set);
-      return () => set.delete(listener);
-    }),
+    stream: vi.fn(
+      async (_target: string, _method: string, args: unknown[]) =>
+        new Response(
+          new ReadableStream({
+            start(next) {
+              controller = next;
+              next.enqueue(
+                encodeEventWatchRecord({
+                  kind: "watching",
+                  events: args[0] as never,
+                  epoch: "test-epoch",
+                })
+              );
+            },
+          })
+        )
+    ),
   } as unknown as RpcClient;
-  return { rpc, listeners };
+  return {
+    rpc,
+    emit(payload: unknown) {
+      controller?.enqueue(
+        encodeEventWatchRecord({
+          kind: "event",
+          event: "shell-approval:pending-changed",
+          payload,
+          sequence: 1,
+        })
+      );
+    },
+  };
 }
 
 describe("createApprovalsClient", () => {
@@ -107,19 +131,21 @@ describe("createApprovalsClient", () => {
     await expect(client.list()).resolves.toEqual([metaChangeAppApproval(), runtimeApproval()]);
   });
 
-  it("subscribes to the shared shell approval queue", () => {
-    const { rpc, listeners } = fakeRpc([]);
+  it("watches the shared shell approval queue", async () => {
+    const { rpc, emit } = fakeRpc([]);
     const client = createApprovalsClient(rpc);
     const listener = vi.fn();
 
     const unsubscribe = client.onChange(listener);
-    listeners.get("event:shell-approval:pending-changed")?.forEach((emit) => emit([]));
+    await vi.waitFor(() => expect(rpc.stream).toHaveBeenCalledTimes(1));
+    emit([]);
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
     unsubscribe();
-    listeners.get("event:shell-approval:pending-changed")?.forEach((emit) => emit([]));
-
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(rpc.call).toHaveBeenCalledWith("main", "events.subscribe", [
-      "shell-approval:pending-changed",
-    ]);
+    expect(rpc.stream).toHaveBeenCalledWith(
+      "main",
+      "events.watch",
+      [["shell-approval:pending-changed"], expect.any(String)],
+      expect.objectContaining({ bodyIdleTimeoutMs: null })
+    );
   });
 });

@@ -44,6 +44,17 @@ describe("TokenManager", () => {
     expect(listener).toHaveBeenCalledWith("worker:one");
   });
 
+  it("allows revocation listeners to release their lifecycle ownership", () => {
+    const listener = vi.fn();
+    const dispose = tm.onRevoke(listener);
+    tm.createToken("worker:one", "worker");
+
+    dispose();
+    tm.revokeToken("worker:one");
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("clear removes all tokens and notifies for each", () => {
     const listener = vi.fn();
     tm.onRevoke(listener);
