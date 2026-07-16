@@ -30,8 +30,10 @@ type ApprovalChoice =
 
 function makeWorkspace() {
   const source = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-test-runner-source-"));
-  const contexts = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-test-runner-contexts-"));
-  return { source, contexts };
+  const contextProjections = fs.mkdtempSync(
+    path.join(os.tmpdir(), "vibestudio-test-runner-context-projections-")
+  );
+  return { source, contextProjections };
 }
 
 function makeCtx(workspace = makeWorkspace(), caller: CallerInfo = {}) {
@@ -46,7 +48,10 @@ function makeCtx(workspace = makeWorkspace(), caller: CallerInfo = {}) {
   const ctx = {
     workspace: {
       async getInfo() {
-        return { path: workspace.source, contextsPath: workspace.contexts };
+        return {
+          path: workspace.source,
+          contextProjectionsPath: workspace.contextProjections,
+        };
       },
     },
     fs: { ensureMaterialized },
@@ -85,8 +90,8 @@ describe("@workspace-extensions/test-runner", () => {
 
   it("runs tests from the caller context by default", async () => {
     const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contexts);
-    const target = path.join(workspace.contexts, "ctx-1", "packages", "tool");
+    cleanup.push(workspace.source, workspace.contextProjections);
+    const target = path.join(workspace.contextProjections, "ctx-1", "packages", "tool");
     fs.mkdirSync(target, { recursive: true });
     const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
     const api = await activate(ctx);
@@ -106,8 +111,8 @@ describe("@workspace-extensions/test-runner", () => {
 
   it("materializes sparse context targets before checking disk", async () => {
     const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contexts);
-    const target = path.join(workspace.contexts, "ctx-1", "extensions", "test-runner");
+    cleanup.push(workspace.source, workspace.contextProjections);
+    const target = path.join(workspace.contextProjections, "ctx-1", "extensions", "test-runner");
     const { ctx, ensureMaterialized } = makeCtx(workspace, { chainContextId: "ctx-1" });
     ensureMaterialized.mockImplementationOnce(async (scope) => {
       expect(scope).toBe("extensions/test-runner");
@@ -128,7 +133,7 @@ describe("@workspace-extensions/test-runner", () => {
 
   it("rejects path traversal before requesting approval", async () => {
     const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contexts);
+    cleanup.push(workspace.source, workspace.contextProjections);
     const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
     const api = await activate(ctx);
 
@@ -139,7 +144,7 @@ describe("@workspace-extensions/test-runner", () => {
 
   it("requires a context id", async () => {
     const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contexts);
+    cleanup.push(workspace.source, workspace.contextProjections);
     fs.mkdirSync(path.join(workspace.source, "packages", "tool"), { recursive: true });
     const { ctx } = makeCtx(workspace);
     ctx.invocation.current = () => ({
@@ -153,8 +158,8 @@ describe("@workspace-extensions/test-runner", () => {
 
   it("injects panel setup for panel targets", async () => {
     const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contexts);
-    fs.mkdirSync(path.join(workspace.contexts, "ctx-1", "panels", "my-app"), {
+    cleanup.push(workspace.source, workspace.contextProjections);
+    fs.mkdirSync(path.join(workspace.contextProjections, "ctx-1", "panels", "my-app"), {
       recursive: true,
     });
     const { ctx } = makeCtx(workspace, { chainContextId: "ctx-1" });
@@ -173,8 +178,8 @@ describe("@workspace-extensions/test-runner", () => {
 
   it("stops when approval is denied", async () => {
     const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contexts);
-    fs.mkdirSync(path.join(workspace.contexts, "ctx-1", "packages", "tool"), {
+    cleanup.push(workspace.source, workspace.contextProjections);
+    fs.mkdirSync(path.join(workspace.contextProjections, "ctx-1", "packages", "tool"), {
       recursive: true,
     });
     const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
@@ -187,8 +192,8 @@ describe("@workspace-extensions/test-runner", () => {
 
   it("stops when approval is dismissed", async () => {
     const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contexts);
-    fs.mkdirSync(path.join(workspace.contexts, "ctx-1", "packages", "tool"), {
+    cleanup.push(workspace.source, workspace.contextProjections);
+    fs.mkdirSync(path.join(workspace.contextProjections, "ctx-1", "packages", "tool"), {
       recursive: true,
     });
     const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
@@ -201,8 +206,8 @@ describe("@workspace-extensions/test-runner", () => {
 
   it("routes through approval even if an untyped caller passes approve false", async () => {
     const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contexts);
-    fs.mkdirSync(path.join(workspace.contexts, "ctx-1", "packages", "tool"), {
+    cleanup.push(workspace.source, workspace.contextProjections);
+    fs.mkdirSync(path.join(workspace.contextProjections, "ctx-1", "packages", "tool"), {
       recursive: true,
     });
     const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
@@ -220,8 +225,8 @@ describe("@workspace-extensions/test-runner", () => {
 
   it("uses a stable scoped approval subject so the approval service can honor remember choices", async () => {
     const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contexts);
-    fs.mkdirSync(path.join(workspace.contexts, "ctx-1", "packages", "tool"), {
+    cleanup.push(workspace.source, workspace.contextProjections);
+    fs.mkdirSync(path.join(workspace.contextProjections, "ctx-1", "packages", "tool"), {
       recursive: true,
     });
     const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
@@ -239,8 +244,8 @@ describe("@workspace-extensions/test-runner", () => {
 
   it("formats passing and failing test results", async () => {
     const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contexts);
-    const target = path.join(workspace.contexts, "ctx-1", "packages", "tool");
+    cleanup.push(workspace.source, workspace.contextProjections);
+    const target = path.join(workspace.contextProjections, "ctx-1", "packages", "tool");
     fs.mkdirSync(target, { recursive: true });
     mockStartVitest.mockResolvedValue({
       state: {

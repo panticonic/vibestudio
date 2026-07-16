@@ -5,9 +5,29 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 import { ExtensionHost } from "./service.js";
 import type { ExtensionHostDeps } from "./service.js";
+
+function publicationEvent(): ProtectedPublicationEvent {
+  return {
+    publicationId: "publication:test",
+    resultHostRefsBasisDigest: "host-refs:test",
+    appliedAt: 42,
+    workspaceStateHash: "state:published",
+    changedPaths: ["extensions/git-tools/index.ts"],
+    repositories: [
+      {
+        repoPath: "extensions/git-tools",
+        previousStateHash: "state:previous",
+        nextStateHash: "state:next",
+        fileChanges: [],
+      },
+    ],
+  };
+}
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-host-"));
@@ -56,7 +76,7 @@ function makeHost(
     sourceProviderContracts?: Record<string, { methods: string[] }>;
     activeProviderContracts?: Record<string, { methods: string[] }>;
     candidateProviderContracts?: Record<string, { methods: string[] }>;
-    readWorkspaceFileAtCommit?: ExtensionHostDeps["readWorkspaceFileAtCommit"];
+    readWorkspaceFileAtState?: ExtensionHostDeps["readWorkspaceFileAtState"];
     gitDefaultBranch?: "main" | "master";
     installed?: boolean;
     status?: "running" | "stopped" | "building" | "error" | "pending-approval";
@@ -199,7 +219,7 @@ function makeHost(
     resolveProviderExtensionName: overrides.resolveProviderExtensionName ?? (() => null),
     providerSlots: overrides.providerSlots ?? [],
     hostProviderContracts: overrides.hostProviderContracts ?? {},
-    readWorkspaceFileAtCommit: overrides.readWorkspaceFileAtCommit ?? (async () => null),
+    readWorkspaceFileAtState: overrides.readWorkspaceFileAtState ?? (async () => null),
     extensionTransport: overrides.extensionTransport ?? {
       call: vi.fn(async () => {
         throw new Error("extensionTransport.call should not be invoked in this test");
@@ -594,17 +614,18 @@ const declare = (name: string, opts: { ref?: string } = {}) => [
 
 describe("ExtensionHost reconcileDeclared", () => {
   it("computes meta-change approvals from committed workspace config", async () => {
-    const readWorkspaceFileAtCommit = vi.fn(
-      async () => "extensions:\n  - source: extensions/git-tools\n"
+    const readWorkspaceFileAtState = vi.fn(
+      async () =>
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nextensions:\n  - source: extensions/git-tools\n`
     );
     const { host, extensionNode } = makeHost({
       installed: false,
-      readWorkspaceFileAtCommit,
+      readWorkspaceFileAtState,
     });
 
     const approval = await host.metaChangeApprovalForCommit("state:next");
 
-    expect(readWorkspaceFileAtCommit).toHaveBeenCalledWith("state:next", "meta/vibestudio.yml");
+    expect(readWorkspaceFileAtState).toHaveBeenCalledWith("state:next", "meta/vibestudio.yml");
     expect(approval.units).toEqual([
       expect.objectContaining({
         unitKind: "extension",
@@ -781,8 +802,8 @@ describe("ExtensionHost reconcileDeclared", () => {
     const onPushBuild = buildSystem.onPushBuild.mock.calls[0]?.[0];
     expect(onPushBuild).toBeTypeOf("function");
 
-    onPushBuild(extensionNode.relativePath, { head: "main" });
-    onPushBuild(extensionNode.relativePath, { head: "main" });
+    onPushBuild(extensionNode.relativePath, publicationEvent());
+    onPushBuild(extensionNode.relativePath, publicationEvent());
 
     await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
     expect(maxActiveStarts).toBe(1);
@@ -978,13 +999,15 @@ describe("ExtensionHost activation", () => {
           _method: string,
           _apiMethod: string,
           _args: unknown[],
-          invocation: { invocationToken?: string }
+          invocation: { requestId: string }
         ) => {
-          expect(invocation.invocationToken).toEqual(expect.any(String));
-          expect(hostRef.resolveActiveInvocation(name, invocation.invocationToken!)).toEqual(
+          expect(invocation.requestId).toEqual(expect.any(String));
+          expect(invocation).not.toHaveProperty("causalParent");
+          expect(hostRef.resolveActiveInvocation(name, invocation.requestId)).toEqual(
             expect.objectContaining({
               extensionName: name,
               method: "blame",
+              causalParent: null,
             })
           );
           return "transport-result";
@@ -1007,11 +1030,48 @@ describe("ExtensionHost activation", () => {
       expect.objectContaining({
         extensionName: extensionNode.name,
         method: "blame",
-        invocationToken: expect.any(String),
+        requestId: expect.any(String),
       })
     );
-    const invocation = extensionTransport.call.mock.calls[0]![4] as { invocationToken: string };
-    expect(host.resolveActiveInvocation(extensionNode.name, invocation.invocationToken)).toBeNull();
+    const invocation = extensionTransport.call.mock.calls[0]![4] as { requestId: string };
+    expect(host.resolveActiveInvocation(extensionNode.name, invocation.requestId)).toBeNull();
+  });
+
+  it("retains a verified causal parent in host-only active invocation state", async () => {
+    const causalParent = {
+      kind: "trajectory-invocation" as const,
+      logId: "trajectory:channel:agent-1",
+      head: "main",
+      invocationId: "invocation:tool-1",
+    };
+    let hostRef: ExtensionHost;
+    const extensionTransport = {
+      call: vi.fn(
+        async (
+          name: string,
+          _method: string,
+          _apiMethod: string,
+          _args: unknown[],
+          invocation: { requestId: string }
+        ) => {
+          expect(invocation).not.toHaveProperty("causalParent");
+          expect(hostRef.resolveActiveInvocation(name, invocation.requestId)).toEqual(
+            expect.objectContaining({ causalParent })
+          );
+          return "transport-result";
+        }
+      ),
+    };
+    const { host, extensionNode } = makeHost({ extensionTransport });
+    hostRef = host;
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host.invoke({ ...doCtx(), causalParent }, extensionNode.name, "blame", ["README.md"])
+    ).resolves.toBe("transport-result");
+
+    const invocation = extensionTransport.call.mock.calls[0]![4] as { requestId: string };
+    expect(host.resolveActiveInvocation(extensionNode.name, invocation.requestId)).toBeNull();
   });
 
   it("accepts workspace-relative extension paths on invocation", async () => {

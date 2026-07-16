@@ -8,6 +8,7 @@
   },
   "exports": {
     "./aboutNamespace": "./src/aboutNamespace.ts",
+    "./ephemeral": "./src/ephemeral.ts",
     "./sourceDirs": "./src/sourceDirs.ts",
     "./types": "./src/types.ts",
     "./workspaceConfigSchema": "./src/workspaceConfigSchema.ts"

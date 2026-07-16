@@ -16,16 +16,13 @@ function fakeWorkspaceSource(workspaceRoot: string): WorkspaceStateSource & Buil
     async unitHashes(_stateHash, relPaths) {
       return Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}`]));
     },
-    async resolveHead() {
-      return "state:test";
-    },
-    async resolveContextView() {
+    async resolveContextState() {
       return "state:test";
     },
     async discoverGraph() {
       return discoverPackageGraph(workspaceRoot);
     },
-    onStateAdvanced() {
+    onProtectedPublication() {
       return () => {};
     },
     async recordBuild() {},

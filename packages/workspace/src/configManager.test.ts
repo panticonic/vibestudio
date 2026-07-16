@@ -3,6 +3,7 @@ import * as fs from "fs";
 import YAML from "yaml";
 import { createWorkspaceConfigManager } from "./loader.js";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 vi.mock("fs");
 vi.mock("yaml");
@@ -16,7 +17,11 @@ describe("createWorkspaceConfigManager", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
-    config = { id: "test-ws", initPanels: [{ source: "panels/chat" }] };
+    config = {
+      id: "test-ws",
+      systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      initPanels: [{ source: "panels/chat" }],
+    };
   });
 
   it("get() returns the live config object", () => {
@@ -105,7 +110,10 @@ describe("createWorkspaceConfigManager", () => {
   });
 
   it("set() clears a field by setting undefined", () => {
-    const onDisk: Record<string, unknown> = { id: "test-ws", initPanels: [{ source: "panels/old" }] };
+    const onDisk: Record<string, unknown> = {
+      id: "test-ws",
+      initPanels: [{ source: "panels/old" }],
+    };
     mockFs.readFileSync.mockReturnValue("yaml");
     mockYAML.parse.mockReturnValue(onDisk);
     mockYAML.stringify.mockReturnValue("out");

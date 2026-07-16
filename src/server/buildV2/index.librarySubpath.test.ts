@@ -20,16 +20,13 @@ function fakeWorkspaceSource(
     async unitHashes(_stateHash, relPaths) {
       return Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}`]));
     },
-    async resolveHead() {
-      return "state:test";
-    },
-    async resolveContextView() {
+    async resolveContextState() {
       return "state:test";
     },
     async discoverGraph() {
       return discoverPackageGraph(getWorkspaceRoot());
     },
-    onStateAdvanced() {
+    onProtectedPublication() {
       return () => {};
     },
     async recordBuild() {},
@@ -62,16 +59,13 @@ function fakeMultiStateWorkspaceSource(
         })
       );
     },
-    async resolveHead(head) {
-      return heads[head] ?? null;
-    },
-    async resolveContextView(contextId) {
+    async resolveContextState(contextId) {
       return heads[`ctx:${contextId}`] ?? "state:test";
     },
     async discoverGraph(stateHash) {
       return discoverPackageGraph(rootForState(stateHash));
     },
-    onStateAdvanced() {
+    onProtectedPublication() {
       return () => {};
     },
     async recordBuild() {},

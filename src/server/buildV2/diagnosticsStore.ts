@@ -1,9 +1,8 @@
 /**
  * In-memory cache of the most recent structured diagnostics per build key and
- * per unit name. Populated by the state-trigger build path and the push gate so
+ * per unit name. Populated by state-triggered and explicit exact-state builds so
  * `getBuildMetadata` / `agent diag` / `getBuildReport` can surface structured
- * esbuild + tsc diagnostics after the fact (the synchronous path is
- * `validateRepoPush`; this is the queryable companion).
+ * esbuild + tsc diagnostics after the fact.
  *
  * This is a best-effort cache, not the source of truth: it bounds memory and is
  * lost on restart. Cleared between tests via `clearDiagnostics`.

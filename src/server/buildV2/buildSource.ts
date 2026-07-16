@@ -1,24 +1,18 @@
 /**
  * Build source provider — the seam between the builder and the CONTENT STORE.
  *
- * The builder never reads the live working tree *directly*: build inputs are
- * content-addressed trees in the generic content store (blobstoreService tree
- * objects), addressed by an immutable worktree state (`state:…` hash) and
- * frozen for the duration of a build (no commit/push race). The production
- * provider (WorkspaceVcs.materializeForBuild) resolves each unit's subtree
- * hash within the state's tree and projects it to disk with the content
- * store's `materializeTree` (hardlinked from the CAS) — the gad DO is never
- * queried for manifests; every state hash handed to the builder resolves in
- * the content store (the mirroring invariant, see
- * WorktreeStore.ensureStateMirrored).
+ * Production builds never read mutable workspace or context directories.
+ * Published and candidate builds use immutable workspace-rooted content
+ * states. Contexts resolve to the same kind of aggregate content coordinate as
+ * protected main, so the builder needs no second repository-set identity.
  *
- * The state is immutable for the build. After bootstrap,
- * `WorkspaceStateSource.ensureFresh()` composes the current protected main
- * refs; it does not scan the source directory or publish uncommitted disk
- * changes. External edits belong to an active context checkout, where the
- * gad-store DO adopts them through the semantics-free worktree scan primitive.
- * The provider owns checkout caching (per-state dirs hardlinked from the
- * blobstore CAS — a P1 cache, deletable at any time).
+ * The source view is immutable for the build. Once materialized,
+ * `WorkspaceStateSource.ensureFresh()` resolves the current protected
+ * workspace publication; it does not scan or infer meaning from disk. Context
+ * edits belong to semantic working frontiers, and explicit scan/project host
+ * effects merely exchange byte facts with their disposable projections. Build
+ * materialization is likewise a deletable, per-state cache hardlinked from the
+ * blobstore CAS.
  *
  * Tests install a passthrough provider that serves a plain directory.
  */
@@ -55,7 +49,7 @@ export function getBuildSourceProvider(): BuildSourceProvider {
 
 /**
  * Passthrough provider serving sources straight from a directory on disk.
- * Used by builder unit tests (no GAD store involved).
+ * Used by builder unit tests (no semantic control plane involved).
  */
 export function directorySourceProvider(sourceRoot: string): BuildSourceProvider {
   return {
@@ -66,9 +60,8 @@ export function directorySourceProvider(sourceRoot: string): BuildSourceProvider
 }
 
 /**
- * Passthrough provider serving the live working tree of whatever workspace
- * root the build was invoked with. Test-only: production builds always
- * materialize from an immutable GAD state.
+ * Passthrough provider serving the invocation directory. Test-only: production
+ * builds always materialize exact content-addressed state.
  */
 export function workingTreeSourceProvider(): BuildSourceProvider {
   return {

@@ -17,6 +17,7 @@ import { z } from "zod";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { parseWorkspaceConfigContentWithId, resolveWorkspaceTrustGrants } from "./configParser.js";
 import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
+import { currentContextProjectionsPath } from "./contextProjections.js";
 export {
   resolveDeclaredApps,
   resolveDeclaredExtensions,
@@ -52,7 +53,10 @@ import type {
   CentralConfigPaths,
 } from "@vibestudio/workspace-contracts/types";
 import type { WorkspaceEntry } from "@vibestudio/shared/types";
-import type { CentralDataManager } from "@vibestudio/shared/centralData";
+import type {
+  CentralDataManager,
+  EphemeralWorkspaceCleanupRecord,
+} from "@vibestudio/shared/centralData";
 import {
   getExistingWorkspaceTemplateDir,
   getWorkspaceTemplateCandidates,
@@ -509,7 +513,7 @@ export function createWorkspace(wsDir: string): Workspace {
 
   const panelsPath = path.join(sourceRoot, "panels");
   const packagesPath = path.join(sourceRoot, "packages");
-  const contextsPath = path.join(stateRoot, ".contexts");
+  const contextProjectionsPath = currentContextProjectionsPath(stateRoot);
   const cachePath = path.join(stateRoot, ".cache");
   const agentsPath = path.join(sourceRoot, "agents");
   const projectsPath = path.join(sourceRoot, "projects");
@@ -517,7 +521,7 @@ export function createWorkspace(wsDir: string): Workspace {
   // Ensure directory structure exists
   fs.mkdirSync(panelsPath, { recursive: true });
   fs.mkdirSync(projectsPath, { recursive: true });
-  fs.mkdirSync(contextsPath, { recursive: true });
+  fs.mkdirSync(contextProjectionsPath, { recursive: true });
   fs.mkdirSync(cachePath, { recursive: true });
   fs.mkdirSync(stateRoot, { recursive: true });
 
@@ -529,7 +533,7 @@ export function createWorkspace(wsDir: string): Workspace {
     config,
     panelsPath,
     packagesPath,
-    contextsPath,
+    contextProjectionsPath,
     cachePath,
     agentsPath,
     projectsPath,
@@ -784,25 +788,53 @@ export function recoverStagedWorkspaceDeletions(
 }
 
 /**
- * Delete a deliberately unregistered workspace directory, currently used for
- * the hub's random on-disk ephemeral dev child. Requiring the catalog handle
- * here prevents this narrow path from becoming an escape hatch around the
- * coordinated registered-workspace deletion above.
+ * Consume one lease-fenced ephemeral cleanup ticket through the same staged
+ * rename/compensation protocol used by registered workspace deletion. The
+ * ticket—not a caller-supplied path—is the filesystem authority.
  */
 export function deleteUnregisteredWorkspace(
-  name: string,
-  centralData: CentralDataManager
+  cleanup: EphemeralWorkspaceCleanupRecord,
+  centralData: CentralDataManager,
+  ownerBootId: string
 ): boolean {
+  const name = cleanup.diskName;
   validateWorkspaceName(name);
+  centralData.assertEphemeralWorkspaceCleanup(ownerBootId, cleanup);
   if (centralData.hasWorkspace(name)) {
     throw new Error(
       `Workspace "${name}" is registered and must be deleted with deleteAndUnregisterWorkspace`
     );
   }
   const workspaceDir = getWorkspaceDir(name);
-  if (!fs.existsSync(workspaceDir)) return false;
-  const staged = stageWorkspaceDeletion(name, `unregistered:${name}`, workspaceDir);
-  removeWorkspaceTree(staged.trashRoot);
+  if (!fs.existsSync(workspaceDir)) {
+    if (!centralData.completeEphemeralWorkspaceCleanup(ownerBootId, cleanup)) {
+      throw new Error(`Ephemeral cleanup ticket ${cleanup.cleanupId} changed before completion`);
+    }
+    return false;
+  }
+  const staged = stageWorkspaceDeletion(name, cleanup.cleanupId, workspaceDir);
+  try {
+    if (!centralData.completeEphemeralWorkspaceCleanup(ownerBootId, cleanup)) {
+      throw new Error(`Ephemeral cleanup ticket ${cleanup.cleanupId} changed before completion`);
+    }
+  } catch (error) {
+    try {
+      restoreWorkspaceDeletion(staged);
+    } catch (restoreError) {
+      throw new AggregateError(
+        [error, restoreError],
+        `Ephemeral cleanup ${cleanup.cleanupId} was refused and its directory could not be restored`
+      );
+    }
+    throw error;
+  }
+  try {
+    removeWorkspaceTree(staged.trashRoot);
+  } catch (error) {
+    log.warn(
+      `[Workspace] Ephemeral cleanup ${cleanup.cleanupId} committed; filesystem cleanup remains queued at ${staged.trashRoot}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
   log.info(`[Workspace] Deleted unregistered ephemeral workspace "${name}"`);
   return true;
 }

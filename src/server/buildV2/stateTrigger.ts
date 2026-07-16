@@ -1,9 +1,8 @@
 /**
- * State Transition Trigger — subscribes to workspace state advances on the
- * GAD vcs log (`vcs:workspace` @ main), recomputes effective versions for
- * the touched units, and rebuilds them.
+ * State Transition Trigger — subscribes to protected workspace publications,
+ * recomputes effective versions for touched units, and rebuilds them.
  *
- * Replaces the git PushTrigger: change detection is `diffGadStates` paths
+ * Replaces the git PushTrigger: change detection consumes explicit content-state differences
  * (precise per-file), content hashes are manifest subtree hashes, and the
  * build's sources come from the same immutable state the EVs were computed
  * at — there is no commit/push race to patch around.
@@ -13,6 +12,7 @@
  */
 
 import { EventEmitter } from "events";
+import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import {
   computeEffectiveVersions,
@@ -31,80 +31,6 @@ import { assertPresent } from "../../lintHelpers";
 // ---------------------------------------------------------------------------
 // Workspace state source (implemented by vcsHost/workspaceVcs.ts)
 // ---------------------------------------------------------------------------
-
-export interface StateAdvancedEvent {
-  head: string;
-  stateHash: string;
-  /**
-   * The advanced log's OWN state hash — the identity space of the values
-   * `vcs.edit`/`readFile`/`revert` return. For a per-repo advance this is
-   * the subtree-rooted repo state, whereas `stateHash` is re-rooted to the
-   * composed workspace/context view for the build trigger; the two differ.
-   * Clients correlating an RPC result with a head advance (e.g. a panel's
-   * self-echo / undo guards) MUST match on this field, not `stateHash`.
-   */
-  repoStateHash: string;
-  /** State this head advanced from; null when the prior state is unknown/new. */
-  sinceStateHash: string | null;
-  /** Producing log event for the transition, when the advance came from GAD. */
-  eventId: string | null;
-  /** New log-head hash after the producing event, when available. */
-  headHash: string | null;
-  /** Verified server-side actor that authored the transition. */
-  actor: { id: string; kind: string } | null;
-  /** Coarse source for consumers that need to distinguish authored edits from scans/merges. */
-  transitionKind: "snapshot" | "edit" | "merge" | "merge-resolution";
-  /** File paths changed vs the previous state of this head (workspace-relative). */
-  changedPaths: string[];
-  /**
-   * Routing metadata: which repo's log advanced. The build trigger stays
-   * workspace-rooted — the per-repo advance re-roots its changed paths to
-   * workspace-relative and builds against the composed workspace view, so
-   * `changedPaths`/`stateHash` remain workspace-rooted regardless.
-   */
-  repoPath: string;
-  /** File-level delta with content hashes/modes for exact reconciliation. */
-  fileChanges: Array<{
-    kind: "added" | "removed" | "changed";
-    path: string;
-    oldContentHash: string | null;
-    newContentHash: string | null;
-    oldMode: number | null;
-    newMode: number | null;
-  }>;
-  /** Authored edit intent, when the transition came from edit-first VCS writes. */
-  editOps: Array<{
-    kind: "replace" | "write" | "create" | "delete" | "chmod";
-    path: string;
-    oldContentHash: string | null;
-    newContentHash: string | null;
-    hunks?: unknown;
-    mode?: number | null;
-  }>;
-}
-
-/**
- * Emitted by `recordEdit` when a repo's UNCOMMITTED working content advances on a
- * `ctx:*` head. Deliberately distinct from {@link StateAdvancedEvent}: an edit is
- * NOT a state operation — it does not advance the commit head, appear in
- * `vcs.log`, or trigger a build. The build trigger does not subscribe to this;
- * consumers that mirror working content (reactive views, dirty indicators) do.
- */
-export interface WorkingAdvancedEvent {
-  head: string;
-  /** Which repo's working content advanced (per-repo VCS). */
-  repoPath: string;
-  /** Verified server-side actor that authored the edit. */
-  actor: { id: string; kind: string } | null;
-  /** The working state hash (committed base + uncommitted ops) projected to disk. */
-  stateHash: string;
-  /** The committed base the working content composes on. */
-  baseStateHash: string;
-  /** The shared per-call edit sequence for this edit's ops. */
-  editSeq: number;
-  /** Paths changed by THIS edit (workspace-relative). */
-  changedPaths: string[];
-}
 
 export interface BuildRecord {
   inputStateHash: string;
@@ -127,29 +53,22 @@ export interface StateChangedUnit {
 
 export interface WorkspaceStateSource {
   /**
-   * The current `main` view — the composed union of every repo's `main`, from
-   * refs + CAS (no disk scan, no commit). This is what a default (`main`/no-ref)
-   * `bindRuntimeImage`/`getBuild` builds; per-entity builds serve
-   * `resolveContextView(ctx:{id})` instead.
+   * Resolve the current protected workspace publication to one exact,
+   * workspace-rooted content state. No disk scan or projection participates.
    */
   ensureFresh(): Promise<{ stateHash: string }>;
   /** Batch manifest subtree hashes for unit-relative paths at a state. */
   unitHashes(stateHash: string, relPaths: string[]): Promise<Record<string, string | null>>;
-  /** Resolve a head name to its current worktree state hash. */
-  resolveHead(head: string): Promise<string | null>;
-  /** Resolve a `ctx:{contextId}` ref to its composed view state (every repo at
-   *  main, with the context's writable repos overlaid at their ctx heads). */
-  resolveContextView(contextId: string): Promise<string>;
+  /** Resolve a semantic context's exact working frontier to workspace content. */
+  resolveContextState(contextId: string): Promise<string>;
   /**
-   * Discover package manifests from a workspace-rooted state. Per the per-repo
-   * VCS reshape this is the composed live workspace view (`workspaceView()` =
-   * `composeRepoStatesLocal` over each repo's `main`). Discovery stays
-   * workspace-rooted so unit `relativePath`s, EVs, and the build graph remain
-   * in workspace coordinates regardless of which repo advanced.
+   * Discover package manifests from exact workspace-rooted content. Unit
+   * relative paths, effective versions, and graph edges therefore share the
+   * same coordinates regardless of repository boundaries.
    */
   discoverGraph(stateHash: string): Promise<PackageGraph>;
-  /** Subscribe to state advances (any head). Returns unsubscribe. */
-  onStateAdvanced(cb: (event: StateAdvancedEvent) => void): () => void;
+  /** Subscribe to atomic protected workspace publications. Returns unsubscribe. */
+  onProtectedPublication(cb: (event: ProtectedPublicationEvent) => void): () => void;
   /** Append `build.completed` provenance to the builds log (best effort). */
   recordBuild(record: BuildRecord): Promise<void>;
 }
@@ -159,18 +78,18 @@ export interface WorkspaceStateSource {
 // ---------------------------------------------------------------------------
 
 export interface StateTriggerEvents {
-  "build-started": { name: string; trigger?: StateAdvancedEvent };
-  "build-complete": { name: string; buildKey: string; trigger?: StateAdvancedEvent };
+  "build-started": { name: string; trigger?: ProtectedPublicationEvent };
+  "build-complete": { name: string; buildKey: string; trigger?: ProtectedPublicationEvent };
   "build-error": {
     name: string;
     error: string;
     diagnostics: BuildDiagnostic[];
-    trigger?: StateAdvancedEvent;
+    trigger?: ProtectedPublicationEvent;
   };
   "change-detected": {
     names: string[];
     units: StateChangedUnit[];
-    trigger: StateAdvancedEvent;
+    trigger: ProtectedPublicationEvent;
   };
   "graph-updated": {
     graph: PackageGraph;
@@ -249,7 +168,7 @@ export class StateTransitionTrigger extends EventEmitter {
   }
 
   start(): void {
-    this.unsubscribe = this.source.onStateAdvanced((event) => this.handleAdvance(event));
+    this.unsubscribe = this.source.onProtectedPublication((event) => this.handlePublication(event));
   }
 
   stop(): void {
@@ -300,39 +219,13 @@ export class StateTransitionTrigger extends EventEmitter {
     return this.queue.then(() => undefined);
   }
 
-  private handleAdvance(event: StateAdvancedEvent): void {
+  private handlePublication(event: ProtectedPublicationEvent): void {
     this.queue = this.queue
-      .then(() => (event.head === MAIN_HEAD ? this.process(event) : this.processPinnedHead(event)))
-      .catch((error) => console.error(`[StateTrigger] Error processing state advance:`, error));
+      .then(() => this.process(event))
+      .catch((error) => console.error(`[StateTrigger] Error processing publication:`, error));
   }
 
-  /**
-   * Non-main (pinned / `ctx:*`) state advance. In the edit→commit→push model a
-   * ctx-head commit emits `state-advanced` ONLY for memory/attribution
-   * bookkeeping (consumed directly off `workspaceVcs.onStateAdvanced`) — it is
-   * NOT a publication and MUST NOT build: builds are validated at the push gate
-   * (`validate`/`validateRepoPush` build + cache the candidate, idempotently —
-   * they do NOT record the baseline), and the recorded baseline (`persistEvState`
-   * + `recordBuild`) is promoted ONLY here, reactively, when `main` advances.
-   * On-demand previews of working content go through `previewBuild` (which
-   * never touches the EV baseline). So the build trigger deliberately does
-   * nothing here: no `buildChanged`, no `change-detected`/unit-reconcile, and —
-   * critically — no `persistEvState` (the EV baseline tracks ONLY pushed main
-   * states; a pinned/working state must never poison it).
-   */
-  private async processPinnedHead(_event: StateAdvancedEvent): Promise<void> {
-    // Intentionally a no-op. See the doc comment above.
-  }
-
-  private async process(event: StateAdvancedEvent): Promise<void> {
-    // A per-repo group push emits ONE event per advanced repo, all carrying the
-    // same composed workspace `stateHash` but DISTINCT per-repo `changedPaths`.
-    // Deduping on `stateHash` alone would drop every repo after the first (the
-    // first advances `this.stateHash` to the composed view), leaving the later
-    // repos' units' content hashes / EV / build notifications stale. Every
-    // per-repo event is therefore processed for its own `changedPaths`; an
-    // empty delta is cheaply handled by the `units.size === 0` branch below.
-
+  private async process(event: ProtectedPublicationEvent): Promise<void> {
     const { units, unmatched, manifestTouched } = unitsForChangedPaths(
       this.graph,
       event.changedPaths
@@ -344,13 +237,13 @@ export class StateTransitionTrigger extends EventEmitter {
       return;
     }
     if (units.size === 0) {
-      this.stateHash = event.stateHash;
+      this.stateHash = event.workspaceStateHash;
       return;
     }
 
     const changedNames = [...units];
     const freshHashes = await this.source.unitHashes(
-      event.stateHash,
+      event.workspaceStateHash,
       changedNames.map((name) => this.graph.get(name).relativePath)
     );
     const updated: ContentHashMap = {};
@@ -370,9 +263,9 @@ export class StateTransitionTrigger extends EventEmitter {
 
     this.evMap = result.evMap;
     this.contentHashes = result.contentHashes;
-    this.stateHash = event.stateHash;
+    this.stateHash = event.workspaceStateHash;
     persistEvState({
-      stateHash: event.stateHash,
+      stateHash: event.workspaceStateHash,
       evMap: result.evMap,
       contentHashes: result.contentHashes,
     });
@@ -380,7 +273,7 @@ export class StateTransitionTrigger extends EventEmitter {
       graph: this.graph,
       evMap: result.evMap,
       contentHashes: result.contentHashes,
-      stateHash: event.stateHash,
+      stateHash: event.workspaceStateHash,
     });
 
     await this.buildChanged(
@@ -396,10 +289,10 @@ export class StateTransitionTrigger extends EventEmitter {
    * Full graph rediscovery: re-scan workspace manifests from the immutable
    * state, hash every unit at that state, recompute all EVs, build what changed.
    */
-  async fullRediscovery(event: StateAdvancedEvent, sourceUnitName?: string): Promise<void> {
-    const newGraph = await this.source.discoverGraph(event.stateHash);
+  async fullRediscovery(event: ProtectedPublicationEvent, sourceUnitName?: string): Promise<void> {
+    const newGraph = await this.source.discoverGraph(event.workspaceStateHash);
     const relPaths = newGraph.allNodes().map((node) => node.relativePath);
-    const hashesByPath = await this.source.unitHashes(event.stateHash, relPaths);
+    const hashesByPath = await this.source.unitHashes(event.workspaceStateHash, relPaths);
     const contentHashes: ContentHashMap = {};
     for (const node of newGraph.allNodes()) {
       const hash = hashesByPath[node.relativePath];
@@ -412,9 +305,9 @@ export class StateTransitionTrigger extends EventEmitter {
     this.graph = newGraph;
     this.evMap = result.evMap;
     this.contentHashes = result.contentHashes;
-    this.stateHash = event.stateHash;
+    this.stateHash = event.workspaceStateHash;
     persistEvState({
-      stateHash: event.stateHash,
+      stateHash: event.workspaceStateHash,
       evMap: result.evMap,
       contentHashes: result.contentHashes,
     });
@@ -422,7 +315,7 @@ export class StateTransitionTrigger extends EventEmitter {
       graph: newGraph,
       evMap: result.evMap,
       contentHashes: result.contentHashes,
-      stateHash: event.stateHash,
+      stateHash: event.workspaceStateHash,
     });
 
     await this.buildChanged(
@@ -438,7 +331,7 @@ export class StateTransitionTrigger extends EventEmitter {
     names: string[],
     graph: PackageGraph,
     evMap: EffectiveVersionMap,
-    trigger: StateAdvancedEvent,
+    trigger: ProtectedPublicationEvent,
     sourceUnitName: string | null
   ): Promise<void> {
     if (names.length === 0) return;
@@ -471,11 +364,11 @@ export class StateTransitionTrigger extends EventEmitter {
 
       this.emit("build-started", { name, trigger });
       try {
-        await buildUnit(node, ev, graph, this.workspaceRoot, trigger.stateHash);
+        await buildUnit(node, ev, graph, this.workspaceRoot, trigger.workspaceStateHash);
         this.emit("build-complete", { name, buildKey, trigger });
         void this.source
           .recordBuild({
-            inputStateHash: trigger.stateHash,
+            inputStateHash: trigger.workspaceStateHash,
             unitName: name,
             subtree: node.relativePath,
             ev,
@@ -490,7 +383,7 @@ export class StateTransitionTrigger extends EventEmitter {
         this.emit("build-error", { name, error: message, diagnostics, trigger });
         void this.source
           .recordBuild({
-            inputStateHash: trigger.stateHash,
+            inputStateHash: trigger.workspaceStateHash,
             unitName: name,
             subtree: node.relativePath,
             ev,

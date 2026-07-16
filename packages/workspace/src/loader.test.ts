@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   createAndRegisterWorkspace,
+  createWorkspace,
   deleteAndUnregisterWorkspace,
   deleteUnregisteredWorkspace,
   initWorkspace,
@@ -16,14 +17,20 @@ import {
   resolveDeclaredExtensions,
   saveCentralConfig,
 } from "./loader.js";
+import { currentContextProjectionsPath } from "./contextProjections.js";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 const originalXdgConfigHome = process.env["XDG_CONFIG_HOME"];
 const tempRoots: string[] = [];
 
 function writeConfig(sourceRoot: string, content: string): void {
   fs.mkdirSync(path.join(sourceRoot, "meta"), { recursive: true });
-  fs.writeFileSync(path.join(sourceRoot, "meta", "vibestudio.yml"), content, "utf-8");
+  fs.writeFileSync(
+    path.join(sourceRoot, "meta", "vibestudio.yml"),
+    `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n${content}`,
+    "utf-8"
+  );
 }
 
 afterEach(() => {
@@ -192,15 +199,46 @@ describe("loadWorkspaceConfig", () => {
   });
 });
 
+describe("context projection topology", () => {
+  it("constructs only the current epoch root and leaves the legacy namespace unreachable", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
+    tempRoots.push(root);
+    const workspaceDir = path.join(root, "workspace");
+    writeConfig(path.join(workspaceDir, "source"), "initPanels: []\n");
+    const legacyMarker = path.join(
+      workspaceDir,
+      "state",
+      ".contexts",
+      "old",
+      ".vibestudio-context.json"
+    );
+    fs.mkdirSync(path.dirname(legacyMarker), { recursive: true });
+    fs.writeFileSync(legacyMarker, "{not-current-epoch", "utf8");
+
+    const workspace = createWorkspace(workspaceDir);
+    expect(workspace.contextProjectionsPath).toBe(
+      currentContextProjectionsPath(workspace.statePath)
+    );
+    expect(workspace.contextProjectionsPath).toBe(
+      path.join(workspaceDir, "state", ".context-projections", "v6")
+    );
+    expect(fs.existsSync(workspace.contextProjectionsPath)).toBe(true);
+    expect(fs.readFileSync(legacyMarker, "utf8")).toBe("{not-current-epoch");
+  });
+});
+
 describe("resolveDeclaredExtensions", () => {
   it("returns an empty list when no extensions section exists", () => {
-    expect(resolveDeclaredExtensions({ id: "ws" })).toEqual([]);
+    expect(resolveDeclaredExtensions({ id: "ws", systemEpoch: WORKSPACE_SYSTEM_EPOCH })).toEqual(
+      []
+    );
   });
 
   it("applies ref defaults", () => {
     expect(
       resolveDeclaredExtensions({
         id: "ws",
+        systemEpoch: WORKSPACE_SYSTEM_EPOCH,
         extensions: [{ source: "extensions/a" }, { source: "@workspace-extensions/b", ref: "dev" }],
       })
     ).toEqual([
@@ -212,13 +250,14 @@ describe("resolveDeclaredExtensions", () => {
 
 describe("resolveDeclaredApps", () => {
   it("returns an empty list when no apps section exists", () => {
-    expect(resolveDeclaredApps({ id: "ws" })).toEqual([]);
+    expect(resolveDeclaredApps({ id: "ws", systemEpoch: WORKSPACE_SYSTEM_EPOCH })).toEqual([]);
   });
 
   it("applies ref defaults", () => {
     expect(
       resolveDeclaredApps({
         id: "ws",
+        systemEpoch: WORKSPACE_SYSTEM_EPOCH,
         apps: [
           { source: "apps/shell" },
           {
@@ -631,17 +670,64 @@ describe("initWorkspace", () => {
       "workspaces",
       "dev-deadbeef"
     );
-    const registered = { hasWorkspace: () => true } as unknown as CentralDataManager;
+    const cleanup = {
+      cleanupId: "cleanup_test",
+      diskName: "dev-deadbeef",
+      sourceOwnerBootId: "boot-owner",
+      createdAt: 1,
+    };
+    const registered = {
+      assertEphemeralWorkspaceCleanup: vi.fn(),
+      hasWorkspace: () => true,
+      completeEphemeralWorkspaceCleanup: vi.fn(() => true),
+    } as unknown as CentralDataManager;
 
-    expect(() => deleteUnregisteredWorkspace("dev-deadbeef", registered)).toThrow(
+    expect(() => deleteUnregisteredWorkspace(cleanup, registered, "boot-owner")).toThrow(
       /is registered and must be deleted with deleteAndUnregisterWorkspace/
     );
     expect(fs.existsSync(workspaceDir)).toBe(true);
 
-    const unregistered = { hasWorkspace: () => false } as unknown as CentralDataManager;
-    expect(deleteUnregisteredWorkspace("dev-deadbeef", unregistered)).toBe(true);
+    const unregistered = {
+      assertEphemeralWorkspaceCleanup: vi.fn(),
+      hasWorkspace: () => false,
+      completeEphemeralWorkspaceCleanup: vi.fn(() => true),
+    } as unknown as CentralDataManager;
+    expect(deleteUnregisteredWorkspace(cleanup, unregistered, "boot-owner")).toBe(true);
     expect(fs.existsSync(workspaceDir)).toBe(false);
-    expect(deleteUnregisteredWorkspace("dev-deadbeef", unregistered)).toBe(false);
+    expect(deleteUnregisteredWorkspace(cleanup, unregistered, "boot-owner")).toBe(false);
+  });
+
+  it("restores an ephemeral checkout when its fenced cleanup ticket is refused", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
+    tempRoots.push(root);
+    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    const templateRoot = path.join(root, "template");
+    writeConfig(templateRoot, "initPanels: []\n");
+    initWorkspace("dev-deadbeef", { templateDir: templateRoot });
+    const workspaceDir = path.join(
+      process.env["XDG_CONFIG_HOME"],
+      "vibestudio",
+      "workspaces",
+      "dev-deadbeef"
+    );
+    const cleanup = {
+      cleanupId: "cleanup_refused",
+      diskName: "dev-deadbeef",
+      sourceOwnerBootId: "boot-displaced",
+      createdAt: 1,
+    };
+    const centralData = {
+      assertEphemeralWorkspaceCleanup: vi.fn(),
+      hasWorkspace: () => false,
+      completeEphemeralWorkspaceCleanup: vi.fn(() => {
+        throw new Error("lease displaced");
+      }),
+    } as unknown as CentralDataManager;
+
+    expect(() => deleteUnregisteredWorkspace(cleanup, centralData, "boot-displaced")).toThrow(
+      /lease displaced/
+    );
+    expect(fs.existsSync(workspaceDir)).toBe(true);
   });
 
   it("completes the registered filesystem and control-data lifecycle as one operation", () => {

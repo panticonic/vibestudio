@@ -1,27 +1,27 @@
+/** Publish workspace-config edits through one fresh semantic context. */
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { parseWorkspaceConfigContent } from "@vibestudio/workspace/loader";
-import { mirrorWorktreeTree, putBytes } from "./services/blobstoreService.js";
-import {
-  isRefConflictError,
-  type ProtectedRefStore,
-  type MainRefOperation,
-} from "./services/protectedRefStore.js";
+import type {
+  VcsCommitResult,
+  VcsInspectResult,
+  VcsListFilesResult,
+  VcsNeighborsResult,
+  VcsPushResult,
+  VcsReadFileResult,
+  VcsStateNodeRef,
+  VcsStatusResult,
+  VcsWorkingMutationResult,
+} from "@vibestudio/service-schemas/vcs";
+import type { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
 
 const META_REPO_PATH = "meta";
 const WORKSPACE_CONFIG_FILE = "vibestudio.yml";
-const REGULAR_FILE_MODE = 33188;
-
-type WorkspaceConfigFile = {
-  content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
-};
-
-type WorkspaceConfigVcs = {
-  readFile(ref: string, filePath: string): Promise<WorkspaceConfigFile | null>;
-  listFiles(ref: string): Promise<Array<{ path: string; contentHash: string; mode: number }>>;
-  ensureRepoLogsFromDisk?(): Promise<void>;
-};
+const PAGE_LIMIT = 500;
 
 export interface WorkspaceConfigMainWriter {
   wouldMutate(mutate: WorkspaceConfigMutation): Promise<boolean>;
@@ -29,7 +29,6 @@ export interface WorkspaceConfigMainWriter {
     ctx: ServiceContext;
     mutate: WorkspaceConfigMutation;
     summary: string;
-    operation: Extract<MainRefOperation, "push" | "import">;
   }): Promise<WorkspaceConfigMutationResult>;
 }
 
@@ -40,120 +39,204 @@ export interface WorkspaceConfigMutationResult {
   nextConfig: WorkspaceConfig;
 }
 
+interface WorkspaceConfigAtState {
+  status: VcsStatusResult;
+  repositoryId: string;
+  fileId: string;
+  text: string;
+  config: WorkspaceConfig;
+}
+
+function sameState(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
+  return (
+    left.kind === right.kind &&
+    (left.kind === "event"
+      ? right.kind === "event" && left.eventId === right.eventId
+      : right.kind === "application" && left.applicationId === right.applicationId)
+  );
+}
+
+const SYSTEM_CAUSE: RpcCausalParent | null = null;
+
 export function createWorkspaceConfigMainWriter(deps: {
   workspacePath: string;
-  blobsDir: string;
-  refs: Pick<ProtectedRefStore, "readMain">;
-  vcs: WorkspaceConfigVcs;
-  /** Publish through the GAD writer DO so protected refs and recorded main
-   * provenance advance atomically under a durable write-ahead intent. */
-  publishMain(input: {
-    ctx: ServiceContext;
-    expectedOld: string;
-    files: Array<{ path: string; contentHash: string; mode: number }>;
-    summary: string;
-    operation: Extract<MainRefOperation, "push" | "import">;
-  }): Promise<{ stateHash: string }>;
+  vcs: WorkspaceVcs;
 }): WorkspaceConfigMainWriter {
   let mutationQueue = Promise.resolve();
 
-  const readCurrentMeta = async (): Promise<{ stateHash: string; content: string }> => {
-    let metaMain = deps.refs.readMain(META_REPO_PATH);
-    if (!metaMain && deps.vcs.ensureRepoLogsFromDisk) {
-      await deps.vcs.ensureRepoLogsFromDisk();
-      metaMain = deps.refs.readMain(META_REPO_PATH);
+  const readConfig = async (
+    contextId: string,
+    causalParent: RpcCausalParent | null
+  ): Promise<WorkspaceConfigAtState> => {
+    const call = <T>(method: string, input: unknown): Promise<T> =>
+      deps.vcs.semanticCausalCall<T>(method, input, causalParent);
+    const status = await call<VcsStatusResult>("vcsStatus", { contextId });
+    const state = status.workingHead;
+    const repositoryRefs = new Map<
+      string,
+      Extract<VcsNeighborsResult["edges"][number]["to"], { kind: "repository" }>
+    >();
+    let cursor: string | undefined;
+    do {
+      const page = await call<VcsNeighborsResult>("vcsNeighbors", {
+        root: state,
+        limit: PAGE_LIMIT,
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const edge of page.edges) {
+        for (const node of [edge.from, edge.to]) {
+          if (node.kind === "repository" && sameState(node.state, state)) {
+            repositoryRefs.set(node.repositoryId, node);
+          }
+        }
+      }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+
+    let repositoryId: string | null = null;
+    for (const repository of repositoryRefs.values()) {
+      const inspected = await call<VcsInspectResult>("vcsInspect", {
+        node: repository,
+        edgeLimit: 1,
+      });
+      if (
+        inspected.node.kind === "repository" &&
+        inspected.node.value.kind === "present" &&
+        inspected.node.value.repoPath === META_REPO_PATH
+      ) {
+        repositoryId = inspected.node.value.repositoryId;
+        break;
+      }
     }
-    if (!metaMain) {
-      throw new Error("Cannot persist workspace config: protected meta/main is not initialized");
+    if (!repositoryId) {
+      throw new Error(`Cannot persist workspace config: ${META_REPO_PATH} repository is absent`);
     }
-    const file = await deps.vcs.readFile(metaMain.stateHash, WORKSPACE_CONFIG_FILE);
-    if (!file || file.content.kind !== "text") {
+
+    let fileId: string | null = null;
+    cursor = undefined;
+    do {
+      const page: VcsListFilesResult = await call("vcsListFiles", {
+        state,
+        repositoryId,
+        prefix: WORKSPACE_CONFIG_FILE,
+        limit: PAGE_LIMIT,
+        ...(cursor ? { cursor } : {}),
+      });
+      fileId =
+        page.files.find((candidate) => candidate.path === WORKSPACE_CONFIG_FILE)?.fileId ?? null;
+      cursor = page.nextCursor ?? undefined;
+    } while (!fileId && cursor);
+    if (!fileId) {
       throw new Error(
-        `Cannot persist workspace config: ${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE} is missing from protected main`
+        `Cannot persist workspace config: ${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE} is absent`
       );
     }
-    return { stateHash: metaMain.stateHash, content: file.content.text };
+
+    const content = await call<VcsReadFileResult>("vcsReadFile", {
+      state,
+      repositoryId,
+      file: { kind: "id", fileId },
+    });
+    if (!content || content.content.kind !== "text") {
+      throw new Error(
+        `Cannot persist workspace config: ${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE} is not text`
+      );
+    }
+    return {
+      status,
+      repositoryId,
+      fileId,
+      text: content.content.text,
+      config: parseWorkspaceConfigContent(content.content.text, deps.workspacePath),
+    };
   };
 
-  const renderMutation = async (
+  const withFreshContext = async <T>(operation: (contextId: string) => Promise<T>): Promise<T> => {
+    const contextId = `system:workspace-config:${randomUUID()}`;
+    await deps.vcs.ensureContext(contextId);
+    try {
+      return await operation(contextId);
+    } finally {
+      await deps.vcs.dropContext(contextId);
+    }
+  };
+
+  const render = (
+    currentContent: string,
+    current: WorkspaceConfig,
     mutate: WorkspaceConfigMutation
-  ): Promise<{
-    currentStateHash: string;
-    currentContent: string;
-    nextContent: string;
-    nextConfig: WorkspaceConfig;
-  }> => {
-    const current = await readCurrentMeta();
-    const currentConfig = parseWorkspaceConfigContent(current.content, deps.workspacePath);
-    const nextConfig = mutate(currentConfig);
+  ) => {
+    const nextConfig = mutate(current);
     return {
-      currentStateHash: current.stateHash,
-      currentContent: current.content,
-      nextContent: renderWorkspaceConfigYaml(current.content, nextConfig, deps.workspacePath),
       nextConfig,
+      nextContent: isDeepStrictEqual(nextConfig, current)
+        ? currentContent
+        : renderWorkspaceConfigYaml(currentContent, nextConfig, deps.workspacePath),
     };
   };
 
   const applyMutation = async (
     input: Parameters<WorkspaceConfigMainWriter["applyMutation"]>[0]
-  ): Promise<WorkspaceConfigMutationResult> => {
-    // Conflicts can only come from another protected meta/main writer. Re-read
-    // and reapply the narrow mutation instead of replaying a stale snapshot.
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const rendered = await renderMutation(input.mutate);
-      if (rendered.currentContent === rendered.nextContent) {
+  ): Promise<WorkspaceConfigMutationResult> =>
+    withFreshContext(async (contextId) => {
+      const causalParent = input.ctx.causalParent ?? null;
+      const current = await readConfig(contextId, causalParent);
+      const rendered = render(current.text, current.config, input.mutate);
+      if (rendered.nextContent === current.text) {
         return { changed: false, nextConfig: rendered.nextConfig };
       }
 
-      const existingFiles = await deps.vcs.listFiles(rendered.currentStateHash);
-      const { digest } = await putBytes(deps.blobsDir, Buffer.from(rendered.nextContent, "utf8"));
-      let replaced = false;
-      const nextFiles = existingFiles.map((file) => {
-        if (file.path !== WORKSPACE_CONFIG_FILE) return file;
-        replaced = true;
-        return { ...file, contentHash: digest };
-      });
-      if (!replaced) {
-        nextFiles.push({
-          path: WORKSPACE_CONFIG_FILE,
-          contentHash: digest,
-          mode: REGULAR_FILE_MODE,
-        });
+      const commandStem = `workspace-config:${input.ctx.requestId ?? randomUUID()}`;
+      const edit = await deps.vcs.semanticCausalCall<VcsWorkingMutationResult>(
+        "vcsEdit",
+        {
+          contextId,
+          commandId: `${commandStem}:edit`,
+          expectedWorkingHead: current.status.workingHead,
+          intentSummary: input.summary,
+          changes: [
+            {
+              kind: "text-edit",
+              repositoryId: current.repositoryId,
+              fileId: current.fileId,
+              edits: [{ start: 0, end: current.text.length, text: rendered.nextContent }],
+            },
+          ],
+        },
+        causalParent
+      );
+      const committed = await deps.vcs.semanticCausalCall<VcsCommitResult>(
+        "vcsCommit",
+        {
+          contextId,
+          commandId: `${commandStem}:commit`,
+          expectedWorkingHead: edit.workingHead,
+          message: input.summary,
+        },
+        causalParent
+      );
+      if (committed.event.kind !== "event") {
+        throw new Error("Workspace config commit did not produce an event");
       }
-      nextFiles.sort((a, b) => a.path.localeCompare(b.path));
-
-      const nextState = await mirrorWorktreeTree(deps.blobsDir, nextFiles);
-      if (nextState.stateHash === rendered.currentStateHash) {
-        return { changed: false, nextConfig: rendered.nextConfig };
-      }
-
-      try {
-        const published = await deps.publishMain({
-          ctx: input.ctx,
-          expectedOld: rendered.currentStateHash,
-          files: nextFiles,
-          summary: input.summary,
-          operation: input.operation,
-        });
-        if (published.stateHash !== nextState.stateHash) {
-          throw new Error(
-            `Workspace config publish hash mismatch: staged ${nextState.stateHash}, published ${published.stateHash}`
-          );
-        }
-        return { changed: true, nextConfig: rendered.nextConfig };
-      } catch (error) {
-        if (!isRefConflictError(error) || attempt === 4) throw error;
-      }
-    }
-    throw new Error("Workspace config mutation retry budget exhausted");
-  };
+      await deps.vcs.semanticPublishCall<VcsPushResult>(
+        {
+          contextId,
+          commandId: `${commandStem}:push`,
+          expectedCommittedEventId: committed.event.eventId,
+          expectedMainEventId: current.status.mainEventId,
+        },
+        causalParent,
+        input.ctx.caller
+      );
+      return { changed: true, nextConfig: rendered.nextConfig };
+    });
 
   return {
-    async wouldMutate(mutate) {
-      const rendered = await renderMutation(mutate);
-      return rendered.currentContent !== rendered.nextContent;
-    },
-
+    wouldMutate: (mutate) =>
+      withFreshContext(async (contextId) => {
+        const current = await readConfig(contextId, SYSTEM_CAUSE);
+        return render(current.text, current.config, mutate).nextContent !== current.text;
+      }),
     applyMutation(input) {
       const run = mutationQueue.then(
         () => applyMutation(input),

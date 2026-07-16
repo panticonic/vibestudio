@@ -82,6 +82,12 @@ export interface TypeCheckServiceConfig {
   workspaceContext?: WorkspaceContext | null;
   /** Opt out of automatic tsconfig.json discovery — useful for hermetic tests. */
   disableTsconfigDiscovery?: boolean;
+  /**
+   * Inclusive upper boundary for parent tsconfig discovery. Build previews set
+   * this to the exact unit root so an absent unit config cannot silently adopt
+   * unrelated workspace-wide include/options state.
+   */
+  tsconfigSearchBoundary?: string;
 }
 
 /**
@@ -775,10 +781,18 @@ export class TypeCheckService {
 
     const candidates: string[] = [];
     let dir = this.config.panelPath;
+    const boundary = this.config.tsconfigSearchBoundary
+      ? path.resolve(this.config.tsconfigSearchBoundary)
+      : null;
     for (let i = 0; i < 3; i++) {
       candidates.push(path.join(dir, "tsconfig.json"));
+      if (boundary && path.resolve(dir) === boundary) break;
       const parent = path.dirname(dir);
       if (parent === dir) break;
+      if (boundary) {
+        const relativeToBoundary = path.relative(boundary, parent);
+        if (relativeToBoundary === ".." || relativeToBoundary.startsWith(`..${path.sep}`)) break;
+      }
       dir = parent;
     }
 

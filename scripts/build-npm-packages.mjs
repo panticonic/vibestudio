@@ -355,6 +355,7 @@ function templateSkip(name, dirent) {
       name === "node_modules" ||
       name === ".git" ||
       name === ".databases" ||
+      name === ".context-projections" ||
       name === ".contexts" ||
       name === ".cache"
     );

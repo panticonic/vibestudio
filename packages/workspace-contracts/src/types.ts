@@ -190,17 +190,17 @@ export type WorkspaceServiceCallerKind =
  * resolve to one of these via `(source, className)`.
  */
 export interface WorkspaceSingletonObjectDecl {
-  /** Worker source path, e.g. `"workers/gad-store"`. */
+  /** Worker source path, e.g. `"workers/model-settings"`. */
   source: string;
   /** Durable Object class name as exported from the worker module. */
   className: string;
-  /** Stable singleton object key (e.g. `"workspace-gad"`). */
+  /** Stable singleton object key (e.g. `"workspace-model-settings"`). */
   key: string;
   /** Optional context binding (free-form; e.g. workspace id). */
   contextId?: string;
 }
 
-/** Userland service declaration in `workspace/meta/vibestudio.yml`. */
+/** Workspace-authored service declaration in `workspace/meta/vibestudio.yml`. */
 export type WorkspaceServiceDecl = {
   source: string;
   name: string;
@@ -403,6 +403,8 @@ export interface WorkspaceRouteDecl {
 export interface WorkspaceConfig {
   /** Resolved workspace identifier. If omitted on disk, derived from the workspace location. */
   id: string;
+  /** Semantic storage, host projections, and workspace runtime ABI epoch. */
+  systemEpoch: number;
   /**
    * Repo used as the base for bare VCS file paths such as `notes.md`.
    * This is workspace policy, not a host convention: omit it to require every
@@ -436,7 +438,7 @@ export interface WorkspaceConfig {
    * here. Workspace load fails otherwise.
    */
   singletonObjects?: WorkspaceSingletonObjectDecl[];
-  /** Userland service declarations. */
+  /** Workspace-authored service declarations. */
   services?: WorkspaceServiceDecl[];
   /** HTTP route declarations exposed under `/_r/w/<source>/...`. */
   routes?: WorkspaceRouteDecl[];
@@ -496,8 +498,8 @@ export interface Workspace {
   panelsPath: string;
   /** Absolute path to packages directory (source/packages) */
   packagesPath: string;
-  /** Absolute path to contexts directory (state/.contexts) */
-  contextsPath: string;
+  /** Absolute path to the current destructive-epoch context projection root. */
+  contextProjectionsPath: string;
   /** Absolute path to cache directory (state/.cache) */
   cachePath: string;
   /** Absolute path to agents directory (source/agents) */

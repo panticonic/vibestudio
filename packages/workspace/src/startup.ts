@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import {
   createAndRegisterWorkspace,
   recoverStagedWorkspaceDeletions,
@@ -14,7 +13,6 @@ export interface ResolveLocalWorkspaceStartupOpts {
   wsDir?: string;
   name?: string;
   init?: boolean;
-  isDev?: boolean;
   requireExplicitSelection?: boolean;
 }
 
@@ -29,9 +27,8 @@ export interface LocalWorkspaceStartup {
  * Resolution order:
  * 1. Explicit workspace directory
  * 2. Explicit workspace name
- * 3. Ephemeral dev workspace when `isDev`
- * 4. Last-opened workspace from central data
- * 5. Default workspace
+ * 3. Last-opened workspace from central data
+ * 4. Default workspace
  *
  * IPC/server callers can set `requireExplicitSelection` to reject implicit
  * selection when they do not own central workspace state.
@@ -70,18 +67,6 @@ export function resolveLocalWorkspaceStartup(
           init: opts.init,
         });
     return { resolved, isEphemeral: false };
-  }
-
-  if (opts.isDev) {
-    const devName = `dev-${randomBytes(4).toString("hex")}`;
-    const resolved = centralData
-      ? resolveRegisteredWorkspace(devName, true, opts.appRoot, centralData)
-      : resolveOrCreateWorkspace({
-          name: devName,
-          appRoot: opts.appRoot,
-          init: true,
-        });
-    return { resolved, isEphemeral: true };
   }
 
   if (centralData) {

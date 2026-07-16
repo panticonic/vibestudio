@@ -125,7 +125,7 @@ describe("extension child runtime process", () => {
                   JSON.stringify({
                     type: "ws:auth-result",
                     success: true,
-                    contractVersion: 1,
+                    contractVersion: 2,
                   } satisfies WsServerMessage)
                 );
                 return;
@@ -141,6 +141,7 @@ describe("extension child runtime process", () => {
                     targetId: envelope.target,
                     method: rpc.method,
                     args: rpc.args,
+                    parentRequestId: rpc.parentRequestId,
                   },
                 };
                 ws.send(
@@ -524,6 +525,7 @@ describe("extension child runtime process", () => {
         targetId: "do:workers/example:ExampleDO:object-1",
         method: "lookup",
         args: ["value"],
+        parentRequestId: targetRequestId,
       },
     });
   });

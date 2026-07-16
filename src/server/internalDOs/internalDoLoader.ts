@@ -9,6 +9,7 @@ export const INTERNAL_DO_CLASSES = [
   "WorkspaceDO",
   "BrowserDataDO",
   "EvalDO",
+  "GadWorkspaceDO",
 ] as const;
 
 export type InternalDOClassName = (typeof INTERNAL_DO_CLASSES)[number];

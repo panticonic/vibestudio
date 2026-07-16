@@ -1,11 +1,11 @@
 /**
- * Typecheck fold-in for the push build gate.
+ * Typecheck fold-in for exact-state unit build reports.
  *
- * esbuild bundles, it does not type-check. The push gate runs the TypeScript
+ * esbuild bundles, but it does not type-check. The report path runs the TypeScript
  * language service (via `@vibestudio/typecheck`, the same engine the typecheck
- * service extension wraps) over each pushed/affected unit's materialized source
- * and merges its diagnostics (`source:"tsc"`) into the build report — so a push
- * surfaces compile AND type errors in one actionable list.
+ * service extension wraps) over the unit's materialized source and merges its
+ * diagnostics (`source:"tsc"`) into the build report, surfacing compile and type
+ * errors in one actionable list.
  *
  * The unit is type-checked against the materialized build source root (the same
  * immutable GAD state the build was produced from), so type diagnostics line up
@@ -60,8 +60,8 @@ function toBuildDiagnostic(
 
 /**
  * Type-check a single unit's materialized sources and return BuildDiagnostics.
- * Best-effort: on any internal failure returns [] (the esbuild gate still
- * stands; we never let a typecheck-engine crash block a push spuriously).
+ * Best-effort: on any internal failure returns [] so a typecheck-engine failure
+ * does not hide the esbuild result.
  *
  * The materialized build source root is a BARE partial checkout — the unit plus
  * its workspace-dependency source subtrees, with NO `node_modules` and NO
@@ -102,6 +102,10 @@ export async function typecheckUnit(
       panelPath: unitDir,
       workspaceContext,
       nodeModulesPaths,
+      // Repository-view builds are hermetic at the unit/dependency closure.
+      // A unit without its own config uses deterministic defaults; it must not
+      // walk into a broader checkout and inherit unrelated workspace settings.
+      tsconfigSearchBoundary: unitDir,
     });
     const files = await loadSourceFiles(createDiskFileSource(unitDir), ".");
     for (const [relPath, content] of files) {

@@ -14,7 +14,11 @@ export const WORKSPACE_SOURCE_DIRS = [
 
 export type WorkspaceSourceDir = typeof WORKSPACE_SOURCE_DIRS[number];
 
-export const WORKSPACE_STATE_DIRS = [".cache", ".databases", ".contexts"] as const;
+export const WORKSPACE_STATE_DIRS = [
+  ".cache",
+  ".databases",
+  ".context-projections",
+] as const;
 
 export const WORKSPACE_IMPORT_PARENT_DIRS = [
   "panels",

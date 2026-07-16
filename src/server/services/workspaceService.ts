@@ -1,21 +1,9 @@
 /**
- * Workspace RPC service — server-side workspace catalog and configuration.
+ * Workspace RPC service — current-workspace configuration and lifecycle.
  *
- * Child-facing façade for workspace operations: reading local configuration,
- * init-panel management, and hub-proxied catalog lifecycle. The hub is the sole
- * catalog/filesystem owner; panels and workers reach this façade directly over
- * the child connection.
- *
- * Method names match the runtime's `WorkspaceClient` interface (see
- * `workspace/packages/runtime/src/shared/workspace.ts`) so eval'd code can
- * `import { workspace } from "@workspace/runtime"` and call `workspace.list()`,
- * `workspace.create("name")`, etc. without an intermediate proxy.
- *
- * The `select` (workspace switch) method needs Electron's `app.relaunch()`,
- * which lives in the desktop shell. The server emits a
- * `workspace:relaunch-requested` event; an attached shell subscribes and
- * relaunches itself. With no shell attached the event goes nowhere and the
- * caller is expected to reconnect manually.
+ * Server-wide catalog discovery, creation, deletion, and routing live only on
+ * the stable hub's `hubControl` service. A workspace child never deputies for
+ * that control plane.
  */
 
 import { randomUUID } from "node:crypto";
@@ -36,16 +24,13 @@ import type {
   HostTargetSelectionInput,
 } from "@vibestudio/shared/hostTargets";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
-import type { UserRole } from "@vibestudio/identity/types";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
-import type { HubWorkspaceRoute } from "@vibestudio/service-schemas/hubControl";
 import type {
   WorkspaceAppVersions,
   WorkspaceHeartbeatSelector,
   WorkspaceHeartbeatStatus,
   WorkspaceHeartbeatTickResult,
   WorkspaceRecurringJobStatus,
-  WorkspaceEntry,
   WorkspaceUnitDiagnostics,
   WorkspaceUnitLogRecord,
   WorkspaceUnitStatus,
@@ -54,7 +39,6 @@ import type { ApprovalQueue } from "./approvalQueue.js";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { listWorkspaceSkillEntries } from "../vcsHost/workspaceSkills.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
-import { isRootOrAdmin } from "./capabilityAuthorizer.js";
 
 // Wire data types live in the shared schema module (single source of truth
 // for server registration and typed clients). Re-exported here because many
@@ -73,23 +57,6 @@ export type {
 
 export type { SkillEntry } from "../vcsHost/workspaceSkills.js";
 
-function isWorkspaceEntry(value: unknown): value is WorkspaceEntry {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    typeof (value as { workspaceId?: unknown }).workspaceId === "string" &&
-    typeof (value as { name?: unknown }).name === "string" &&
-    typeof (value as { lastOpened?: unknown }).lastOpened === "number"
-  );
-}
-
-export interface WorkspaceCatalogClient {
-  list(actorUserId: string): Promise<WorkspaceEntry[]>;
-  create(actorUserId: string, name: string, opts?: { forkFrom?: string }): Promise<WorkspaceEntry>;
-  delete(actorUserId: string, name: string): Promise<void>;
-  select(actorUserId: string, deviceId: string, name: string): Promise<HubWorkspaceRoute>;
-}
-
 export interface WorkspaceServiceDeps {
   workspace: Workspace;
   /** User-facing catalog name. Falls back to config.id for standalone tests/hosts. */
@@ -97,26 +64,6 @@ export interface WorkspaceServiceDeps {
   treeScanner?: WorkspaceTreeScanner;
   getConfig: () => WorkspaceConfig;
   setConfigField: (key: string, value: unknown, ctx: ServiceContext) => void | Promise<void>;
-  /** Required hub-owned catalog proxy; children never mutate the catalog. */
-  workspaceCatalog: WorkspaceCatalogClient;
-  /**
-   * Live role lookup from the shared identity DB (WP9 §3/§6) — resolves the
-   * CURRENT role of a caller's `subject.userId`. Role-gates the host-administrative
-   * catalog ops (`create`/`delete`) to root/admin, evaluated live so a
-   * demotion takes effect immediately.
-   */
-  roleOf: (userId: string) => UserRole | null | undefined;
-  /**
-   * Event bus for `workspace:relaunch-requested`: an attached desktop shell
-   * subscribes and relaunches itself into the selected workspace. With no
-   * shell attached the event is a no-op (the caller reconnects manually).
-   */
-  eventService?: {
-    emit(
-      event: "workspace:relaunch-requested",
-      payload: { name: string; route: HubWorkspaceRoute }
-    ): void;
-  };
   /** Workspace-unit operational status rows, including extension health. */
   listUnits?: () => Promise<WorkspaceUnitStatus[]> | WorkspaceUnitStatus[];
   /** Restart a workspace unit through the owning manager. */
@@ -211,12 +158,7 @@ export interface WorkspaceServiceDeps {
   resolveCallerContext?: (callerId: string) => Promise<string | null> | string | null;
 }
 
-type WorkspaceApprovalOperation =
-  | "create"
-  | "delete"
-  | "select"
-  | "setInitPanels"
-  | "setConfigField";
+type WorkspaceApprovalOperation = "setInitPanels" | "setConfigField";
 
 type WorkspaceTreeNode = {
   path: string;
@@ -414,35 +356,6 @@ function resolveWorkspacePrincipal(
   };
 }
 
-/**
- * WP9 §5/§6 — role-gate the host-administrative catalog ops.
- *
- * `create`/`delete`/`select` (switch, which relaunches the app) are host-admin
- * operations: the acting user's LIVE role must be root/admin (resolved from the
- * identity DB via `deps.roleOf`, never a value frozen onto the connection). This
- * is ORTHOGONAL to the userland approval below (which still gates non-trusted
- * callers) and to capability-grant matching (untouched, code-identity-scoped) —
- * role gates WHO may drive the catalog, not whether the code is approved.
- *
- * Intra-workspace config writes (`setInitPanels`/`setConfigField`) are NOT
- * role-gated: members are mutually trusting inside a workspace (plan §0.0), so
- * those stay on the approval/trust path only.
- *
- */
-function requireWorkspaceAdminRole(
-  deps: WorkspaceServiceDeps,
-  ctx: ServiceContext,
-  operation: WorkspaceApprovalOperation
-): void {
-  if (isRootOrAdmin(ctx.caller, { roleOf: deps.roleOf })) return;
-  throw new ServiceError(
-    "workspace",
-    operation,
-    `workspace.${operation} requires the root or admin role`,
-    "EACCES"
-  );
-}
-
 async function requireWorkspaceApproval(
   deps: WorkspaceServiceDeps,
   ctx: ServiceContext,
@@ -509,17 +422,10 @@ async function requireWorkspaceApproval(
 export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefinition {
   const activeWorkspaceName = () => deps.activeWorkspaceName ?? deps.getConfig().id;
   const { workspace } = deps;
-  const actorUserId = (ctx: ServiceContext): string => {
-    const userId = ctx.caller.subject?.userId;
-    if (!userId || userId === "system") {
-      throw new ServiceError("workspace", "catalog", "Workspace catalog requires a user", "EACCES");
-    }
-    return userId;
-  };
 
   return {
     name: "workspace",
-    description: "Workspace catalog, configuration, and lifecycle (list, create, switch, etc.)",
+    description: "Current-workspace configuration, units, and lifecycle",
     policy: {
       allowed: ["shell", "app", "panel", "worker", "do", "extension", "server"],
     },
@@ -532,78 +438,17 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       getInfo: () => ({
         path: workspace.path,
         statePath: workspace.statePath,
-        contextsPath: workspace.contextsPath,
+        contextProjectionsPath: workspace.contextProjectionsPath,
         config: deps.getConfig(),
       }),
 
-      list: (ctx) => deps.workspaceCatalog.list(actorUserId(ctx)),
-
       getActive: () => activeWorkspaceName(),
-
-      getActiveEntry: async (ctx) => {
-        const active = activeWorkspaceName();
-        const entries = await deps.workspaceCatalog.list(actorUserId(ctx));
-        const listedEntry = entries.find(
-          (entry) => isWorkspaceEntry(entry) && entry.name === active
-        );
-        if (!listedEntry) {
-          throw new ServiceError(
-            "workspace",
-            "getActiveEntry",
-            `The active workspace is missing from the hub catalog: ${active}`,
-            "ENOENT"
-          );
-        }
-        return listedEntry;
-      },
 
       getConfig: () => deps.getConfig(),
 
       // -----------------------------------------------------------------
       // Writes
       // -----------------------------------------------------------------
-
-      create: async (ctx, [name, opts]) => {
-        requireWorkspaceAdminRole(deps, ctx, "create");
-        await requireWorkspaceApproval(deps, ctx, "create", {
-          target: name,
-          title: "Create workspace?",
-          summary: "This panel or worker wants to create a new workspace.",
-          details: opts?.forkFrom ? [{ label: "Fork from", value: opts.forkFrom }] : undefined,
-        });
-        return deps.workspaceCatalog.create(actorUserId(ctx), name, opts);
-      },
-
-      delete: async (ctx, [name]) => {
-        if (name === deps.getConfig().id) {
-          throw new Error("Cannot delete the currently running workspace");
-        }
-        requireWorkspaceAdminRole(deps, ctx, "delete");
-        await requireWorkspaceApproval(deps, ctx, "delete", {
-          target: name,
-          title: "Delete workspace?",
-          summary: "This panel or worker wants to permanently delete a workspace.",
-          warning: "This removes the workspace directory and cannot be undone.",
-        });
-        await deps.workspaceCatalog.delete(actorUserId(ctx), name);
-      },
-
-      select: async (ctx, [name]) => {
-        if (ctx.caller.runtime.kind !== "shell" || !ctx.caller.runtime.id.startsWith("shell:")) {
-          throw new ServiceError(
-            "workspace",
-            "select",
-            "Workspace switching requires an authenticated device shell",
-            "EACCES"
-          );
-        }
-        const deviceId = ctx.caller.runtime.id.slice("shell:".length);
-        const route = await deps.workspaceCatalog.select(actorUserId(ctx), deviceId, name);
-        // Signal any attached desktop shell to relaunch into the new
-        // workspace. Exact control/workspace reaches are included so the
-        // desktop can durably persist them before relaunching.
-        deps.eventService?.emit("workspace:relaunch-requested", { name, route });
-      },
 
       setInitPanels: async (ctx, [initPanels]) => {
         await requireWorkspaceApproval(deps, ctx, "setInitPanels", {

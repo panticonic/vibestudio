@@ -29,6 +29,42 @@ afterEach(() => {
 });
 
 describe("TypeCheckService workspace resolution", () => {
+  it("honors an exact tsconfig search boundary instead of adopting parent workspace config", () => {
+    const root = createTempDir("typecheck-service-config-boundary-");
+    const unitDir = path.join(root, "packages", "unit");
+    const sourceFile = path.join(unitDir, "index.ts");
+    writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { strict: false } })
+    );
+    writeFile(sourceFile, "export function identity(value) { return value; }\n");
+
+    const inherited = new TypeCheckService({
+      panelPath: unitDir,
+      skipSuggestions: true,
+      workspaceContext: null,
+    });
+    inherited.updateFile(sourceFile, fs.readFileSync(sourceFile, "utf8"));
+    expect(inherited.check(sourceFile).diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
+    );
+
+    const exact = new TypeCheckService({
+      panelPath: unitDir,
+      skipSuggestions: true,
+      workspaceContext: null,
+      tsconfigSearchBoundary: unitDir,
+    });
+    exact.updateFile(sourceFile, fs.readFileSync(sourceFile, "utf8"));
+    expect(
+      exact
+        .check(sourceFile)
+        .diagnostics.some((diagnostic) =>
+          diagnostic.message.includes("implicitly has an 'any' type")
+        )
+    ).toBe(true);
+  });
+
   it("provides the standard decorator context globals in hermetic builds", () => {
     const root = createTempDir("typecheck-service-decorators-");
     const sourceFile = path.join(root, "index.ts");
@@ -39,7 +75,7 @@ describe("TypeCheckService workspace resolution", () => {
         "  void value; void context;",
         "}",
         "class DecoratedService { @rpc run(): void {} }",
-      ].join("\n"),
+      ].join("\n")
     );
     const service = new TypeCheckService({
       panelPath: root,
@@ -62,10 +98,7 @@ describe("TypeCheckService workspace resolution", () => {
     //   <root>/packages/consumer/index.ts    (imports @workspace/runtime)
     const root = createTempDir("typecheck-service-workspace-");
 
-    writeFile(
-      path.join(root, "pnpm-workspace.yaml"),
-      "packages:\n  - 'packages/*'\n",
-    );
+    writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n");
 
     // The producer package
     writeFile(
@@ -77,18 +110,18 @@ describe("TypeCheckService workspace resolution", () => {
           exports: { ".": "./src/index.ts" },
         },
         null,
-        2,
-      ),
+        2
+      )
     );
     writeFile(
       path.join(root, "packages", "runtime", "src", "index.ts"),
-      "export interface RuntimeThing { ok: boolean }\n",
+      "export interface RuntimeThing { ok: boolean }\n"
     );
 
     // The consumer package (this is what we type-check)
     writeFile(
       path.join(root, "packages", "consumer", "package.json"),
-      JSON.stringify({ name: "@workspace/consumer", type: "module" }, null, 2),
+      JSON.stringify({ name: "@workspace/consumer", type: "module" }, null, 2)
     );
     const consumerFile = path.join(root, "packages", "consumer", "index.ts");
     writeFile(
@@ -97,7 +130,7 @@ describe("TypeCheckService workspace resolution", () => {
         'import type { RuntimeThing } from "@workspace/runtime";',
         "const value: RuntimeThing = { ok: true };",
         "void value;",
-      ].join("\n"),
+      ].join("\n")
     );
 
     const service = new TypeCheckService({
@@ -117,20 +150,14 @@ describe("TypeCheckService workspace resolution", () => {
 
   it("returns a Cannot-find-module error for an import that doesn't resolve", () => {
     const root = createTempDir("typecheck-service-workspace-");
-    writeFile(
-      path.join(root, "pnpm-workspace.yaml"),
-      "packages:\n  - 'packages/*'\n",
-    );
+    writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n");
     const consumerDir = path.join(root, "packages", "consumer");
     writeFile(
       path.join(consumerDir, "package.json"),
-      JSON.stringify({ name: "@workspace/consumer", type: "module" }, null, 2),
+      JSON.stringify({ name: "@workspace/consumer", type: "module" }, null, 2)
     );
     const consumerFile = path.join(consumerDir, "index.ts");
-    writeFile(
-      consumerFile,
-      'import { nope } from "@workspace/nonexistent";\nvoid nope;\n',
-    );
+    writeFile(consumerFile, 'import { nope } from "@workspace/nonexistent";\nvoid nope;\n');
 
     const service = new TypeCheckService({
       panelPath: consumerDir,
@@ -151,25 +178,33 @@ describe("TypeCheckService workspace resolution", () => {
 
     writeFile(
       path.join(consumerDir, "package.json"),
-      JSON.stringify({
-        name: "@workspace/consumer",
-        type: "module",
-        dependencies: {
-          "use-stick-to-bottom": "^1.1.3",
+      JSON.stringify(
+        {
+          name: "@workspace/consumer",
+          type: "module",
+          dependencies: {
+            "use-stick-to-bottom": "^1.1.3",
+          },
         },
-      }, null, 2),
+        null,
+        2
+      )
     );
     writeFile(
       path.join(externalNodeModules, "use-stick-to-bottom", "package.json"),
-      JSON.stringify({
-        name: "use-stick-to-bottom",
-        type: "module",
-        types: "./dist/index.d.ts",
-      }, null, 2),
+      JSON.stringify(
+        {
+          name: "use-stick-to-bottom",
+          type: "module",
+          types: "./dist/index.d.ts",
+        },
+        null,
+        2
+      )
     );
     writeFile(
       path.join(externalNodeModules, "use-stick-to-bottom", "dist", "index.d.ts"),
-      'export declare function useStickToBottom(): { isAtBottom: boolean };\n',
+      "export declare function useStickToBottom(): { isAtBottom: boolean };\n"
     );
 
     const consumerFile = path.join(consumerDir, "index.ts");
@@ -180,7 +215,7 @@ describe("TypeCheckService workspace resolution", () => {
         "const state = useStickToBottom();",
         "const atBottom: boolean = state.isAtBottom;",
         "void atBottom;",
-      ].join("\n"),
+      ].join("\n")
     );
 
     const service = new TypeCheckService({
@@ -213,24 +248,27 @@ describe("TypeCheckService workspace resolution", () => {
           ".": "./index.js",
           "./jsx-runtime": "./jsx-runtime.js",
         },
-      }),
+      })
     );
-    writeFile(path.join(externalNodeModules, "react", "index.js"), "export const runtime = true;\n");
+    writeFile(
+      path.join(externalNodeModules, "react", "index.js"),
+      "export const runtime = true;\n"
+    );
     writeFile(
       path.join(externalNodeModules, "react", "jsx-runtime.js"),
-      "export function jsx() {}\n",
+      "export function jsx() {}\n"
     );
     writeFile(
       path.join(externalNodeModules, "@types", "react", "package.json"),
-      JSON.stringify({ name: "@types/react", types: "index.d.ts" }),
+      JSON.stringify({ name: "@types/react", types: "index.d.ts" })
     );
     writeFile(
       path.join(externalNodeModules, "@types", "react", "index.d.ts"),
-      "export interface ReactNodeMarker { readonly kind: 'react-node' }\n",
+      "export interface ReactNodeMarker { readonly kind: 'react-node' }\n"
     );
     writeFile(
       path.join(externalNodeModules, "@types", "react", "jsx-runtime.d.ts"),
-      "export declare function jsx(type: string): { readonly type: string };\n",
+      "export declare function jsx(type: string): { readonly type: string };\n"
     );
 
     const sourceFile = path.join(consumerDir, "index.tsx");
@@ -242,7 +280,7 @@ describe("TypeCheckService workspace resolution", () => {
         "const marker: ReactNodeMarker = { kind: 'react-node' };",
         "const elementType: string = jsx('div').type;",
         "void marker; void elementType;",
-      ].join("\n"),
+      ].join("\n")
     );
 
     const service = new TypeCheckService({
@@ -266,14 +304,24 @@ describe("TypeCheckService extension registry propagation", () => {
   // `declare module "@vibestudio/extension"` augmentation into the panel's
   // program, so `extensions.use("...")` resolves — without the panel importing
   // the extension directly.
-  function buildRuntimeWorkspace(opts: { withBarrel: boolean }): { root: string; panelFile: string } {
+  function buildRuntimeWorkspace(opts: { withBarrel: boolean }): {
+    root: string;
+    panelFile: string;
+  } {
     const root = createTempDir("typecheck-registry-");
-    writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n  - 'extensions/*'\n");
+    writeFile(
+      path.join(root, "pnpm-workspace.yaml"),
+      "packages:\n  - 'packages/*'\n  - 'extensions/*'\n"
+    );
 
     // @vibestudio/extension: empty registry + use() keyed on it.
     writeFile(
       path.join(root, "packages", "extension", "package.json"),
-      JSON.stringify({ name: "@vibestudio/extension", type: "module", exports: { ".": "./index.ts" } }),
+      JSON.stringify({
+        name: "@vibestudio/extension",
+        type: "module",
+        exports: { ".": "./index.ts" },
+      })
     );
     writeFile(
       path.join(root, "packages", "extension", "index.ts"),
@@ -283,13 +331,13 @@ describe("TypeCheckService extension registry propagation", () => {
         "export function use<K extends ExtensionName>(_n: K): WorkspaceExtensions[K] {",
         "  return undefined as WorkspaceExtensions[K];",
         "}",
-      ].join("\n"),
+      ].join("\n")
     );
 
     // Extension package that self-registers.
     writeFile(
       path.join(root, "extensions", "foo", "package.json"),
-      JSON.stringify({ name: "@ext/foo", type: "module", exports: { ".": "./index.ts" } }),
+      JSON.stringify({ name: "@ext/foo", type: "module", exports: { ".": "./index.ts" } })
     );
     writeFile(
       path.join(root, "extensions", "foo", "index.ts"),
@@ -298,30 +346,34 @@ describe("TypeCheckService extension registry propagation", () => {
         'declare module "@vibestudio/extension" {',
         '  interface WorkspaceExtensions { "@ext/foo": Api }',
         "}",
-      ].join("\n"),
+      ].join("\n")
     );
 
     // @workspace/runtime: re-exports use(), and (optionally) the barrel.
     writeFile(
       path.join(root, "packages", "runtime", "package.json"),
-      JSON.stringify({ name: "@workspace/runtime", type: "module", exports: { ".": "./src/index.ts" } }),
+      JSON.stringify({
+        name: "@workspace/runtime",
+        type: "module",
+        exports: { ".": "./src/index.ts" },
+      })
     );
     writeFile(
       path.join(root, "packages", "runtime", "src", "registry.ts"),
-      'export type { Api as Foo } from "@ext/foo";\n',
+      'export type { Api as Foo } from "@ext/foo";\n'
     );
     writeFile(
       path.join(root, "packages", "runtime", "src", "index.ts"),
       [
         'export { use } from "@vibestudio/extension";',
         ...(opts.withBarrel ? ['export type * from "./registry.js";'] : []),
-      ].join("\n"),
+      ].join("\n")
     );
 
     // The panel: uses the registry without importing the extension.
     writeFile(
       path.join(root, "packages", "panel", "package.json"),
-      JSON.stringify({ name: "@workspace/panel", type: "module" }),
+      JSON.stringify({ name: "@workspace/panel", type: "module" })
     );
     const panelFile = path.join(root, "packages", "panel", "index.ts");
     writeFile(
@@ -330,7 +382,7 @@ describe("TypeCheckService extension registry propagation", () => {
         'import { use } from "@workspace/runtime";',
         'const greeting: string = use("@ext/foo").greet();',
         "void greeting;",
-      ].join("\n"),
+      ].join("\n")
     );
     return { root, panelFile };
   }

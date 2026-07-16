@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { initWorkspace } from "./loader.js";
 import { resolveLocalWorkspaceStartup } from "./startup.js";
 
@@ -23,7 +24,10 @@ function setup() {
   process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
   const templateDir = path.join(root, "workspace");
   fs.mkdirSync(path.join(templateDir, "meta"), { recursive: true });
-  fs.writeFileSync(path.join(templateDir, "meta", "vibestudio.yml"), "initPanels: []\n");
+  fs.writeFileSync(
+    path.join(templateDir, "meta", "vibestudio.yml"),
+    `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ninitPanels: []\n`
+  );
   const centralData = new CentralDataManager({
     databasePath: path.join(root, "identity.db"),
     now: () => 123,

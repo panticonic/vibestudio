@@ -17,6 +17,7 @@ import {
 import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { validateWorkspaceGitConfig } from "./remotes.js";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
 
@@ -54,6 +55,11 @@ export function parseWorkspaceConfigContentWithId(content: string, id: string): 
     if (!(error instanceof ZodError)) throw error;
     const issue = error.issues[0];
     throw new Error(issue ? workspaceConfigIssueMessage(issue) : "Invalid meta/vibestudio.yml");
+  }
+  if (config.systemEpoch !== WORKSPACE_SYSTEM_EPOCH) {
+    throw new Error(
+      `meta/vibestudio.yml: systemEpoch ${config.systemEpoch} is incompatible with host epoch ${WORKSPACE_SYSTEM_EPOCH}; recreate or explicitly upgrade this pre-release workspace`
+    );
   }
   validateDeclaredUnits(config);
   return config;
