@@ -16,13 +16,7 @@
 // ---------------------------------------------------------------- hardware
 
 export type GpuVendor = "nvidia" | "amd" | "intel" | "apple";
-export type EngineBackend =
-  | "cuda-12.4"
-  | "cuda-13.3"
-  | "vulkan"
-  | "rocm"
-  | "metal"
-  | "cpu";
+export type EngineBackend = "cuda-12.4" | "cuda-13.3" | "vulkan" | "rocm" | "metal" | "cpu";
 
 export interface GpuInfo {
   vendor: GpuVendor;
@@ -169,6 +163,14 @@ export interface DownloadJob {
   error: string | null;
 }
 
+export interface DownloadModelRequest {
+  hfRepo: string;
+  file: string;
+  expectedSha256?: string;
+  displayName?: string;
+  slug?: string;
+}
+
 // -------------------------------------------------------------- supervisor
 
 export type ServerKind = "utility" | "main";
@@ -184,6 +186,9 @@ export interface OwnerInfo {
   pid: number;
   bootId: string;
   ports: { utility: number; main: number };
+  /** Authenticated loopback RPC used by attached extension processes to ask
+   * the owner to materialize a cold server. */
+  controlPort: number;
   workspaceId: string;
   since: number;
   /** Live server child pids — lets a takeover reap a dead owner's orphans. */

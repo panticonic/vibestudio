@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type {
+  OwnerControlRequest,
+  OwnerControlResponse,
+  OwnerControlTransport,
+} from "./owner-control.js";
 
 const netMock = vi.hoisted(() => ({
   nextPort: 41000,
@@ -107,11 +112,13 @@ interface Harness {
 }
 
 const roots: string[] = [];
+let ownerControl: MemoryOwnerControlTransport;
 
 beforeEach(() => {
   roots.length = 0;
   netMock.nextPort = 41000;
   netMock.createServer.mockClear();
+  ownerControl = new MemoryOwnerControlTransport();
 });
 
 afterEach(() => {
@@ -141,7 +148,27 @@ describe("createServerSupervisor", () => {
     expect(attached.spawns).toHaveLength(0);
   });
 
-  it("rejects attached fallback loads while the owner's utility server is cold", async () => {
+  it("releases the owner claim when the control listener fails to initialize", async () => {
+    const rootDir = tempRoot();
+    const listen = vi
+      .fn<OwnerControlTransport["listen"]>()
+      .mockRejectedValueOnce(new Error("control bind failed"))
+      .mockImplementation((apiKey, handler) => ownerControl.listen(apiKey, handler));
+    const harness = makeHarness({
+      rootDir,
+      ownerControl: { listen, request: (...args) => ownerControl.request(...args) },
+    });
+
+    await expect(harness.supervisor.activate()).rejects.toThrow("control bind failed");
+    expect(existsSync(join(rootDir, ROOT_LAYOUT.ownerLock))).toBe(false);
+    expect(existsSync(join(rootDir, ROOT_LAYOUT.ownerInfo))).toBe(false);
+
+    await expect(harness.supervisor.activate()).resolves.toBeUndefined();
+    expect(harness.supervisor.role()).toBe("owner");
+    expect(harness.supervisor.ownerInfo()).toMatchObject({ workspaceId: "ws" });
+  });
+
+  it("routes an attached fallback demand to the cold owner", async () => {
     const rootDir = tempRoot();
     const owner = makeHarness({ rootDir, workspaceId: "owner-ws" });
     await owner.supervisor.activate();
@@ -149,25 +176,55 @@ describe("createServerSupervisor", () => {
     const attached = makeHarness({ rootDir, workspaceId: "attached-ws" });
     await attached.supervisor.activate();
 
-    await expect(attached.supervisor.ensureLoaded(FALLBACK_MODEL.slug)).rejects.toThrow(
-      /utility server is cold/
-    );
+    await expect(attached.supervisor.ensureLoaded(FALLBACK_MODEL.slug)).resolves.toEqual({
+      baseUrl: "http://127.0.0.1:41000/v1",
+    });
     expect(attached.spawns).toHaveLength(0);
-    expect(owner.spawns.filter((spawn) => serverKind(spawn) === "utility")).toHaveLength(0);
+    expect(owner.spawns.filter((spawn) => serverKind(spawn) === "utility")).toHaveLength(1);
   });
 
-  it("rejects attached main-model loads while the owner's main server is cold", async () => {
+  it("routes attached library mutations to the lock owner", async () => {
+    const rootDir = tempRoot();
+    const owner = makeHarness({ rootDir, workspaceId: "owner-ws" });
+    vi.mocked(owner.deps.libraryControl).mockResolvedValue({ kind: "ok" });
+    await owner.supervisor.activate();
+
+    const attached = makeHarness({ rootDir, workspaceId: "attached-ws" });
+    await attached.supervisor.activate();
+    await expect(
+      attached.supervisor.library({
+        operation: "setModelConfig",
+        slug: "toy",
+        config: {
+          contextLength: 4096,
+          gpuLayers: 2,
+        },
+      })
+    ).resolves.toEqual({ kind: "ok" });
+
+    expect(owner.deps.libraryControl).toHaveBeenCalledWith({
+      operation: "setModelConfig",
+      slug: "toy",
+      config: { contextLength: 4096, gpuLayers: 2 },
+    });
+    expect(attached.deps.libraryControl).not.toHaveBeenCalled();
+  });
+
+  it("routes an attached main-model demand to the cold owner", async () => {
     const rootDir = tempRoot();
     const owner = makeHarness({ rootDir, workspaceId: "owner-ws" });
     await owner.supervisor.activate();
 
+    owner.models.set("toy", modelRecord("toy"));
     const attached = makeHarness({ rootDir, workspaceId: "attached-ws" });
     attached.models.set("toy", modelRecord("toy"));
     await attached.supervisor.activate();
 
-    await expect(attached.supervisor.ensureLoaded("toy")).rejects.toThrow(/main server is cold/);
+    await expect(attached.supervisor.ensureLoaded("toy")).resolves.toEqual({
+      baseUrl: "http://127.0.0.1:41001/v1",
+    });
     expect(attached.spawns).toHaveLength(0);
-    expect(owner.spawns.filter((spawn) => serverKind(spawn) === "main")).toHaveLength(0);
+    expect(owner.spawns.filter((spawn) => serverKind(spawn) === "main")).toHaveLength(1);
   });
 
   it("returns an attached fallback URL when the owner utility server is warm", async () => {
@@ -347,6 +404,7 @@ function makeHarness(
     rootDir?: string;
     workspaceId?: string;
     fetch?: typeof fetch;
+    ownerControl?: OwnerControlTransport;
   } = {}
 ): Harness {
   const rootDir = opts.rootDir ?? tempRoot();
@@ -392,6 +450,12 @@ function makeHarness(
     now: () => timers.now,
     setTimeoutFn: timers.setTimeout,
     clearTimeoutFn: timers.clearTimeout,
+    ownerControl: opts.ownerControl ?? ownerControl,
+    libraryControl: vi.fn(async (request) =>
+      request.operation === "listDownloads"
+        ? { kind: "downloads" as const, jobs: [] }
+        : { kind: "ok" as const }
+    ),
   };
 
   return {
@@ -403,6 +467,38 @@ function makeHarness(
     models,
     supervisor: createServerSupervisor(deps),
   };
+}
+
+class MemoryOwnerControlTransport implements OwnerControlTransport {
+  private nextPort = 43000;
+  private readonly listeners = new Map<
+    number,
+    {
+      apiKey: string;
+      handler: (request: OwnerControlRequest) => Promise<OwnerControlResponse>;
+    }
+  >();
+
+  async listen(
+    apiKey: string,
+    handler: (request: OwnerControlRequest) => Promise<OwnerControlResponse>
+  ) {
+    const port = this.nextPort;
+    this.nextPort += 1;
+    this.listeners.set(port, { apiKey, handler });
+    return {
+      port,
+      close: async () => {
+        this.listeners.delete(port);
+      },
+    };
+  }
+
+  async request(port: number, apiKey: string, request: OwnerControlRequest) {
+    const listener = this.listeners.get(port);
+    if (!listener || listener.apiKey !== apiKey) throw new Error("owner control unavailable");
+    return listener.handler(request);
+  }
 }
 
 function tempRoot(): string {

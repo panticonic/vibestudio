@@ -20,12 +20,18 @@ import path from "node:path";
 import { createHardwareProfiler } from "./hardware.js";
 import { createEngineInstaller } from "./engine.js";
 import { createModelLibrary, estimateFit } from "./library.js";
+import {
+  createHttpOwnerControlTransport,
+  type OwnerLibraryRequest,
+  type OwnerLibraryResponse,
+} from "./owner-control.js";
 import { createServerSupervisor } from "./supervisor.js";
 import { runModelBenchmark } from "./benchmark.js";
 import {
   FALLBACK_MODEL,
   type CuratedModel,
   type DownloadJob,
+  type DownloadModelRequest,
   type EnginePin,
   type EngineState,
   type HardwareProfile,
@@ -169,14 +175,6 @@ const CURATED_CATALOG: CuratedModel[] = [
 ];
 
 type BootstrapStage = "idle" | "probing" | "engines" | "ready" | "error";
-
-interface DownloadModelRequest {
-  hfRepo: string;
-  file: string;
-  expectedSha256?: string;
-  displayName?: string;
-  slug?: string;
-}
 
 interface ExtensionInvocationLike {
   caller?: { kind?: string; id?: string };
@@ -357,6 +355,39 @@ export async function activate(ctx: Ctx) {
     now: () => Date.now(),
   });
 
+  const libraryControl = async (request: OwnerLibraryRequest): Promise<OwnerLibraryResponse> => {
+    switch (request.operation) {
+      case "ensureFallback":
+        return { kind: "record", record: await library.ensureFallback() };
+      case "startDownload":
+        return { kind: "download", job: await library.startDownload(request.request) };
+      case "startDownloadJob":
+        return { kind: "download", job: await library.startDownloadJob(request.request) };
+      case "pauseDownload":
+        await library.pauseDownload(request.id);
+        return { kind: "ok" };
+      case "resumeDownload":
+        await library.resumeDownload(request.id);
+        return { kind: "ok" };
+      case "cancelDownload":
+        await library.cancelDownload(request.id);
+        return { kind: "ok" };
+      case "listDownloads":
+        return { kind: "downloads", jobs: library.listDownloads() };
+      case "remove":
+        await library.remove(request.slug);
+        return { kind: "ok" };
+      case "importDir":
+        return { kind: "records", records: await library.importDir(request.dir) };
+      case "setModelConfig":
+        await library.setModelConfig(request.slug, request.config);
+        return { kind: "ok" };
+      case "setBenchmark":
+        await library.setBenchmark(request.slug, request.result);
+        return { kind: "ok" };
+    }
+  };
+
   const supervisor = createServerSupervisor({
     rootDir,
     workspaceId,
@@ -372,6 +403,8 @@ export async function activate(ctx: Ctx) {
     libraryModel: (slug) => library.get(slug),
     libraryModels: () => library.list(),
     now: () => Date.now(),
+    ownerControl: createHttpOwnerControlTransport(globalThis.fetch),
+    libraryControl,
     killPid: (pid) => {
       try {
         process.kill(pid, "SIGTERM");
@@ -380,6 +413,25 @@ export async function activate(ctx: Ctx) {
       }
     },
   });
+
+  async function ownerLibrary(request: OwnerLibraryRequest): Promise<OwnerLibraryResponse> {
+    return supervisor.library(request);
+  }
+
+  async function ownerDownload(
+    operation: "startDownload" | "startDownloadJob",
+    request: DownloadModelRequest
+  ): Promise<DownloadJob> {
+    const response = await ownerLibrary({ operation, request });
+    if (response.kind !== "download") throw new Error("invalid owner download response");
+    return response.job;
+  }
+
+  async function ownerDownloads(): Promise<DownloadJob[]> {
+    const response = await ownerLibrary({ operation: "listDownloads" });
+    if (response.kind !== "downloads") throw new Error("invalid owner downloads response");
+    return response.jobs;
+  }
 
   /** Health reflects the readiness to *serve* a local model on demand, not a
    *  warm fallback: the fallback is loaded lazily (design §5), so a stopped
@@ -498,7 +550,8 @@ export async function activate(ctx: Ctx) {
     await ensureBootstrap();
     const slug = bareSlug(modelId);
     if (slug === FALLBACK_MODEL.slug) {
-      await library.ensureFallback();
+      const response = await ownerLibrary({ operation: "ensureFallback" });
+      if (response.kind !== "record") throw new Error("invalid owner fallback response");
       if (options.scheduleFallbackBenchmark) {
         scheduleBenchmark(slug);
       }
@@ -527,7 +580,14 @@ export async function activate(ctx: Ctx) {
         fetch: globalThis.fetch,
         ensureLoaded: (candidate) => ensureLoadedInternal(candidate),
         apiKey: () => supervisor.apiKey(),
-        setBenchmark: (candidate, result) => library.setBenchmark(candidate, result),
+        setBenchmark: async (candidate, result) => {
+          const response = await ownerLibrary({
+            operation: "setBenchmark",
+            slug: candidate,
+            result,
+          });
+          if (response.kind !== "ok") throw new Error("invalid owner benchmark response");
+        },
         now: () => Date.now(),
         log,
       });
@@ -563,14 +623,14 @@ export async function activate(ctx: Ctx) {
   }
 
   function startDownloadWithBenchmark(req: DownloadModelRequest): Promise<DownloadJob> {
-    const download = library.startDownload(req);
+    const download = ownerDownload("startDownload", req);
     scheduleBenchmarkAfterDownload(download);
     return download;
   }
 
   async function startDownloadJobWithBenchmark(req: DownloadModelRequest): Promise<DownloadJob> {
-    const job = await library.startDownloadJob(req);
-    scheduleBenchmarkAfterDownload(library.startDownload(req));
+    const job = await ownerDownload("startDownloadJob", req);
+    scheduleBenchmarkAfterDownload(ownerDownload("startDownload", req));
     return job;
   }
 
@@ -592,11 +652,11 @@ export async function activate(ctx: Ctx) {
     ].join("\0");
   }
 
-  function findDownloadForRequest(
+  async function findDownloadForRequest(
     req: DownloadModelRequest,
     opts: { id?: string | null; ignoreIds?: ReadonlySet<string> } = {}
-  ): DownloadJob | null {
-    const matches = library.listDownloads().filter((job) => matchesDownloadRequest(job, req));
+  ): Promise<DownloadJob | null> {
+    const matches = (await ownerDownloads()).filter((job) => matchesDownloadRequest(job, req));
     if (opts.id) return matches.find((job) => job.id === opts.id) ?? null;
     return matches.find((job) => !opts.ignoreIds?.has(job.id)) ?? null;
   }
@@ -645,12 +705,12 @@ export async function activate(ctx: Ctx) {
   }
 
   async function listModels(): Promise<LocalModelEntry[]> {
-    const [records, hw] = await Promise.all([
+    const [records, hw, downloads] = await Promise.all([
       library.list(),
       probeHardware(false).catch(() => null),
+      ownerDownloads(),
     ]);
     const servers = supervisor.status();
-    const downloads = library.listDownloads();
     const entries = records.map((record) => {
       const kind = serverForRecord(record);
       const status = recordState(record, servers, downloads);
@@ -722,7 +782,10 @@ export async function activate(ctx: Ctx) {
 
   async function status(): Promise<LocalModelsStatus> {
     const servers = supervisor.status();
-    const fallbackRecord = await library.get(FALLBACK_MODEL.slug);
+    const [fallbackRecord, downloads] = await Promise.all([
+      library.get(FALLBACK_MODEL.slug),
+      ownerDownloads(),
+    ]);
     const utilityRunning = servers.utility.state === "running";
     let diskFreeBytes = 0;
     try {
@@ -750,7 +813,7 @@ export async function activate(ctx: Ctx) {
             ? "fallback downloads on first use"
             : (bootstrapError ?? `bootstrap ${bootstrapStage}`),
       },
-      downloads: library.listDownloads(),
+      downloads,
       storageRoot: rootDir,
       diskFreeBytes,
     };
@@ -829,7 +892,8 @@ export async function activate(ctx: Ctx) {
         let downloadId: string | null = null;
         let lastPushedKey: string | null = null;
         let poll: ReturnType<typeof setInterval> | null = null;
-        const ignoredDownloadIds = new Set(library.listDownloads().map((job) => job.id));
+        let ignoredDownloadIds = new Set<string>();
+        let polling = false;
 
         const stop = (error?: string) => {
           if (closed) return;
@@ -846,31 +910,33 @@ export async function activate(ctx: Ctx) {
           lastPushedKey = key;
           push(job);
         };
-        const pollOnce = () => {
-          if (closed) return;
-          const current = findDownloadForRequest(req, {
-            id: downloadId,
-            ignoreIds: ignoredDownloadIds,
-          });
-          if (!current) return;
-          downloadId = current.id;
-          pushOnce(current);
-          if (current.error) {
-            stop(current.error);
+        const pollOnce = async () => {
+          if (closed || polling) return;
+          polling = true;
+          try {
+            const current = await findDownloadForRequest(req, {
+              id: downloadId,
+              ignoreIds: ignoredDownloadIds,
+            });
+            if (!current) return;
+            downloadId = current.id;
+            pushOnce(current);
+            if (current.error) stop(current.error);
+          } catch (error) {
+            stop(error instanceof Error ? error.message : String(error));
+          } finally {
+            polling = false;
           }
         };
 
-        let download: Promise<DownloadJob>;
-        try {
-          download = startDownloadWithBenchmark(req);
-        } catch (err) {
-          stop(err instanceof Error ? err.message : String(err));
-          return () => {};
-        }
-
-        poll = setInterval(pollOnce, 500);
-        queueMicrotask(pollOnce);
-        download
+        void ownerDownloads()
+          .then((existing) => {
+            ignoredDownloadIds = new Set(existing.map((job) => job.id));
+            const download = startDownloadWithBenchmark(req);
+            poll = setInterval(() => void pollOnce(), 500);
+            queueMicrotask(() => void pollOnce());
+            return download;
+          })
           .then((job) => {
             downloadId = job.id;
             pushOnce(job);
@@ -885,31 +951,37 @@ export async function activate(ctx: Ctx) {
     },
 
     async pauseDownload(id: string): Promise<void> {
-      await library.pauseDownload(id);
+      const response = await ownerLibrary({ operation: "pauseDownload", id });
+      if (response.kind !== "ok") throw new Error("invalid owner pause response");
     },
     async resumeDownload(id: string): Promise<void> {
-      await library.resumeDownload(id);
+      const response = await ownerLibrary({ operation: "resumeDownload", id });
+      if (response.kind !== "ok") throw new Error("invalid owner resume response");
     },
     async cancelDownload(id: string): Promise<void> {
-      await library.cancelDownload(id);
+      const response = await ownerLibrary({ operation: "cancelDownload", id });
+      if (response.kind !== "ok") throw new Error("invalid owner cancel response");
     },
     async listDownloads(): Promise<DownloadJob[]> {
-      return library.listDownloads();
+      return ownerDownloads();
     },
 
     async removeModel(slug: string): Promise<void> {
-      await library.remove(slug);
+      const response = await ownerLibrary({ operation: "remove", slug });
+      if (response.kind !== "ok") throw new Error("invalid owner remove response");
       emit({ kind: "models.changed" });
     },
 
     async importDir(dir: string): Promise<ModelRecord[]> {
-      const imported = await library.importDir(dir);
+      const response = await ownerLibrary({ operation: "importDir", dir });
+      if (response.kind !== "records") throw new Error("invalid owner import response");
       emit({ kind: "models.changed" });
-      return imported;
+      return response.records;
     },
 
     async setModelConfig(slug: string, cfg: ModelRuntimeConfig): Promise<void> {
-      await library.setModelConfig(slug, cfg);
+      const response = await ownerLibrary({ operation: "setModelConfig", slug, config: cfg });
+      if (response.kind !== "ok") throw new Error("invalid owner config response");
       emit({ kind: "models.changed" });
     },
 

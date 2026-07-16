@@ -153,42 +153,51 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
   const downloads = new Map<string, DownloadTask>();
   const queue: DownloadTask[] = [];
   let activeTask: DownloadTask | null = null;
-  let recordsCache: ModelRecord[] | null = null;
-  let writeChain: Promise<void> = Promise.resolve();
+  let mutationChain: Promise<void> = Promise.resolve();
 
   async function ensureStorage(): Promise<void> {
     await fsp.mkdir(modelsDir, { recursive: true });
   }
 
   async function loadRecords(): Promise<ModelRecord[]> {
-    if (recordsCache !== null) {
-      return recordsCache;
-    }
-
     await ensureStorage();
     try {
       const raw = await fsp.readFile(recordsFile, "utf8");
-      recordsCache = JSON.parse(raw) as ModelRecord[];
+      return JSON.parse(raw) as ModelRecord[];
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") {
-        recordsCache = [];
+        return [];
       } else {
         throw error;
       }
     }
-    return recordsCache;
   }
 
   async function saveRecords(records: ModelRecord[]): Promise<void> {
-    recordsCache = records;
-    const write = writeChain.catch(() => undefined).then(async () => {
-      await ensureStorage();
-      const tmp = path.join(modelsDir, `${RECORDS_FILE}.${process.pid}.${randomUUID()}.tmp`);
-      await fsp.writeFile(tmp, `${JSON.stringify(records, null, 2)}\n`, "utf8");
-      await fsp.rename(tmp, recordsFile);
-    });
-    writeChain = write;
-    await write;
+    await ensureStorage();
+    const tmp = path.join(modelsDir, `${RECORDS_FILE}.${process.pid}.${randomUUID()}.tmp`);
+    await fsp.writeFile(tmp, `${JSON.stringify(records, null, 2)}\n`, "utf8");
+    await fsp.rename(tmp, recordsFile);
+  }
+
+  async function mutateRecords<T>(
+    mutate: (
+      records: ModelRecord[]
+    ) => Promise<{ records: ModelRecord[]; result: T }> | { records: ModelRecord[]; result: T }
+  ): Promise<T> {
+    const operation = mutationChain
+      .catch(() => undefined)
+      .then(async () => {
+        const current = await loadRecords();
+        const next = await mutate(current);
+        if (next.records !== current) await saveRecords(next.records);
+        return next.result;
+      });
+    mutationChain = operation.then(
+      () => undefined,
+      () => undefined
+    );
+    return operation;
   }
 
   function emitModelsChanged(): void {
@@ -206,12 +215,17 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
     task.onProgress?.(job);
   }
 
-  async function startDownloadTask(req: DownloadRequest, options: DownloadOptions = {}): Promise<StartedDownloadTask> {
+  async function startDownloadTask(
+    req: DownloadRequest,
+    options: DownloadOptions = {}
+  ): Promise<StartedDownloadTask> {
     validateDownloadRequest(req);
     await ensureStorage();
     const records = await loadRecords();
     const targetPath = modelTargetPath(modelsDir, req.hfRepo, req.file);
-    const existing = records.find((record) => path.resolve(record.file) === path.resolve(targetPath));
+    const existing = records.find(
+      (record) => path.resolve(record.file) === path.resolve(targetPath)
+    );
     if (existing) {
       const job: DownloadJob = {
         id: randomUUID(),
@@ -235,7 +249,8 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
       ...records.map((record) => record.slug),
       ...Array.from(downloads.values()).map((task) => task.job.slug),
     ]);
-    const slug = options.slugOverride ?? uniqueSlug(downloadSlugBase(req.hfRepo, req.file), usedSlugs);
+    const slug =
+      options.slugOverride ?? uniqueSlug(downloadSlugBase(req.hfRepo, req.file), usedSlugs);
     const job: DownloadJob = {
       id: randomUUID(),
       slug,
@@ -274,11 +289,17 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
     return { job: copyJob(task.job), done: task.done };
   }
 
-  async function startDownloadInternal(req: DownloadRequest, options: DownloadOptions = {}): Promise<DownloadJob> {
+  async function startDownloadInternal(
+    req: DownloadRequest,
+    options: DownloadOptions = {}
+  ): Promise<DownloadJob> {
     return (await startDownloadTask(req, options)).done;
   }
 
-  async function startDownloadJobInternal(req: DownloadRequest, options: DownloadOptions = {}): Promise<DownloadJob> {
+  async function startDownloadJobInternal(
+    req: DownloadRequest,
+    options: DownloadOptions = {}
+  ): Promise<DownloadJob> {
     const started = await startDownloadTask(req, options);
     void started.done.catch(() => {
       // The job starter is intentionally nonblocking; callers observe failures
@@ -372,7 +393,11 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
 
       task.job.totalBytes = responseTotalBytes(response, resumeFrom);
       emitProgress(task, true);
-      await preflightDiskSpace(path.dirname(task.targetPath), task.job.totalBytes, task.job.receivedBytes);
+      await preflightDiskSpace(
+        path.dirname(task.targetPath),
+        task.job.totalBytes,
+        task.job.receivedBytes
+      );
 
       const hash = createHash("sha256");
       if (resumed) {
@@ -416,7 +441,10 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
       }
 
       const digest = hash.digest("hex");
-      if (task.req.expectedSha256 && digest.toLowerCase() !== task.req.expectedSha256.toLowerCase()) {
+      if (
+        task.req.expectedSha256 &&
+        digest.toLowerCase() !== task.req.expectedSha256.toLowerCase()
+      ) {
         await unlinkIfExists(task.partPath);
         throw new Error(
           `Checksum mismatch for ${task.req.hfRepo}/${task.req.file}: expected ${task.req.expectedSha256}, got ${digest}`
@@ -432,8 +460,10 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
         sha256: digest,
         importedInPlace: false,
       });
-      const records = await loadRecords();
-      await saveRecords([...records.filter((item) => item.slug !== record.slug), record]);
+      await mutateRecords((records) => ({
+        records: [...records.filter((item) => item.slug !== record.slug), record],
+        result: undefined,
+      }));
       task.job.totalBytes = record.sizeBytes;
       task.job.receivedBytes = record.sizeBytes;
       emitProgress(task, true);
@@ -474,7 +504,8 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
       paramCount: meta.paramCountLabel ?? inferParamCount(input.displayName, input.file),
       arch: meta.arch,
       trainedContextLength:
-        meta.contextLength ?? (input.slug === FALLBACK_MODEL.slug ? FALLBACK_MODEL.contextLength : 4096),
+        meta.contextLength ??
+        (input.slug === FALLBACK_MODEL.slug ? FALLBACK_MODEL.contextLength : 4096),
       toolsCapable: detectToolsCapable(meta.chatTemplate),
       sha256: input.sha256,
       importedInPlace: input.importedInPlace,
@@ -565,80 +596,71 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
 
     async remove(slug: string): Promise<void> {
       if (slug === FALLBACK_MODEL.slug) {
-        throw new Error(`Refusing to remove fallback model ${FALLBACK_MODEL.ref}; it is required for local models.`);
+        throw new Error(
+          `Refusing to remove fallback model ${FALLBACK_MODEL.ref}; it is required for local models.`
+        );
       }
 
-      const records = await loadRecords();
-      const record = records.find((item) => item.slug === slug);
-      if (!record) {
-        return;
-      }
-
-      if (!record.importedInPlace) {
-        await unlinkIfExists(record.file);
-      }
-      await saveRecords(records.filter((item) => item.slug !== slug));
+      const removed = await mutateRecords(async (records) => {
+        const record = records.find((item) => item.slug === slug);
+        if (!record) return { records, result: false };
+        if (!record.importedInPlace) await unlinkIfExists(record.file);
+        return { records: records.filter((item) => item.slug !== slug), result: true };
+      });
+      if (!removed) return;
       emitModelsChanged();
     },
 
     async importDir(dir: string): Promise<ModelRecord[]> {
       const root = path.resolve(dir);
-      const records = await loadRecords();
-      const indexedPaths = new Set(records.map((record) => path.resolve(record.file)));
-      const usedSlugs = new Set(records.map((record) => record.slug));
       const ggufs = await findGgufFiles(root);
-      const added: ModelRecord[] = [];
+      const added = await mutateRecords(async (records) => {
+        const indexedPaths = new Set(records.map((record) => path.resolve(record.file)));
+        const usedSlugs = new Set(records.map((record) => record.slug));
+        const additions: ModelRecord[] = [];
 
-      for (const file of ggufs) {
-        const resolved = path.resolve(file);
-        if (indexedPaths.has(resolved)) {
-          continue;
+        for (const file of ggufs) {
+          const resolved = path.resolve(file);
+          if (indexedPaths.has(resolved)) continue;
+          const header = parseGgufHeader(await readFilePrefix(resolved, HEADER_READ_BYTES));
+          const quant = header.quantLabel ?? quantFromFilename(resolved) ?? "gguf";
+          const slug = uniqueSlug(importSlugBase(resolved, quant), usedSlugs);
+          usedSlugs.add(slug);
+          additions.push(
+            await buildRecord({
+              slug,
+              displayName: displayNameForFile(resolved),
+              hfRepo: null,
+              file: resolved,
+              sha256: await sha256File(resolved),
+              importedInPlace: true,
+            })
+          );
+          indexedPaths.add(resolved);
         }
+        return {
+          records: additions.length > 0 ? [...records, ...additions] : records,
+          result: additions,
+        };
+      });
 
-        const header = parseGgufHeader(await readFilePrefix(resolved, HEADER_READ_BYTES));
-        const quant = header.quantLabel ?? quantFromFilename(resolved) ?? "gguf";
-        const slug = uniqueSlug(importSlugBase(resolved, quant), usedSlugs);
-        usedSlugs.add(slug);
-        const record = await buildRecord({
-          slug,
-          displayName: displayNameForFile(resolved),
-          hfRepo: null,
-          file: resolved,
-          sha256: await sha256File(resolved),
-          importedInPlace: true,
-        });
-        added.push(record);
-        indexedPaths.add(resolved);
-      }
-
-      if (added.length > 0) {
-        await saveRecords([...records, ...added]);
-        emitModelsChanged();
-      }
+      if (added.length > 0) emitModelsChanged();
 
       return added.map(copyRecord);
     },
 
     async setModelConfig(slug: string, cfg: ModelRuntimeConfig): Promise<void> {
-      const records = await loadRecords();
-      const index = records.findIndex((record) => record.slug === slug);
-      if (index === -1) {
-        throw new Error(`Model ${slug} is not installed`);
-      }
-
-      const next = records.slice();
-      const record = records[index];
-      if (!record) {
-        throw new Error(`Model ${slug} is not installed`);
-      }
-      next[index] = {
-        ...record,
-        config: {
-          contextLength: cfg.contextLength,
-          gpuLayers: cfg.gpuLayers,
-        },
-      };
-      await saveRecords(next);
+      await mutateRecords((records) => {
+        const index = records.findIndex((record) => record.slug === slug);
+        const record = records[index];
+        if (index === -1 || !record) throw new Error(`Model ${slug} is not installed`);
+        const next = records.slice();
+        next[index] = {
+          ...record,
+          config: { contextLength: cfg.contextLength, gpuLayers: cfg.gpuLayers },
+        };
+        return { records: next, result: undefined };
+      });
       emitModelsChanged();
     },
 
@@ -650,25 +672,17 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
         throw new Error(`Invalid benchmark timestamp for ${slug}: ${result.measuredAt}`);
       }
 
-      const records = await loadRecords();
-      const index = records.findIndex((record) => record.slug === slug);
-      if (index === -1) {
-        throw new Error(`Model ${slug} is not installed`);
-      }
-
-      const next = records.slice();
-      const record = records[index];
-      if (!record) {
-        throw new Error(`Model ${slug} is not installed`);
-      }
-      next[index] = {
-        ...record,
-        benchmark: {
-          tokensPerSec: result.tokensPerSec,
-          measuredAt: result.measuredAt,
-        },
-      };
-      await saveRecords(next);
+      await mutateRecords((records) => {
+        const index = records.findIndex((record) => record.slug === slug);
+        const record = records[index];
+        if (index === -1 || !record) throw new Error(`Model ${slug} is not installed`);
+        const next = records.slice();
+        next[index] = {
+          ...record,
+          benchmark: { tokensPerSec: result.tokensPerSec, measuredAt: result.measuredAt },
+        };
+        return { records: next, result: undefined };
+      });
       emitModelsChanged();
     },
   };
@@ -705,8 +719,15 @@ export function estimateFit(
   }
 
   const contextLimit =
-    fit === "full-gpu" ? 32768 : fit === "partial-offload" ? 16384 : fit === "cpu-only" ? 8192 : 8192;
-  const trainedContextLength = record.trainedContextLength > 0 ? record.trainedContextLength : contextLimit;
+    fit === "full-gpu"
+      ? 32768
+      : fit === "partial-offload"
+        ? 16384
+        : fit === "cpu-only"
+          ? 8192
+          : 8192;
+  const trainedContextLength =
+    record.trainedContextLength > 0 ? record.trainedContextLength : contextLimit;
   const gpuLayers = fit === "full-gpu" ? 99 : fit === "partial-offload" ? -1 : 0;
   const notes =
     fit === "too-big"
@@ -733,7 +754,13 @@ function validateDownloadRequest(req: DownloadRequest): void {
 }
 
 function isSafePathSegment(segment: string): boolean {
-  return segment.length > 0 && segment !== "." && segment !== ".." && !segment.includes("/") && !segment.includes("\\");
+  return (
+    segment.length > 0 &&
+    segment !== "." &&
+    segment !== ".." &&
+    !segment.includes("/") &&
+    !segment.includes("\\")
+  );
 }
 
 function modelTargetPath(modelsDir: string, hfRepo: string, file: string): string {
@@ -766,7 +793,11 @@ function responseTotalBytes(response: Response, resumeFrom: number): number | nu
   return null;
 }
 
-async function preflightDiskSpace(dir: string, totalBytes: number | null, receivedBytes: number): Promise<void> {
+async function preflightDiskSpace(
+  dir: string,
+  totalBytes: number | null,
+  receivedBytes: number
+): Promise<void> {
   if (totalBytes === null) {
     return;
   }
@@ -810,7 +841,10 @@ async function sha256File(file: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function updateHashFromFile(hash: ReturnType<typeof createHash>, file: string): Promise<void> {
+async function updateHashFromFile(
+  hash: ReturnType<typeof createHash>,
+  file: string
+): Promise<void> {
   const stream = createReadStream(file);
   for await (const chunk of stream) {
     hash.update(chunk as Uint8Array);
@@ -954,7 +988,11 @@ function titleize(value: string): string {
 }
 
 function fallbackFileName(): string {
-  const repoName = FALLBACK_MODEL.hfRepo.split("/").at(-1)?.replace(/[-_.]?gguf$/i, "") ?? "model";
+  const repoName =
+    FALLBACK_MODEL.hfRepo
+      .split("/")
+      .at(-1)
+      ?.replace(/[-_.]?gguf$/i, "") ?? "model";
   return `${repoName}-${FALLBACK_MODEL.quant}.gguf`;
 }
 

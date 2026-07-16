@@ -13,6 +13,13 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
+import type {
+  OwnerLibraryRequest,
+  OwnerLibraryResponse,
+  OwnerControlListener,
+  OwnerControlRequest,
+  OwnerControlTransport,
+} from "./owner-control.js";
 import { join } from "node:path";
 import {
   FALLBACK_MODEL,
@@ -56,6 +63,9 @@ export interface SupervisorDeps {
   killPid?(pid: number): void;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
+  ownerControl: OwnerControlTransport;
+  /** Machine-global library mutations execute only in the lock-owning process. */
+  libraryControl(request: OwnerLibraryRequest): Promise<OwnerLibraryResponse>;
 }
 
 type SpawnedProcess = { pid: number; kill(signal?: string): void };
@@ -107,6 +117,7 @@ export function createServerSupervisor(deps: SupervisorDeps): {
   ensureLoaded(slug: string): Promise<{ baseUrl: string }>;
   apiKey(): Promise<string>;
   restart(kind: ServerKind): Promise<void>;
+  library(request: OwnerLibraryRequest): Promise<OwnerLibraryResponse>;
   tailLog(kind: ServerKind, lines?: number): string[];
   dispose(): Promise<void>;
 } {
@@ -134,6 +145,7 @@ class ServerSupervisor {
   private disposed = false;
   private nextProcessToken = 0;
   private idleTimer: TimerHandle | null = null;
+  private ownerControlListener: OwnerControlListener | null = null;
   private readonly lastUsed = new Map<string, number>();
   private readonly logs: Record<ServerKind, string[]> = { utility: [], main: [] };
   private readonly servers: Record<ServerKind, ServerRuntime> = {
@@ -162,6 +174,7 @@ class ServerSupervisor {
     ensureLoaded(slug: string): Promise<{ baseUrl: string }>;
     apiKey(): Promise<string>;
     restart(kind: ServerKind): Promise<void>;
+    library(request: OwnerLibraryRequest): Promise<OwnerLibraryResponse>;
     tailLog(kind: ServerKind, lines?: number): string[];
     dispose(): Promise<void>;
   } {
@@ -173,6 +186,7 @@ class ServerSupervisor {
       ensureLoaded: (slug) => this.ensureLoaded(slug),
       apiKey: () => this.publicApiKey(),
       restart: (kind) => this.restart(kind),
+      library: (request) => this.library(request),
       tailLog: (kind, lines) => this.tailLog(kind, lines),
       dispose: () => this.dispose(),
     };
@@ -212,6 +226,13 @@ class ServerSupervisor {
       this.ownerInfoValue = owner;
       this.ports = owner.ports;
       return;
+    }
+
+    const lockOwner = this.readLockOwner();
+    if (!owner && lockOwner && pidAlive(lockOwner.pid)) {
+      throw new Error(
+        "active local-models owner does not expose the required control endpoint; restart the owning Vibestudio process"
+      );
     }
 
     if (!retried && (!owner || !pidAlive(owner.pid))) {
@@ -256,16 +277,49 @@ class ServerSupervisor {
     }
 
     this.lockFd = fd;
-    this.bootId = readBootId();
-    writeSync(fd, JSON.stringify({ pid: process.pid, bootId: this.bootId }));
+    try {
+      this.bootId = readBootId();
+      writeSync(fd, JSON.stringify({ pid: process.pid, bootId: this.bootId }));
 
-    this.roleValue = "owner";
-    this.ports = await this.loadOrCreatePorts();
-    await this.ensureApiKeyFile();
-    this.writeOwnerInfo();
-    // Servers stay cold: the fallback floor is lazy (design §5), so the
-    // utility server starts on the first ensureLoaded(fallback), not here.
-    return true;
+      this.roleValue = "owner";
+      this.ports = await this.loadOrCreatePorts();
+      const apiKey = await this.ensureApiKeyFile();
+      this.ownerControlListener = await this.deps.ownerControl.listen(apiKey, (request) =>
+        this.handleOwnerControl(request)
+      );
+      this.writeOwnerInfo();
+      // Servers stay cold: the fallback floor is lazy (design §5), so the
+      // utility server starts on the first ensureLoaded(fallback), not here.
+      return true;
+    } catch (error) {
+      await this.releaseOwnerClaim();
+      throw error;
+    }
+  }
+
+  private async releaseOwnerClaim(): Promise<void> {
+    if (this.ownerControlListener) {
+      try {
+        await this.ownerControlListener.close();
+      } catch (error) {
+        this.deps.log("failed to close local-models owner control listener", { error });
+      }
+      this.ownerControlListener = null;
+    }
+    if (this.lockFd !== null) {
+      try {
+        closeSync(this.lockFd);
+      } catch (error) {
+        this.deps.log("failed to close local-models owner lock", { error });
+      }
+      this.lockFd = null;
+    }
+    unlinkIfExists(this.paths.owner);
+    unlinkIfExists(this.paths.lock);
+    this.roleValue = "attached";
+    this.ownerInfoValue = null;
+    this.ports = null;
+    this.bootId = "";
   }
 
   private async loadOrCreatePorts(): Promise<{ utility: number; main: number }> {
@@ -290,7 +344,7 @@ class ServerSupervisor {
   }
 
   private writeOwnerInfo(): void {
-    if (this.roleValue !== "owner" || !this.ports) return;
+    if (this.roleValue !== "owner" || !this.ports || !this.ownerControlListener) return;
     const serverPids: { utility?: number; main?: number } = {};
     for (const kind of ["utility", "main"] as const) {
       const pid = this.servers[kind].process?.child.pid;
@@ -300,6 +354,7 @@ class ServerSupervisor {
       pid: process.pid,
       bootId: this.bootId,
       ports: this.ports,
+      controlPort: this.ownerControlListener.port,
       workspaceId: this.deps.workspaceId,
       since: this.ownerInfoValue?.since ?? this.deps.now(),
       serverPids,
@@ -311,9 +366,20 @@ class ServerSupervisor {
   private readOwnerInfo(): OwnerInfo | null {
     const value = readJsonFile<OwnerInfo>(this.paths.owner);
     if (!value) return null;
-    if (!validPort(value.ports?.utility) || !validPort(value.ports?.main)) return null;
+    if (
+      !validPort(value.ports?.utility) ||
+      !validPort(value.ports?.main) ||
+      !validPort(value.controlPort)
+    )
+      return null;
     if (!Number.isInteger(value.pid) || typeof value.bootId !== "string") return null;
     if (typeof value.workspaceId !== "string" || typeof value.since !== "number") return null;
+    return value;
+  }
+
+  private readLockOwner(): { pid: number; bootId: string } | null {
+    const value = readJsonFile<{ pid: number; bootId: string }>(this.paths.lock);
+    if (!value || !Number.isInteger(value.pid) || typeof value.bootId !== "string") return null;
     return value;
   }
 
@@ -378,7 +444,7 @@ class ServerSupervisor {
     const slug = normalizeSlug(inputSlug);
     if (slug === FALLBACK_MODEL.slug) {
       if (this.roleValue === "attached") {
-        return this.attachedWarmBaseUrl("utility");
+        return this.forwardEnsureLoaded(slug);
       }
       await this.ensureOwnerServer("utility");
       await this.assertHealthy("utility");
@@ -389,7 +455,7 @@ class ServerSupervisor {
     if (!model) throw new Error(`local model not found: ${slug}`);
 
     if (this.roleValue === "attached") {
-      return this.attachedWarmBaseUrl("main");
+      return this.forwardEnsureLoaded(slug);
     }
 
     this.lastUsed.set(slug, this.deps.now());
@@ -399,21 +465,42 @@ class ServerSupervisor {
     return { baseUrl: baseUrl(this.portFor("main")) };
   }
 
-  private async attachedWarmBaseUrl(kind: ServerKind): Promise<{ baseUrl: string }> {
+  private async forwardEnsureLoaded(slug: string): Promise<{ baseUrl: string }> {
     await this.ensureAttachedOwnerAlive();
     const owner = this.ownerInfoValue;
-    const serverPid = owner?.serverPids?.[kind];
-    if (typeof serverPid !== "number" || serverPid <= 0 || !pidAlive(serverPid)) {
-      throw new Error(
-        `local-models ${kind} server is cold in owner process; load the model from the owning workspace first`
-      );
-    }
+    if (!owner) throw new Error("local-models owner is unavailable");
+    const value = await this.deps.ownerControl.request(owner.controlPort, await this.apiKey(), {
+      action: "ensureLoaded",
+      slug,
+    });
+    if (!("baseUrl" in value)) throw new Error("invalid local-models owner response");
+    this.ownerInfoValue = this.readOwnerInfo() ?? owner;
+    this.ports = this.ownerInfoValue.ports;
+    return { baseUrl: value.baseUrl };
+  }
 
-    const port = this.portFor(kind);
-    if (!(await this.healthCheck(port))) {
-      throw new Error(`local-models ${kind} server is not healthy in owner process`);
+  private async handleOwnerControl(request: OwnerControlRequest) {
+    if (this.roleValue !== "owner") throw new Error("local-models supervisor is not the owner");
+    if (request.action === "ensureLoaded") return this.ensureLoaded(request.slug);
+    if (request.action === "library") {
+      return { library: await this.deps.libraryControl(request.request) } as const;
     }
-    return { baseUrl: baseUrl(port) };
+    await this.restart(request.kind);
+    return { restarted: true } as const;
+  }
+
+  private async library(request: OwnerLibraryRequest): Promise<OwnerLibraryResponse> {
+    await this.activate();
+    if (this.roleValue === "owner") return this.deps.libraryControl(request);
+    await this.ensureAttachedOwnerAlive();
+    const owner = this.ownerInfoValue;
+    if (!owner) throw new Error("local-models owner is unavailable");
+    const value = await this.deps.ownerControl.request(owner.controlPort, await this.apiKey(), {
+      action: "library",
+      request,
+    });
+    if (!("library" in value)) throw new Error("invalid local-models owner library response");
+    return value.library;
   }
 
   private async ensureAttachedOwnerAlive(): Promise<void> {
@@ -465,8 +552,16 @@ class ServerSupervisor {
 
   private async restart(kind: ServerKind): Promise<void> {
     await this.activate();
-    if (this.roleValue !== "owner")
-      throw new Error("attached local-models supervisors cannot restart servers");
+    if (this.roleValue !== "owner") {
+      await this.ensureAttachedOwnerAlive();
+      const owner = this.ownerInfoValue;
+      if (!owner) throw new Error("local-models owner is unavailable");
+      await this.deps.ownerControl.request(owner.controlPort, await this.apiKey(), {
+        action: "restart",
+        kind,
+      });
+      return;
+    }
 
     // A restart only re-launches a server that was already up (or mid-launch):
     // the fallback floor is lazy (design §5), so restarting a cold utility must
@@ -847,12 +942,7 @@ class ServerSupervisor {
     }
 
     if (this.roleValue === "owner") {
-      if (this.lockFd !== null) {
-        closeSync(this.lockFd);
-        this.lockFd = null;
-      }
-      unlinkIfExists(this.paths.owner);
-      unlinkIfExists(this.paths.lock);
+      await this.releaseOwnerClaim();
     }
   }
 }

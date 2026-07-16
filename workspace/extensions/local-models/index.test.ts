@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OwnerLibraryRequest } from "./owner-control.js";
 import { FALLBACK_MODEL } from "./types.js";
 
 interface TestDownloadJob {
@@ -27,13 +28,11 @@ const modelLibraryMock = vi.hoisted(() => {
     error: null,
   });
 
-  let pendingDownload:
-    | {
-        job: TestDownloadJob;
-        promise: Promise<TestDownloadJob>;
-        resolve(job: TestDownloadJob): void;
-      }
-    | null = null;
+  let pendingDownload: {
+    job: TestDownloadJob;
+    promise: Promise<TestDownloadJob>;
+    resolve(job: TestDownloadJob): void;
+  } | null = null;
   const state = {
     downloads: [] as TestDownloadJob[],
     nextDownloadOrdinal: 1,
@@ -56,8 +55,8 @@ const modelLibraryMock = vi.hoisted(() => {
       ensureFallback: vi.fn(async () => {
         throw new Error("not used");
       }),
-      startDownload: vi.fn(() => ensureDownload().promise),
-      startDownloadJob: vi.fn(async () => ({ ...ensureDownload().job })),
+      startDownload: vi.fn((_request: unknown) => ensureDownload().promise),
+      startDownloadJob: vi.fn(async (_request: unknown) => ({ ...ensureDownload().job })),
       pauseDownload: vi.fn(async () => {}),
       resumeDownload: vi.fn(async () => {}),
       cancelDownload: vi.fn(async () => {}),
@@ -153,6 +152,35 @@ vi.mock("./supervisor.js", () => ({
     role: vi.fn(() => "owner"),
     apiKey: vi.fn(async () => "test-key"),
     restart: vi.fn(async () => {}),
+    library: vi.fn(async (request: OwnerLibraryRequest) => {
+      switch (request.operation) {
+        case "ensureFallback":
+          return { kind: "record", record: await modelLibraryMock.library.ensureFallback() };
+        case "startDownload":
+          return {
+            kind: "download",
+            job: await modelLibraryMock.library.startDownload(request.request),
+          };
+        case "startDownloadJob":
+          return {
+            kind: "download",
+            job: await modelLibraryMock.library.startDownloadJob(request.request),
+          };
+        case "listDownloads":
+          return { kind: "downloads", jobs: modelLibraryMock.library.listDownloads() };
+        case "pauseDownload":
+        case "resumeDownload":
+        case "cancelDownload":
+        case "remove":
+        case "setModelConfig":
+        case "setBenchmark":
+          return { kind: "ok" };
+        case "importDir":
+          return { kind: "records", records: [] };
+        default:
+          throw new Error("unexpected library operation");
+      }
+    }),
     tailLog: vi.fn(() => []),
   })),
 }));
@@ -326,7 +354,10 @@ function jsonLineReader(response: Response): {
   };
 }
 
-async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 1000): Promise<void> {
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 1000
+): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (await predicate()) return;
