@@ -136,42 +136,6 @@ describe("wsClientTransport", () => {
     expect(sockets).toHaveLength(1);
   });
 
-  it("delivers pushed ws:event frames to the server-event callback", async () => {
-    const events: Array<{ event: string; payload: unknown }> = [];
-    const sockets: FakeSocket[] = [];
-    const eventTransport = wsClientTransport({
-      adapter: {
-        createSocket: () => {
-          const socket = new FakeSocket();
-          sockets.push(socket);
-          return socket;
-        },
-        getAuthToken: async () => "token",
-        now: () => Date.now(),
-      },
-      getWsUrl: () => "wss://server.example/rpc",
-      selfId: "app:mobile:test",
-      onServerEvent: (event, payload) => events.push({ event, payload }),
-    });
-
-    const connected = eventTransport.connectAndWait();
-    await Promise.resolve();
-    sockets[0]?.open();
-    sockets[0]?.authenticate();
-    await connected;
-
-    const payload = { pending: [{ approvalId: "approval-1", kind: "credential" }] };
-    sockets[0]?.onmessage?.({
-      data: JSON.stringify({
-        type: "ws:event",
-        event: "event:shell-approval:pending-changed",
-        payload,
-      }),
-    });
-
-    expect(events).toEqual([{ event: "event:shell-approval:pending-changed", payload }]);
-  });
-
   it("synthesizes a rejecting response envelope from ws:routed-response-error", async () => {
     const { sockets, transport } = createTransportHarness();
     const delivered: Array<{ from: string; message: unknown }> = [];

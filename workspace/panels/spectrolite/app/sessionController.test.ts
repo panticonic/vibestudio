@@ -68,25 +68,31 @@ describe("SessionController", () => {
   });
 
   it("rehydrates persisted agents after selecting a vault from the picker", async () => {
-    const store = createStore(initialState({
-      contextId: "ctx",
-      channelName: "chan",
-      repoRoot: null,
-      openPath: null,
-      installedAgents: [{
-        agentId: "SilentAgentWorker",
-        handle: "scribe",
-        key: "agent:scribe",
-        source: "workers/silent-agent-worker",
-        className: "SilentAgentWorker",
-      }],
-    }));
+    const store = createStore(
+      initialState({
+        contextId: "ctx",
+        channelName: "chan",
+        repoRoot: null,
+        openPath: null,
+        installedAgents: [
+          {
+            agentId: "SilentAgentWorker",
+            handle: "scribe",
+            key: "agent:scribe",
+            source: "workers/silent-agent-worker",
+            className: "SilentAgentWorker",
+          },
+        ],
+      })
+    );
     const session = new SessionController(store);
 
     await session.start();
-    expect(pubsubMocks.connectViaRpc).toHaveBeenCalledWith(expect.objectContaining({
-      clientId: "panel:slot-test",
-    }));
+    expect(pubsubMocks.connectViaRpc).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: "panel:slot-test",
+      })
+    );
     expect(bootstrapMocks.createAndSubscribeAgent).not.toHaveBeenCalled();
 
     store.setState({ repoRoot: "/projects/default" });
@@ -94,29 +100,35 @@ describe("SessionController", () => {
     await vi.waitFor(() => {
       expect(bootstrapMocks.createAndSubscribeAgent).toHaveBeenCalledTimes(1);
     });
-    expect(bootstrapMocks.createAndSubscribeAgent).toHaveBeenCalledWith(expect.objectContaining({
-      key: "agent:scribe",
-      channelId: "chan",
-      channelContextId: "ctx",
-      replay: true,
-    }));
+    expect(bootstrapMocks.createAndSubscribeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "agent:scribe",
+        channelId: "chan",
+        channelContextId: "ctx",
+        replay: true,
+      })
+    );
   });
 
   it("retries failed rehydration with backoff", async () => {
     vi.useFakeTimers();
-    const store = createStore(initialState({
-      contextId: "ctx",
-      channelName: "chan",
-      repoRoot: "/projects/default",
-      openPath: null,
-      installedAgents: [{
-        agentId: "SilentAgentWorker",
-        handle: "scribe",
-        key: "agent:scribe",
-        source: "workers/silent-agent-worker",
-        className: "SilentAgentWorker",
-      }],
-    }));
+    const store = createStore(
+      initialState({
+        contextId: "ctx",
+        channelName: "chan",
+        repoRoot: "/projects/default",
+        openPath: null,
+        installedAgents: [
+          {
+            agentId: "SilentAgentWorker",
+            handle: "scribe",
+            key: "agent:scribe",
+            source: "workers/silent-agent-worker",
+            className: "SilentAgentWorker",
+          },
+        ],
+      })
+    );
     bootstrapMocks.createAndSubscribeAgent
       .mockRejectedValueOnce(new Error("transient"))
       .mockResolvedValueOnce(undefined);

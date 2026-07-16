@@ -25,6 +25,8 @@ import gadRuntimeCatalog from "./generated/gadRuntimeCatalog.json";
 import { blobstoreMethods } from "../blobstore.js";
 import { GAD_RUNTIME_METHOD_NAMES } from "@vibestudio/shared/gadRuntimeMethods";
 import { gitInteropMethods } from "../gitInterop.js";
+import { vcsMethods } from "../vcs.js";
+import { workspaceMethods } from "../workspace.js";
 
 // --- shared namespace member arrays (single source of truth) ---
 export const WORKERS_MEMBERS = [
@@ -38,19 +40,12 @@ export const WORKERS_MEMBERS = [
   "durableObjectService",
 ];
 
+/** Top-level keys of the actual typed workspace client, plus its one ergonomic
+ * project-discovery namespace. Deriving this prevents the portable help surface
+ * from retaining deleted hub-catalog methods or missing new nested groups. */
 export const WORKSPACE_MEMBERS = [
-  "list",
-  "getActive",
-  "getActiveEntry",
-  "getConfig",
-  "create",
-  "delete",
-  "setInitPanels",
-  "setConfigField",
-  "switchTo",
-  "sourceTree",
-  "findUnitForPath",
-  "units",
+  ...new Set(Object.keys(workspaceMethods).map((method) => method.split(".")[0]!)),
+  "projects",
 ];
 
 export const CREDENTIALS_MEMBERS = [
@@ -124,38 +119,10 @@ export const BROWSER_DATA_MEMBERS = [
 
 export const GIT_MEMBERS = Object.keys(gitInteropMethods);
 
-export const VCS_MEMBERS = [
-  "edit",
-  "commit",
-  "discardEdits",
-  "readFile",
-  "listFiles",
-  "revert",
-  "status",
-  "log",
-  "diff",
-  "resolveHead",
-  "workspaceViewWithRepoAt",
-  "merge",
-  "abortMerge",
-  "pendingMerge",
-  "push",
-  "pushStatus",
-  "previewBuild",
-  "commitEdits",
-  "fileHistory",
-  "commitAncestors",
-  "editsByActor",
-  "editsByTurn",
-  "editsByInvocation",
-  "forkRepo",
-  "contextStatus",
-  "rebaseContext",
-  "recall",
-];
+export const VCS_MEMBERS = Object.keys(vcsMethods);
 
 export const VCS_DESCRIPTION =
-  "Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance.";
+  "Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, and directly walkable provenance.";
 
 export const GAD_MEMBERS = [...GAD_RUNTIME_METHOD_NAMES];
 
@@ -192,7 +159,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   contextId: valueEntry(),
   rpc: valueEntry("Portable RPC client (the full createRpcClient)."),
   fs: valueEntry(
-    "Per-context filesystem sandbox. Paths are context-root-relative. For valid workspace-repo paths, writeFile, appendFile, truncate, chmod, unlink/rmdir/rm, copyFile destinations, and supported renames into or within repos route through GAD working edits; tracked-to-scratch renames and open with write flags are rejected. mkdir and utimes remain direct filesystem operations. Platform-ignored paths and paths outside reserved workspace source roots are local scratch.",
+    "Per-context filesystem sandbox. Paths are context-root-relative. The semantic workspace records managed mutations before projection; moves preserve file identity and copies mint a new identity with exact copy provenance. Tracked-to-scratch renames, managed empty-directory mkdir, and open with write flags are rejected. Scratch mkdir and utimes remain direct filesystem operations. Platform-excluded paths and paths outside reserved workspace source roots are local scratch.",
     "fs"
   ),
   callMain: valueEntry('Call a `main` (server) service method: callMain("fs.readFile", path).'),

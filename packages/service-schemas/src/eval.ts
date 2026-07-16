@@ -21,13 +21,6 @@ export const evalRunArgsSchema = z
     contextId: z.string().optional(),
     /** Logical sub-context name (default "default") — lets one owner keep multiple eval scopes. */
     subKey: z.string().optional(),
-    /**
-     * Channel the eval is bound to. When the caller is an agent DO and this is
-     * set, the service threads it (with the agent's runtime id) into the EvalDO
-     * so the sandbox gets a `chat` binding that proxies channel ops back to the
-     * agent. Omitted for CLI/panel callers (they get no `chat`).
-     */
-    channelId: z.string().optional(),
     /** Inline code to execute (provide either `code` or `path`). */
     code: z.string().optional(),
     /** Context-relative TS/TSX file to execute instead of inline code. */
@@ -39,7 +32,7 @@ export const evalRunArgsSchema = z
     syntax: z.enum(["javascript", "typescript", "jsx", "tsx"]).optional(),
     /** On-demand package builds (e.g. { "lodash": "npm:^4.17.21" }). */
     imports: z.record(z.string()).optional(),
-    /** Caller-supplied idempotency key (agents pass their raw invocationId). Defaults server-side. */
+    /** Idempotent run identity (the agent eval gate uses its current invocation id). */
     runId: z.string().optional(),
     /** Opt-in deadline in ms; the run is aborted after this long. Absent ⇒ unbounded. */
     timeoutMs: z.number().int().positive().optional(),
@@ -250,12 +243,5 @@ export const evalMethods = defineServiceMethods({
     description:
       "Cancel a single in-flight or pending run by runId (CAS to cancelled, then abort its outbound calls so a run wedged on an rpc.call unwinds). Other runs and the persistent scope are untouched. A no-op if the run is already terminal.",
     access: { sensitivity: "write" },
-  },
-  forceReset: {
-    args: z.union([z.tuple([]), z.tuple([evalResetArgsSchema])]),
-    returns: z.object({ ok: z.boolean() }).strict(),
-    description:
-      "Forced recovery for a wedged eval DO: cancel every non-terminal run, abort all in-flight runs, and reset the eval context (wipe scope + user db) IMMEDIATELY without waiting on the stuck run chain. Use when `reset` itself would hang behind a wedged run.",
-    access: { sensitivity: "destructive" },
   },
 });

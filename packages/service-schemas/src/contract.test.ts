@@ -32,7 +32,7 @@ import { panelRuntimeMethods } from "./panelRuntime.js";
 import { panelTreeMethods } from "./panelTree.js";
 import { pushMethods, PushRegisterRequestSchema } from "./push.js";
 import { permissionsMethods } from "./permissions.js";
-import { refsMethods } from "./refs.js";
+import { phoneProvisioningMethods } from "./phoneProvisioning.js";
 import { remoteCredMethods } from "./remoteCred.js";
 import { runtimeMethods } from "./runtime.js";
 import { evalMethods } from "./eval.js";
@@ -45,7 +45,6 @@ import { workerLogMethods } from "./workerLog.js";
 import { workspaceMethods } from "./workspace.js";
 import { workspacePresenceMethods } from "./workspacePresence.js";
 import { workspaceStateMethods } from "./workspaceState.js";
-import { worktreeMethods } from "./worktree.js";
 
 type ServiceTable = {
   service: string;
@@ -81,8 +80,12 @@ const serviceTables: ServiceTable[] = [
   { service: "panelRuntime", file: "panelRuntime.ts", methods: panelRuntimeMethods },
   { service: "panelTree", file: "panelTree.ts", methods: panelTreeMethods },
   { service: "permissions", file: "permissions.ts", methods: permissionsMethods },
+  {
+    service: "phoneProvisioning",
+    file: "phoneProvisioning.ts",
+    methods: phoneProvisioningMethods,
+  },
   { service: "push", file: "push.ts", methods: pushMethods },
-  { service: "refs", file: "refs.ts", methods: refsMethods },
   { service: "remoteCred", file: "remoteCred.ts", methods: remoteCredMethods },
   { service: "runtime", file: "runtime.ts", methods: runtimeMethods },
   { service: "eval", file: "eval.ts", methods: evalMethods },
@@ -99,7 +102,6 @@ const serviceTables: ServiceTable[] = [
     methods: workspacePresenceMethods,
   },
   { service: "workspace-state", file: "workspaceState.ts", methods: workspaceStateMethods },
-  { service: "worktree", file: "worktree.ts", methods: worktreeMethods },
 ];
 
 const approvedReturnlessMethods = new Set([
@@ -107,6 +109,9 @@ const approvedReturnlessMethods = new Set([
   // bridge. That transport is validated by stream-level tests rather than a
   // JSON-compatible Zod return schema.
   "extensions.invokeStream",
+  // A watch is likewise a live Response resource. Its NDJSON records have a
+  // structural codec; the Response itself is owned and validated by RPC.
+  "events.watch",
 ]);
 
 const approvedWeakReturnRoots = new Set([
@@ -198,11 +203,9 @@ function weakReturnRootPaths(
 }
 
 describe("service schema contracts", () => {
-  it("allows reset-style eval methods to omit their optional routing object", () => {
+  it("allows eval reset to omit its optional routing object", () => {
     expect(evalMethods.reset.args.safeParse([]).success).toBe(true);
     expect(evalMethods.reset.args.safeParse([{}]).success).toBe(true);
-    expect(evalMethods.forceReset.args.safeParse([]).success).toBe(true);
-    expect(evalMethods.forceReset.args.safeParse([{}]).success).toBe(true);
   });
 
   it("bounds lossless eval scope pages at 128 Ki code units", () => {

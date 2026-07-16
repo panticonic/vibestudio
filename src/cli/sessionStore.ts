@@ -9,9 +9,11 @@ import { cliConfigRoot } from "./configPaths.js";
  * session under the same config dir as the CLI device credential.
  */
 export interface AgentSession {
-  schemaVersion: 1;
+  schemaVersion: 3;
   name: string;
-  serverUrl: string;
+  serverId: string;
+  workspaceId: string;
+  workspaceName: string;
   entityId: string;
   contextId: string;
   scopeKey: string;
@@ -51,7 +53,9 @@ export function loadAgentSession(name: string): AgentSession | null {
   const allowedKeys = new Set([
     "schemaVersion",
     "name",
-    "serverUrl",
+    "serverId",
+    "workspaceId",
+    "workspaceName",
     "entityId",
     "contextId",
     "scopeKey",
@@ -59,12 +63,17 @@ export function loadAgentSession(name: string): AgentSession | null {
   ]);
   if (
     Object.keys(parsed).some((key) => !allowedKeys.has(key)) ||
-    parsed.schemaVersion !== 1 ||
+    parsed.schemaVersion !== 3 ||
     typeof parsed.name !== "string" ||
     !isValidSessionName(parsed.name) ||
     parsed.name !== name ||
-    typeof parsed.serverUrl !== "string" ||
-    !parsed.serverUrl ||
+    typeof parsed.serverId !== "string" ||
+    !parsed.serverId ||
+    typeof parsed.workspaceId !== "string" ||
+    !parsed.workspaceId ||
+    parsed.workspaceId.trim() !== parsed.workspaceId ||
+    typeof parsed.workspaceName !== "string" ||
+    !parsed.workspaceName ||
     typeof parsed.entityId !== "string" ||
     !parsed.entityId ||
     typeof parsed.contextId !== "string" ||

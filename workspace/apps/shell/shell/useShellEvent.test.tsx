@@ -3,17 +3,17 @@
 import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-const listeners = new Map<string, (event: { payload: unknown }) => void>();
+const listeners = new Map<string, (payload: unknown) => void>();
 const subscribe = vi.fn();
 const unsubscribe = vi.fn();
-const onRpcEvent = vi.fn();
+const onEvent = vi.fn();
 
 vi.mock("./client.js", () => ({
   events: {
     subscribe: (...args: unknown[]) => subscribe(...args),
     unsubscribe: (...args: unknown[]) => unsubscribe(...args),
+    on: (...args: unknown[]) => onEvent(...args),
   },
-  onRpcEvent: (...args: unknown[]) => onRpcEvent(...args),
 }));
 
 import { useShellEvent } from "./useShellEvent";
@@ -33,17 +33,15 @@ describe("useShellEvent", () => {
     subscribe.mockReset();
     unsubscribe.mockReset();
     unsubscribe.mockResolvedValue(undefined);
-    onRpcEvent.mockReset();
-    onRpcEvent.mockImplementation(
-      (channel: string, listener: (event: { payload: unknown }) => void) => {
+    onEvent.mockReset();
+    onEvent.mockImplementation((event: string, listener: (payload: unknown) => void) => {
         order.push("listen");
-        listeners.set(channel, listener);
-        return () => listeners.delete(channel);
-      }
-    );
+        listeners.set(event, listener);
+        return () => listeners.delete(event);
+      });
     subscribe.mockImplementation(async (event: string) => {
       order.push("subscribe");
-      listeners.get(`event:${event}`)?.({ payload: snapshot });
+      listeners.get(event)?.(snapshot);
     });
 
     render(<Probe onUpdate={received} />);

@@ -6,6 +6,10 @@ import {
 } from "@vibestudio/shared/serviceDispatcher";
 import { panelMethods } from "@vibestudio/service-schemas/panel";
 import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
+import { base64ToBytes } from "@vibestudio/rpc";
+import { FRAME_DATA, FRAME_HEAD } from "@vibestudio/rpc/protocol/streamCodec";
+import { EventService } from "@vibestudio/shared/eventsService";
+import { createEventsServiceDefinition } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
 import { IpcDispatcher } from "./ipcDispatcher.js";
 
 const ipcHandlers = new Map<string, (...args: never[]) => void>();
@@ -69,8 +73,11 @@ function makeDispatcher(opts: {
   ) => { callerId: string; callerKind: "shell" | "panel" | "app" } | null;
   getCodeIdentityForCaller?: (callerId: string) => VerifiedCodeIdentity | null;
   getWebContentsForCaller?: (callerId: string) => ReturnType<typeof makeWebContents> | null;
+  getShellWebContents?: () => ReturnType<typeof makeWebContents> | null;
   call?: ReturnType<typeof vi.fn>;
   callAs?: ReturnType<typeof vi.fn>;
+  stream?: ReturnType<typeof vi.fn>;
+  streamAs?: ReturnType<typeof vi.fn>;
   addMessageListener?: ReturnType<typeof vi.fn>;
   configureDispatcher?: (dispatcher: ServiceDispatcher) => void;
   authorizeAppServerCall?: (
@@ -93,7 +100,8 @@ function makeDispatcher(opts: {
   const serverClient = {
     call: opts.call ?? vi.fn(async () => ({ ok: "shell" })),
     callAs: opts.callAs ?? vi.fn(async () => ({ ok: "app" })),
-    stream: vi.fn(async () => new Response()),
+    stream: opts.stream ?? vi.fn(async () => new Response()),
+    streamAs: opts.streamAs ?? vi.fn(async () => new Response()),
     addMessageListener: opts.addMessageListener ?? vi.fn(() => vi.fn()),
     openPanelSession:
       opts.openPanelSession ??
@@ -106,22 +114,21 @@ function makeDispatcher(opts: {
       })),
     isConnected: vi.fn(() => true),
     getConnectionStatus: vi.fn(() => "connected" as const),
+    onDirectEvent: vi.fn(() => () => {}),
     close: vi.fn(async () => {}),
   };
-  const eventService = { registerSubscriber: vi.fn() };
-  new IpcDispatcher({
+  const ipcDispatcher = new IpcDispatcher({
     dispatcher,
     serverClient,
-    getShellWebContents: () => null,
+    getShellWebContents: (opts.getShellWebContents ?? (() => null)) as never,
     resolveCallerForWebContents: opts.resolve,
     getCodeIdentityForCaller: opts.getCodeIdentityForCaller,
     getWebContentsForCaller: (opts.getWebContentsForCaller ?? (() => null)) as never,
     getPanelRuntimeConnection: opts.getPanelRuntimeConnection,
     authorizeAppServerCall: opts.authorizeAppServerCall,
     onServerRpcResult: opts.onServerRpcResult,
-    eventService: eventService as never,
   });
-  return { serverClient, eventService };
+  return { serverClient, ipcDispatcher };
 }
 
 describe("IpcDispatcher", () => {
@@ -129,6 +136,86 @@ describe("IpcDispatcher", () => {
     vi.restoreAllMocks();
     ipcHandlers.clear();
     ipcInvokeHandlers.clear();
+  });
+
+  it("relays an addressed server event directly to the shell RPC client", () => {
+    const shellWc = makeWebContents(9);
+    const { ipcDispatcher } = makeDispatcher({
+      resolve: () => ({ callerId: "shell", callerKind: "shell" }),
+      getShellWebContents: () => shellWc,
+    });
+
+    ipcDispatcher.sendEventToShell("user-notifications-changed", { changedAt: 10 });
+
+    expectSentRpcMessage(shellWc, "shell", {
+      type: "event",
+      fromId: "main",
+      event: "user-notifications-changed",
+      payload: { changedAt: 10 },
+    });
+  });
+
+  it("carries a local event watch as framed IPC streaming RPC and cancels its response", async () => {
+    const shellWc = makeWebContents(9);
+    const eventService = new EventService();
+    makeDispatcher({
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      configureDispatcher: (dispatcher) => {
+        dispatcher.registerService(createEventsServiceDefinition(eventService));
+      },
+    });
+
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: shellWc } as never,
+      rpcEnvelope("@workspace-apps/shell", "app", {
+        type: "stream-request",
+        requestId: "events-watch-1",
+        fromId: "@workspace-apps/shell",
+        method: "events.watch",
+        args: [["build:complete"], "watch:ipc-events"],
+      } satisfies RpcMessage) as never
+    );
+
+    await vi.waitFor(() => expect(eventService.getSubscriberCount("build:complete")).toBe(1));
+    eventService.emit("build:complete", { source: "panels/chat" });
+
+    await vi.waitFor(() => {
+      const messages = shellWc.send.mock.calls.map((call) => call[1] as RpcEnvelope);
+      expect(
+        messages.some(
+          (item) => item.message.type === "stream-frame" && item.message.frameType === FRAME_HEAD
+        )
+      ).toBe(true);
+      const records = messages
+        .filter(
+          (item) => item.message.type === "stream-frame" && item.message.frameType === FRAME_DATA
+        )
+        .flatMap((item) => {
+          if (item.message.type !== "stream-frame") return [];
+          return new TextDecoder()
+            .decode(base64ToBytes(item.message.payload))
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as { kind: string; event?: string });
+        });
+      expect(records).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "watching" }),
+          expect.objectContaining({ kind: "event", event: "build:complete" }),
+        ])
+      );
+    });
+
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: shellWc } as never,
+      rpcEnvelope("@workspace-apps/shell", "app", {
+        type: "stream-cancel",
+        requestId: "events-watch-1",
+        fromId: "@workspace-apps/shell",
+      } satisfies RpcMessage) as never
+    );
+    await vi.waitFor(() => expect(eventService.getSubscriberCount("build:complete")).toBe(0));
   });
 
   it("forwards app renderer server RPC through an app-scoped server client", async () => {
@@ -558,32 +645,6 @@ describe("IpcDispatcher", () => {
     emitToApp(eventEnvelope);
 
     expect(appWc.send).toHaveBeenCalledWith("vibestudio:rpc:message", eventEnvelope);
-  });
-
-  it("registers an IPC event subscriber for app-backed shell views", async () => {
-    const appWc = makeWebContents(16);
-    const { eventService } = makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
-      getWebContentsForCaller: () => appWc,
-    });
-
-    ipcHandlers.get("vibestudio:rpc:send")?.(
-      { sender: appWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", {
-        type: "request",
-        requestId: "req-local-events",
-        fromId: "@workspace-apps/shell",
-        method: "events.subscribe",
-        args: ["workspace:revision-bumped"],
-      } satisfies RpcMessage) as never
-    );
-
-    await vi.waitFor(() => {
-      expect(eventService.registerSubscriber).toHaveBeenCalledWith(
-        "@workspace-apps/shell",
-        expect.objectContaining({ callerKind: "app" })
-      );
-    });
   });
 
   // §3.3: the ONLY recycle signal is a terminal isClosed(); transport status is

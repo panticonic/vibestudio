@@ -16,6 +16,7 @@ import { HubProcessManager } from "./hubProcessManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
 import { createWebRtcServerClient } from "./webrtcServerClient.js";
 import type { ReconnectProgress } from "@vibestudio/rpc/transports/webrtcClient";
+import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
 import { startPanelAssetFacade } from "../node/panelAssets/panelAssetFacade.js";
 import { relaunchApp } from "./relaunchApp.js";
 import {
@@ -30,7 +31,6 @@ import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { ConnectedStartupMode } from "./startupMode.js";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
-import { authMethods } from "@vibestudio/service-schemas/auth";
 import {
   HubWorkspaceRouteSchema,
   type HubWorkspaceRoute,
@@ -45,6 +45,50 @@ import {
 } from "@vibestudio/shared/connect";
 
 const log = createDevLogger("ServerSession");
+
+async function throwAfterOwnedCleanup(
+  failure: unknown,
+  resources: ReadonlyArray<{ label: string; close: () => Promise<void> }>,
+  context: string
+): Promise<never> {
+  const settled = await Promise.allSettled(resources.map((resource) => resource.close()));
+  const cleanupFailures = settled.flatMap((result, index) => {
+    if (result.status !== "rejected") return [];
+    const resource = resources[index];
+    return resource
+      ? [new Error(`${resource.label} cleanup failed`, { cause: result.reason })]
+      : [new Error("Unknown session resource cleanup failed", { cause: result.reason })];
+  });
+  if (cleanupFailures.length === 0) throw failure;
+  throw new AggregateError(
+    [failure, ...cleanupFailures],
+    `${context} failed and owned resources could not all be released`
+  );
+}
+
+function ownSessionResources(
+  resources: ReadonlyArray<{ label: string; close: () => Promise<void> }>
+): () => Promise<void> {
+  let closing: Promise<void> | null = null;
+  return () => {
+    if (closing) return closing;
+    closing = (async () => {
+      const settled = await Promise.allSettled(resources.map((resource) => resource.close()));
+      const failures = settled.flatMap((result, index) => {
+        if (result.status !== "rejected") return [];
+        const resource = resources[index];
+        return resource
+          ? [new Error(`${resource.label} close failed`, { cause: result.reason })]
+          : [new Error("Unknown session resource close failed", { cause: result.reason })];
+      });
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Session resources could not all be closed");
+      }
+    })();
+    return closing;
+  };
+}
 
 export interface SessionConnection {
   connectionMode: "local" | "remote";
@@ -63,7 +107,12 @@ export interface SessionConnection {
   workspacePath: string;
   statePath: string;
   workspaceConfig: WorkspaceConfig;
+  /** Stable server-wide control session. Only hubControl RPC belongs here. */
+  hubControlClient: ServerClient;
+  /** Exact selected-workspace session. All workspace services belong here. */
   serverClient: ServerClient;
+  /** Idempotently close every transport/facade owned by this session. */
+  close(): Promise<void>;
   hubProcessManager: HubProcessManager | null;
   panelHttpServer: PanelHttpServerLike;
   serverInfo: ServerInfo;
@@ -111,8 +160,7 @@ export function connectRemoteViaWebRtc(
     getShellToken: () => Promise<string> | string;
     connectionId?: string;
     /** Fired when a fresh device is paired — persist the returned credential. */
-    onPaired?: (credential: { deviceId: string; refreshToken: string }) => void;
-    onServerEvent?: (event: string, payload: unknown) => void;
+    onPaired?: (credential: DeviceCredential, context?: PairingContext) => void;
     onConnectionStatusChanged?: (status: ConnectionStatus) => void;
     onReconnectProgress?: (progress: ReconnectProgress) => void;
     onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
@@ -142,13 +190,12 @@ export async function establishServerSession(args: {
    */
   skipStoredRemote?: boolean;
   centralData: CentralDataManager;
-  onServerEvent: (event: string, payload: unknown) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   onMainSessionTerminalClose?: (error: Error) => void;
 }): Promise<SessionConnection> {
-  const { mode, pendingPairing, skipStoredRemote, onServerEvent } = args;
+  const { mode, pendingPairing, skipStoredRemote } = args;
 
   // (a) FRESH pair: the bootstrap chooser handed us a pairing link this launch.
   if (pendingPairing) {
@@ -170,6 +217,7 @@ export async function establishServerSession(args: {
   const externalHost = "localhost";
   const hubProcessManager = new HubProcessManager({
     workspaceName: mode.workspaceName,
+    ephemeral: mode.isEphemeral,
     appRoot: getAppRoot(),
     appVersion: app.getVersion(),
     centralData: args.centralData,
@@ -221,9 +269,20 @@ export async function establishServerSession(args: {
     },
     onRecovery: args.onRecovery,
     onDisconnect: () => console.error("[App] Local workspace connection closed"),
-    onServerEvent,
   });
+  let hubControlClient: ServerClient | null = null;
   try {
+    hubControlClient = await createServerClient(
+      target.gatewayPort,
+      await hubProcessManager.getHubAuthToken(),
+      {
+        reconnect: true,
+        getWsUrl: () => hubProcessManager.getHubWsUrl(),
+        refreshAuthToken: () => hubProcessManager.getHubAuthToken(),
+        onDisconnect: () => console.error("[App] Local hub control connection closed"),
+      }
+    );
+    const connectedHubControlClient = hubControlClient;
     await refreshCdpAuthToken();
 
     log.info("[Server] Shell client connected through the local hub");
@@ -265,7 +324,15 @@ export async function establishServerSession(args: {
       /** The local server's own state directory (same host). */
       statePath: wsInfo.statePath,
       workspaceConfig: wsInfo.config,
+      hubControlClient: connectedHubControlClient,
       serverClient,
+      close: ownSessionResources([
+        { label: "local workspace client", close: () => serverClient.close() },
+        {
+          label: "local hub control client",
+          close: () => connectedHubControlClient.close(),
+        },
+      ]),
       hubProcessManager,
       panelHttpServer,
       serverInfo,
@@ -273,14 +340,26 @@ export async function establishServerSession(args: {
     };
   } catch (error) {
     hubProcessManager.detach();
-    await serverClient.close().catch(() => undefined);
-    throw error;
+    return throwAfterOwnedCleanup(
+      error,
+      [
+        ...(hubControlClient
+          ? [
+              {
+                label: "local hub control client",
+                close: hubControlClient.close.bind(hubControlClient),
+              },
+            ]
+          : []),
+        { label: "local workspace client", close: () => serverClient.close() },
+      ],
+      "Local session establishment"
+    );
   }
 }
 
 /** The connect-callback subset both remote-session paths forward to the pipe. */
 type RemoteConnectArgs = {
-  onServerEvent: (event: string, payload: unknown) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
@@ -295,45 +374,63 @@ type RemoteConnectArgs = {
  */
 async function establishRemoteSession(
   stored: StoredRemote,
-  args: RemoteConnectArgs
+  args: RemoteConnectArgs,
+  origin: "fresh pairing" | "returning device" = "returning device"
 ): Promise<SessionConnection> {
-  const serverClient = await connectRemoteViaWebRtc(
-    { ...stored.workspacePairing, code: "" },
+  let current = stored;
+  const rotate = (credential: DeviceCredential): void => {
+    current = {
+      ...current,
+      deviceId: credential.deviceId,
+      refreshToken: credential.refreshToken,
+      rotatedAt: Date.now(),
+    };
+    saveDeviceCredential(current);
+  };
+  const auth = () => `refresh:${current.deviceId}:${current.refreshToken}`;
+  const hubControlClient = await connectRemoteViaWebRtc(
+    { ...stored.controlPairing, code: "" },
     {
       callerId: `shell:${stored.deviceId}`,
-      getShellToken: () => `refresh:${stored.deviceId}:${stored.refreshToken}`,
-      // A returning device re-auths with its refresh token; if the server rotates
-      // it (delivered via onPaired), persist the fresh secret for next launch.
-      onPaired: (credential) =>
-        saveDeviceCredential({
-          ...stored,
-          deviceId: credential.deviceId,
-          refreshToken: credential.refreshToken,
-          rotatedAt: Date.now(),
-        }),
-      onServerEvent: args.onServerEvent,
-      onConnectionStatusChanged: args.onConnectionStatusChanged,
-      onReconnectProgress: args.onReconnectProgress,
-      onRecovery: args.onRecovery,
-      onMainSessionTerminalClose: args.onMainSessionTerminalClose,
+      getShellToken: auth,
+      onPaired: rotate,
     }
   );
+  let serverClient: ServerClient | null = null;
   try {
-    const connection = await buildRemoteSessionConnection(serverClient);
-    log.info("[Server] Shell client connected over WebRTC remote pipe (returning device)");
+    serverClient = await connectRemoteViaWebRtc(
+      { ...stored.workspacePairing, code: "" },
+      {
+        callerId: `shell:${stored.deviceId}`,
+        getShellToken: auth,
+        onPaired: rotate,
+        onConnectionStatusChanged: args.onConnectionStatusChanged,
+        onReconnectProgress: args.onReconnectProgress,
+        onRecovery: args.onRecovery,
+        onMainSessionTerminalClose: args.onMainSessionTerminalClose,
+      }
+    );
+    const connection = await buildRemoteSessionConnection(serverClient, hubControlClient);
+    log.info(`[Server] Shell client connected over WebRTC remote pipe (${origin})`);
     return connection;
   } catch (error) {
-    await serverClient.close().catch(() => undefined);
-    throw error;
+    return throwAfterOwnedCleanup(
+      error,
+      [
+        ...(serverClient
+          ? [{ label: "remote workspace client", close: serverClient.close.bind(serverClient) }]
+          : []),
+        { label: "remote hub control client", close: () => hubControlClient.close() },
+      ],
+      "Returning remote session establishment"
+    );
   }
 }
 
 /**
- * Pair a FRESH device over WebRTC and KEEP the pipe as the session. The one-time
- * `code` is presented as the session token (which pairs a new device server-side
- * and delivers `{deviceId, refreshToken}` via `onPaired`); that credential is
- * persisted so the next launch reconnects as a returning device. There is no
- * throwaway redeem — this connection IS the session.
+ * Pair a FRESH device on the stable hub, resolve its exact workspace reach, then
+ * hand off to a distinct workspace pipe. The hub pipe is control-plane only; it
+ * never masquerades as a workspace RPC session.
  */
 async function establishFreshPairSession(
   pairing: ConnectPairing,
@@ -352,74 +449,128 @@ async function establishFreshPairSession(
   ) {
     throw new Error("Fresh WebRTC pairing coordinates are not canonicalizable");
   }
-  const issuedCredential: { current: { deviceId: string; refreshToken: string } | null } = {
+  const paired: {
+    current: {
+      credential: { deviceId: string; refreshToken: string };
+      workspaceId: string;
+    } | null;
+  } = {
     current: null,
   };
-  const serverClient = await connectRemoteViaWebRtc(pairing, {
+  let currentStored: StoredRemote | null = null;
+  const controlClient = await connectRemoteViaWebRtc(pairing, {
     // The server assigns the real `shell:<deviceId>` principal when it redeems the
     // one-time code; we don't know that id yet, so dial with a stable selfId. (If
     // the resolved id is ever threaded back, swap it in here.)
     callerId: "shell:pairing",
     getShellToken: () => {
-      const credential = issuedCredential.current;
+      const credential = paired.current?.credential;
       return credential
         ? `refresh:${credential.deviceId}:${credential.refreshToken}`
         : pairing.code;
     },
     // Persist the issued device credential against the pairing material (minus the
     // one-time code) so the NEXT launch reconnects via refresh:<deviceId>:<token>.
-    onPaired: (credential) => {
-      issuedCredential.current = credential;
+    onPaired: (credential, context) => {
+      if (!paired.current) {
+        if (!context) throw new Error("Fresh pairing did not identify its target workspace");
+        paired.current = { credential, workspaceId: context.workspaceId };
+      } else {
+        paired.current = { ...paired.current, credential };
+      }
+      if (currentStored) {
+        currentStored = {
+          ...currentStored,
+          deviceId: credential.deviceId,
+          refreshToken: credential.refreshToken,
+          rotatedAt: Date.now(),
+        };
+        saveDeviceCredential(currentStored);
+      }
     },
-    onServerEvent: args.onServerEvent,
-    onConnectionStatusChanged: args.onConnectionStatusChanged,
-    onReconnectProgress: args.onReconnectProgress,
-    onRecovery: args.onRecovery,
-    onMainSessionTerminalClose: args.onMainSessionTerminalClose,
   });
+  let workspaceClient: ServerClient | null = null;
   try {
-    if (!issuedCredential.current) {
+    if (!paired.current) {
       throw new Error(
         "Fresh WebRTC pairing completed without an issued device credential — mint a new invite and try again."
       );
     }
-    const authClient = createTypedServiceClient("auth", authMethods, (svc, m, a) =>
-      serverClient.call(svc, m, a)
-    );
-    const info = await authClient.getConnectionInfo();
-    const workspaceName = await serverClient.call("workspace", "getActive", []);
-    if (typeof workspaceName !== "string" || !workspaceName) {
-      throw new Error("Fresh WebRTC pairing did not report an active workspace");
-    }
+    const issued = paired.current;
     const route = HubWorkspaceRouteSchema.parse(
-      await serverClient.call("hubControl", "routeWorkspace", [{ workspace: workspaceName }])
+      await controlClient.call("hubControl", "routeWorkspace", [
+        { workspaceId: issued.workspaceId },
+      ])
     );
-    if (route.serverId !== info.serverId) {
-      throw new Error("Workspace route changed server identity during pairing");
+    if (route.workspaceId !== issued.workspaceId) {
+      throw new Error("Workspace route changed the pairing target");
     }
-    const controlPairing = storedReach(route.controlReach);
+    const { code: _code, ...stableHubReach } = pairing;
+    const controlPairing = storedReach(stableHubReach);
     const workspacePairing = storedReach(route.workspaceReach);
-    saveDeviceCredential({
-      serverId: info.serverId,
+    currentStored = {
+      serverId: route.serverId,
       transport: "webrtc",
       controlPairing,
       workspacePairing,
       workspaceName: route.workspace,
-      deviceId: issuedCredential.current.deviceId,
-      refreshToken: issuedCredential.current.refreshToken,
+      deviceId: issued.credential.deviceId,
+      refreshToken: issued.credential.refreshToken,
       ...(label ? { label } : {}),
       pairedAt: Date.now(),
-    });
-    const connection = await buildRemoteSessionConnection(serverClient);
+    };
+    saveDeviceCredential(currentStored);
+    const auth = () => {
+      const active = currentStored;
+      if (!active) throw new Error("Fresh pairing credential was not committed");
+      return `refresh:${active.deviceId}:${active.refreshToken}`;
+    };
+    workspaceClient = await connectRemoteViaWebRtc(
+      { ...currentStored.workspacePairing, code: "" },
+      {
+        callerId: `shell:${currentStored.deviceId}`,
+        getShellToken: auth,
+        onPaired: (credential) => {
+          if (!currentStored) return;
+          currentStored = {
+            ...currentStored,
+            deviceId: credential.deviceId,
+            refreshToken: credential.refreshToken,
+            rotatedAt: Date.now(),
+          };
+          saveDeviceCredential(currentStored);
+        },
+        onConnectionStatusChanged: args.onConnectionStatusChanged,
+        onReconnectProgress: args.onReconnectProgress,
+        onRecovery: args.onRecovery,
+        onMainSessionTerminalClose: args.onMainSessionTerminalClose,
+      }
+    );
+    const connection = await buildRemoteSessionConnection(workspaceClient, controlClient);
     log.info("[Server] Shell client connected over WebRTC remote pipe (fresh pairing)");
     return connection;
   } catch (error) {
-    await serverClient.close().catch(() => undefined);
-    throw error;
+    return throwAfterOwnedCleanup(
+      error,
+      [
+        ...(workspaceClient
+          ? [
+              {
+                label: "fresh workspace client",
+                close: workspaceClient.close.bind(workspaceClient),
+              },
+            ]
+          : []),
+        { label: "fresh hub control client", close: () => controlClient.close() },
+      ],
+      "Fresh remote session establishment"
+    );
   }
 }
 
-function storedReach(reach: HubWorkspaceRoute["controlReach"]): StoredRemote["controlPairing"] {
+function storedReach(
+  reach: HubWorkspaceRoute["workspaceReach"] | Omit<ConnectPairing, "code">
+): StoredRemote["controlPairing"] {
   const signaling = parseSignalingEndpoint(reach.sig);
   if (signaling.kind === "error") throw new Error(signaling.reason);
   return {
@@ -428,7 +579,6 @@ function storedReach(reach: HubWorkspaceRoute["controlReach"]): StoredRemote["co
     sig: signaling.url,
     v: reach.v,
     ice: reach.ice,
-    ...(reach.srv ? { srv: reach.srv } : {}),
   };
 }
 
@@ -438,7 +588,8 @@ function storedReach(reach: HubWorkspaceRoute["controlReach"]): StoredRemote["co
  * between them is HOW the pipe authenticated (one-time code vs refresh token).
  */
 async function buildRemoteSessionConnection(
-  serverClient: ServerClient
+  serverClient: ServerClient,
+  hubControlClient: ServerClient
 ): Promise<SessionConnection> {
   const protocol = "http" as const;
   const externalHost = "localhost";
@@ -447,8 +598,7 @@ async function buildRemoteSessionConnection(
   // origin (buildPanelUrl → http://127.0.0.1:{gatewayPort}/{source}/), so stand
   // up an assets-only façade that proxies each request to the remote server's
   // own gateway over the pipe (gateway.fetch RPC). The façade lives for the
-  // whole session; there is no teardown hook on this path (the process exits
-  // with the session), which is acceptable for a single loopback listener.
+  // whole session and is closed with both RPC clients by SessionConnection.close.
   // Persist the façade's asset cache + stable loopback port under userData so the
   // content-addressed cache and the webview HTTP cache both survive restarts.
   const facade = await startPanelAssetFacade(serverClient, {
@@ -499,7 +649,13 @@ async function buildRemoteSessionConnection(
       workspacePath: wsInfo.path,
       statePath,
       workspaceConfig: wsInfo.config,
+      hubControlClient,
       serverClient,
+      close: ownSessionResources([
+        { label: "remote workspace client", close: () => serverClient.close() },
+        { label: "remote hub control client", close: () => hubControlClient.close() },
+        { label: "remote panel asset facade", close: () => facade.close() },
+      ]),
       hubProcessManager: null,
       panelHttpServer,
       serverInfo,
@@ -507,7 +663,10 @@ async function buildRemoteSessionConnection(
       getCdpAuthToken: () => "",
     };
   } catch (error) {
-    await facade.close().catch(() => undefined);
-    throw error;
+    return throwAfterOwnedCleanup(
+      error,
+      [{ label: "remote panel asset facade", close: () => facade.close() }],
+      "Remote session shaping"
+    );
   }
 }

@@ -164,7 +164,16 @@ export async function callTypedServiceMethod<M extends ServiceMethodSchemas>(
   const result = await call(service, method, parsedArgs);
   if (!definition.returns) return result;
   try {
-    return definition.returns.parse(result);
+    // JSON success envelopes represent logical `undefined` as `null`. Convert
+    // only when the declared schema accepts undefined and rejects null, so
+    // nullable domain results remain untouched.
+    const normalizedResult =
+      result === null &&
+      !definition.returns.safeParse(null).success &&
+      definition.returns.safeParse(undefined).success
+        ? undefined
+        : result;
+    return definition.returns.parse(normalizedResult);
   } catch (error) {
     throw schemaFailure(service, method, "return value", error);
   }

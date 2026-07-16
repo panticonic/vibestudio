@@ -195,7 +195,7 @@ function delay(ms: number): Promise<void> {
 function sessionInfoEqual(a: SessionInfo, b: SessionInfo): boolean {
   return a.sessionId === b.sessionId
     && a.label === b.label
-    && a.gitBranch === b.gitBranch
+    && a.revisionLabel === b.revisionLabel
     && a.cols === b.cols
     && a.rows === b.rows
     && a.alive === b.alive

@@ -25,56 +25,6 @@ describe("WorkspaceClient", () => {
     client = new WorkspaceClient(rpc);
   });
 
-  describe("list()", () => {
-    it("calls workspace.list RPC and returns result", async () => {
-      const entries = [
-        { workspaceId: "ws_default", name: "default", lastOpened: 2 },
-        { workspaceId: "ws_dev", name: "dev", lastOpened: 1 },
-      ];
-      rpc.call.mockResolvedValueOnce(entries);
-
-      const result = await client.list();
-
-      expect(rpc.call).toHaveBeenCalledWith("main", "workspace.list", []);
-      expect(result).toEqual(entries);
-    });
-  });
-
-  describe("create()", () => {
-    it("calls workspace.create RPC with name", async () => {
-      const entry = { workspaceId: "ws_new", name: "new-ws", lastOpened: 1 };
-      rpc.call.mockResolvedValueOnce(entry);
-
-      const result = await client.create("new-ws");
-
-      expect(rpc.call).toHaveBeenCalledWith("main", "workspace.create", ["new-ws", undefined]);
-      expect(result).toEqual(entry);
-    });
-
-    it("calls workspace.create RPC with forkFrom option", async () => {
-      const entry = { workspaceId: "ws_forked", name: "forked", lastOpened: 1 };
-      rpc.call.mockResolvedValueOnce(entry);
-
-      const result = await client.create("forked", { forkFrom: "default" });
-
-      expect(rpc.call).toHaveBeenCalledWith("main", "workspace.create", [
-        "forked",
-        { forkFrom: "default" },
-      ]);
-      expect(result).toEqual(entry);
-    });
-  });
-
-  describe("delete()", () => {
-    it("calls workspace.delete RPC with name", async () => {
-      rpc.call.mockResolvedValueOnce(undefined);
-
-      await client.delete("old-ws");
-
-      expect(rpc.call).toHaveBeenCalledWith("main", "workspace.delete", ["old-ws"]);
-    });
-  });
-
   describe("getActive()", () => {
     it("calls workspace.getActive RPC and returns workspace name", async () => {
       rpc.call.mockResolvedValueOnce("default");

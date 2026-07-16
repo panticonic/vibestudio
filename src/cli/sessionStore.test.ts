@@ -13,9 +13,11 @@ import {
 
 function makeSession(name: string): AgentSession {
   return {
-    schemaVersion: 1,
+    schemaVersion: 3,
     name,
-    serverUrl: "https://host.tailnet.ts.net",
+    serverId: `srv_${"S".repeat(24)}`,
+    workspaceId: "ws_dev",
+    workspaceName: "dev",
     entityId: `session:${name}`,
     contextId: `ctx-${name}`,
     scopeKey: name,
@@ -63,6 +65,12 @@ describe("sessionStore", () => {
     fs.writeFileSync(
       sessionPath("alpha"),
       JSON.stringify({ ...makeSession("alpha"), hubUrl: "retired" })
+    );
+    expect(loadAgentSession("alpha")).toBeNull();
+
+    fs.writeFileSync(
+      sessionPath("alpha"),
+      JSON.stringify({ ...makeSession("alpha"), schemaVersion: 2 })
     );
     expect(loadAgentSession("alpha")).toBeNull();
 

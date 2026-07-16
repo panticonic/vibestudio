@@ -62,6 +62,7 @@ describe("inbound stream mux → framed Response decode", () => {
           message: "upstream boom",
           code: "EBOOM",
           errorKind: "transport",
+          errorData: { code: "upstream", retryable: true },
         })
       )
     );
@@ -71,6 +72,7 @@ describe("inbound stream mux → framed Response decode", () => {
       message: "upstream boom",
       code: "EBOOM",
       errorKind: "transport",
+      errorData: { code: "upstream", retryable: true },
     });
   });
 

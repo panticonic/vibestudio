@@ -28,6 +28,29 @@ export type ServiceHandlers<M extends ServiceMethodSchemas> = {
   [K in keyof M]: ServiceMethodHandler<M[K]>;
 };
 
+/**
+ * Generate one handler per schema method without restating the method table.
+ *
+ * The single contained assertion is justified by construction: iteration is
+ * over the exact schema keys and installs exactly one wrapper for each key.
+ * Callers still pass the result through `defineServiceHandler`, which checks
+ * runtime key parity before accepting traffic.
+ */
+export function mapServiceHandlers<const M extends ServiceMethodSchemas>(
+  methods: M,
+  handler: <K extends keyof M>(
+    method: K,
+    ctx: ServiceContext,
+    args: ServiceHandlerArgs<M[K]>
+  ) => Awaitable<unknown>
+): ServiceHandlers<M> {
+  const mapped: Partial<ServiceHandlers<M>> = {};
+  for (const method of Object.keys(methods) as Array<keyof M>) {
+    mapped[method] = ((ctx, args) => handler(method, ctx, args)) as ServiceHandlers<M>[typeof method];
+  }
+  return mapped as ServiceHandlers<M>;
+}
+
 /** Parse dynamic handler arguments through the schema while preserving its
  * inferred tuple type. Direct unit-level handler calls get the same trailing
  * optional normalization as calls routed through the dispatcher. */

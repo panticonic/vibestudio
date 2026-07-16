@@ -1,6 +1,7 @@
 import {
   bridgeStreamSurfaceOf,
   openBridgeUploadStream,
+  rpcErrorDataOf,
   rpcErrorKindOf,
   responseEnvelopeFor,
   type BridgeStreamShellSurface,
@@ -157,6 +158,9 @@ export function createPanelTransport(): EnvelopeRpcTransport {
                     requestId: request.requestId,
                     errorKind: rpcErrorKindOf(err),
                     error: err instanceof Error ? err.message : String(err),
+                    ...(rpcErrorDataOf(err) !== undefined
+                      ? { errorData: rpcErrorDataOf(err) }
+                      : {}),
                   }
                 )
               );

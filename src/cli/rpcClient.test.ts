@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthError } from "./output.js";
+import { AuthError, ConnectionError } from "./output.js";
 import { RpcClient, clearShellTokenCache, refreshAgent, refreshShell } from "./rpcClient.js";
+import type { LocalHubControlTransport } from "./localHubTransport.js";
 
 // Intercept the lazily-imported WS client so push/stream selection can be
 // asserted without opening a real socket.
@@ -9,6 +10,31 @@ const wsMocks = vi.hoisted(() => ({
   onEvent: vi.fn(async () => () => {}),
   stream: vi.fn(async () => new Response("streamed")),
 }));
+
+const localTransportMocks = vi.hoisted(() => ({
+  resolve: vi.fn<() => Promise<LocalHubControlTransport | null>>(async () => null),
+}));
+
+const webRtcMocks = vi.hoisted(() => ({
+  ctor: vi.fn(),
+  call: vi.fn(),
+  close: vi.fn(async () => undefined),
+}));
+
+vi.mock("./localHubTransport.js", () => ({
+  resolveLocalHubControlTransport: localTransportMocks.resolve,
+}));
+
+vi.mock("./webrtcClient.js", () => ({
+  WebRtcRpcClient: class {
+    constructor(config: unknown) {
+      webRtcMocks.ctor(config);
+    }
+    call = webRtcMocks.call;
+    close = webRtcMocks.close;
+  },
+}));
+
 vi.mock("./wsClient.js", () => ({
   WsRpcClient: class {
     constructor(config: unknown) {
@@ -27,6 +53,32 @@ const CREDS = {
   url: "https://host.tailnet.ts.net",
   deviceId: "dev_cli",
   refreshToken: "refresh_cli",
+};
+
+const PAIRED_CREDS = {
+  schemaVersion: 4 as const,
+  kind: "device" as const,
+  url: "webrtc://11111111-1111-4111-8111-111111111111/_workspace/dev",
+  workspaceId: "ws_dev",
+  workspaceName: "dev",
+  serverId: `srv_${"S".repeat(24)}`,
+  deviceId: `dev_${"D".repeat(24)}`,
+  refreshToken: "R".repeat(43),
+  controlPairing: {
+    room: "22222222-2222-4222-8222-222222222222",
+    fp: "AA".repeat(32),
+    sig: "wss://signal.example/",
+    v: 2 as const,
+    ice: "all" as const,
+  },
+  workspacePairing: {
+    room: "11111111-1111-4111-8111-111111111111",
+    fp: "BB".repeat(32),
+    sig: "wss://signal.example/",
+    v: 2 as const,
+    ice: "all" as const,
+  },
+  pairedAt: 1,
 };
 
 function refreshShellResult(shellToken: string, callerId = "c"): string {
@@ -51,7 +103,7 @@ function rpcResult(result: unknown): string {
   });
 }
 
-function rpcError(error: string, errorCode?: string): string {
+function rpcError(error: string, errorCode?: string, errorData?: unknown): string {
   return JSON.stringify({
     from: "main",
     target: CREDS.deviceId,
@@ -63,6 +115,7 @@ function rpcError(error: string, errorCode?: string): string {
       error,
       errorKind: "application",
       errorCode,
+      errorData,
     },
   });
 }
@@ -70,6 +123,10 @@ function rpcError(error: string, errorCode?: string): string {
 describe("rpcClient", () => {
   beforeEach(() => {
     clearShellTokenCache();
+    localTransportMocks.resolve.mockReset().mockResolvedValue(null);
+    webRtcMocks.ctor.mockClear();
+    webRtcMocks.call.mockReset();
+    webRtcMocks.close.mockClear();
   });
 
   afterEach(() => {
@@ -113,6 +170,16 @@ describe("rpcClient", () => {
       vi.fn(async () => new Response(JSON.stringify({ error: "unknown device" }), { status: 401 }))
     );
     await expect(refreshShell(CREDS)).rejects.toThrow(AuthError);
+  });
+
+  it("types an unreachable auth endpoint as a retryable connection error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Promise.reject(new Error("read ECONNRESET")))
+    );
+    const request = refreshShell(CREDS);
+    await expect(request).rejects.toThrow(ConnectionError);
+    await expect(request).rejects.toThrow(AuthError);
   });
 
   it("rejects a truncated successful shell refresh response", async () => {
@@ -214,7 +281,7 @@ describe("rpcClient", () => {
         if (String(url).endsWith("/refresh-shell")) {
           return new Response(refreshShellResult("tok"));
         }
-        return new Response(rpcError("boom", "ENOENT"));
+        return new Response(rpcError("boom", "ENOENT", { path: "/missing", retryable: false }));
       })
     );
     const client = new RpcClient(CREDS);
@@ -223,6 +290,7 @@ describe("rpcClient", () => {
       message: "boom",
       errorKind: "application",
       errorCode: "ENOENT",
+      errorData: { path: "/missing", retryable: false },
     });
   });
 
@@ -252,6 +320,86 @@ describe("rpcClient", () => {
         args: ["x"],
       },
     });
+  });
+
+  it("routes a paired local workspace through the hub-authenticated loopback endpoint", async () => {
+    localTransportMocks.resolve.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:46247",
+    });
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL) => {
+        requests.push(String(url));
+        if (String(url).endsWith("/refresh-shell")) {
+          return new Response(
+            JSON.stringify({
+              shellToken: "loopback-token",
+              callerId: `shell:${PAIRED_CREDS.deviceId}`,
+              deviceId: PAIRED_CREDS.deviceId,
+              label: "CLI test device",
+              serverId: PAIRED_CREDS.serverId,
+              serverBootId: `boot_${"C".repeat(24)}`,
+              workspaceId: PAIRED_CREDS.workspaceId,
+            })
+          );
+        }
+        if (String(url) === "http://127.0.0.1:46247/rpc") {
+          return new Response(
+            rpcResult({
+              workspace: "dev",
+              workspaceId: PAIRED_CREDS.workspaceId,
+              running: true,
+              serverUrl: "http://127.0.0.1:46247/_workspace/dev",
+              workspaceReach: PAIRED_CREDS.workspacePairing,
+              serverId: PAIRED_CREDS.serverId,
+              serverBootId: `boot_${"C".repeat(24)}`,
+            })
+          );
+        }
+        return new Response(rpcResult({ workspace: "dev" }));
+      })
+    );
+
+    const client = new RpcClient(PAIRED_CREDS);
+    await expect(client.call("auth.getConnectionInfo", [])).resolves.toEqual({ workspace: "dev" });
+
+    expect(localTransportMocks.resolve).toHaveBeenCalledOnce();
+    expect(requests).toEqual([
+      "http://127.0.0.1:46247/_r/s/auth/refresh-shell",
+      "http://127.0.0.1:46247/rpc",
+      "http://127.0.0.1:46247/_workspace/dev/_r/s/auth/refresh-shell",
+      "http://127.0.0.1:46247/_workspace/dev/rpc",
+    ]);
+    expect(webRtcMocks.ctor).not.toHaveBeenCalled();
+  });
+
+  it("does not hide a rejected local workspace route behind a WebRTC fallback", async () => {
+    localTransportMocks.resolve.mockRejectedValue(
+      new Error("The local hub routed the paired device to a different server or workspace")
+    );
+
+    const client = new RpcClient(PAIRED_CREDS);
+    await expect(client.call("auth.getConnectionInfo", [])).rejects.toThrow(
+      "different server or workspace"
+    );
+    expect(webRtcMocks.ctor).not.toHaveBeenCalled();
+  });
+
+  it("connects an explicit WebRTC endpoint without resolving a workspace", async () => {
+    const client = new RpcClient({
+      url: PAIRED_CREDS.url,
+      deviceId: PAIRED_CREDS.deviceId,
+      refreshToken: PAIRED_CREDS.refreshToken,
+      pairing: PAIRED_CREDS.controlPairing,
+    });
+
+    await client.call("hubControl.listWorkspaces", []);
+
+    expect(localTransportMocks.resolve).not.toHaveBeenCalled();
+    expect(webRtcMocks.ctor).toHaveBeenCalledWith(
+      expect.objectContaining({ pairing: PAIRED_CREDS.controlPairing })
+    );
   });
 
   it("rejects a 200 /rpc response without result or error keys as malformed", async () => {

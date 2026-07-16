@@ -42,7 +42,7 @@ export const RuntimeEntityHandleSchema = z
       })
       .strict()
       .describe("Resolved source identity (repo path + effective version)."),
-    contextId: z.string().describe("Context (working-tree) this entity belongs to."),
+    contextId: z.string().describe("Semantic workspace context this entity belongs to."),
     targetId: z
       .string()
       .describe(
@@ -54,7 +54,7 @@ export const RuntimeEntityHandleSchema = z
 const BuildRefSchema = z
   .string()
   .describe(
-    'Optional code build ref. Omit to use the main build; pass "ctx:<contextId>" or "state:<stateHash>" only for targeted builds.'
+    'Optional exact code build ref. Workers and Durable Objects default to their owning context; panels and apps default to protected main. Pass "main", "ctx:<contextId>", or "state:<stateHash>" only to select that frontier deliberately.'
   );
 
 const RuntimeAgentBindingSchema = z
@@ -108,6 +108,14 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .describe("Opaque initial state passed to the worker runtime."),
     env: z.record(z.string()).optional().describe("Extra environment variables for the worker."),
     agentBinding: RuntimeAgentBindingSchema.optional(),
+    agentChannelId: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        "Channel this runtime entity itself serves as an agent. The host derives the canonical entity and context coordinates; callers never supply them."
+      ),
   }),
   z.object({
     kind: z.literal("do"),
@@ -122,6 +130,14 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .describe("Target context; omit/null to mint a fresh one in the caller's context."),
     stateArgs: z.unknown().optional().describe("Opaque initial state passed to the DO runtime."),
     agentBinding: RuntimeAgentBindingSchema.optional(),
+    agentChannelId: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        "Channel this runtime entity itself serves as an agent. The host derives the canonical entity and context coordinates; callers never supply them."
+      ),
   }),
   z.object({
     kind: z.literal("session"),
@@ -133,6 +149,14 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .describe("Target context; omit/null to mint a fresh one (reused on key re-attach)."),
     key: z.string().optional().describe("Stable session key; omit to mint a random UUID."),
     title: z.string().optional().describe("Display title surfaced by approval UIs."),
+    agentChannelId: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        "Channel served by this external-agent session. The host records the derived self entity/context/channel binding on the session."
+      ),
   }),
 ]);
 
@@ -335,7 +359,7 @@ export const runtimeMethods = defineServiceMethods({
   },
   createContext: {
     description:
-      "Create a full logical workspace context branch. Every context presents the whole workspace tree; per-repo ctx heads are created lazily as edits are made. Use vcs.contextStatus to inspect uncommitted changes, ahead/behind repos, and deleted refs.",
+      "Create a full logical semantic workspace context. When invoked by a context-scoped runtime, the new context is recorded as that exact runtime entity's lifecycle child, making ownership, initialization authority, and teardown walkable instead of leaving an ownerless context island. Root host callers create root contexts. The state machine initializes one exact committed event and event/application working head over the whole workspace; later semantic operations advance that working head atomically. Use vcs.status for compact ancestry and integration orientation, then page repository and work membership through focused VCS inspectors.",
     args: z.tuple([
       z.object({
         contextId: z
@@ -346,12 +370,12 @@ export const runtimeMethods = defineServiceMethods({
     ]),
     returns: WorkspaceContextSchema,
     access: { sensitivity: "write" },
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
+    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
     examples: [{ args: [{}] }, { args: [{ contextId: "agent-branch-1" }] }],
   },
   cloneContext: {
     description:
-      "Clone a context's durable state — every worker/DO's storage plus the VCS working snapshot (committed + uncommitted) — into a fresh, isolated context. Returns the new contextId and the source→clone entity/context maps. With `recursive`, the whole LIFECYCLE subtree is cloned (never following lineage edges); with `targetKey`, the clone is idempotent (a retry returns the same child). The caller drives any per-entity rewiring (e.g. a fork re-rooting logs at a point, re-homing pending calls) on the returned clones; the clones are launched parented to the caller, so the caller may freely destroyContext them.",
+      "Clone a context's durable state—every worker/DO store plus its exact committed event and event/application working head—into a fresh isolated context. Immutable semantic history and authored facts are shared by identity, not copied into a parallel snapshot history. Returns the new contextId and source-to-clone entity/context maps. With `recursive`, the whole lifecycle subtree is cloned (never following lineage edges); with `targetKey`, retry returns the same child. The caller performs per-entity rewiring such as fork-log re-rooting on the returned clones.",
     args: z.tuple([
       z.object({
         sourceContextId: z.string().describe("Context whose durable state is cloned."),
@@ -359,7 +383,7 @@ export const runtimeMethods = defineServiceMethods({
           .array(z.string())
           .optional()
           .describe(
-            "Canonical ids of the worker/DO entities to clone; applies to the ROOT context only (recursive descendants always clone in full). Omit to clone every durable entity. (The file/VCS snapshot is always the whole context.)"
+            "Canonical ids of the worker/DO entities to clone; applies to the ROOT context only (recursive descendants always clone in full). Omit to clone every durable entity. The semantic workspace state is always cloned as a whole-context pair of roots."
           ),
         recursive: z
           .boolean()
@@ -480,7 +504,7 @@ export const runtimeMethods = defineServiceMethods({
   },
   createSubagentContext: {
     description:
-      "Create a subagent's child context off a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; callers must not hand-roll this.",
+      "Create a subagent's child context from a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's committed event and exact event/application working head while retaining provenance lineage, ensure its projection directory, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes context lifecycle and registry operations; callers must not hand-roll this.",
     args: z.tuple([
       z.object({
         parentContextId: z.string().describe("Parent context the subagent forks from."),

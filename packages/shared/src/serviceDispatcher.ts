@@ -12,7 +12,12 @@ import type { MethodSchema } from "./typedServiceClient.js";
 import type { ServicePolicy } from "./servicePolicy.js";
 import { checkServiceAccess } from "./servicePolicy.js";
 import type { CallerKind, CodeIdentityCallerKind } from "./principalKinds.js";
-import { rpcErrorKindOf, type AuthenticatedCaller } from "@vibestudio/rpc";
+import {
+  rpcErrorDataOf,
+  rpcErrorKindOf,
+  type AuthenticatedCaller,
+  type RpcCausalParent,
+} from "@vibestudio/rpc";
 import type { AgentBinding, UserSubject } from "@vibestudio/identity/types";
 export type { CallerKind } from "./principalKinds.js";
 
@@ -174,8 +179,7 @@ export interface VerifiedCodeIdentity {
 /**
  * The entity/context/channel scope an `agent`-kind connection is bound to,
  * resolved from its agent credential at auth time. HOST-VERIFIED — stamped in
- * `handleAuth` from the redeemer result only, NEVER from client input (modelled
- * after the host-verified `callerContextId` precedent). Services read
+ * `handleAuth` from the redeemer result only, NEVER from client input. Services read
  * `ctx.caller.agentBinding` to enforce scope without trusting client-supplied ids.
  */
 export interface VerifiedCaller {
@@ -305,10 +309,13 @@ export type ServiceContext = {
   caller: VerifiedCaller;
   /**
    * Upstream userland caller for an extension-originated service call. Set
-   * only after the server validates an extension's opaque parent invocation
-   * token against the active invocation table.
+   * only while the host can correlate the extension's `parentRequestId` with
+   * an active, host-issued extension request lifecycle.
    */
   chainCaller?: VerifiedCodeIdentity;
+  /** Non-authorizing upstream invocation coordinate selected by the trusted
+   * vessel, then verified against the authenticated trajectory binding. */
+  causalParent?: RpcCausalParent;
   /** WS transport instance ID when caller connected via WebSocket. */
   connectionId?: string;
   /** WS client state when caller connected via WebSocket */
@@ -353,6 +360,8 @@ export class ServiceError extends Error {
   public readonly code?: string;
   /** Stable wire category preserved by RPC transports. */
   public readonly errorKind: import("@vibestudio/rpc").RpcErrorKind;
+  /** Schema-owned failure payload preserved without parsing or translation. */
+  public readonly errorData?: import("@vibestudio/rpc").RpcErrorData;
 
   constructor(
     service: string,
@@ -360,13 +369,15 @@ export class ServiceError extends Error {
     message: string,
     code?: string,
     cause?: unknown,
-    errorKind: import("@vibestudio/rpc").RpcErrorKind = "service"
+    errorKind: import("@vibestudio/rpc").RpcErrorKind = "service",
+    errorData?: import("@vibestudio/rpc").RpcErrorData
   ) {
     super(`[${service}.${method}] ${message}`);
     this.service = service;
     this.method = method;
     this.code = code;
     this.errorKind = errorKind;
+    this.errorData = errorData;
     this.name = "ServiceError";
     if (cause instanceof Error) {
       (this as Error & { cause?: unknown }).cause = cause;
@@ -542,7 +553,8 @@ export class ServiceDispatcher {
         error instanceof Error ? error.message : String(error),
         error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         error,
-        rpcErrorKindOf(error, "service")
+        rpcErrorKindOf(error, "service"),
+        rpcErrorDataOf(error)
       );
     }
   }

@@ -2,7 +2,7 @@
  * WebSocket transport bridge for preload scripts.
  */
 
-import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
+import type { RpcEnvelope } from "@vibestudio/rpc";
 import { TERMINAL_CLOSE_CODES } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import type { WsLike } from "@vibestudio/rpc/protocol/wsAdapter";
@@ -35,7 +35,6 @@ export type TransportBridge = {
 
 export interface WsTransportConfig {
   viewId: string;
-  eventPanelId?: string;
   wsPort: number;
   authToken: string;
   callerKind: string;
@@ -46,49 +45,6 @@ export interface WsTransportConfig {
   reconnect?: boolean;
   /** Override WebSocket URL. Default: ws://127.0.0.1:{wsPort} */
   wsUrl?: string;
-}
-
-export function translateWsServerEvent(
-  event: string,
-  payload: unknown,
-  config: Pick<WsTransportConfig, "eventPanelId" | "viewId">,
-  deliver: (message: RpcMessage) => void
-): boolean {
-  if (event !== "panel:event") {
-    // General server pushes (VCS head/working advances, workspace watches,
-    // notifications, approvals, etc.) are already named RPC events. Feed them
-    // into the normal RpcClient event path instead of dropping them through an
-    // unset transport-only callback.
-    deliver({ type: "event", fromId: "main", event, payload });
-    return true;
-  }
-  const record = payload as Record<string, unknown>;
-  if (record["panelId"] !== (config.eventPanelId ?? config.viewId)) return true;
-  if (record["type"] === "focus") {
-    deliver({ type: "event", fromId: "main", event: "runtime:focus", payload: null });
-  } else if (record["type"] === "theme") {
-    deliver({
-      type: "event",
-      fromId: "main",
-      event: "runtime:theme",
-      payload: record["theme"],
-    });
-  } else if (record["type"] === "child-created") {
-    deliver({
-      type: "event",
-      fromId: "main",
-      event: "runtime:child-created",
-      payload: { childId: record["childId"], url: record["url"] },
-    });
-  } else if (record["type"] === "child-creation-error") {
-    deliver({
-      type: "event",
-      fromId: "main",
-      event: "runtime:child-creation-error",
-      payload: { url: record["url"], error: record["error"] },
-    });
-  }
-  return true;
 }
 
 class BrowserWsLike implements WsLike {
@@ -156,12 +112,6 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
     }
   };
 
-  const translateEvent = (
-    event: string,
-    payload: unknown,
-    baseDeliver: (message: RpcMessage) => void
-  ): boolean => translateWsServerEvent(event, payload, config, baseDeliver);
-
   const refreshAuthToken = async (): Promise<string> => {
     const globals = globalThis as vibestudioTransportGlobals;
     const shell = globals.__vibestudioShell;
@@ -193,7 +143,6 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
     reconnect: config.reconnect,
     routeTarget: normalizeEndpointId,
     terminalCloseCodes: [...TERMINAL_CLOSE_CODES],
-    translateEvent,
     logPrefix: "WsTransport",
     getAuthMessageFields: () => ({
       connectionId,

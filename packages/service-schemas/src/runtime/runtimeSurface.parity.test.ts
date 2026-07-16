@@ -6,8 +6,10 @@ import {
   CREDENTIALS_MEMBERS,
   GAD_MEMBERS,
   portableExports,
+  VCS_MEMBERS,
   WEBHOOKS_MEMBERS,
 } from "./runtimeSurface.portable.js";
+import { vcsMethods } from "../vcs.js";
 
 describe("runtime surface schemaRef parity", () => {
   it("every schemaRef resolves to a service-schemas source file", () => {
@@ -44,6 +46,17 @@ describe("runtime surface schemaRef parity", () => {
       argsSchema: expect.any(Object),
       returnsSchema: expect.any(Object),
     });
+  });
+
+  it("derives the documented VCS namespace from the canonical semantic registry", () => {
+    const vcs = portableExports["vcs"];
+    if (!vcs) throw new Error("missing VCS runtime surface");
+    expect(VCS_MEMBERS).toEqual(Object.keys(vcsMethods));
+    expect(vcs.members).toEqual(Object.keys(vcsMethods));
+    expect(vcs.members).toContain("integrate");
+    expect(vcs.members).toContain("move");
+    expect(vcs.members).toContain("neighbors");
+    expect(vcs.members).not.toContain("moveFiles");
   });
 
   it("documents the ergonomic webhook lifecycle without exposing its raw transport", () => {

@@ -8,8 +8,10 @@
 import { ipcMain, type WebContents } from "electron";
 import {
   createBridgeStreamRelay,
+  bytesToBase64,
   responseEnvelopeFor,
   stampEnvelopeCaller,
+  rpcErrorDataOf,
   rpcErrorKindOf,
   RpcBoundaryError,
   type BridgeBodyChunk,
@@ -20,17 +22,23 @@ import {
   type RpcMessage,
   type RpcRequest,
   type RpcResponse,
+  type RpcStreamCancel,
+  type RpcStreamFrameMessage,
+  type RpcStreamRequest,
 } from "@vibestudio/rpc";
+import {
+  FRAME_DATA,
+  FRAME_END,
+  FRAME_ERROR,
+  FRAME_HEAD,
+} from "@vibestudio/rpc/protocol/streamCodec";
 import {
   createVerifiedCaller,
   type ServiceDispatcher,
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { PanelSession, ServerClient } from "./serverClient.js";
-import type { EventService, Subscriber } from "@vibestudio/shared/eventsService";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
-import type { WebSocket } from "ws";
-import { assertPresent } from "../lintHelpers";
 
 const MAIN_CALLER = { callerId: "main", callerKind: "server" as const };
 
@@ -39,6 +47,11 @@ type PanelRuntimeConnection = { runtimeEntityId: string; connectionId: string };
 type PanelSessionEntry = {
   session: PanelSession;
   leaseKey: string;
+};
+
+type ActiveIpcStream = {
+  abort: AbortController;
+  reader: ReadableStreamDefaultReader<Uint8Array> | null;
 };
 
 function panelRuntimeConnectionKey(conn: PanelRuntimeConnection): string {
@@ -121,78 +134,23 @@ export interface IpcDispatcherDeps {
     args: readonly unknown[];
     result: unknown;
   }) => Promise<void> | void;
-  /** EventService for registering IPC-backed shell subscriber */
-  eventService: EventService;
-}
-
-/**
- * IPC-backed subscriber for shell event delivery.
- * Implements the Subscriber interface used by EventService, delivering
- * events via webContents.send instead of WebSocket.
- */
-class IpcSubscriber implements Subscriber {
-  private destroyed = false;
-  private destroyHandlers: (() => void)[] = [];
-
-  constructor(
-    private getWebContents: () => WebContents | null,
-    private readonly callerId: string,
-    readonly callerKind: CallerKind
-  ) {}
-
-  get isAlive(): boolean {
-    const wc = this.getWebContents();
-    return !this.destroyed && !!wc && !wc.isDestroyed();
-  }
-
-  send(channel: string, payload: unknown): void {
-    if (!this.isAlive) return;
-    const wc = assertPresent(this.getWebContents());
-    // Deliver as an RPC event message that the shell transport understands
-    wc.send(
-      "vibestudio:rpc:message",
-      envelopeFor(this.callerId, "main", {
-        type: "event",
-        fromId: "main",
-        event: channel,
-        payload,
-      })
-    );
-  }
-
-  isBoundTo(_ws: WebSocket): boolean {
-    // IPC subscriber is never bound to a WebSocket
-    return false;
-  }
-
-  onDestroyed(handler: () => void): void {
-    this.destroyHandlers.push(handler);
-  }
-
-  destroy(): void {
-    this.destroyed = true;
-    for (const handler of this.destroyHandlers) handler();
-  }
 }
 
 export class IpcDispatcher {
   private deps: IpcDispatcherDeps;
   private readonly appMessageBridges = new Map<string, () => void>();
-  private readonly appEventSubscribers = new Map<string, IpcSubscriber>();
   /** One relay session per panel principal (callerId = panel view id). */
   private readonly panelSessions = new Map<string, Promise<PanelSessionEntry>>();
   /** webContents ids with a destroy teardown attached (so we attach it once). */
   private readonly panelDestroyHooked = new Set<number>();
   /** §1.6 upload relays, one per panel principal (see @vibestudio/rpc bridgeStream.ts). */
   private readonly panelStreamRelays = new Map<string, BridgeStreamRelay>();
+  /** Response streams carried by ordinary RPC envelopes over Electron IPC. */
+  private readonly activeIpcStreams = new Map<string, ActiveIpcStream>();
+  private readonly ipcStreamDestroyHooked = new Set<number>();
 
   constructor(deps: IpcDispatcherDeps) {
     this.deps = deps;
-
-    // Register an IPC-backed subscriber for the shell so EventService can push
-    // events to it without requiring a WebSocket connection.
-    const shellSubscriber = new IpcSubscriber(deps.getShellWebContents, "shell", "shell");
-    deps.eventService.registerSubscriber("shell", shellSubscriber);
 
     ipcMain.on("vibestudio:rpc:send", (event, envelope: RpcEnvelope) => {
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
@@ -229,7 +187,6 @@ export class IpcDispatcher {
       }
       if (caller.callerKind === "app") {
         this.ensureAppMessageBridge(caller.callerId);
-        this.ensureAppEventSubscriber(caller.callerId);
       }
       this.handleEnvelope(event.sender, caller.callerId, caller.callerKind, envelope);
     });
@@ -330,10 +287,8 @@ export class IpcDispatcher {
     }
   }
 
-  /**
-   * Broadcast a server event to the shell (e.g., build:complete).
-   */
-  broadcastEvent(event: string, payload: unknown): void {
+  /** Relay an event addressed to the authenticated desktop shell session. */
+  sendEventToShell(event: string, payload: unknown): void {
     this.sendToShell("main", {
       type: "event",
       fromId: "main",
@@ -350,6 +305,14 @@ export class IpcDispatcher {
   ): Promise<void> {
     const message = envelope.message;
     const targetId = envelope.target;
+    if (message.type === "stream-cancel") {
+      this.cancelIpcStream(sender.id, message);
+      return;
+    }
+    if (message.type === "stream-request" && targetId === "main") {
+      await this.handleStreamRequest(sender, callerId, callerKind, envelope, message);
+      return;
+    }
     if (message.type === "request" && targetId === "main") {
       const req = message as RpcRequest;
       const callOptions = callOptionsFromEnvelope(envelope);
@@ -446,6 +409,215 @@ export class IpcDispatcher {
           ...(errorCode ? { errorCode } : {}),
         });
       }
+    }
+  }
+
+  private ipcStreamKey(webContentsId: number, requestId: string): string {
+    return `${webContentsId}\u0000${requestId}`;
+  }
+
+  private cancelIpcStream(webContentsId: number, message: RpcStreamCancel): void {
+    const key = this.ipcStreamKey(webContentsId, message.requestId);
+    const active = this.activeIpcStreams.get(key);
+    if (!active) return;
+    active.abort.abort();
+    void active.reader?.cancel().catch(() => {});
+  }
+
+  private hookIpcStreamTeardown(sender: WebContents): void {
+    if (this.ipcStreamDestroyHooked.has(sender.id)) return;
+    this.ipcStreamDestroyHooked.add(sender.id);
+    sender.once("destroyed", () => {
+      this.ipcStreamDestroyHooked.delete(sender.id);
+      const prefix = `${sender.id}\u0000`;
+      for (const [key, active] of this.activeIpcStreams) {
+        if (!key.startsWith(prefix)) continue;
+        active.abort.abort();
+        void active.reader?.cancel().catch(() => {});
+        this.activeIpcStreams.delete(key);
+      }
+    });
+  }
+
+  private sendStreamFrame(
+    sender: WebContents,
+    requestEnvelope: RpcEnvelope,
+    requestId: string,
+    frameType: number,
+    payload: string
+  ): void {
+    if (sender.isDestroyed()) throw new Error("RPC stream renderer was destroyed");
+    const frame: RpcStreamFrameMessage = {
+      type: "stream-frame",
+      requestId,
+      fromId: "main",
+      frameType,
+      payload,
+    };
+    sender.send("vibestudio:rpc:message", responseEnvelopeFor(requestEnvelope, MAIN_CALLER, frame));
+  }
+
+  private async handleStreamRequest(
+    sender: WebContents,
+    callerId: string,
+    callerKind: CallerKind,
+    envelope: RpcEnvelope,
+    request: RpcStreamRequest
+  ): Promise<void> {
+    const key = this.ipcStreamKey(sender.id, request.requestId);
+    if (this.activeIpcStreams.has(key)) {
+      this.sendStreamFrame(
+        sender,
+        envelope,
+        request.requestId,
+        FRAME_ERROR,
+        JSON.stringify({
+          status: 409,
+          message: `Duplicate streaming request id: ${request.requestId}`,
+          errorKind: "protocol",
+        })
+      );
+      return;
+    }
+
+    const dotIndex = request.method.indexOf(".");
+    if (dotIndex === -1) {
+      this.sendStreamFrame(
+        sender,
+        envelope,
+        request.requestId,
+        FRAME_ERROR,
+        JSON.stringify({
+          status: 400,
+          message: `Invalid method format: ${request.method}`,
+          errorKind: "protocol",
+        })
+      );
+      return;
+    }
+
+    const service = request.method.slice(0, dotIndex);
+    const method = request.method.slice(dotIndex + 1);
+    const abort = new AbortController();
+    const active: ActiveIpcStream = { abort, reader: null };
+    this.activeIpcStreams.set(key, active);
+    this.hookIpcStreamTeardown(sender);
+
+    try {
+      let response: Response;
+      if (this.deps.dispatcher.routesToHost(service, callerKind)) {
+        const result = await this.deps.dispatcher.dispatch(
+          {
+            caller: createVerifiedCaller(
+              callerId,
+              callerKind,
+              this.deps.getCodeIdentityForCaller?.(callerId) ?? null
+            ),
+            requestId: request.requestId,
+            ...(envelope.delivery.idempotencyKey
+              ? { idempotencyKey: envelope.delivery.idempotencyKey }
+              : {}),
+            ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
+          },
+          service,
+          method,
+          request.args
+        );
+        if (!(result instanceof Response)) {
+          throw new Error(`Streaming method ${request.method} did not return a Response`);
+        }
+        response = result;
+      } else if (callerKind === "shell") {
+        response = await this.deps.serverClient.stream(service, method, request.args, {
+          signal: abort.signal,
+          ...(envelope.delivery.idempotencyKey
+            ? { idempotencyKey: envelope.delivery.idempotencyKey }
+            : {}),
+          ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
+        });
+      } else if (callerKind === "app") {
+        this.deps.authorizeAppServerCall?.(callerId, service, method, request.args);
+        response = await this.deps.serverClient.streamAs(
+          { callerId, callerKind },
+          service,
+          method,
+          request.args,
+          {
+            signal: abort.signal,
+            ...(envelope.delivery.idempotencyKey
+              ? { idempotencyKey: envelope.delivery.idempotencyKey }
+              : {}),
+            ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
+          }
+        );
+      } else {
+        throw new Error(`Server RPC stream relay is not available for ${callerKind} callers`);
+      }
+
+      if (abort.signal.aborted) {
+        await response.body?.cancel().catch(() => {});
+        return;
+      }
+
+      this.sendStreamFrame(
+        sender,
+        envelope,
+        request.requestId,
+        FRAME_HEAD,
+        JSON.stringify({
+          status: response.status,
+          statusText: response.statusText,
+          headerPairs: Array.from(response.headers.entries()),
+          finalUrl: response.url,
+        })
+      );
+
+      let bytesIn = 0;
+      if (response.body) {
+        const reader = response.body.getReader();
+        active.reader = reader;
+        while (true) {
+          if (abort.signal.aborted) return;
+          const next = await reader.read();
+          if (next.done) break;
+          bytesIn += next.value.byteLength;
+          this.sendStreamFrame(
+            sender,
+            envelope,
+            request.requestId,
+            FRAME_DATA,
+            bytesToBase64(next.value)
+          );
+        }
+      }
+      if (!abort.signal.aborted) {
+        this.sendStreamFrame(
+          sender,
+          envelope,
+          request.requestId,
+          FRAME_END,
+          JSON.stringify({ bytesIn })
+        );
+      }
+    } catch (error) {
+      if (!abort.signal.aborted && !sender.isDestroyed()) {
+        this.sendStreamFrame(
+          sender,
+          envelope,
+          request.requestId,
+          FRAME_ERROR,
+          JSON.stringify({
+            status: 502,
+            message: error instanceof Error ? error.message : String(error),
+            code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
+            errorKind: rpcErrorKindOf(error, "transport"),
+            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+          })
+        );
+      }
+    } finally {
+      active.reader?.releaseLock();
+      this.activeIpcStreams.delete(key);
     }
   }
 
@@ -587,19 +759,5 @@ export class IpcDispatcher {
       }
     );
     this.appMessageBridges.set(callerId, unsubscribe);
-  }
-
-  private ensureAppEventSubscriber(callerId: string): void {
-    const existing = this.appEventSubscribers.get(callerId);
-    if (existing?.isAlive) return;
-    existing?.destroy();
-    const subscriber = new IpcSubscriber(
-      () => this.deps.getWebContentsForCaller(callerId),
-      callerId,
-      "app"
-    );
-    subscriber.onDestroyed(() => this.appEventSubscribers.delete(callerId));
-    this.appEventSubscribers.set(callerId, subscriber);
-    this.deps.eventService.registerSubscriber(callerId, subscriber);
   }
 }

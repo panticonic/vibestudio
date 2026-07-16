@@ -6,8 +6,8 @@
  * ring buffer with structured metadata. Secrets (pairing codes, tokens) are
  * redacted at capture time, so this surface is safe for userland callers.
  *
- * Live tailing: subscribe to the `server-log:append` event
- * (`events.subscribe("server-log:append")`) — the server pushes
+ * Live tailing: include `server-log:append` in an `events.watch` response —
+ * the server pushes
  * `{ records: ServerLogRecord[] }` batches; dedupe/catch up by `seq` using
  * `query({ sinceSeq })`.
  */

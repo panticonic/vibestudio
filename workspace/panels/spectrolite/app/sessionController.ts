@@ -52,7 +52,11 @@ const PANEL_METADATA = {
   handle: PANEL_HANDLE,
 };
 
-function buildAgentConfig(opts: { handle: string; repoRoot: string | null; className?: string }): Record<string, unknown> {
+function buildAgentConfig(opts: {
+  handle: string;
+  repoRoot: string | null;
+  className?: string;
+}): Record<string, unknown> {
   const base: Record<string, unknown> = {
     handle: opts.handle,
     systemPrompt: spectroliteAgentSystemPrompt({
@@ -86,9 +90,7 @@ export class SessionController {
   private agentEnsureRetryAttempt = 0;
   private unsubscribeRoster: (() => void) | null = null;
 
-  constructor(
-    private readonly store: Store<SpectroliteState>,
-  ) {}
+  constructor(private readonly store: Store<SpectroliteState>) {}
 
   async start(): Promise<void> {
     if (this.started || this.disposed) return;
@@ -118,14 +120,17 @@ export class SessionController {
     this.client = client;
     this.store.setState({ client });
 
-    void client.ready()
+    void client
+      .ready()
       .then(() => registerSpectroliteMessageTypes(client))
       .catch((err) => console.warn("[Spectrolite] message type registration failed:", err));
 
     this.unsubscribeRoster = client.onRoster(() => this.handleRosterUpdate());
     void this.consumeEvents(client);
     void listAvailableAgents()
-      .then((agents) => { if (!this.disposed) this.store.setState({ availableAgents: agents }); })
+      .then((agents) => {
+        if (!this.disposed) this.store.setState({ availableAgents: agents });
+      })
       .catch(() => {});
 
     // A vault may already be selected (persisted stateArgs / initPanels).
@@ -176,7 +181,8 @@ export class SessionController {
     const channelName = state.channelName;
     const contextId = state.contextId;
     if (!channelName || !contextId) return;
-    const agents = state.availableAgents.length > 0 ? state.availableAgents : await listAvailableAgents();
+    const agents =
+      state.availableAgents.length > 0 ? state.availableAgents : await listAvailableAgents();
     const agent = agents.find((a) => a.id === agentId || a.className === agentId) ?? agents[0];
     if (!agent) return;
     const handle = `${agent.proposedHandle}-${crypto.randomUUID().slice(0, 4)}`;
@@ -187,7 +193,11 @@ export class SessionController {
       key,
       channelId: channelName,
       channelContextId: contextId,
-      config: buildAgentConfig({ handle, repoRoot: this.store.getState().repoRoot, className: agent.className }),
+      config: buildAgentConfig({
+        handle,
+        repoRoot: this.store.getState().repoRoot,
+        className: agent.className,
+      }),
     });
     this.persistInstalled([
       ...this.store.getState().installedAgents,
@@ -210,11 +220,17 @@ export class SessionController {
       if (match) {
         await unsubscribeDOFromChannel(match.source, match.className, match.objectKey, channelName);
       } else {
-        console.warn(`[Spectrolite] no DO worker matches handle "${handle}" (key=${record?.key ?? "?"})`);
+        console.warn(
+          `[Spectrolite] no DO worker matches handle "${handle}" (key=${record?.key ?? "?"})`
+        );
       }
-      this.persistInstalled(this.store.getState().installedAgents.filter((a) => a.handle !== handle));
+      this.persistInstalled(
+        this.store.getState().installedAgents.filter((a) => a.handle !== handle)
+      );
     } catch (err) {
-      this.store.setState((prev) => ({ removedHandles: prev.removedHandles.filter((h) => h !== handle) }));
+      this.store.setState((prev) => ({
+        removedHandles: prev.removedHandles.filter((h) => h !== handle),
+      }));
       throw err;
     }
   }
@@ -264,7 +280,9 @@ export class SessionController {
             replay: true,
           });
         } catch (err) {
-          this.persistInstalled(this.store.getState().installedAgents.filter((a) => a.key !== agentKey));
+          this.persistInstalled(
+            this.store.getState().installedAgents.filter((a) => a.key !== agentKey)
+          );
           console.warn("[Spectrolite] failed to subscribe default agent:", err);
           this.scheduleEnsureAgentsRetry();
           return;
@@ -293,7 +311,11 @@ export class SessionController {
             key: agent.key,
             channelId: channelName,
             channelContextId: contextId,
-            config: buildAgentConfig({ handle: agent.handle, repoRoot, className: agent.className }),
+            config: buildAgentConfig({
+              handle: agent.handle,
+              repoRoot,
+              className: agent.className,
+            }),
             replay: true,
           });
         } catch (err) {
@@ -323,7 +345,7 @@ export class SessionController {
   private scheduleEnsureAgentsRetry(): void {
     if (this.disposed || this.agentEnsureRetryTimer) return;
     this.agentsEnsured = false;
-    const delayMs = Math.min(30_000, 1_000 * (2 ** this.agentEnsureRetryAttempt));
+    const delayMs = Math.min(30_000, 1_000 * 2 ** this.agentEnsureRetryAttempt);
     this.agentEnsureRetryAttempt += 1;
     this.agentEnsureRetryTimer = setTimeout(() => {
       this.agentEnsureRetryTimer = null;
@@ -345,7 +367,10 @@ export class SessionController {
       const removedHandles = prev.removedHandles.filter((handle) => liveHandles.has(handle));
       return {
         roster: next,
-        removedHandles: removedHandles.length === prev.removedHandles.length ? prev.removedHandles : removedHandles,
+        removedHandles:
+          removedHandles.length === prev.removedHandles.length
+            ? prev.removedHandles
+            : removedHandles,
       };
     });
   }

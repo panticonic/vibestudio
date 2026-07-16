@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDurableObjectServiceClient } from "./userlandServiceRpc";
+import { createDurableObjectServiceClient } from "./workspaceServiceRpc";
 
 describe("createDurableObjectServiceClient", () => {
   it("retries service resolution after a transient failure", async () => {

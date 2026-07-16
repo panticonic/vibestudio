@@ -1,4 +1,5 @@
 import {
+  rpcErrorDataOf,
   rpcErrorKindOf,
   responseEnvelopeFor,
   type RpcEnvelope,
@@ -134,7 +135,11 @@ export class HttpRpcHandler {
         responseEnvelopeFor(envelope, SERVER_RESPONDER, {
           type: "response",
           requestId: message.requestId,
-          result,
+          // `undefined` is the in-process result of a void RPC, but JSON drops
+          // object properties whose value is undefined. The wire contract
+          // requires every successful response to carry `result`, so encode
+          // void explicitly instead of emitting a malformed success envelope.
+          result: result === undefined ? null : result,
         })
       );
     } catch (error) {
@@ -151,6 +156,7 @@ export class HttpRpcHandler {
           errorKind: rpcErrorKindOf(error, "internal"),
           ...(errorCode ? { errorCode } : {}),
           ...(errorStack ? { errorStack } : {}),
+          ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
         })
       );
     }

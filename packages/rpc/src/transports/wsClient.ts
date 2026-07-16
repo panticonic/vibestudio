@@ -4,7 +4,11 @@ import type {
   RpcEnvelope,
   RpcMessage,
 } from "../types.js";
-import type { WsClientMessage, WsServerMessage } from "../protocol/wsProtocol.js";
+import type {
+  WsAuthSuccessResultMessage,
+  WsClientMessage,
+  WsServerMessage,
+} from "../protocol/wsProtocol.js";
 import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
 import type { WsLike, WsTransportAdapter } from "../protocol/wsAdapter.js";
 import { TERMINAL_CLOSE_CODES } from "../protocol/closeCodes.js";
@@ -19,19 +23,13 @@ export interface WsClientTransportConfig {
   terminalCloseCodes?: number[];
   getAuthMessageFields?: () => Partial<Extract<WsClientMessage, { type: "ws:auth" }>>;
   routeTarget?: (targetId: string) => string;
-  translateEvent?: (
-    event: string,
-    payload: unknown,
-    deliver: (message: RpcMessage) => void
-  ) => boolean;
-  onServerEvent?: (event: string, payload: unknown) => void;
   onRecovery?: (kind: RecoveryKind) => void | Promise<void>;
   /**
    * Fired on a successful auth-result. Carries the optional `deviceCredential`
    * the server issues only when this session authenticated by redeeming a
    * one-time pairing code — the caller persists it to reconnect (`refresh:…`).
    */
-  onAuthResult?: (msg: { deviceCredential?: { deviceId: string; refreshToken: string } }) => void;
+  onAuthResult?: (msg: WsAuthSuccessResultMessage) => void;
   logPrefix?: string;
 }
 
@@ -181,23 +179,6 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         for (const listener of messageListeners) listener(envelope);
         return;
       }
-      case "ws:event":
-        if (
-          config.translateEvent?.(msg.event, msg.payload, (message) => {
-            const envelope: RpcEnvelope = {
-              from: "main",
-              target: config.selfId,
-              delivery: { caller: { callerId: "main", callerKind: "server" } },
-              provenance: [{ callerId: "main", callerKind: "server" }],
-              message,
-            };
-            for (const listener of messageListeners) listener(envelope);
-          })
-        ) {
-          return;
-        }
-        config.onServerEvent?.(msg.event, msg.payload);
-        return;
       case "ws:routed-response-error": {
         // The server could not deliver our routed request to the target. Turn
         // the explicit error frame into a rejecting `response` so the pending

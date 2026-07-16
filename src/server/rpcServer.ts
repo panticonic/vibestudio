@@ -3,14 +3,17 @@
  * shell-host and server communication.
  *
  * Replaces Electron IPC with a single WebSocket transport.
- * Auth is unified through TokenManager. Events use a Subscriber interface.
+ * Auth is unified through TokenManager. Events use owned streaming responses.
  */
 
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
+import type { IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
 import type { ExtensionInvocation } from "@vibestudio/extension";
 import {
   createRpcClient,
+  rpcErrorDataOf,
   rpcErrorKindOf,
   envelopeFromMessage,
   responseEnvelopeFor,
@@ -22,6 +25,7 @@ import {
   type RpcMessage,
   type RpcRequest,
   type RpcResponse,
+  type RpcCausalParent,
 } from "@vibestudio/rpc";
 import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
 import {
@@ -55,10 +59,10 @@ import {
 } from "@vibestudio/shared/serviceDispatcher";
 import type { UserSubject } from "@vibestudio/identity/types";
 import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
+import type { EventService } from "@vibestudio/shared/eventsService";
 import { DeferralRegistry } from "./services/deferralRegistry.js";
 import { checkServiceAccess } from "@vibestudio/shared/servicePolicy";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
-import { WsEventSession, type EventService } from "@vibestudio/shared/eventsService";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { callerKindForPrincipalKind } from "@vibestudio/shared/principalKinds";
@@ -68,12 +72,14 @@ import { ConnectionRegistry, type WsClientState } from "./rpcServer/connectionRe
 import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
+import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
 import {
   HttpRpcHandler,
   resolveRpcMaxBodyBytes,
   type HttpRpcAdmission,
 } from "./rpcServer/httpRpcHandler.js";
 import { StreamingRelay } from "./rpcServer/streamingRelay.js";
+import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 
 const log = createDevLogger("RpcServer");
 const RPC_RUNTIME_ID_HEADER = "x-vibestudio-runtime-id";
@@ -172,27 +178,38 @@ interface PendingToolCall {
 
 type RelayAuthCheck = { ok: true } | { ok: false; reason: string };
 
+export interface RelayAuthorizationRequest {
+  callerId: string;
+  callerKind: CallerKind;
+  targetId: string;
+  method?: string;
+}
+
+export type RelayAuthorizationPolicy = (request: RelayAuthorizationRequest) => RelayAuthCheck;
+
 type RelayCallMeta = {
   requestId?: string;
   idempotencyKey?: string;
   readOnly?: boolean;
+  causalParent?: RpcCausalParent;
 };
 
 type RelayCallerScope = {
   /** Exact caller stamped at transport admission (never re-resolved by runtime id). */
   authenticatedCaller: VerifiedCaller;
-  /** Host-resolved parent caller to record in a VCS invocation token. */
+  /** Host-resolved parent caller used for chained extension attribution. */
   invocationCaller: VerifiedCaller;
-  /** Caller id whose context registration should scope a routed VCS dispatch. */
-  contextCallerId: string;
-  /** Already-resolved context id, when the parent invocation carried one. */
-  callerContextId?: string;
 };
 
 type ResolvedExtensionParentCaller = {
   caller: VerifiedCaller;
   code: VerifiedCodeIdentity;
   contextId?: string;
+};
+
+type ResolvedExtensionInvocation = Pick<ExtensionInvocation, "caller" | "chainCaller"> & {
+  /** Host-retained edge from the verified context that invoked the extension. */
+  causalParent: RpcCausalParent | null;
 };
 
 export interface RpcServerUploadPreopenLimits {
@@ -213,11 +230,12 @@ function resolvePositiveLimit(value: number | undefined, fallback: number, name:
 
 function relayCallOptions(
   meta?: RelayCallMeta
-): { idempotencyKey?: string; readOnly?: boolean } | undefined {
-  if (!meta?.idempotencyKey && !meta?.readOnly) return undefined;
+): { idempotencyKey?: string; readOnly?: boolean; causalParent?: RpcCausalParent } | undefined {
+  if (!meta?.idempotencyKey && !meta?.readOnly && !meta?.causalParent) return undefined;
   return {
     ...(meta.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
     ...(meta.readOnly ? { readOnly: true } : {}),
+    ...(meta.causalParent ? { causalParent: meta.causalParent } : {}),
   };
 }
 
@@ -228,11 +246,16 @@ function relayMetaFromEnvelope(envelope?: RpcEnvelope): RelayCallMeta | undefine
     message.type === "request" || message.type === "stream-request" ? message.requestId : undefined;
   const idempotencyKey = envelope.delivery.idempotencyKey;
   const readOnly = envelope.delivery.readOnly === true;
-  if (!requestId && !idempotencyKey && !readOnly) return undefined;
+  const causalParent =
+    message.type === "request" || message.type === "stream-request"
+      ? message.causalParent
+      : undefined;
+  if (!requestId && !idempotencyKey && !readOnly && !causalParent) return undefined;
   return {
     ...(requestId ? { requestId } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(readOnly ? { readOnly: true } : {}),
+    ...(causalParent ? { causalParent } : {}),
   };
 }
 
@@ -258,18 +281,6 @@ function getErrorCode(error: unknown): string | undefined {
 
 function createRelayError(message: string, code: RelayErrorCode): Error {
   return Object.assign(new Error(message), { code });
-}
-
-function isRetryableDORelayError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return (
-    msg.includes("No such module") ||
-    msg.includes("No such Durable Object") ||
-    msg.includes("class not found") ||
-    msg.includes("ECONNREFUSED") ||
-    msg.includes("fetch failed") ||
-    msg.includes("workerd not running")
-  );
 }
 
 function isRuntimeIdForServiceToken(
@@ -305,20 +316,26 @@ export class RpcServer {
   private workerdUrl: string | null = null;
   private workerdGatewayToken: string | null = null;
   private workerdDispatchSecret: string | null = null;
-  private ensureDOFn:
-    | ((source: string, className: string, objectKey: string) => Promise<void>)
-    | null = null;
   private resolveWorkerInstanceNameFn: ((targetId: string) => string | null) | null = null;
 
   /**
    * Tracks DO/worker-initiated service calls that complete out-of-band. Settled
-   * results are delivered back via `callTarget(..., "onDeferredResult", ...)`.
+   * results wake a still-active caller. Retirement ends that notification
+   * obligation; the caller's journal remains the recovery source.
    */
   private readonly deferrals = new DeferralRegistry({
-    deliver: (callerId, requestId, result, isError) =>
-      this.callTarget(callerId, "onDeferredResult", { requestId, result, isError }).then(
-        () => undefined
-      ),
+    deliver: async (callerId, requestId, result, isError) => {
+      if (!this.isActiveDeferredRecipient(callerId)) return;
+      try {
+        await this.callTarget(callerId, "onDeferredResult", { requestId, result, isError });
+      } catch (error) {
+        // Retirement may race the active check. That is successful disposal,
+        // not a failed delivery and certainly not a reason to recreate/retry
+        // the caller. Preserve real delivery faults for one bounded warning.
+        if (!this.isActiveDeferredRecipient(callerId)) return;
+        throw error;
+      }
+    },
     logger: console,
   });
   private connections = new ConnectionRegistry({
@@ -362,6 +379,26 @@ export class RpcServer {
   private sessions: SessionRegistry;
   private readonly httpRpc: HttpRpcHandler;
   private readonly streamingRelay: StreamingRelay;
+  private readonly eventSessionReleases = new WeakMap<WsClientState, () => void>();
+  private disposeTokenRevocationListener: (() => void) | null = null;
+  private readonly pendingAuthentications = new Map<
+    WebSocket,
+    ReturnType<typeof setTimeout> | null
+  >();
+  /** Requests whose response still has to be queued before revocation may close the socket. */
+  private readonly activeInboundRequests = new Map<WebSocket, number>();
+  /** Terminal caller teardown, shared by token revocation and explicit reach cleanup. */
+  private readonly callerRetirements = new Map<
+    string,
+    {
+      promise: Promise<void>;
+      resolve: () => void;
+      pendingSockets: Set<WebSocket>;
+      callerKind?: CallerKind;
+      settled: boolean;
+    }
+  >();
+  private stopped = false;
 
   private readonly bootId = randomUUID();
   private readonly uploadPreopenLimits: Required<RpcServerUploadPreopenLimits>;
@@ -378,17 +415,6 @@ export class RpcServer {
       onClientDisconnect?: (callerId: string, callerKind: CallerKind) => void;
       /** Called when a client successfully authenticates */
       onClientAuthenticate?: (callerId: string, callerKind: CallerKind) => void;
-      /**
-       * Optional: the shared EventService. When provided, every authenticated
-       * WS connection is registered as an event session so
-       * `eventService.emitToCaller(callerId, ...)` can deliver events to the
-       * caller even before they've issued any explicit `events.subscribe` call.
-       * Without this, emitTo returns false for admin-client and other
-       * passive subscribers — which broke remote OAuth (the initiating
-       * Electron client never called events.subscribe, so the login URL
-       * had nowhere to go).
-       */
-      eventService?: EventService;
       /**
        * Optional: the EgressProxy. When provided, `POST /rpc/stream`
        * can serve the `credentials.proxyFetch` fast path with a
@@ -430,26 +456,29 @@ export class RpcServer {
        * cannot leave a cached device, agent, or user usable.
        */
       liveCallerGate?: (caller: VerifiedCaller, authorizedBy?: string) => boolean;
+      /**
+       * Exact existence check for a causal invocation coordinate in the
+       * canonical trajectory projection. Causal parents fail closed when this
+       * dependency is absent, rejects, or reports that the node does not exist.
+       */
+      verifyExactCausalInvocation?: (parent: RpcCausalParent) => Promise<boolean>;
+      /**
+       * Host-level relay boundary composed with RpcServer's invariant transport
+       * protections. Direct service dispatch to `main` never reaches this
+       * policy; every attempt to address another runtime does.
+       */
+      relayAuthorization?: RelayAuthorizationPolicy;
       connectionGrants?: ConnectionGrantService;
       resolveExtensionInvocation?: (
         extensionName: string,
-        invocationToken: string
-      ) => Pick<ExtensionInvocation, "caller" | "chainCaller"> | null;
+        requestId: string
+      ) => ResolvedExtensionInvocation | null;
       resolveExtensionCodeIdentity?: (extensionName: string) => VerifiedCodeIdentity | null;
-      /**
-       * On-behalf-of invocation table for userland vcs-DO dispatches
-       * (narrow-host-vcs §4): when a sandboxed caller's relay targets the DO
-       * backing the workspace `vcs` service declaration, the host mints a
-       * correlation nonce recording the VERIFIED caller, passes it with the
-       * dispatch, and clears it when the dispatch completes.
-       */
-      vcsInvocations?: import("./services/vcsInvocationTable.js").VcsInvocationTable;
-      /** The single-writer vcs DO identity (`do:{source}:{className}:{objectKey}`),
-       *  or null when the workspace declares none. Recomputed per dispatch. */
-      getVcsWriterIdentity?: () => string | null;
       sessionInboxCapacity?: SessionRegistryOptions["inboxCapacity"];
       sessionTtlMs?: SessionRegistryOptions["ttlMs"];
       runtimeCoordinator?: PanelRuntimeCoordinator;
+      /** Direct event addressing is owned by authenticated transport lifetime. */
+      eventService?: EventService;
       /**
        * Optional: redeem a device-pairing credential presented as a session
        * token — a QR pairing `code` (fresh device) or `refresh:<deviceId>:<token>`
@@ -466,7 +495,8 @@ export class RpcServer {
         | {
             callerId: string;
             callerKind: CallerKind;
-            deviceCredential?: { deviceId: string; refreshToken: string };
+            deviceCredential?: DeviceCredential;
+            pairingContext?: PairingContext;
             /**
              * Entity/context binding for an `agent:`-prefixed credential (§3.2),
              * stamped onto the connection's VerifiedCaller. Host-verified — never
@@ -480,7 +510,8 @@ export class RpcServer {
         | Promise<{
             callerId: string;
             callerKind: CallerKind;
-            deviceCredential?: { deviceId: string; refreshToken: string };
+            deviceCredential?: DeviceCredential;
+            pairingContext?: PairingContext;
             agentBinding?: import("@vibestudio/identity/types").AgentBinding;
             subject?: UserSubject;
           } | null>;
@@ -498,8 +529,11 @@ export class RpcServer {
         this.checkRelayAuth(callerId, callerKind, targetId, method),
       createHttpContext: (caller, extras) =>
         this.serviceContextFor(caller.callerId, caller.callerKind, extras, caller.agentBinding),
+      resolveCausalParent: (caller, request) => this.resolveCausalParent(caller, request),
       createWsContext: (client, request, extras) =>
         this.serviceContextForRpcMessage(client, request, extras),
+      relayTargetStream: (caller, envelope, request, causalParent, signal) =>
+        this.relayTargetStream(caller, envelope, request, causalParent, signal),
       sendWs: (client, message) => this.sendToWs(client.ws, message),
     });
     this.httpRpc = new HttpRpcHandler({
@@ -612,7 +646,10 @@ export class RpcServer {
 
   private serviceContextForRpcMessage(
     client: WsClientState,
-    message: Pick<RpcRequest | import("@vibestudio/rpc").RpcStreamRequest, "parentInvocationToken">,
+    message: {
+      parentRequestId?: string;
+      causalParent?: import("@vibestudio/rpc").RpcCausalParent;
+    },
     extras: Omit<ServiceContext, "caller" | "connectionId" | "wsClient" | "chainCaller"> = {}
   ): ServiceContext {
     const ctx: ServiceContext = {
@@ -626,16 +663,75 @@ export class RpcServer {
     return ctx;
   }
 
+  private async resolveCausalParent(
+    caller: VerifiedCaller,
+    message: Pick<RpcRequest, "causalParent" | "parentRequestId">
+  ): Promise<RpcCausalParent | undefined> {
+    const presented = message.causalParent !== undefined;
+    let causalParent = message.causalParent;
+    if (!causalParent && caller.runtime.kind === "extension" && message.parentRequestId) {
+      causalParent =
+        this.deps.resolveExtensionInvocation?.(caller.runtime.id, message.parentRequestId)
+          ?.causalParent ?? undefined;
+    }
+    if (!causalParent) return undefined;
+    if (
+      causalParent.kind !== "trajectory-invocation" ||
+      typeof causalParent.logId !== "string" ||
+      causalParent.logId.length === 0 ||
+      typeof causalParent.head !== "string" ||
+      causalParent.head.length === 0 ||
+      typeof causalParent.invocationId !== "string" ||
+      causalParent.invocationId.length === 0
+    ) {
+      throw createRelayError("Invalid causal parent coordinate", "RPC_PROTOCOL_ERROR");
+    }
+    if (presented) {
+      const binding = caller.agentBinding;
+      if (!binding) {
+        throw createRelayError("Causal parent requires a host-bound agent trajectory", "EACCES");
+      }
+      const expected = channelTrajectoryFor(binding.channelId);
+      if (causalParent.logId !== expected.logId || causalParent.head !== expected.head) {
+        throw createRelayError(
+          "Causal parent does not match the presenter's host-bound trajectory",
+          "EACCES"
+        );
+      }
+    }
+
+    const verifier = this.deps.verifyExactCausalInvocation;
+    if (!verifier) {
+      throw createRelayError("Exact causal invocation verification is unavailable", "EACCES");
+    }
+    let exists: boolean;
+    try {
+      exists = await verifier(causalParent);
+    } catch (error) {
+      throw createRelayError(
+        `Exact causal invocation verification failed: ${error instanceof Error ? error.message : String(error)}`,
+        "EACCES"
+      );
+    }
+    if (!exists) {
+      throw createRelayError(
+        `Causal invocation does not exist: ${causalParent.invocationId}`,
+        "EACCES"
+      );
+    }
+    return causalParent;
+  }
+
   private resolveExtensionParentCaller(
     client: WsClientState,
-    message: Pick<RpcRequest | import("@vibestudio/rpc").RpcStreamRequest, "parentInvocationToken">
+    message: Pick<RpcRequest | import("@vibestudio/rpc").RpcStreamRequest, "parentRequestId">
   ): ResolvedExtensionParentCaller | null {
-    if (client.caller.runtime.kind !== "extension" || !message.parentInvocationToken) {
+    if (client.caller.runtime.kind !== "extension" || !message.parentRequestId) {
       return null;
     }
     const invocation = this.deps.resolveExtensionInvocation?.(
       client.caller.runtime.id,
-      message.parentInvocationToken
+      message.parentRequestId
     );
     if (invocation?.chainCaller) {
       const code: VerifiedCodeIdentity = {
@@ -676,14 +772,12 @@ export class RpcServer {
 
   private relayCallerScopeForRpcMessage(
     client: WsClientState,
-    message: Pick<RpcRequest, "parentInvocationToken">
+    message: Pick<RpcRequest, "parentRequestId">
   ): RelayCallerScope {
     const parent = this.resolveExtensionParentCaller(client, message);
     return {
       authenticatedCaller: client.caller,
       invocationCaller: parent?.caller ?? client.caller,
-      contextCallerId: parent?.code.callerId ?? client.caller.runtime.id,
-      ...(parent?.contextId ? { callerContextId: parent.contextId } : {}),
     };
   }
 
@@ -752,10 +846,6 @@ export class RpcServer {
     this.workerdDispatchSecret = secret;
   }
 
-  setEnsureDO(fn: (source: string, className: string, objectKey: string) => Promise<void>): void {
-    this.ensureDOFn = fn;
-  }
-
   setWorkerInstanceResolver(fn: (targetId: string) => string | null): void {
     this.resolveWorkerInstanceNameFn = fn;
   }
@@ -765,6 +855,7 @@ export class RpcServer {
    * Call this when the gateway owns the socket and dispatches to us.
    */
   initHandlers(): void {
+    if (this.stopped) throw new Error("RpcServer has stopped and cannot be restarted");
     if (this.handlersInitialized) return;
     this.handlersInitialized = true;
 
@@ -774,24 +865,28 @@ export class RpcServer {
     this.wss = new WebSocketServer({ noServer: true });
 
     // Register revocation-driven disconnect
-    this.deps.tokenManager.onRevoke((callerId) => {
-      for (const client of this.getCallerConnections(callerId)) {
-        client.ws.close(4001, "Token revoked");
-      }
+    this.disposeTokenRevocationListener = this.deps.tokenManager.onRevoke((callerId) => {
+      void this.retireCaller(callerId);
     });
   }
   private handlersInitialized = false;
 
   private handleConnection(ws: WebSocket): void {
+    if (this.stopped) {
+      ws.close(1001, "Server shutting down");
+      return;
+    }
     // Expect first message to be ws:auth
     let authTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       ws.close(4003, "Auth timeout");
     }, 10000);
+    this.pendingAuthentications.set(ws, authTimeout);
 
     const onFirstMessage = (data: Buffer | ArrayBuffer | Buffer[]) => {
       if (authTimeout) {
         clearTimeout(authTimeout);
         authTimeout = null;
+        this.pendingAuthentications.set(ws, null);
       }
       ws.off("message", onFirstMessage);
 
@@ -827,7 +922,9 @@ export class RpcServer {
         msg.clientLabel,
         msg.clientSessionId,
         msg.clientPlatform
-      ).catch((error) => this.abortFailedAuthentication(ws, error));
+      )
+        .catch((error) => this.abortFailedAuthentication(ws, error))
+        .finally(() => this.pendingAuthentications.delete(ws));
     };
 
     ws.on("message", onFirstMessage);
@@ -836,6 +933,7 @@ export class RpcServer {
         clearTimeout(authTimeout);
         authTimeout = null;
       }
+      this.pendingAuthentications.delete(ws);
     });
   }
 
@@ -847,6 +945,10 @@ export class RpcServer {
     clientSessionId?: string,
     clientPlatform?: ClientPlatform
   ): Promise<void> {
+    if (this.stopped) {
+      ws.close(1001, "Server shutting down");
+      return;
+    }
     if (ws.readyState !== WebSocket.OPEN) return;
     // Both the WebSocket and WebRTC handshakes reach this method, and neither
     // transport guarantees that a malformed open frame contains a string token.
@@ -882,7 +984,8 @@ export class RpcServer {
       this.deps.connectionGrants?.validate(token) ??
       null;
     let entry: import("@vibestudio/shared/tokenManager").TokenEntry | null;
-    let deviceCredential: { deviceId: string; refreshToken: string } | undefined;
+    let deviceCredential: DeviceCredential | undefined;
+    let pairingContext: PairingContext | undefined;
     let agentBinding: import("@vibestudio/identity/types").AgentBinding | undefined;
     // Host-verified subject for a device/agent credential redeemed over the pipe
     // (§5.1/§5.3). Absent for the caller-token path (§5.2), where
@@ -911,7 +1014,8 @@ export class RpcServer {
       let paired: {
         callerId: string;
         callerKind: CallerKind;
-        deviceCredential?: { deviceId: string; refreshToken: string };
+        deviceCredential?: DeviceCredential;
+        pairingContext?: PairingContext;
         agentBinding?: import("@vibestudio/identity/types").AgentBinding;
         subject?: UserSubject;
       } | null = null;
@@ -929,6 +1033,7 @@ export class RpcServer {
       if (paired) {
         entry = { callerId: paired.callerId, callerKind: paired.callerKind };
         deviceCredential = paired.deviceCredential;
+        pairingContext = paired.pairingContext;
         agentBinding = paired.agentBinding;
         subject = paired.subject;
       }
@@ -936,7 +1041,7 @@ export class RpcServer {
     // Pairing redemption crosses the child→hub boundary. The unauthenticated
     // socket may disappear while that durable operation is in flight; never
     // create session/lease/bridge state for a transport that is already gone.
-    if (ws.readyState !== WebSocket.OPEN) return;
+    if (this.stopped || ws.readyState !== WebSocket.OPEN) return;
     if (!entry) {
       // Fail-loud observability: a device/panel/agent presented a token that
       // matched no grant, bearer, or pairing/refresh credential. Log the device
@@ -992,6 +1097,24 @@ export class RpcServer {
         return;
       }
     }
+
+    // Credential validation may have raced a revocation while awaiting its
+    // durable redeemer. Retirement is terminal; never resurrect its session.
+    const priorRetirement = this.callerRetirements.get(callerId);
+    if (priorRetirement && !priorRetirement.settled) {
+      const msg: WsServerMessage = {
+        type: "ws:auth-result",
+        success: false,
+        error: "Caller has been revoked",
+      };
+      ws.send(JSON.stringify(msg));
+      ws.close(4001, "Token revoked");
+      return;
+    }
+    // Caller ids are stable identities, not credential generations. Once the
+    // old transport is fully gone, a newly valid credential (for example after
+    // workspace membership is restored) may establish a fresh generation.
+    if (priorRetirement?.settled) this.callerRetirements.delete(callerId);
 
     const pendingTimer = this.disconnectTimers.get(connectionKey);
     if (pendingTimer) {
@@ -1049,12 +1172,9 @@ export class RpcServer {
       // De-register the old connection BEFORE closing it. A real `ws` closes
       // asynchronously (handleClose runs after we return, by which point the
       // replacement is registered, so it sees wasReplaced). But
-      // SessionWebSocketShim.close() fires its close handlers SYNCHRONOUSLY — so
-      // unless `existing` is already de-registered, that inline handleClose runs
-      // the FULL real-disconnect path (spurious markDisconnected / panel churn +
-      // freshly-armed reconnect waiters and a grace timer that this very cleanup
-      // would then strand). De-registering first makes wasReplaced===true for the
-      // synchronous shim exactly as it already is for the async real WS.
+      // SessionWebSocketShim also preserves ordered asynchronous close, but
+      // de-register first so both transports classify any later close callback
+      // as replacement cleanup rather than a reconnectable disconnect.
       this.cleanupClient(existing);
       this.sessions.markDisconnected(existing.caller.runtime.id, existing.caller.runtime.kind);
       existing.ws.close(4002, "Replaced by new connection");
@@ -1122,6 +1242,27 @@ export class RpcServer {
       transport: envelopeTransportFromWsServer(transport),
     });
     this.setBridge(callerId, connectionId, bridge, transport);
+    if (this.deps.eventService) {
+      const release = this.deps.eventService.registerTransportSession({
+        callerId,
+        callerKind,
+        connectionId,
+        userId,
+        send: (event, payload) => {
+          this.sendToWs(ws, {
+            type: "ws:rpc",
+            envelope: envelopeFromMessage({
+              selfId: "main",
+              from: "main",
+              target: callerId,
+              caller: SERVER_RESPONDER,
+              message: { type: "event", fromId: "main", event, payload },
+            }),
+          });
+        },
+      });
+      this.eventSessionReleases.set(client, release);
+    }
 
     // Notify auth callback (e.g., for HarnessManager bridge resolution) before
     // acknowledging success. A host integration failure must roll admission
@@ -1139,6 +1280,7 @@ export class RpcServer {
       serverBootId: this.bootId,
       sessionDirty,
       ...(deviceCredential ? { deviceCredential } : {}),
+      ...(pairingContext ? { pairingContext } : {}),
     };
     ws.send(JSON.stringify(authResult));
 
@@ -1152,23 +1294,11 @@ export class RpcServer {
         });
       }
     }
-
-    // Register the authenticated connection as a direct-address event session.
-    // Pub/sub subscriptions still opt in per event; direct delivery can target
-    // either this one connection or all live connections for the caller.
-    if (this.deps.eventService) {
-      try {
-        this.deps.eventService.registerSession(
-          new WsEventSession(ws, callerKind, callerId, connectionId, caller.subject?.userId)
-        );
-      } catch (err) {
-        log.warn(`Failed to register event session for ${callerId}: ${(err as Error).message}`);
-      }
-    }
   }
 
   private abortFailedAuthentication(ws: WebSocket, error: unknown): void {
     const client = this.connections.getBySocket(ws);
+    if (client) this.releaseEventSession(client);
     if (client && this.connections.removeClient(client)) {
       if (client.caller.runtime.kind === "panel") {
         try {
@@ -1238,6 +1368,101 @@ export class RpcServer {
     return this.connections.getCallerConnections(callerId);
   }
 
+  /**
+   * Retire one authenticated caller without racing its currently executing RPC
+   * response. Authentication is already invalid when TokenManager invokes this;
+   * this method owns only transport disposal. Idle sockets close immediately,
+   * while a socket dispatching a unary request closes after that response has
+   * been queued. The promise settles after every concrete socket has closed, so
+   * callers may then tear down the WebRTC room that carries those sessions.
+   */
+  retireCaller(callerId: string): Promise<void> {
+    const existing = this.callerRetirements.get(callerId);
+    if (existing) return existing.promise;
+
+    const clients = this.getCallerConnections(callerId);
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const sessionKind = this.sessions.retire(callerId);
+    const retirement = {
+      promise,
+      resolve,
+      pendingSockets: new Set(clients.map((client) => client.ws)),
+      ...(clients[0]?.caller.runtime.kind || sessionKind
+        ? { callerKind: clients[0]?.caller.runtime.kind ?? sessionKind }
+        : {}),
+      settled: false,
+    };
+    this.callerRetirements.set(callerId, retirement);
+    this.clearReconnectStateForRetirement(callerId);
+
+    for (const client of clients) {
+      if ((this.activeInboundRequests.get(client.ws) ?? 0) === 0) {
+        client.ws.close(4001, "Token revoked");
+      }
+    }
+    this.maybeCompleteCallerRetirement(callerId);
+    return promise;
+  }
+
+  private clearReconnectStateForRetirement(callerId: string): void {
+    const terminal = createRelayError("Caller retired", "EACCES");
+    const reconnect = this.reconnectWaiters.get(callerId);
+    if (reconnect) {
+      this.reconnectWaiters.delete(callerId);
+      reconnect.reject(terminal);
+    }
+    const prefix = `${callerId}:`;
+    for (const [key, timer] of this.disconnectTimers) {
+      if (!key.startsWith(prefix)) continue;
+      clearTimeout(timer);
+      this.disconnectTimers.delete(key);
+    }
+    for (const [key, waiter] of this.connectionReconnectWaiters) {
+      if (!key.startsWith(prefix)) continue;
+      this.connectionReconnectWaiters.delete(key);
+      waiter.reject(terminal);
+    }
+  }
+
+  private maybeCompleteCallerRetirement(callerId: string): void {
+    const retirement = this.callerRetirements.get(callerId);
+    if (!retirement || retirement.settled || retirement.pendingSockets.size > 0) return;
+    retirement.settled = true;
+    if (retirement.callerKind) {
+      this.deps.onClientDisconnect?.(callerId, retirement.callerKind);
+    }
+    retirement.resolve();
+  }
+
+  private finishRetiredConnection(client: WsClientState): void {
+    const callerId = client.caller.runtime.id;
+    const retirement = this.callerRetirements.get(callerId);
+    if (!retirement) return;
+    retirement.callerKind ??= client.caller.runtime.kind;
+    retirement.pendingSockets.delete(client.ws);
+    this.maybeCompleteCallerRetirement(callerId);
+  }
+
+  private beginInboundRequest(client: WsClientState): void {
+    this.activeInboundRequests.set(client.ws, (this.activeInboundRequests.get(client.ws) ?? 0) + 1);
+  }
+
+  private finishInboundRequest(client: WsClientState): void {
+    const remaining = (this.activeInboundRequests.get(client.ws) ?? 1) - 1;
+    if (remaining > 0) {
+      this.activeInboundRequests.set(client.ws, remaining);
+      return;
+    }
+    this.activeInboundRequests.delete(client.ws);
+    const retirement = this.callerRetirements.get(client.caller.runtime.id);
+    if (retirement?.pendingSockets.has(client.ws) && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.close(4001, "Token revoked");
+    }
+  }
+
   /** Subscribe to connection add/drop + session-expiry change signals (WP4 §5). */
   onConnectionsChanged(listener: () => void): () => void {
     return this.connections.onConnectionsChanged(listener);
@@ -1289,6 +1514,12 @@ export class RpcServer {
     // stores before ANY post-auth frame is processed. This intentionally also
     // gates routed responses/tool results: a revoked caller cannot keep acting
     // merely because the hub's best-effort socket close failed.
+    if (this.callerRetirements.has(client.caller.runtime.id)) {
+      if ((this.activeInboundRequests.get(client.ws) ?? 0) === 0) {
+        client.ws.close(4001, "Token revoked");
+      }
+      return;
+    }
     if (
       msg.type !== "ws:auth" &&
       this.deps.liveCallerGate &&
@@ -1346,7 +1577,7 @@ export class RpcServer {
           msg.envelope,
           authenticatedCallerOf(client.caller)
         );
-        this.handleRoute(
+        void this.handleRoute(
           client,
           routeEnvelope.target,
           routeEnvelope.message,
@@ -1416,15 +1647,17 @@ export class RpcServer {
 
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
-    const ctx = this.serviceContextForRpcMessage(client, request, {
-      ...(request.requestId ? { requestId: request.requestId } : {}),
-      ...(idempotencyKey ? { idempotencyKey } : {}),
-      ...(readOnly ? { readOnly: true } : {}),
-    });
-
     const dispatcher = this.dispatcher;
 
+    this.beginInboundRequest(client);
     try {
+      const causalParent = await this.resolveCausalParent(client.caller, request);
+      const ctx = this.serviceContextForRpcMessage(client, request, {
+        ...(request.requestId ? { requestId: request.requestId } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(readOnly ? { readOnly: true } : {}),
+        ...(causalParent ? { causalParent } : {}),
+      });
       const result = await dispatcher.dispatch(ctx, service, method, request.args);
       this.sendToWs(client.ws, {
         type: "ws:rpc",
@@ -1444,8 +1677,13 @@ export class RpcServer {
           error: error instanceof Error ? error.message : String(error),
           errorKind: rpcErrorKindOf(error, "internal"),
           ...(errorCode ? { errorCode } : {}),
+          ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
         }),
       });
+    } finally {
+      // `sendToWs` above synchronously queues the response. A concurrent token
+      // revocation may close this connection only after that ordering point.
+      this.finishInboundRequest(client);
     }
   }
 
@@ -1458,13 +1696,29 @@ export class RpcServer {
     pending.resolve(result);
   }
 
-  private handleRoute(
+  private async handleRoute(
     client: WsClientState,
     targetId: string,
     message: RpcMessage,
     targetConnectionId: string | undefined,
     routeEnvelope: RpcEnvelope
-  ): void {
+  ): Promise<void> {
+    if (
+      (message.type === "request" || message.type === "stream-request") &&
+      (message.causalParent ||
+        (client.caller.runtime.kind === "extension" && message.parentRequestId))
+    ) {
+      try {
+        const causalParent = await this.resolveCausalParent(client.caller, message);
+        if (causalParent && message.causalParent !== causalParent) {
+          message = { ...message, causalParent };
+          routeEnvelope = { ...routeEnvelope, message };
+        }
+      } catch (error) {
+        this.sendRouteError(client, targetId, message, error);
+        return;
+      }
+    }
     const method =
       message.type === "request" || message.type === "stream-request" ? message.method : undefined;
     const auth = this.checkRelayAuth(
@@ -1777,11 +2031,13 @@ export class RpcServer {
   private handleClose(client: WsClientState, code?: number, reason?: string): void {
     const callerId = client.caller.runtime.id;
     const callerKind = client.caller.runtime.kind;
+    const retirement = this.callerRetirements.get(callerId);
     const connectionKey = this.connectionKey(callerId, client.connectionId);
+    this.releaseEventSession(client);
     const removedActive = this.connections.removeClient(client);
     const wasReplaced = !removedActive;
 
-    this.streamingRelay.abortConnection(callerId, client.connectionId);
+    this.streamingRelay.abortConnection(client);
 
     if (!wasReplaced && callerKind === "panel") {
       this.deps.runtimeCoordinator?.markDisconnected(callerId, client.connectionId);
@@ -1800,7 +2056,7 @@ export class RpcServer {
                 : "other",
       });
     }
-    if (!wasReplaced) {
+    if (!wasReplaced && !retirement) {
       this.sessions.markDisconnected(callerId, callerKind);
     }
 
@@ -1811,6 +2067,25 @@ export class RpcServer {
         this.pendingToolCalls.delete(callId);
         pending.reject(new Error("Client disconnected"));
       }
+    }
+
+    // Closing sockets is part of stop(). Their close events may arrive on a
+    // later turn after the registries have been cleared. Shutdown is terminal:
+    // cleanup the concrete connection above, but never recreate session grace
+    // state or timers from a delayed close callback.
+    if (this.stopped) {
+      this.finishRetiredConnection(client);
+      return;
+    }
+
+    // Revocation is terminal, unlike a network drop. Its credential is already
+    // invalid and the ordered close has drained, so skip all reconnect grace
+    // state and settle transport-owned work immediately.
+    if (retirement) {
+      this.failRoutedRequestsForCallee(callerId, client.connectionId);
+      this.cleanupRoutedOriginsForConnection(callerId, client.connectionId);
+      this.finishRetiredConnection(client);
+      return;
     }
 
     // If this socket was replaced, the replacement is already connected under the
@@ -1908,7 +2183,15 @@ export class RpcServer {
       clearTimeout(pendingTimer);
       this.disconnectTimers.delete(connectionKey);
     }
+    this.releaseEventSession(client);
     this.connections.removeClient(client);
+  }
+
+  private releaseEventSession(client: WsClientState): void {
+    const release = this.eventSessionReleases.get(client);
+    if (!release) return;
+    this.eventSessionReleases.delete(client);
+    release();
   }
 
   private cleanupRoutedOriginsForConnection(callerId: string, connectionId: string): void {
@@ -1993,11 +2276,6 @@ export class RpcServer {
     return this.pickPrimary(callerId);
   }
 
-  /** Broadcast a message to control-plane clients (server and shell callers). */
-  broadcastToControlPlane(msg: WsServerMessage): void {
-    this.connections.forEachControlPlane((client) => this.sendToWs(client.ws, msg));
-  }
-
   // ===========================================================================
   // HTTP POST /rpc endpoint
   // ===========================================================================
@@ -2078,6 +2356,8 @@ export class RpcServer {
     const requestId = message.requestId;
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
+    const verifiedCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
+    const causalParent = await this.resolveCausalParent(verifiedCaller, message);
 
     // Direct service dispatch
     if (targetId === "main") {
@@ -2107,6 +2387,7 @@ export class RpcServer {
         callerId,
         callerKind,
         {
+          ...(causalParent ? { causalParent } : {}),
           ...(requestId ? { requestId } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(deferral ? { deferral } : {}),
@@ -2120,7 +2401,7 @@ export class RpcServer {
     // Relay to another target
     const auth = this.checkRelayAuth(callerId, callerKind, targetId, method);
     if (!auth.ok) throw createRelayError(auth.reason, "EACCES");
-    const authenticatedCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
+    const authenticatedCaller = verifiedCaller;
     return await this.relayCall(
       callerId,
       callerKind,
@@ -2132,11 +2413,11 @@ export class RpcServer {
         ...(requestId ? { requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
+        ...(causalParent ? { causalParent } : {}),
       },
       {
         authenticatedCaller,
         invocationCaller: authenticatedCaller,
-        contextCallerId: callerId,
       }
     );
   }
@@ -2181,7 +2462,14 @@ export class RpcServer {
           `${method} to ${targetId}; call the host extensions service instead`,
       };
     }
-    return { ok: true };
+    return (
+      this.deps.relayAuthorization?.({
+        callerId,
+        callerKind,
+        targetId,
+        ...(method ? { method } : {}),
+      }) ?? { ok: true }
+    );
   }
 
   private async awaitReconnectIfPending(targetId: string): Promise<ReconnectOutcome> {
@@ -2211,15 +2499,9 @@ export class RpcServer {
     return this.relayCall("main", "server", targetId, method, args) as Promise<T>;
   }
 
-  /**
-   * Server→caller event push. Used by the `EventService` DO push-subscriber to
-   * deliver `events.subscribe` pushes to a connectionless DO/worker: `channel`
-   * is the full `event:<name>` the caller's `rpc.on(...)` listens on, so the
-   * DO's `handleEvent` matches it directly. Throws if the target is unreachable
-   * (the subscriber treats that as a reap signal).
-   */
-  async pushEventToCaller(targetId: string, channel: string, payload: unknown): Promise<void> {
-    await this.relayEvent("main", "server", targetId, channel, payload);
+  private isActiveDeferredRecipient(callerId: string): boolean {
+    const cache = this.deps.entityCache;
+    return !cache || cache.resolveActive(callerId) != null;
   }
 
   async streamCallTarget(targetId: string, method: string, ...args: unknown[]): Promise<Response> {
@@ -2352,40 +2634,6 @@ export class RpcServer {
 
     const { postToDurableObject } = await import("./workerdRpcRelay.js");
 
-    // On-behalf-of invocation token (narrow-host-vcs §4): a dispatch to the
-    // workspace vcs writer DO records the ORIGINATING verified caller in the
-    // host's invocation table and threads an opaque nonce to the DO. The DO
-    // presents it back on `refs.updateMains` (possibly multiple times, for CAS
-    // retries) within this dispatch's lifetime; the record is cleared when the
-    // relayed call settles, so later replay fails closed.
-    const vcsWriterIdentity = this.deps.getVcsWriterIdentity?.() ?? null;
-    const targetsVcsWriter = vcsWriterIdentity !== null && targetId === vcsWriterIdentity;
-    // The token is a method-agnostic host-resolved principal handle (the host no
-    // longer classifies a VCS operation from the method — that semantics moved to
-    // the DO). Mint it for every dispatch routed to the writer DO; the `method`
-    // rides along for attribution/prompt copy only and grants no authority.
-    const vcsInvocations = targetsVcsWriter ? this.deps.vcsInvocations : undefined;
-    const invocation = vcsInvocations
-      ? vcsInvocations.mint({
-          caller:
-            relayCallerScope?.invocationCaller ?? this.verifiedCallerFor(callerId, callerKind),
-          via: targetId,
-          method,
-          ...(meta?.requestId ? { requestId: meta.requestId } : {}),
-        })
-      : null;
-    // Source-head confinement (register row 11): thread the caller's
-    // HOST-RESOLVED context registration id alongside the token so the writer DO
-    // can reject a sandboxed push proposing a FOREIGN `ctx:` source head. Never
-    // client-asserted — resolved here at the same chokepoint that mints the
-    // token. Absent when the caller has no context (chrome/server) or the target
-    // is not the writer DO.
-    const callerContextId = targetsVcsWriter
-      ? (relayCallerScope?.callerContextId ??
-        cache?.resolveContext(relayCallerScope?.contextCallerId ?? callerId) ??
-        null)
-      : null;
-
     const dispatch = async () => {
       if (!this.deps.tokenManager || !this.workerdUrl || !this.workerdGatewayToken) {
         throw new Error(
@@ -2414,26 +2662,73 @@ export class RpcServer {
         ...(meta?.requestId ? { requestId: meta.requestId } : {}),
         ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
         ...(meta?.readOnly ? { readOnly: true } : {}),
-        ...(invocation ? { invocationToken: invocation.token } : {}),
-        ...(callerContextId ? { callerContextId } : {}),
+        ...(meta?.causalParent ? { causalParent: meta.causalParent } : {}),
       });
       return result;
     };
 
-    try {
-      return await dispatch();
-    } catch (err) {
-      if (!this.ensureDOFn || !isRetryableDORelayError(err)) throw err;
-      console.warn(
-        `[RpcServer] DO relay ${targetId}.${method} failed (${err instanceof Error ? err.message : String(err)}), ensuring DO and retrying`
+    // A relay is one semantic invocation, not a transport-level retry unit.
+    // Replaying here is unsafe even for an apparently pre-delivery failure:
+    // the entity may retire while the first dispatch is in flight, and an
+    // ensure-and-retry would then recreate infrastructure for a terminal
+    // identity. Callers may retry explicitly with their semantic command's
+    // idempotency key after resolving the entity lifecycle again.
+    return await dispatch();
+  }
+
+  private async relayTargetStream(
+    caller: VerifiedCaller,
+    envelope: RpcEnvelope,
+    request: import("@vibestudio/rpc").RpcStreamRequest,
+    causalParent: RpcCausalParent | undefined,
+    signal: AbortSignal
+  ): Promise<Response> {
+    const targetId = envelope.target;
+    if (!targetId.startsWith("do:")) {
+      throw createRelayError(
+        `Streaming target ${targetId} is not a Durable Object`,
+        "UNKNOWN_TARGET_KIND"
       );
-      await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
-      return await dispatch();
-    } finally {
-      // The dispatch (including any host-held deferred completion the DO
-      // awaited inside this call) is settled — the token window closes here.
-      invocation?.release();
     }
+    const ref = parseDOTarget(targetId);
+    if (this.deps.entityCache && !this.deps.entityCache.resolveActive(targetId)) {
+      throw createRelayError(
+        `DO ${targetId} is not registered as an active runtime entity`,
+        "DO_NOT_CREATED"
+      );
+    }
+    if (!this.workerdUrl || !this.workerdGatewayToken) {
+      throw new Error("Cannot stream to DO: workerdUrl or workerdGatewayToken not configured");
+    }
+    const { streamFromDurableObject } = await import("./workerdRpcRelay.js");
+    const authenticatedCaller = authenticatedCallerOf(caller);
+    const callerPanelId =
+      caller.runtime.kind === "panel"
+        ? (this.deps.runtimeCoordinator?.getLease(caller.runtime.id)?.slotId ?? undefined)
+        : undefined;
+    return streamFromDurableObject(
+      ref,
+      request.method,
+      request.args,
+      {
+        workerdUrl: this.workerdUrl,
+        workerdGatewayToken: this.workerdGatewayToken,
+        ...(this.workerdDispatchSecret
+          ? { workerdDispatchSecret: this.workerdDispatchSecret }
+          : {}),
+        callerId: caller.runtime.id,
+        callerKind: caller.runtime.kind,
+        ...(callerPanelId ? { callerPanelId } : {}),
+        ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+        requestId: request.requestId,
+        ...(envelope.delivery.idempotencyKey
+          ? { idempotencyKey: envelope.delivery.idempotencyKey }
+          : {}),
+        ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
+        ...(causalParent ? { causalParent } : {}),
+      },
+      signal
+    );
   }
 
   private async relayToWorker(
@@ -2462,6 +2757,7 @@ export class RpcServer {
         fromId: callerId,
         method,
         args,
+        ...(meta?.causalParent ? { causalParent: meta.causalParent } : {}),
       },
     });
 
@@ -2684,12 +2980,8 @@ export class RpcServer {
   // Internal helpers
   // ===========================================================================
 
-  // Backpressure limits for slow WebSocket consumers. Below the soft limit
-  // everything is sent; between soft and hard, broadcast events are dropped
-  // (they're best-effort — clients resync via snapshots) while responses and
-  // stream frames still go through; past the hard limit the socket is
-  // terminated so an unread buffer can't grow without bound.
-  private static readonly WS_BACKPRESSURE_SOFT_LIMIT = 16 * 1024 * 1024;
+  // A slow consumer is terminated once its buffer crosses the hard bound. No
+  // message class is silently discarded below that bound.
   private static readonly WS_BACKPRESSURE_HARD_LIMIT = 128 * 1024 * 1024;
 
   /** Min interval between `closed(4008)` self-heal frames per unknown sid (plan §1.5). */
@@ -2745,9 +3037,6 @@ export class RpcServer {
       ws.terminate();
       return;
     }
-    if (buffered > RpcServer.WS_BACKPRESSURE_SOFT_LIMIT && msg.type === "ws:event") {
-      return;
-    }
     ws.send(JSON.stringify(msg));
   }
 
@@ -2758,6 +3047,17 @@ export class RpcServer {
   /** Accept a pre-upgraded WebSocket from the gateway (no WSS needed on our side). */
   handleGatewayWsConnection(ws: WebSocket): void {
     this.handleConnection(ws);
+  }
+
+  /** Upgrade a WebSocket when this RPC server directly owns the gateway route. */
+  handleGatewayWsUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    const wss = this.wss;
+    if (!wss) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => this.handleConnection(ws));
   }
 
   /**
@@ -2779,6 +3079,7 @@ export class RpcServer {
       onDown?(handler: (reason: string) => void): () => void;
     }
   ): void {
+    if (this.stopped) throw new Error("RpcServer has stopped and cannot attach a WebRTC pipe");
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     const shims = new Map<string, SessionWebSocketShim>();
@@ -2851,24 +3152,6 @@ export class RpcServer {
       if (!shim) log.warn(`WebRTC pipe: ${frameType} for unknown session ${sid}`);
       return shim;
     };
-
-    pipe.onDown?.((reason) => {
-      for (const [sid, shim] of [...shims]) {
-        shims.delete(sid);
-        // remoteClosed → fireClosed drops each session's inbound bodies, which
-        // unregisters their bulk routes below — no per-pipe leak (plan §1.6).
-        shim.remoteClosed(1006, reason || "WebRTC pipe down");
-      }
-      // Pre-open upload buffers die with the pipe (their opens can never
-      // arrive on it) — free the frames and cancel their TTL timers.
-      for (const pending of pendingBodies.values()) clearTimeout(pending.timer);
-      pendingBodies.clear();
-      pendingBodyBytes = 0;
-      // Body stream ids are monotonic only within one client transport. A fresh
-      // reconnect starts at 1 again, so retired ids from the old pipe generation
-      // must not cause valid early DATA on the new generation to be dropped.
-      retiredBodyIds.clear();
-    });
 
     // Upload seam (plan §1.6): request bodies arrive as inbound bulk DATA
     // frames keyed by the stream-open's `bodyStreamId` and are assembled into
@@ -3159,7 +3442,26 @@ export class RpcServer {
       if (code) error.code = code;
       entry.settle(error);
     };
+    const resetPipe = (reason: string): void => {
+      for (const [sid, shim] of [...shims]) {
+        shims.delete(sid);
+        shim.remoteClosed(1006, reason || "WebRTC pipe down");
+      }
+      for (const body of [...inboundBodies.values()]) {
+        body.settle(new Error(reason || "WebRTC pipe down"));
+      }
+      for (const pending of pendingBodies.values()) clearTimeout(pending.timer);
+      pendingBodies.clear();
+      pendingBodyBytes = 0;
+      retiredBodyIds.clear();
+    };
+    // A transport-down is a generation boundary, not necessarily the end of
+    // the answerer object: WebRTC recovery may reopen sessions on this same
+    // pipe. Reset generation-owned state while retaining the subscription.
+    pipe.onDown?.((reason) => resetPipe(reason));
+
     pipe.onBulkFrame((streamId, type, payload) => {
+      if (this.stopped) return;
       if (inboundBodies.has(streamId)) {
         deliverBodyFrame(streamId, type, payload);
         return;
@@ -3170,6 +3472,7 @@ export class RpcServer {
     });
 
     pipe.onControl((data) => {
+      if (this.stopped) return;
       let frame: SessionControlFrame;
       try {
         frame = decodeControlFrame(decoder.decode(data));
@@ -3332,12 +3635,29 @@ export class RpcServer {
     req: import("http").IncomingMessage,
     res: import("http").ServerResponse
   ): Promise<void> {
+    if (this.stopped) {
+      res.statusCode = 503;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "RPC server is shutting down" }));
+      return;
+    }
     await this.httpRpc.handle(req, res);
   }
 
   /** Shut down the server */
   async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.disposeTokenRevocationListener?.();
+    this.disposeTokenRevocationListener = null;
+
     this.connections.closeAll(1001, "Server shutting down");
+
+    for (const [ws, authTimer] of this.pendingAuthentications) {
+      if (authTimer) clearTimeout(authTimer);
+      ws.close(1001, "Server shutting down");
+    }
+    this.pendingAuthentications.clear();
 
     // Clear pending tool calls
     for (const [, pending] of this.pendingToolCalls) {
@@ -3345,6 +3665,8 @@ export class RpcServer {
       pending.reject(new Error("Server shutting down"));
     }
     this.pendingToolCalls.clear();
+
+    this.deferrals.cancelAll();
 
     for (const timer of this.disconnectTimers.values()) {
       clearTimeout(timer);
@@ -3360,6 +3682,7 @@ export class RpcServer {
     }
     this.connectionReconnectWaiters.clear();
     this.routedRequestOrigins.clear();
+    this.sessions.clear();
 
     // Close WebSocket server
     if (this.wss) {

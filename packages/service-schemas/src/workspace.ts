@@ -1,10 +1,10 @@
 /**
- * workspace service method schemas — workspace catalog, configuration, and
- * lifecycle (list, create, switch, units, host targets). Pure-data wire
+ * workspace service method schemas — current-workspace configuration,
+ * lifecycle, units, and host targets. Server-wide workspace discovery and
+ * routing belong to the stable `hubControl` service, never to a workspace
+ * child.
  * contract shared by the server registration (`src/server/services/
  * workspaceService.ts`) and the typed client (`clients/workspaceClient.ts`).
- * The workspace child always receives the hub-owned catalog proxy required by
- * the catalog methods, so the registered handler table is exhaustive.
  */
 
 import { z } from "zod";
@@ -480,17 +480,13 @@ export const workspaceMethods = defineServiceMethods({
     returns: z.object({
       path: z.string().describe("Absolute path to the workspace source tree."),
       statePath: z.string().describe("Absolute path to the workspace's persisted state directory."),
-      contextsPath: z.string().describe("Absolute path to the workspace's `.contexts` directory."),
+      contextProjectionsPath: z.string().describe(
+        "Absolute path to the workspace's current-epoch disposable context projections."
+      ),
       config: WorkspaceConfigSchema.describe(
         "The resolved workspace config (meta/vibestudio.yml)."
       ),
     }),
-    access: READ_ACCESS,
-  },
-  list: {
-    description: "List all known workspaces in the catalog with their last-opened timestamps.",
-    args: z.tuple([]),
-    returns: z.array(WorkspaceEntrySchema),
     access: READ_ACCESS,
   },
   getActive: {
@@ -499,59 +495,11 @@ export const workspaceMethods = defineServiceMethods({
     returns: z.string(),
     access: READ_ACCESS,
   },
-  getActiveEntry: {
-    description: "Catalog entry (name + last-opened) for the currently active workspace.",
-    args: z.tuple([]),
-    returns: WorkspaceEntrySchema,
-    access: READ_ACCESS,
-  },
   getConfig: {
     description: "The active workspace's resolved config (meta/vibestudio.yml).",
     args: z.tuple([]),
     returns: WorkspaceConfigSchema,
     access: READ_ACCESS,
-  },
-  // Catalog-dependent write methods — the server omits these at registration
-  // time when no workspace catalog is available (see module docs above).
-  create: {
-    description:
-      "Create and register a new workspace on disk, optionally forking from an existing one; userland callers are approval-gated.",
-    args: z.tuple([
-      z.string().describe("Name (id) of the new workspace."),
-      z
-        .object({
-          forkFrom: z
-            .string()
-            .optional()
-            .describe("Name of an existing workspace to fork the new one from."),
-        })
-        .optional()
-        .describe("Optional creation options."),
-    ]),
-    returns: WorkspaceEntrySchema,
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
-    access: { sensitivity: "write" },
-    examples: [{ args: ["my-new-ws"] }, { args: ["fork-ws", { forkFrom: "main" }] }],
-  },
-  delete: {
-    description:
-      "Permanently delete a workspace directory and remove it from the catalog; refuses to delete the active workspace and is approval-gated for userland.",
-    args: z.tuple([z.string().describe("Name (id) of the workspace to delete.")]),
-    returns: z.void(),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
-    access: { sensitivity: "destructive" },
-    examples: [{ args: ["old-ws"] }],
-  },
-  // SECURITY (#33, T2 in audit summary): `select` triggers an
-  // app.relaunch() — disruptive and reachable only via shell UI.
-  select: {
-    description:
-      "Switch the active workspace, touching the catalog and signalling the host to relaunch into it; disruptive and approval-gated for userland.",
-    args: z.tuple([z.string().describe("Name (id) of the workspace to switch to.")]),
-    returns: z.void(),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
-    access: { sensitivity: "admin" },
-    examples: [{ args: ["other-ws"] }],
   },
   setInitPanels: {
     description:

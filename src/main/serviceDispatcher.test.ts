@@ -80,25 +80,43 @@ describe("ServiceDispatcher", () => {
   });
 
   const boundaryCause = new Error("policy source");
+  const structuredFailure = {
+    code: "RevisionChanged",
+    message: "exact frontier advanced",
+    expectedFrontierId: "frontier:old",
+  };
 
   it.each([
     {
       label: "RpcBoundaryError",
-      error: new RpcBoundaryError("permission denied", "access", "EACCES", boundaryCause),
+      error: new RpcBoundaryError(
+        "permission denied",
+        "access",
+        "EACCES",
+        boundaryCause,
+        structuredFailure
+      ),
       errorKind: "access" as const,
       code: "EACCES",
       sourceCause: boundaryCause,
+      errorData: structuredFailure,
     },
     {
       label: "RemoteRpcError",
-      error: new RemoteRpcError("upstream unavailable", "transport", "ECONNRESET"),
+      error: new RemoteRpcError(
+        "upstream unavailable",
+        "transport",
+        "ECONNRESET",
+        structuredFailure
+      ),
       errorKind: "transport" as const,
       code: "ECONNRESET",
       sourceCause: undefined,
+      errorData: structuredFailure,
     },
   ])(
     "preserves $label provenance when wrapping it",
-    async ({ error, errorKind, code, sourceCause }) => {
+    async ({ error, errorKind, code, sourceCause, errorData }) => {
       const sd = new ServiceDispatcher();
       sd.registerService(
         makeService("fail", async () => {
@@ -115,6 +133,7 @@ describe("ServiceDispatcher", () => {
         method: "run",
         errorKind,
         code,
+        errorData,
         cause: error,
       });
       if (sourceCause) {

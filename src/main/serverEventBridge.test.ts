@@ -1,35 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
-import { createServerEventBridge } from "./serverEventBridge.js";
-import type { HubWorkspaceRoute } from "@vibestudio/service-schemas/hubControl";
-
-const workspaceRoute: HubWorkspaceRoute = {
-  workspace: "other-ws",
-  workspaceId: "ws_other",
-  running: true,
-  serverUrl: "https://hub.example.test/w/other-ws",
-  controlReach: {
-    room: "room_123456789012345678901234",
-    fp: "AA".repeat(32),
-    sig: "wss://signal.example.test",
-    v: 2,
-    ice: "all",
-  },
-  workspaceReach: {
-    room: "room_abcdefghijklmnopqrstuvwx",
-    fp: "AA".repeat(32),
-    sig: "wss://signal.example.test",
-    v: 2,
-    ice: "all",
-  },
-  serverId: "srv_123456789012345678901234",
-  serverBootId: "boot_123456789012345678901234",
-};
+import { createServerEventBridge, notificationAttention } from "./serverEventBridge.js";
 
 function createHarness(
   opts: {
     resolveAppAvailableEvent?: (payload: unknown) => unknown;
-    onWorkspaceRelaunchRequested?: (name: string, route: HubWorkspaceRoute) => void;
     onCredentialCaptureRequest?: (
       payload: Record<string, unknown>
     ) => Promise<Record<string, unknown>>;
@@ -59,7 +34,6 @@ function createHarness(
     openExternal: vi.fn(async () => {}),
     onAppHostTargetChanged,
     resolveAppAvailableEvent: opts.resolveAppAvailableEvent,
-    onWorkspaceRelaunchRequested: opts.onWorkspaceRelaunchRequested,
     onCredentialCaptureRequest: opts.onCredentialCaptureRequest,
     warn,
   });
@@ -96,38 +70,18 @@ describe("createServerEventBridge", () => {
       reason: "released" as const,
     };
 
-    handle("event:panel:runtimeLeaseChanged", payload);
+    handle("panel:runtimeLeaseChanged", payload);
     await Promise.resolve();
 
     expect(panelOrchestrator.handleRuntimeLeaseChanged).toHaveBeenCalledWith(payload);
     expect(eventService.emit).not.toHaveBeenCalled();
   });
 
-  it("routes workspace:relaunch-requested to the relaunch handler instead of re-emitting", () => {
-    const onWorkspaceRelaunchRequested = vi.fn();
-    const { handle, eventService } = createHarness({ onWorkspaceRelaunchRequested });
-
-    handle("event:workspace:relaunch-requested", { name: "other-ws", route: workspaceRoute });
-
-    expect(onWorkspaceRelaunchRequested).toHaveBeenCalledWith("other-ws", workspaceRoute);
-    expect(eventService.emit).not.toHaveBeenCalled();
-  });
-
-  it("refuses a relaunch event without exact device reaches", () => {
-    const onWorkspaceRelaunchRequested = vi.fn();
-    const { handle, warn } = createHarness({ onWorkspaceRelaunchRequested });
-
-    handle("event:workspace:relaunch-requested", { name: "other-ws" });
-
-    expect(onWorkspaceRelaunchRequested).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith("[workspace] ignored malformed relaunch route");
-  });
-
   it("answers credential:capture-request with credentials.completeCapture", async () => {
     const onCredentialCaptureRequest = vi.fn(async () => ({ cookieHeader: "a=b" }));
     const { handle, serverClient } = createHarness({ onCredentialCaptureRequest });
 
-    handle("event:credential:capture-request", {
+    handle("credential:capture-request", {
       captureId: "cap-1",
       kind: "cookies",
       signInUrl: "https://example.test/login",
@@ -149,7 +103,7 @@ describe("createServerEventBridge", () => {
     });
     const { handle, serverClient } = createHarness({ onCredentialCaptureRequest });
 
-    handle("event:credential:capture-request", { captureId: "cap-2", kind: "cookies" });
+    handle("credential:capture-request", { captureId: "cap-2", kind: "cookies" });
 
     await vi.waitFor(() =>
       expect(serverClient.call).toHaveBeenCalledWith("credentials", "completeCapture", [
@@ -162,7 +116,7 @@ describe("createServerEventBridge", () => {
   it("re-emits ordinary server EventService events as local shell events", () => {
     const { handle, eventService } = createHarness();
 
-    handle("event:notification:show", { id: "n1", type: "info", title: "Hello" });
+    handle("notification:show", { id: "n1", type: "info", title: "Hello" });
 
     expect(eventService.emit).toHaveBeenCalledWith("notification:show", {
       id: "n1",
@@ -175,7 +129,7 @@ describe("createServerEventBridge", () => {
     const { handle, eventService, panelOrchestrator } = createHarness();
     const snapshot = { revision: 2, rootPanels: [] };
 
-    handle("event:panel-tree-updated", snapshot);
+    handle("panel-tree-updated", snapshot);
     await Promise.resolve();
 
     expect(panelOrchestrator.applyServerPanelTreeSnapshot).toHaveBeenCalledWith(snapshot);
@@ -186,7 +140,7 @@ describe("createServerEventBridge", () => {
   it("applies server panel title updates without forwarding raw events", () => {
     const { handle, eventService, panelOrchestrator } = createHarness();
 
-    handle("event:panel-title-updated", {
+    handle("panel-title-updated", {
       panelId: "panel:tree/panel-1",
       title: "New title",
       explicit: true,
@@ -203,7 +157,7 @@ describe("createServerEventBridge", () => {
   it("rejects browser-panel open events instead of proxying panel creation", async () => {
     const { handle, eventService, warn } = createHarness();
 
-    handle("event:browser-panel:open", {
+    handle("browser-panel:open", {
       url: "https://example.com/",
       parentPanelId: "panel:tree/slot-a",
     });
@@ -224,7 +178,7 @@ describe("createServerEventBridge", () => {
       adoptionPolicy: "prompt",
     };
 
-    handle("event:apps:available", payload);
+    handle("apps:available", payload);
     await Promise.resolve();
 
     expect(appOrchestrator.applyAppAvailable).toHaveBeenCalledWith(payload);
@@ -250,7 +204,7 @@ describe("createServerEventBridge", () => {
       adoptionPolicy: "prompt",
     };
 
-    handle("event:apps:available", payload);
+    handle("apps:available", payload);
     await Promise.resolve();
 
     expect(appOrchestrator.applyAppAvailable).toHaveBeenCalledWith(resolvedPayload);
@@ -266,7 +220,7 @@ describe("createServerEventBridge", () => {
       resolveAppAvailableEvent: () => null,
     });
 
-    handle("event:apps:available", {
+    handle("apps:available", {
       appId: "@workspace-apps/shell",
       target: "electron",
       url: "https://old.example/_a/app/index.html",
@@ -281,15 +235,31 @@ describe("createServerEventBridge", () => {
   it("only wakes desktop host sync for host-target changes that can affect Electron", () => {
     const { handle, onAppHostTargetChanged } = createHarness();
 
-    handle("event:host-targets:changed", { target: "react-native", reason: "app-status" });
+    handle("host-targets:changed", { target: "react-native", reason: "app-status" });
     expect(onAppHostTargetChanged).not.toHaveBeenCalled();
 
     const payload = { target: "electron", reason: "selection-changed" };
-    handle("event:host-targets:changed", payload);
+    handle("host-targets:changed", payload);
 
     expect(onAppHostTargetChanged).toHaveBeenCalledWith({
       event: "host-targets:changed",
       payload,
     });
+  });
+});
+
+describe("notificationAttention", () => {
+  it("recognizes chat attention for watched and direct delivery without changing transport", () => {
+    expect(
+      notificationAttention("notification:show", {
+        id: "chat-attention:channel:one",
+        title: "Agent replied",
+        message: "The task needs you.",
+      })
+    ).toEqual({ title: "Agent replied", message: "The task needs you." });
+    expect(
+      notificationAttention("notification:show", { id: "ordinary", title: "Saved" })
+    ).toBeNull();
+    expect(notificationAttention("notification:dismiss", { id: "chat-attention:x" })).toBeNull();
   });
 });

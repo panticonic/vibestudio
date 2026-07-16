@@ -22,7 +22,7 @@ function pair(room: string, code: string) {
   return { room, fp: FP, code, sig: "wss://signal.example/", v: 2 as const, ice: "all" as const };
 }
 function expectedPairing(room: string, code: string) {
-  return { room, fp: FP, code, sig: "wss://signal.example/", v: 2, ice: "all", srv: undefined };
+  return { room, fp: FP, code, sig: "wss://signal.example/", v: 2, ice: "all" };
 }
 
 describe("protocolHandler", () => {
