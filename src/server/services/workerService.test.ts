@@ -80,7 +80,7 @@ function createDeps() {
   };
 }
 
-describe("workerService userland service resolution", () => {
+describe("workerService workspace service resolution", () => {
   it("lists every launchable worker with its real manifest entry point", async () => {
     const deps = createDeps();
     const dispatcher = new ServiceDispatcher();
@@ -171,7 +171,7 @@ describe("workerService userland service resolution", () => {
 
     await expect(
       dispatcher.dispatch(panelCtx, "workers", "resolveService", ["poem.store.v1"])
-    ).rejects.toThrow("No userland service registered");
+    ).rejects.toThrow("No workspace service registered");
 
     deps.workspaceDecls.singletons.replaceAll([
       ...deps.workspaceDecls.singletons.all(),

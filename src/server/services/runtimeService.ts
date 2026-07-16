@@ -21,6 +21,11 @@ import {
 import type { ContextEdge, ContextEdgeKind } from "@vibestudio/shared/runtime/contextEdges";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type {
+  LifecyclePrepareInput,
+  LifecyclePrepareResult,
+} from "@vibestudio/shared/doDispatcher";
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import {
   buildWorkspaceContext,
   canonicalEntityId,
@@ -79,6 +84,16 @@ export interface RuntimeEntityHooks {
   onRetire: (record: EntityRecord) => Promise<void>;
 
   /**
+   * Release resources owned inside an entity before its durable row is retired.
+   * A failed or rejected receipt leaves the entity active; post-retire host
+   * cleanup is deliberately a separate, retryable phase.
+   */
+  releaseEntity: (
+    record: EntityRecord,
+    input: LifecyclePrepareInput
+  ) => Promise<LifecyclePrepareResult>;
+
+  /**
    * Clone a DO's durable SQLite storage to a new instance key (server-internal
    * `workerdManager.cloneDO`). Used by `cloneContext`; never exposed to userland.
    */
@@ -102,31 +117,23 @@ export interface RuntimeEntityHooks {
   }) => Promise<void>;
 }
 
-/** Context-folder lifecycle used by inert session entities. */
+/** Disposable host projection directories for semantic contexts. */
 export interface RuntimeContextFolders {
   ensureContextFolder(contextId: string): Promise<string>;
   removeContext(contextId: string): Promise<void>;
 }
 
-/** VCS lifecycle hooks for full-workspace context branches. */
-export interface RuntimeVcsContexts {
+/** Lifecycle hooks for GAD-owned semantic workspace contexts. */
+export interface RuntimeSemanticContexts {
+  /** Ensure the durable semantic context exists. Idempotent. */
+  ensureContext(contextId: string): Promise<void>;
+  /** Drop the semantic context and its disposable host projection. */
+  dropContext(contextId: string): Promise<void>;
   /**
-   * Pin a context's base view at creation (idempotent — pins the current
-   * `workspaceView()` only if not already pinned) so its reads don't drift.
+   * Fork the source context's exact working frontier into an independent target
+   * semantic context. Used by clone/subagent lifecycle orchestration.
    */
-  pinContext?(contextId: string): Promise<string>;
-  /**
-   * Tear down all VCS state for a context on retire: clear caches + delete its
-   * `ctx` heads and pin ref.
-   */
-  dropContext?(contextId: string): Promise<void>;
-  /**
-   * Fork a context's file state: snapshot the SOURCE context's full working view
-   * (committed ctx heads + uncommitted edits) as the TARGET context's pinned base,
-   * so the clone starts as an isolated copy of the source's files and then diverges
-   * independently. Used by `cloneContext`.
-   */
-  forkContext?(sourceContextId: string, targetContextId: string): Promise<void>;
+  forkContext(sourceContextId: string, targetContextId: string): Promise<void>;
 }
 
 export interface RuntimeServiceDeps {
@@ -140,8 +147,8 @@ export interface RuntimeServiceDeps {
   hooks: RuntimeEntityHooks;
   contextBoundary: ContextBoundaryDeps;
   contextFolders: RuntimeContextFolders;
-  /** Optional VCS hooks for pinning and dropping context branches. */
-  vcsContexts?: RuntimeVcsContexts;
+  /** Required semantic-context lifecycle owned by the semantic workspace. */
+  semanticContexts: RuntimeSemanticContexts;
   /**
    * Server-controlled display-title registry. Workers (and DOs / panels)
    * call `runtime.setTitle(title)` to populate the title that approval UIs
@@ -186,6 +193,7 @@ function deriveEntityKey(srcKey: string, targetKey: string, srcId: string): stri
 
 export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinition {
   const store = deps.entityStore;
+  const retirementChains = new Map<string, Promise<unknown>>();
 
   /**
    * The context-boundary gate for DIRECT (userland) entity launch/destroy/
@@ -237,6 +245,12 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
 
   function bindingFromSpec(spec: RuntimeEntityCreateSpec): RuntimeAgentBindingInput | undefined {
     return spec.kind === "do" || spec.kind === "worker" ? spec.agentBinding : undefined;
+  }
+
+  function selfAgentChannelFromSpec(spec: RuntimeEntityCreateSpec): string | undefined {
+    return spec.kind === "do" || spec.kind === "worker" || spec.kind === "session"
+      ? spec.agentChannelId
+      : undefined;
   }
 
   function isExtensionOrchestratedCreate(
@@ -320,17 +334,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     return requested;
   }
 
-  /**
-   * Set up a full logical workspace context branch. Pinning freezes the base
-   * workspace view so reads remain stable until the context explicitly rebases.
-   * Per-repo ctx heads are created lazily by the VCS layer when the context edits
-   * or commits a repo; repo membership is not part of the runtime contract.
-   */
+  /** Ensure one durable semantic workspace context before attaching an entity. */
   async function setUpContext(contextId: string): Promise<WorkspaceContext> {
-    // Pin the context's base view (a per-context VCS ref) so its reads are a
-    // consistent snapshot and never drift as `main` advances under it. Idempotent:
-    // a second entity joining the context inherits the existing pin.
-    await deps.vcsContexts?.pinContext?.(contextId);
+    await deps.semanticContexts.ensureContext(contextId);
     return buildWorkspaceContext(contextId);
   }
 
@@ -359,13 +365,18 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     // of the boundary check on this path; `activateEntity` is gate-free so internal
     // orchestration (cloneContext) can create clones after a single source-gate.
     const contextId = await resolveContextPolicy(caller, spec.contextId, spec);
+    if (bindingFromSpec(spec) && selfAgentChannelFromSpec(spec)) {
+      throw new Error(
+        "runtime.createEntity cannot combine an external agent relay binding with a self-agent channel"
+      );
+    }
     const agentBinding = await resolveAgentBinding(
       caller,
       "createEntity",
       contextId,
       bindingFromSpec(spec)
     );
-    return activateEntity(caller, spec, contextId, agentBinding);
+    return activateEntity(caller, spec, contextId, agentBinding, selfAgentChannelFromSpec(spec));
   }
 
   /**
@@ -378,7 +389,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     caller: VerifiedCaller,
     spec: RuntimeEntityCreateSpec,
     initialContextId: string,
-    agentBinding?: RuntimeAgentBinding
+    externalAgentBinding?: RuntimeAgentBinding,
+    selfAgentChannelId?: string
   ): Promise<RuntimeEntityHandle> {
     let contextId = initialContextId;
     const key = spec.key ?? randomUUID();
@@ -476,10 +488,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       targetId = canonicalId;
     }
 
-    // A context is a full logical workspace branch. The VCS layer lazily creates
-    // per-repo ctx heads as this branch edits repos.
+    // A context is a GAD-owned semantic workspace frontier shared by every
+    // runtime entity attached to the same context id.
     await setUpContext(contextId);
 
+    const agentBinding = selfAgentChannelId
+      ? {
+          entityId: canonicalId,
+          contextId,
+          channelId: selfAgentChannelId,
+        }
+      : externalAgentBinding;
     const activateInput = {
       kind: spec.kind,
       source: { repoPath: spec.source, effectiveVersion },
@@ -520,22 +539,31 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   }
 
   /**
-   * Create a full logical workspace context branch without attaching an entity
-   * to it yet. Useful when an orchestrator wants several entities to share a
-   * branch. Repo selection remains an operation-level concern on VCS methods.
+   * Establish a semantic workspace context without attaching an entity yet.
+   * Useful when an orchestrator wants several entities to share one working
+   * frontier and provenance timeline.
    */
   async function createContext(
     caller: VerifiedCaller,
     args: { contextId?: string }
   ): Promise<WorkspaceContext> {
-    // A named, already-existing foreign context is gated (this re-pins its VCS /
-    // re-materializes its folder); a fresh/omitted contextId is free.
+    // Reusing a named foreign context is gated because it joins an existing
+    // semantic timeline; a fresh/omitted context id is isolated.
     if (args.contextId != null && args.contextId !== "") {
       await gateContextLaunch(caller, args.contextId, { kind: "runtime", verb: "Set up context" });
     }
     const contextId = args.contextId ?? randomUUID();
     const context = await setUpContext(contextId);
     await deps.contextFolders.ensureContextFolder(contextId);
+    const ownerContextId = await store.resolveContext(caller.runtime.id);
+    if (ownerContextId && ownerContextId !== contextId) {
+      await store.recordContextEdge({
+        contextId,
+        ownerContextId,
+        kind: "lifecycle",
+        ownerEntityId: caller.runtime.id,
+      });
+    }
     return context;
   }
 
@@ -545,15 +573,29 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
    * `destroyContext` call it directly (their gate is on the context as a whole).
    */
   async function retireRecord(id: string): Promise<EntityRecord | null> {
-    const record = await store.retire(id);
-    if (!record) return null;
-    try {
-      await deps.hooks.onRetire(record);
-      await store.cleanupComplete(id);
-    } catch {
-      // Leave cleanup_complete=0; cleanupReaper will retry.
-    }
-    return record;
+    return serializeByKey(retirementChains, id, async () => {
+      const active = await store.resolveRecord(id);
+      if (!active || active.status !== "active") return null;
+      const released = await deps.hooks.releaseEntity(active, {
+        epoch: `retire:${randomUUID()}`,
+        mode: "retire",
+        reason: "entity_retire",
+        deadlineMs: 0,
+      });
+      if (released.status === "failed") {
+        throw new Error(`Entity ${id} refused terminal lifecycle release`);
+      }
+
+      const record = await store.retire(id);
+      if (!record) return null;
+      try {
+        await deps.hooks.onRetire(record);
+        await store.cleanupComplete(id);
+      } catch {
+        // Leave cleanup_complete=0; cleanupReaper will retry.
+      }
+      return record;
+    });
   }
 
   async function retireEntity(
@@ -583,17 +625,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     if (removeContext) {
       const live = await store.listActive();
       if (!live.some((e) => e.contextId === record.contextId)) {
-        // Tear down VCS state (caches + ctx heads + pin ref) before the folder.
-        await deps.vcsContexts?.dropContext?.(record.contextId).catch(() => undefined);
+        await deps.semanticContexts.dropContext(record.contextId).catch(() => undefined);
         await deps.contextFolders.removeContext(record.contextId);
       }
     }
   }
 
   /** Build a clone spec from a source record: same source + class, new key/context.
-   *  `ref` is omitted, so the clone builds at the current main version (HEAD-tracking
-   *  entities — the common case — match; a source pinned to an older version is
-   *  re-resolved to main, an accepted trade-off vs. plumbing a state-hash build ref). */
+   * `ref` is omitted so the clone follows the cloned semantic context's exact
+   * working head. Code and cloned durable state therefore share one boundary. */
   function buildCloneSpec(
     src: EntityRecord,
     contextId: string,
@@ -730,10 +770,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       for (const srcCtx of sourceContexts) {
         const isRoot = srcCtx === sourceContextId;
         const targetCtx = newContextIdOf.get(srcCtx) as string;
-        // Fork file state FIRST: pin the new context to the source's working
-        // snapshot so clones materialize the source's files, then diverge.
-        // Idempotent under retry (gad-store fork + folder guard + upsert storage).
-        await deps.vcsContexts?.forkContext?.(srcCtx, targetCtx);
+        // Fork semantic state first so every cloned runtime observes the exact
+        // source working frontier and can then diverge independently.
+        await deps.semanticContexts.forkContext(srcCtx, targetCtx);
         await deps.contextFolders.ensureContextFolder(targetCtx);
         createdContexts.push(targetCtx);
 
@@ -803,7 +842,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         await deps.hooks.destroyDurableStorage?.(s).catch(() => undefined);
       for (const c of createdContexts) {
         await store.deleteContextEdges(c).catch(() => undefined);
-        await deps.vcsContexts?.dropContext?.(c).catch(() => undefined);
+        await deps.semanticContexts.dropContext(c).catch(() => undefined);
         await deps.contextFolders.removeContext(c).catch(() => undefined);
       }
       throw err instanceof Error ? err : new Error(String(err));
@@ -875,7 +914,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     // Drop this context's own inbound edges so the registry doesn't accumulate
     // danglers, then the VCS state + folder.
     await store.deleteContextEdges(contextId).catch(() => undefined);
-    await deps.vcsContexts?.dropContext?.(contextId).catch(() => undefined);
+    await deps.semanticContexts.dropContext(contextId).catch(() => undefined);
     await deps.contextFolders.removeContext(contextId).catch(() => undefined);
   }
 
@@ -1000,8 +1039,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     });
 
     const contextId = deriveContextId(args.targetKey);
-    // Order mirrors cloneContext: fork file state, then materialize the folder.
-    await deps.vcsContexts?.forkContext?.(args.parentContextId, contextId);
+    // Order mirrors cloneContext: fork semantic state, then materialize its projection.
+    await deps.semanticContexts.forkContext(args.parentContextId, contextId);
     await deps.contextFolders.ensureContextFolder(contextId);
     await store.recordContextEdge({
       contextId,

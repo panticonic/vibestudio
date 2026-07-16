@@ -1,6 +1,7 @@
 import {
   DurableObjectBase,
   rpc,
+  type AlarmSchedule,
   type LifecyclePrepareInput,
   type LifecyclePrepareResult,
   type LifecycleResumeInput,
@@ -20,7 +21,9 @@ export class LifecycleProbeDO extends DurableObjectBase {
     `);
   }
 
-  override async prepareForRestart(input: LifecyclePrepareInput): Promise<LifecyclePrepareResult> {
+  override async releaseForLifecycle(
+    input: LifecyclePrepareInput
+  ): Promise<LifecyclePrepareResult> {
     this.record("prepare", input);
     return { status: "ready" };
   }
@@ -29,9 +32,10 @@ export class LifecycleProbeDO extends DurableObjectBase {
     this.record("resume", input);
   }
 
-  override async alarm(): Promise<void> {
+  override async alarm(): Promise<AlarmSchedule | null> {
     await super.alarm();
     this.record("alarm", { firedAt: "redacted" });
+    return null;
   }
 
   /** Schedule a server-driven alarm `delayMs` from now (negative = already due). */

@@ -2,7 +2,7 @@
  * Tests for the typed workerd client.
  *
  * Worker lifecycle delegates to the canonical runtime entity service while
- * discovery and userland service resolution use the workers service.
+ * discovery and workspace service resolution use the workers service.
  */
 
 import { createWorkerdClient, type WorkerdClient } from "./workerd.js";

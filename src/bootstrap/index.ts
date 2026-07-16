@@ -24,7 +24,7 @@ import {
 } from "@vibestudio/shared/hostTargetLaunchGate";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
-import { eventsMethods } from "@vibestudio/service-schemas/events";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import type { HostTargetLaunchSessionSnapshot } from "@vibestudio/shared/hostTargets";
 import { parseConnectLink } from "@vibestudio/shared/connect";
 
@@ -103,9 +103,11 @@ function getRpc(): RpcClient {
   return rpc;
 }
 
-const eventsClient = createTypedServiceClient("events", eventsMethods, (service, method, args) =>
-  getRpc().call("main", `${service}.${method}`, args)
-);
+let eventsClient: EventsClient | null = null;
+function getEventsClient(): EventsClient {
+  eventsClient ??= new EventsClient(getRpc());
+  return eventsClient;
+}
 const hostTarget = "electron";
 const launchEventNames = [HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT] as const;
 let pending: PendingUnitBatchApproval[] = [];
@@ -410,16 +412,16 @@ async function refresh(): Promise<void> {
 }
 
 async function subscribeToLaunchEvents(): Promise<void> {
+  const eventClient = getEventsClient();
   for (const eventName of launchEventNames) {
-    const rpcClient = getRpc();
-    rpcClient.on(`event:${eventName}`, (payload) => {
+    eventClient.on(eventName, (payload) => {
       if (launchSession && isLaunchSessionEventFor(launchSession.sessionId, eventName, payload)) {
         if (setLaunchSession(payload)) render();
         return;
       }
       if (isLaunchSessionEventForTarget(hostTarget, eventName, payload)) scheduleRefresh();
     });
-    await eventsClient.subscribe(eventName);
+    await eventClient.subscribe(eventName);
   }
 }
 
@@ -805,15 +807,6 @@ function appendPairConfirmation(parent: HTMLElement, link: string): void {
   details.className = "field-grid";
   details.style.gap = "6px";
 
-  const serverRow = document.createElement("div");
-  const serverLabel = document.createElement("div");
-  serverLabel.className = "meta";
-  serverLabel.textContent = "Server";
-  const serverValue = document.createElement("div");
-  serverValue.style.fontWeight = "600";
-  serverValue.textContent = parsed.srv || "Unnamed server";
-  serverRow.append(serverLabel, serverValue);
-
   const fpRow = document.createElement("div");
   const fpLabel = document.createElement("div");
   fpLabel.className = "meta";
@@ -824,7 +817,7 @@ function appendPairConfirmation(parent: HTMLElement, link: string): void {
   fpValue.style.fontSize = "0.85em";
   fpRow.append(fpLabel, fpValue);
 
-  details.append(serverRow, fpRow);
+  details.append(fpRow);
 
   const actions = document.createElement("div");
   actions.className = "toolbar";

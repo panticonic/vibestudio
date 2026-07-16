@@ -19,7 +19,12 @@ import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
-import { WorkerdManager, type WorkerdManagerDeps } from "./workerdManager.js";
+import {
+  WorkerdManager,
+  type WorkerdManagerDeps,
+  type WorkerdWorkspaceProvider,
+} from "./workerdManager.js";
+import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import type { BuildResult } from "./buildV2/buildStore.js";
 import {
   buildWorkerdPrograms,
@@ -117,14 +122,7 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
     tokenManager,
     fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
-    bindRuntimeImage: async (unitPath: string, ref?: string) => ({
-      source: unitPath,
-      unitName: unitPath,
-      stateHash: ref?.startsWith("state:") ? ref : "state:test",
-      effectiveVersion: currentBuild.value.metadata.ev,
-      buildKey: `build:${unitPath}:${currentBuild.value.metadata.ev}`,
-    }),
-    getBuildByKey: () => currentBuild.value,
+    workspaceId: "workspace:dynamic-worker-host-test",
     workerdPrograms: compiledWorkerdPrograms,
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-ws-")),
     statePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-state-")),
@@ -136,7 +134,22 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
     getWorkerdGatewayToken: () => "test-gateway-token",
     workerdStartupReadyTimeoutMs: 15_000,
   };
+  const provider: WorkerdWorkspaceProvider = {
+    bindRuntimeImage: async (unitPath: string, ref?: string) => ({
+      source: unitPath,
+      unitName: unitPath,
+      stateHash: ref?.startsWith("state:") ? ref : "state:test",
+      effectiveVersion: currentBuild.value.metadata.ev,
+      buildKey: `build:${unitPath}:${currentBuild.value.metadata.ev}`,
+    }),
+    getBuildByKey: () => currentBuild.value,
+    getManifestRoutes: () => [],
+    getManifestDoClasses: () => [],
+    singletonRegistry: new SingletonRegistry([]),
+    getInternalDoEnv: () => ({}),
+  };
   const manager = new WorkerdManager(deps);
+  manager.bindWorkspaceProvider(provider);
 
   // Minimal gateway serving the loader endpoints (mirrors gateway.ts).
   const gateway = createServer((req, res) => {

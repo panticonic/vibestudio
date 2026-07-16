@@ -5,6 +5,7 @@ import type { ManagedService } from "@vibestudio/shared/managedService";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BuildSystemV2 } from "../buildV2/index.js";
+import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import {
   wireRuntimeObservability,
   type RuntimeObservabilityBootstrapDeps,
@@ -76,8 +77,21 @@ describe("wireRuntimeObservability", () => {
       type: "build-complete";
       name: string;
       buildKey: string;
+      trigger: ProtectedPublicationEvent;
     }) => void;
-    emitBuildEvent({ type: "build-complete", name: "example", buildKey: "build-1" });
+    emitBuildEvent({
+      type: "build-complete",
+      name: "example",
+      buildKey: "build-1",
+      trigger: {
+        publicationId: "publication:test",
+        resultHostRefsBasisDigest: "host-refs:test",
+        appliedAt: 42,
+        workspaceStateHash: "state:published",
+        changedPaths: ["workers/example/index.ts"],
+        repositories: [],
+      },
+    });
 
     expect(diagnostics.history("workers/example").entries).toEqual([
       expect.objectContaining({
@@ -85,6 +99,12 @@ describe("wireRuntimeObservability", () => {
         kind: "worker",
         level: "info",
         message: "Build complete (build-1)",
+        fields: {
+          buildEvent: "build-complete",
+          buildKey: "build-1",
+          publicationId: "publication:test",
+          workspaceStateHash: "state:published",
+        },
       }),
     ]);
     await bridge?.stop?.(unsubscribe);

@@ -21,11 +21,15 @@ export type EntityChangeKind = "activate" | "retire" | "delete";
 
 export class EntityCache {
   private readonly records = new Map<string, EntityRecord>();
+  private readonly controlPlaneRecords = new Map<string, EntityRecord>();
   private readonly listeners = new Set<(id: string, change: EntityChangeKind) => void>();
 
   hydrate(records: EntityRecord[]): void {
     this.records.clear();
     for (const record of records) {
+      this.records.set(record.id, record);
+    }
+    for (const record of this.controlPlaneRecords.values()) {
       this.records.set(record.id, record);
     }
   }
@@ -97,6 +101,30 @@ export class EntityCache {
     this.emit(record.id, "activate");
   }
 
+  /**
+   * Register a product-sealed DO principal that exists before WorkspaceDO and
+   * therefore is deliberately not a workspace-authored runtime entity row.
+   * Hydration preserves these records across the later WorkspaceDO reconcile.
+   */
+  registerControlPlane(record: {
+    id: string;
+    source: EntitySource;
+    contextId: string;
+    className: string;
+    key: string;
+  }): void {
+    const entry: EntityRecord = {
+      ...record,
+      kind: "do",
+      createdAt: Date.now(),
+      status: "active",
+      cleanupComplete: true,
+    };
+    this.controlPlaneRecords.set(entry.id, entry);
+    this.records.set(entry.id, entry);
+    this.emit(entry.id, "activate");
+  }
+
   onChange(listener: (id: string, change: EntityChangeKind) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -105,6 +133,7 @@ export class EntityCache {
   /** Clear the cache. Tests only. */
   _clear(): void {
     this.records.clear();
+    this.controlPlaneRecords.clear();
   }
 
   private emit(id: string, change: EntityChangeKind): void {

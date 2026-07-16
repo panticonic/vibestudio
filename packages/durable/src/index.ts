@@ -3,6 +3,8 @@ import {
   createConnectionlessRpcClient,
   envelopeFromMessage,
   rpcExposedMethodNames,
+  rpcErrorDataOf,
+  rpcErrorKindOf,
   type AuthenticatedCaller,
   type ConnectionlessRpcClient,
   type DeferrableRpcClient,
@@ -26,12 +28,6 @@ export interface DurableObjectContext {
   getWebSockets(tag?: string): WebSocket[];
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
   waitUntil?(promise: Promise<unknown>): void;
-  /**
-   * workerd: discard the in-memory instance (in-flight work aborted) without deleting
-   * durable SQLite. Used by EvalDO for idle GC under `preventEviction`. Present on the
-   * real workerd `DurableObjectState`; declared here because the minimal type omitted it.
-   */
-  abort(reason?: string): void;
 }
 
 export interface SqlStorage {
@@ -49,15 +45,22 @@ export interface DORef {
   objectKey: string;
 }
 
+function quoteSqlIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
 export interface LifecyclePrepareInput {
   epoch: string;
+  /** Release only activation resources, or perform terminal entity release. */
+  mode: "suspend" | "retire";
   reason: string;
+  /** Remaining preparation budget; zero means the caller imposes no deadline. */
   deadlineMs: number;
 }
 
 export interface LifecyclePrepareResult {
   status: "ready" | "failed";
-  detail?: string;
+  detail?: unknown;
 }
 
 export interface LifecycleResumeInput {
@@ -65,6 +68,10 @@ export interface LifecycleResumeInput {
   previousGeneration: number | null;
   currentGeneration: number;
   reason: "planned" | "crash" | "server_restart";
+}
+
+export interface AlarmSchedule {
+  wakeAt: number;
 }
 
 // (RPC exposure is now opt-in via `@rpc` + `rpcExposedMethodNames` — no reserved deny-list needed;
@@ -85,8 +92,6 @@ export abstract class DurableObjectBase {
   private currentRpcCallerPanelId: string | null = null;
   private currentRpcRequestId: string | null = null;
   private currentRpcIdempotencyKey: string | null = null;
-  private currentInvocationToken: string | undefined = undefined;
-  private currentCallerContextId: string | undefined = undefined;
   private currentObjectKey: string | null = null;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
@@ -96,8 +101,6 @@ export abstract class DurableObjectBase {
   }
 
   protected abstract createTables(): void;
-
-  protected migrate(_fromVersion: number, _toVersion: number): void {}
 
   protected requiredTables(): readonly string[] {
     return [];
@@ -138,7 +141,7 @@ export abstract class DurableObjectBase {
         String(targetVersion)
       );
     } else if (currentVersion < targetVersion) {
-      this.migrate(currentVersion, targetVersion);
+      this.resetPersistenceForSchemaEpoch();
       this.createTables();
       this.validateSchema();
       this.sql.exec(
@@ -150,6 +153,47 @@ export abstract class DurableObjectBase {
       this.validateSchema();
     }
     this.schemaReady = true;
+  }
+
+  /**
+   * Pre-release schema epochs are hard cuts. A Durable Object owns every
+   * non-framework SQLite object in its database, so an older epoch is replaced
+   * wholesale instead of interpreted by compatibility code. Virtual tables are
+   * dropped before ordinary tables so SQLite can remove their shadow tables.
+   * The old epoch stamp remains until the exact current schema validates, making
+   * an interrupted reset repeat safely on the next activation.
+   */
+  private resetPersistenceForSchemaEpoch(): void {
+    const rows = this.sql
+      .exec(
+        `SELECT type, name, sql FROM sqlite_master
+         WHERE type IN ('table', 'view')
+           AND name <> 'state'
+           AND name NOT LIKE 'sqlite_%'`
+      )
+      .toArray() as Array<{ type: string; name: string; sql?: unknown }>;
+    const isVirtual = (row: { sql?: unknown }): boolean =>
+      typeof row.sql === "string" && /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(row.sql);
+
+    for (const row of rows) {
+      if (row.type === "view") {
+        this.sql.exec(`DROP VIEW IF EXISTS ${quoteSqlIdentifier(row.name)}`);
+      }
+    }
+    for (const row of rows) {
+      if (row.type === "table" && isVirtual(row)) {
+        this.sql.exec(`DROP TABLE IF EXISTS ${quoteSqlIdentifier(row.name)}`);
+      }
+    }
+    for (const row of rows) {
+      if (row.type !== "table" || isVirtual(row)) continue;
+      const stillExists =
+        this.sql
+          .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, row.name)
+          .toArray().length > 0;
+      if (stillExists) this.sql.exec(`DROP TABLE IF EXISTS ${quoteSqlIdentifier(row.name)}`);
+    }
+    this.sql.exec(`DELETE FROM state WHERE key <> 'schema_version'`);
   }
 
   protected getStateValue(key: string): string | null {
@@ -169,7 +213,6 @@ export abstract class DurableObjectBase {
     args: unknown[];
     error?: string;
     caller?: AuthenticatedCaller | null;
-    invocationToken?: string;
   } {
     const parsed = JSON.parse(body);
     if (Array.isArray(parsed)) return { args: parsed };
@@ -185,9 +228,6 @@ export abstract class DurableObjectBase {
         if (typeof record["callerId"] === "string" && typeof record["callerKind"] === "string") {
           return {
             args: (parsed as { args: unknown[] }).args,
-            ...(typeof (parsed as { __invocationToken?: unknown }).__invocationToken === "string"
-              ? { invocationToken: (parsed as { __invocationToken: string }).__invocationToken }
-              : {}),
             caller: {
               callerId: record["callerId"],
               callerKind: record["callerKind"] as AuthenticatedCaller["callerKind"],
@@ -201,9 +241,6 @@ export abstract class DurableObjectBase {
       }
       return {
         args: (parsed as { args: unknown[] }).args,
-        ...(typeof (parsed as { __invocationToken?: unknown }).__invocationToken === "string"
-          ? { invocationToken: (parsed as { __invocationToken: string }).__invocationToken }
-          : {}),
       };
     }
     return { args: [parsed] };
@@ -303,44 +340,6 @@ export abstract class DurableObjectBase {
     return this.currentRpcIdempotencyKey;
   }
 
-  /**
-   * The host-minted invocation token for the dispatch currently being served, or
-   * `undefined` when the inbound call carried none (a non-relayed / non-`vcs`
-   * dispatch, or a self-initiated DO call). Opaque correlation nonce, NOT a
-   * credential — see `RpcRequest.invocationToken` and
-   * docs/narrow-host-vcs-plan.md §4. A DO orchestrating a host write echoes it
-   * into `refs.updateMains` so the host can resolve on-behalf-of attribution
-   * against its own invocation table.
-   *
-   * SCOPING CONTRACT (identical to `caller`/`rpcRequestId`): this reflects the
-   * dispatch whose handler is CURRENTLY executing its synchronous entry. The DO
-   * multiplexes — at any non-storage `await` a concurrent inbound dispatch can be
-   * delivered and rebind this field — so a handler MUST read it synchronously at
-   * entry and capture it into a local before its first `await`. Read that way it
-   * is provably the current dispatch's token: the value is set synchronously in
-   * `dispatchInboundEnvelope` and the handler runs one microtask later
-   * (`handleRequest` schedules it via `Promise.resolve().then`), and no other
-   * dispatch — a fresh `fetch`, i.e. a macrotask — can interpose across that
-   * microtask boundary. It is never a concurrent or previous dispatch's token at
-   * that point (each dispatch restores the prior value in a `finally`). Reading
-   * it lazily AFTER an await is unsupported and may observe another in-flight
-   * dispatch's token; capture-at-entry is the contract. Never log it.
-   */
-  protected get invocationToken(): string | undefined {
-    return this.currentInvocationToken;
-  }
-
-  /**
-   * The originating caller's HOST-RESOLVED context registration id for the
-   * dispatch currently being served (or `undefined`). HOST-VERIFIED, never
-   * client-asserted — read-at-entry like {@link invocationToken}. Threaded on
-   * relayed userland `vcs` dispatches for source-head confinement
-   * (docs/narrow-host-vcs-plan.md §3, register row 11).
-   */
-  protected get callerContextId(): string | undefined {
-    return this.currentCallerContextId;
-  }
-
   protected get objectKey(): string {
     if (this.currentObjectKey) return this.currentObjectKey;
     if (this.ctx.id.name) {
@@ -359,36 +358,47 @@ export abstract class DurableObjectBase {
     throw new Error("objectKey not available");
   }
 
-  protected setAlarm(delayMs: number, opts?: { bestEffort?: boolean }): void {
-    this.setAlarmAt(Date.now() + delayMs, opts);
+  protected setAlarm(delayMs: number): void {
+    this.setAlarmAt(Date.now() + delayMs);
   }
 
   /**
-   * @param opts.bestEffort fire-once, never re-armed on dispatch failure — for alarms
-   *   whose handler may abort its own DO (idle GC). Default alarms are at-least-once.
+   * Persist an alarm from an ordinary DO request. An `alarm()` handler returns
+   * its next schedule directly instead of calling this method.
+   *
    */
-  protected setAlarmAt(timeMs: number, opts?: { bestEffort?: boolean }): void {
-    this.trackAlarmRpc(this.alarmRpc("workspace-state.alarmSet", {
-      ...this.lifecycleKey(),
-      wakeAt: timeMs,
-      ...(opts?.bestEffort ? { bestEffort: true } : {}),
-    }));
+  protected setAlarmAt(timeMs: number): void {
+    this.trackAlarmRpc(
+      this.rpc.call<void>("main", "workspace-state.alarmSet", [
+        {
+          ...this.lifecycleKey(),
+          wakeAt: timeMs,
+        },
+      ])
+    );
   }
 
+  /** Clear an alarm from an ordinary DO request. A completed `alarm()` returns `null`. */
   protected deleteAlarm(): void {
-    this.trackAlarmRpc(this.alarmRpc("workspace-state.alarmClear", this.lifecycleKey()));
+    this.trackAlarmRpc(
+      this.rpc.call<void>("main", "workspace-state.alarmClear", [this.lifecycleKey()])
+    );
   }
 
   private readonly pendingAlarmRpcs = new Set<Promise<void>>();
 
   private trackAlarmRpc(pending: Promise<void>): void {
     this.pendingAlarmRpcs.add(pending);
-    void pending.finally(() => this.pendingAlarmRpcs.delete(pending));
   }
 
   private async drainAlarmRpcs(): Promise<void> {
     while (this.pendingAlarmRpcs.size > 0) {
-      await Promise.allSettled([...this.pendingAlarmRpcs]);
+      const pending = [...this.pendingAlarmRpcs];
+      try {
+        await Promise.all(pending);
+      } finally {
+        for (const settled of pending) this.pendingAlarmRpcs.delete(settled);
+      }
     }
   }
 
@@ -400,19 +410,12 @@ export abstract class DurableObjectBase {
     };
   }
 
-  private async alarmRpc(method: string, payload: unknown): Promise<void> {
-    try {
-      await this.rpc.call("main", method, [payload]);
-    } catch (err) {
-      console.warn(`[durable] ${method} failed:`, err instanceof Error ? err.message : err);
-    }
-  }
-
-  async alarm(): Promise<void> {
+  async alarm(): Promise<AlarmSchedule | null> {
     this.ensureReady();
+    return null;
   }
 
-  async prepareForRestart(_input: LifecyclePrepareInput): Promise<LifecyclePrepareResult> {
+  async releaseForLifecycle(_input: LifecyclePrepareInput): Promise<LifecyclePrepareResult> {
     return { status: "ready" };
   }
 
@@ -449,7 +452,6 @@ export abstract class DurableObjectBase {
 
       let args: unknown[] = [];
       let verifiedCallerFromBody: AuthenticatedCaller | null = null;
-      let invocationTokenFromBody: string | undefined;
       if (request.method === "POST") {
         const body = await request.text();
         if (body) {
@@ -462,7 +464,6 @@ export abstract class DurableObjectBase {
           }
           args = result.args;
           verifiedCallerFromBody = result.caller ?? null;
-          invocationTokenFromBody = result.invocationToken;
         }
       }
 
@@ -475,7 +476,7 @@ export abstract class DurableObjectBase {
             method === "__lifecycle/prepare"
               ? await (async () => {
                   await this.drainAlarmRpcs();
-                  return this.prepareForRestart(args[0] as LifecyclePrepareInput);
+                  return this.releaseForLifecycle(args[0] as LifecyclePrepareInput);
                 })()
               : await this.resumeAfterRestart(args[0] as LifecycleResumeInput);
           return jsonResponse(result ?? null);
@@ -487,8 +488,7 @@ export abstract class DurableObjectBase {
           if (this.caller?.callerKind !== "server") {
             return jsonResponse({ error: "Alarm calls require server caller" }, 403);
           }
-          await this.alarm();
-          return jsonResponse({ result: "ok" });
+          return jsonResponse({ nextAlarm: await this.alarm() });
         });
       }
 
@@ -513,9 +513,6 @@ export abstract class DurableObjectBase {
           fromId: caller.callerId || "unknown",
           method,
           args,
-          ...(invocationTokenFromBody !== undefined
-            ? { invocationToken: invocationTokenFromBody }
-            : {}),
         },
       });
       const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
@@ -527,7 +524,11 @@ export abstract class DurableObjectBase {
         return jsonResponse(
           {
             error: responseMessage.error,
+            errorKind: responseMessage.errorKind,
             ...(responseMessage.errorCode ? { errorCode: responseMessage.errorCode } : {}),
+            ...(responseMessage.errorData !== undefined
+              ? { errorData: responseMessage.errorData }
+              : {}),
           },
           500
         );
@@ -538,7 +539,23 @@ export abstract class DurableObjectBase {
           : null
       );
     } catch (err) {
-      return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 500);
+      const errorData = rpcErrorDataOf(err);
+      const errorCode = err instanceof Error ? (err as Error & { code?: string }).code : undefined;
+      return jsonResponse(
+        {
+          error: err instanceof Error ? err.message : String(err),
+          errorKind: rpcErrorKindOf(err),
+          ...(typeof errorCode === "string" ? { errorCode } : {}),
+          ...(errorData === undefined ? {} : { errorData }),
+        },
+        500
+      );
+    } finally {
+      // An alarm mutation is part of the request's durable outcome. If its
+      // single scheduling write fails, the request fails too; returning a
+      // successful domain response would otherwise acknowledge work whose
+      // only future wake was never recorded.
+      await this.drainAlarmRpcs();
     }
   }
 
@@ -570,6 +587,29 @@ export abstract class DurableObjectBase {
       this.connectionlessClient().deliver(envelope);
       return jsonResponse({});
     }
+    if (message.type === "stream-request") {
+      const responseEnvelope = await this.dispatchInboundEnvelope({
+        ...envelope,
+        message: { ...message, type: "request" } satisfies RpcRequest,
+      });
+      const responseMessage = responseEnvelope?.message;
+      if (responseMessage?.type === "response" && "result" in responseMessage) {
+        if (responseMessage.result instanceof Response) return responseMessage.result;
+        return jsonResponse(
+          { error: `Streaming method ${message.method} did not return a Response` },
+          500
+        );
+      }
+      return jsonResponse(
+        {
+          error:
+            responseMessage?.type === "response" && "error" in responseMessage
+              ? responseMessage.error
+              : `Streaming method ${message.method} did not produce a response`,
+        },
+        500
+      );
+    }
     const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
     return jsonResponse(responseEnvelope ?? {});
   }
@@ -595,8 +635,6 @@ export abstract class DurableObjectBase {
       callerPanelId: this.currentRpcCallerPanelId,
       requestId: this.currentRpcRequestId,
       idempotencyKey: this.currentRpcIdempotencyKey,
-      invocationToken: this.currentInvocationToken,
-      callerContextId: this.currentCallerContextId,
     };
     this.currentVerifiedCaller = caller;
     this.currentRpcCallerId = caller?.callerId ?? null;
@@ -604,12 +642,6 @@ export abstract class DurableObjectBase {
     this.currentRpcCallerPanelId = caller?.callerPanelId ?? null;
     this.currentRpcRequestId = message?.requestId ?? null;
     this.currentRpcIdempotencyKey = envelope.delivery.idempotencyKey ?? null;
-    // Host-minted on-behalf-of nonce, present only on relayed userland `vcs`
-    // dispatches (absent → undefined). Bound per-dispatch; see `invocationToken`.
-    this.currentInvocationToken = message?.invocationToken ?? undefined;
-    // Host-resolved source-head confinement context (register row 11), present
-    // only on relayed userland `vcs` dispatches. Bound per-dispatch.
-    this.currentCallerContextId = message?.callerContextId ?? undefined;
     try {
       return await connectionless.respond(envelope);
     } finally {
@@ -619,8 +651,6 @@ export abstract class DurableObjectBase {
       this.currentRpcCallerPanelId = prev.callerPanelId;
       this.currentRpcRequestId = prev.requestId;
       this.currentRpcIdempotencyKey = prev.idempotencyKey;
-      this.currentInvocationToken = prev.invocationToken;
-      this.currentCallerContextId = prev.callerContextId;
     }
   }
 

@@ -15,11 +15,16 @@
  */
 
 import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
+import { RemoteRpcError, type RpcErrorKind } from "@vibestudio/rpc";
 import type {
   AlarmDoDispatcher,
+  DoAlarmDispatchResult,
   DORef,
   HeldDoDispatcher,
   LifecycleDoDispatcher,
+  LifecyclePrepareInput,
+  LifecyclePrepareResult,
+  LifecycleResumeInput,
 } from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
@@ -103,15 +108,7 @@ export async function postToDOWithToken(
   args: unknown[],
   deps: PostToDOWithTokenDeps,
   callerId?: string,
-  caller?: DOCallerEnvelope,
-  /**
-   * Host-minted on-behalf-of nonce (narrow-host-vcs §4) threaded on the
-   * method-path envelope as `__invocationToken`. Set ONLY by trusted host
-   * dispatchers (e.g. chrome merge-to-main, register row 12) — the DO reads it
-   * read-at-entry and echoes it into `refs.updateMains` so the approval gate
-   * attributes to the originating principal. Never identity-bearing.
-   */
-  invocationToken?: string
+  caller?: DOCallerEnvelope
 ): Promise<unknown> {
   // 1. Build the instance ID for this DO: "do:{source}:{className}:{objectKey}"
   const instanceId = `do:${ref.source}:${ref.className}:${ref.objectKey}`;
@@ -130,7 +127,6 @@ export async function postToDOWithToken(
     __instanceId: instanceId,
     __parentId: callerId ?? undefined,
     __caller: caller ?? undefined,
-    __invocationToken: invocationToken ?? undefined,
   };
 
   const headers: Record<string, string> = {
@@ -149,8 +145,35 @@ export async function postToDOWithToken(
   } as RequestInit);
 
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`DO dispatch failed (${res.status}): ${text}`);
+    const body = await res.text();
+    try {
+      const parsed = JSON.parse(body) as {
+        error?: unknown;
+        errorKind?: unknown;
+        errorCode?: unknown;
+        errorData?: unknown;
+      };
+      if (typeof parsed.error === "string") {
+        const kind: RpcErrorKind =
+          parsed.errorKind === "access" ||
+          parsed.errorKind === "service" ||
+          parsed.errorKind === "transport" ||
+          parsed.errorKind === "protocol" ||
+          parsed.errorKind === "application" ||
+          parsed.errorKind === "internal"
+            ? parsed.errorKind
+            : "application";
+        throw new RemoteRpcError(
+          parsed.error,
+          kind,
+          typeof parsed.errorCode === "string" ? parsed.errorCode : undefined,
+          parsed.errorData
+        );
+      }
+    } catch (error) {
+      if (error instanceof RemoteRpcError) throw error;
+    }
+    throw new Error(`DO dispatch failed (${res.status}): ${body}`);
   }
 
   return res.json();
@@ -166,7 +189,6 @@ export interface InstanceTokenEnvelope {
   __instanceId?: unknown;
   __parentId?: unknown;
   __caller?: unknown;
-  __invocationToken?: unknown;
 }
 
 export interface VerifyInstanceTokenResult {
@@ -241,27 +263,10 @@ export function verifyInstanceTokenEnvelope(
 // ---------------------------------------------------------------------------
 
 export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, LifecycleDoDispatcher {
-  private ensureDOFn:
-    | ((source: string, className: string, objectKey: string) => Promise<void>)
-    | null = null;
-  private beforeDispatchFn: ((ref: DORef) => Promise<void> | void) | null = null;
   private tokenManager: TokenManager | null = null;
   private getWorkerdUrl: (() => string) | null = null;
   private getDispatchSecret: (() => string) | null = null;
   private getWorkerdGatewayToken: (() => string) | null = null;
-
-  /**
-   * Set the ensureDO callback for retry-on-failure.
-   * When a dispatch fails with a retryable error, ensureDO is called to
-   * re-register the service and restart workerd before retrying.
-   */
-  setEnsureDO(fn: (source: string, className: string, objectKey: string) => Promise<void>): void {
-    this.ensureDOFn = fn;
-  }
-
-  setBeforeDispatch(fn: (ref: DORef) => Promise<void> | void): void {
-    this.beforeDispatchFn = fn;
-  }
 
   /**
    * Set the TokenManager for per-instance identity tokens.
@@ -301,34 +306,14 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   /**
    * Dispatch a method call to a DO via HTTP POST.
    * Returns the parsed JSON response (type depends on the DO method).
-   * On retryable errors (DO class not found, ECONNREFUSED), calls ensureDO and retries once.
    *
-   * When tokenManager and workerdUrl are configured, uses postToDOWithToken
-   * to include per-instance identity tokens. Otherwise falls back to the
-   * raw dispatcher function.
+   * A dispatch is attempted exactly once. Lifecycle owners prepare the DO
+   * before invoking it; this transport must not replay a semantic call or
+   * recreate infrastructure after its entity has retired.
    */
   async dispatch(ref: DORef, method: string, ...args: unknown[]): Promise<unknown> {
     return this.withSlowWarning(`${doRefKey(ref)}.${method}`, () =>
       this.dispatchImpl(ref, method, args)
-    );
-  }
-
-  /**
-   * Like `dispatch`, but attaches a host-minted on-behalf-of invocation token
-   * (narrow-host-vcs §4, register row 12) to the method-path envelope. The DO
-   * reads it read-at-entry and echoes it into `refs.updateMains`, so a
-   * host-dispatched write (chrome merge-to-main) attributes to the originating
-   * principal instead of the writer DO. `args` is the already-collected arg
-   * array (not spread) so the trailing token cannot be mistaken for an arg.
-   */
-  async dispatchOnBehalf(
-    ref: DORef,
-    method: string,
-    args: unknown[],
-    invocationToken: string | undefined
-  ): Promise<unknown> {
-    return this.withSlowWarning(`${doRefKey(ref)}.${method}`, () =>
-      this.dispatchImpl(ref, method, args, false, invocationToken)
     );
   }
 
@@ -378,11 +363,8 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     ref: DORef,
     method: string,
     args: unknown[],
-    held = false,
-    invocationToken?: string
+    held = false
   ): Promise<unknown> {
-    await Promise.resolve(this.beforeDispatchFn?.(ref));
-
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
@@ -399,37 +381,15 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       ...(held ? { heldConnection: true } : {}),
     });
     const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
-    try {
-      return await postToDOWithToken(
-        ref,
-        method,
-        args,
-        buildDeps(),
-        "main",
-        serverCaller,
-        invocationToken
-      );
-    } catch (err) {
-      if (this.ensureDOFn && this.isRetryable(err)) {
-        console.warn(
-          `[DODispatch] ${doRefKey(ref)}.${method} failed (${err instanceof Error ? err.message : String(err)}), calling ensureDO and retrying`
-        );
-        await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
-        await Promise.resolve(this.beforeDispatchFn?.(ref));
-        return await postToDOWithToken(
-          ref,
-          method,
-          args,
-          buildDeps(),
-          "main",
-          serverCaller,
-          invocationToken
-        );
-      }
-      throw err;
-    }
+    return await postToDOWithToken(ref, method, args, buildDeps(), "main", serverCaller);
   }
 
+  async dispatchLifecycle(
+    ref: DORef,
+    method: "prepare",
+    arg: LifecyclePrepareInput
+  ): Promise<LifecyclePrepareResult>;
+  async dispatchLifecycle(ref: DORef, method: "resume", arg: LifecycleResumeInput): Promise<void>;
   async dispatchLifecycle(
     ref: DORef,
     method: "prepare" | "resume",
@@ -446,8 +406,6 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     arg: unknown
   ): Promise<unknown> {
     const lifecycleMethod = `__lifecycle/${method}`;
-    await Promise.resolve(this.beforeDispatchFn?.(ref));
-
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
@@ -458,47 +416,18 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
     });
     const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
-    try {
-      return await postToDOWithToken(
-        ref,
-        lifecycleMethod,
-        [arg],
-        buildDeps(),
-        "main",
-        serverCaller
-      );
-    } catch (err) {
-      if (this.ensureDOFn && this.isRetryable(err)) {
-        console.warn(
-          `[DODispatch] ${doRefKey(ref)}.${lifecycleMethod} failed (${err instanceof Error ? err.message : String(err)}), calling ensureDO and retrying`
-        );
-        await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
-        await Promise.resolve(this.beforeDispatchFn?.(ref));
-        return await postToDOWithToken(
-          ref,
-          lifecycleMethod,
-          [arg],
-          buildDeps(),
-          "main",
-          serverCaller
-        );
-      }
-      throw err;
-    }
+    return await postToDOWithToken(ref, lifecycleMethod, [arg], buildDeps(), "main", serverCaller);
   }
 
   /**
    * Fire a server-driven `__alarm` on a DO. Mirrors `dispatchLifecycle`'s
-   * server-caller envelope (so the DO can gate `__alarm` to the server) and
-   * ensureDO-on-missing retry (a hibernated/cold DO is woken to handle it).
+   * server-caller envelope so the DO can gate `__alarm` to the server.
    */
-  async dispatchAlarm(ref: DORef): Promise<unknown> {
+  async dispatchAlarm(ref: DORef): Promise<DoAlarmDispatchResult> {
     return this.withSlowWarning(`${doRefKey(ref)}.__alarm`, () => this.dispatchAlarmImpl(ref));
   }
 
-  private async dispatchAlarmImpl(ref: DORef): Promise<unknown> {
-    await Promise.resolve(this.beforeDispatchFn?.(ref));
-
+  private async dispatchAlarmImpl(ref: DORef): Promise<DoAlarmDispatchResult> {
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
@@ -509,27 +438,13 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
     });
     const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
-    try {
-      return await postToDOWithToken(ref, "__alarm", [], buildDeps(), "main", serverCaller);
-    } catch (err) {
-      if (this.ensureDOFn && this.isRetryable(err)) {
-        await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
-        await Promise.resolve(this.beforeDispatchFn?.(ref));
-        return await postToDOWithToken(ref, "__alarm", [], buildDeps(), "main", serverCaller);
-      }
-      throw err;
-    }
-  }
-
-  private isRetryable(err: unknown): boolean {
-    const msg = String(err);
-    const cause = err instanceof Error && "cause" in err ? String(err.cause) : "";
-    return (
-      msg.includes("DO class not found") ||
-      msg.includes("ECONNREFUSED") ||
-      msg.includes("fetch failed") ||
-      msg.includes("workerd not running") ||
-      cause.includes("ECONNREFUSED")
-    );
+    return (await postToDOWithToken(
+      ref,
+      "__alarm",
+      [],
+      buildDeps(),
+      "main",
+      serverCaller
+    )) as DoAlarmDispatchResult;
   }
 }

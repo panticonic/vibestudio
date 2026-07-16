@@ -22,7 +22,7 @@ import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/se
 import type { FsService } from "@vibestudio/shared/fsService";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import { primaryTextArtifactContent, type BuildResult } from "./buildV2/buildStore.js";
-import type { RuntimeImageBinding, StateAdvancedEvent } from "./buildV2/index.js";
+import type { ProtectedPublicationEvent, RuntimeImageBinding } from "./buildV2/index.js";
 import { validateBuildRef } from "./buildV2/refs.js";
 import type { RouteRegistry, ManifestRouteDecl } from "./routeRegistry.js";
 import type { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
@@ -31,7 +31,15 @@ import {
   getPhysicalPathForAsarPath,
   getPlatformPackageBinaryPath,
 } from "@vibestudio/shared/runtimePaths";
-import { getInternalDOBundle, isInternalDOSource } from "./internalDOs/internalDoLoader.js";
+import {
+  getInternalDOBundle,
+  isInternalDOSource,
+  type InternalDOBundle,
+} from "./internalDOs/internalDoLoader.js";
+import {
+  SEMANTIC_CONTROL_PLANE,
+  semanticControlPlaneEnvironment,
+} from "./internalDOs/controlPlane.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
@@ -72,9 +80,18 @@ function explicitScopeRef(explicitRef?: string): string | undefined {
     : undefined;
 }
 
-function scopeTracksHead(scopeRef: string | undefined, head: string): boolean {
+/**
+ * Runtime entities follow the semantic context that owns them unless their
+ * creator deliberately pins another immutable selector. This is the execution
+ * half of context-local work: code changes remain local until publication.
+ */
+function entityScopeRef(explicitRef: string | undefined, contextId: string): string {
+  return explicitScopeRef(explicitRef) ?? `ctx:${contextId}`;
+}
+
+function scopeTracksProtectedMain(scopeRef: string | undefined): boolean {
   const normalized = scopeRef && scopeRef.length > 0 ? scopeRef : "main";
-  return normalized === head;
+  return normalized === "main";
 }
 
 // This file is bundled as both ESM (standalone server) and CJS (Electron
@@ -233,6 +250,13 @@ export interface WorkerdManagerDeps {
   tokenManager: TokenManager;
   fsService: FsService;
   /**
+   * Opaque workspace identity issued by the hub. The manager hosts exactly one
+   * workspace, and binds this process-owned identity into product-sealed
+   * authorities; a Durable Object id is a storage coordinate, not a workspace
+   * identity.
+   */
+  workspaceId: string;
+  /**
    * URL workers use to reach the server's RPC endpoint via HTTP POST.
    * Always points at an in-process loopback HTTP listener — workers are
    * spawned on the same host as the server, so the back-channel never
@@ -242,10 +266,14 @@ export interface WorkerdManagerDeps {
   getServerUrl: () => string;
   /** Additional externally advertised gateway URLs that map to this server. */
   getServerAliasUrls?: () => readonly string[];
-  bindRuntimeImage: (unitPath: string, ref?: string) => Promise<RuntimeImageBinding>;
-  getBuildByKey: (key: string) => BuildResult | null;
   /** Immutable, build-compiled programs used by the workerd host services. */
   readonly workerdPrograms: WorkerdProgramSources;
+  /**
+   * Immutable internal-DO program paired with this manager. Production loads
+   * the build artifact; tests inject an in-memory build so they cannot replace
+   * a concurrently running source server's authority program on disk.
+   */
+  readonly internalDOBundle?: InternalDOBundle;
   /** Workspace source root — used for WORKER_SOURCE binding. */
   workspacePath: string;
   /** State directory — used for DO storage (localDisk). */
@@ -253,12 +281,6 @@ export interface WorkerdManagerDeps {
   /** Route registry for `/_r/` dispatch — optional; when absent, route
    *  registration is a no-op and routes in package manifests have no effect. */
   routeRegistry?: RouteRegistry;
-  /** Manifest-route lookup, keyed by source. Used alongside routeRegistry. */
-  getManifestRoutes?: (source: string) => ReadonlyArray<ManifestRouteDecl>;
-  /** Durable Object classes declared by a worker package manifest, keyed by source. */
-  getManifestDoClasses?: (source: string) => ReadonlyArray<{ className: string }>;
-  /** Singleton registry — joins routes' (source,className) to object keys. */
-  singletonRegistry?: SingletonRegistry;
   getProxyPort: (caller: VerifiedCaller) => Promise<number | null> | number | null;
   /** Shared attributed-by-header egress listener port for the dynamic worker
    *  host. Identity travels in the `X-Vibestudio-Egress-Caller` header (stamped
@@ -273,20 +295,6 @@ export interface WorkerdManagerDeps {
   /** Process-owned secret bound into worker hosts and checked by shared egress. */
   egressSecret: string;
   getWorkerdGatewayToken: () => string;
-  /**
-   * Manifest-declared DOs that stay bound to the explicit main head during
-   * bootstrap instead of synthetic ctx-head scopes (e.g. the gad store
-   * backing the userland `vcs` service in meta/vibestudio.yml). Absent ⇒ no DO is
-   * bootstrap-main-bound; the manager never assumes a hardcoded unit.
-   */
-  getBootstrapMainBoundDos?: () => ReadonlyArray<{ source: string; className: string }>;
-  /**
-   * Extra env text bindings for INTERNAL DO classes, keyed by className.
-   * The server derives these from the workspace manifest's `providers.*`
-   * slots (e.g. `EVAL_ENGINE_SOURCE` for EvalDO, `BROWSER_DATA_BROKER_ID`
-   * for BrowserDataDO) so internal DOs never hardcode workspace unit names.
-   */
-  getInternalDoEnv?: (className: string) => Record<string, string>;
   /** Override for tests; production uses the default router readiness window. */
   workerdStartupReadyTimeoutMs?: number;
   cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
@@ -305,6 +313,23 @@ export interface WorkerdManagerDeps {
   }) => void;
 }
 
+/**
+ * Workspace-authored runtime capabilities become available only after the
+ * semantic authority has activated exact protected main. Until this provider
+ * is bound, WorkerdManager is a sealed control-plane host, not a general
+ * worker/build host.
+ */
+export interface WorkerdWorkspaceProvider {
+  bindRuntimeImage(unitPath: string, ref?: string): Promise<RuntimeImageBinding>;
+  getBuildByKey(key: string): BuildResult | null;
+  getManifestRoutes(source: string): ReadonlyArray<ManifestRouteDecl>;
+  getManifestDoClasses(source: string): ReadonlyArray<{ className: string }>;
+  readonly singletonRegistry: SingletonRegistry;
+  getInternalDoEnv(className: string): Record<string, string>;
+}
+
+export type WorkerdStage = "control-plane" | "workspace";
+
 type ResolvedWorkerdManagerDeps = WorkerdManagerDeps;
 
 /** The canonical regular-worker instance name for a source. Matches the
@@ -322,18 +347,15 @@ function workerdInspectorEnabled(): boolean {
   return process.env["VIBESTUDIO_DISABLE_WORKERD_INSPECTOR"] !== "1";
 }
 
-const EXPECTED_EVAL_IDLE_EVICTION_ABORT =
-  "EvalDO: idle eviction (reclaim memory; SQLite preserved)";
-
-export function isExpectedEvalIdleEvictionWorkerdStderr(text: string): boolean {
-  return text.includes(EXPECTED_EVAL_IDLE_EVICTION_ABORT);
-}
-
 // ---------------------------------------------------------------------------
 // WorkerdManager
 // ---------------------------------------------------------------------------
 
 export class WorkerdManager {
+  private internalDOBundle(): InternalDOBundle {
+    return this.deps.internalDOBundle ?? getInternalDOBundle();
+  }
+
   private instances = new Map<string, WorkerInstance>();
   // Most recent startup/update failure per worker source. Survives the
   // instance row (which is deleted on failed start) so `units.list` can
@@ -360,7 +382,6 @@ export class WorkerdManager {
   private workerdStartedAtMs: number | null = null;
   private workerdMemorySampleTimer: ReturnType<typeof setInterval> | null = null;
   private lastWorkerdRssBytes: number | null = null;
-  private suppressNextExpectedWorkerdStack = false;
 
   // DO support: shared services (one per source)
   /** Shared DO services — keyed by `${source}:${className}`. Source-scoped: two workers CAN have same className if different source. */
@@ -384,6 +405,7 @@ export class WorkerdManager {
   /** Per-process secret the host's EgressGateway stamps on forwarded egress so
    *  the shared egress listener trusts the `X-Vibestudio-Egress-Caller` header. */
   private readonly egressSecret: string;
+  private workspaceProvider: WorkerdWorkspaceProvider | null = null;
   /** Resolved shared egress listener port (memoized after first start). */
   private sharedEgressPort: number | null = null;
 
@@ -395,6 +417,35 @@ export class WorkerdManager {
     fs.mkdirSync(this.configDir, { recursive: true });
     this.bootGenerationFile = stateLayout(this.deps.statePath).bootGenerationFile;
     this.bootGeneration = this.readBootGeneration();
+  }
+
+  getStage(): WorkerdStage {
+    return this.workspaceProvider ? "workspace" : "control-plane";
+  }
+
+  /** Bind the one semantic-main-backed workspace provider exactly once. */
+  bindWorkspaceProvider(provider: WorkerdWorkspaceProvider): void {
+    if (this.workspaceProvider) {
+      throw new Error("Workerd workspace provider is already bound");
+    }
+    this.workspaceProvider = provider;
+  }
+
+  private requireWorkspaceProvider(operation: string): WorkerdWorkspaceProvider {
+    if (!this.workspaceProvider) {
+      throw new Error(
+        `${operation} is unavailable while workerd is in the sealed control-plane stage`
+      );
+    }
+    return this.workspaceProvider;
+  }
+
+  private isSemanticControlPlane(source: string, className: string, objectKey?: string): boolean {
+    return (
+      source === SEMANTIC_CONTROL_PLANE.source &&
+      className === SEMANTIC_CONTROL_PLANE.className &&
+      (objectKey === undefined || objectKey === SEMANTIC_CONTROL_PLANE.objectKey)
+    );
   }
 
   private ensureWorkerBearer(callerId: string): string {
@@ -416,7 +467,10 @@ export class WorkerdManager {
     source: string,
     scopeRef?: string
   ): Promise<RuntimeImageRecord> {
-    const binding = await this.deps.bindRuntimeImage(source, scopeRef);
+    const binding = await this.requireWorkspaceProvider("runtime image binding").bindRuntimeImage(
+      source,
+      scopeRef
+    );
     return this.persistRuntimeImage(imageId, binding, scopeRef);
   }
 
@@ -448,7 +502,9 @@ export class WorkerdManager {
     if (!image) {
       throw new RuntimeImageWarmingError(`Runtime image is not bound yet: ${imageId}`);
     }
-    const build = this.deps.getBuildByKey(image.buildKey);
+    const build = this.requireWorkspaceProvider("runtime image loading").getBuildByKey(
+      image.buildKey
+    );
     if (build) return { image, build };
     if (image.error) {
       throw new RuntimeImageUnavailableError(
@@ -655,15 +711,16 @@ export class WorkerdManager {
     contextId: string;
     stateArgs?: unknown;
   }): Promise<{ targetId: string; effectiveVersion: string }> {
+    if (!this.isSemanticControlPlane(args.source, args.className, args.key)) {
+      this.requireWorkspaceProvider("Durable Object entity activation");
+    }
     const targetId = canonicalEntityId({
       kind: "do",
       source: args.source,
       className: args.className,
       key: args.key,
     });
-    const explicitRef = explicitScopeRef(args.ref);
-    const bootstrapMainBound = this.isBootstrapMainBoundDo(args.source, args.className);
-    const scopeRef = bootstrapMainBound ? args.ref : explicitRef;
+    const scopeRef = entityScopeRef(args.ref, args.contextId);
     await this.ensureDOClass(args.source, args.className, {
       scopeRef,
       objectKey: args.key,
@@ -698,6 +755,7 @@ export class WorkerdManager {
     env?: Record<string, string>;
     parent?: { parentId: string; parentEntityId: string; parentKind?: "panel" | "worker" | "do" };
   }): Promise<{ targetId: string; effectiveVersion: string }> {
+    this.requireWorkspaceProvider("worker start");
     const targetId = canonicalEntityId({ kind: "worker", source: args.source, key: args.key });
     const name = args.key.replace(/[^a-zA-Z0-9_-]/g, "_");
 
@@ -739,8 +797,7 @@ export class WorkerdManager {
 
     const callerId = targetId;
     const token = this.ensureWorkerBearer(callerId);
-    const explicitRef = explicitScopeRef(args.ref);
-    const scopeRef = explicitRef;
+    const scopeRef = entityScopeRef(args.ref, args.contextId);
 
     const stateArgs =
       args.stateArgs && typeof args.stateArgs === "object" && !Array.isArray(args.stateArgs)
@@ -801,10 +858,12 @@ export class WorkerdManager {
       });
       log.info(`Worker entity "${targetId}" started (source: ${args.source})`);
 
-      if (this.deps.routeRegistry && this.deps.getManifestRoutes) {
+      if (this.deps.routeRegistry) {
         const canonical = canonicalInstanceNameForSource(args.source);
         if (name === canonical) {
-          const routes = this.deps.getManifestRoutes(args.source);
+          const routes = this.requireWorkspaceProvider(
+            "worker route registration"
+          ).getManifestRoutes(args.source);
           if (routes.length > 0) {
             this.deps.routeRegistry.registerWorkerRoutes(args.source, name, Array.from(routes));
           }
@@ -945,7 +1004,7 @@ export class WorkerdManager {
     if (updates.bindings) instance.bindings = updates.bindings;
     if (updates.stateArgs !== undefined) instance.stateArgs = updates.stateArgs;
     if (updates.ref !== undefined) {
-      instance.scopeRef = explicitScopeRef(updates.ref);
+      instance.scopeRef = entityScopeRef(updates.ref, instance.contextId);
       const image = await this.bindRuntimeImage(
         instance.runtimeImageId,
         instance.source,
@@ -1295,7 +1354,7 @@ export class WorkerdManager {
       if (!isInternalDOSource(doService.source)) continue;
       const { className } = doService;
       // Internal DOs ship as a single pre-built bundle (no wasm artifacts).
-      const internalBundle = getInternalDOBundle();
+      const internalBundle = this.internalDOBundle();
       const bundleContent = internalBundle.bundle;
       doService.buildKey = internalBundle.buildKey;
 
@@ -1328,6 +1387,14 @@ export class WorkerdManager {
         { name: "WORKERD_BOOT_GENERATION", text: String(this.configBootGeneration()) },
       ];
 
+      if (this.isSemanticControlPlane(doService.source, className)) {
+        for (const [name, text] of Object.entries(
+          semanticControlPlaneEnvironment(this.deps.workspaceId)
+        )) {
+          bindings.push({ name, text });
+        }
+      }
+
       // Gateway URL for RPC bridge (DOs use HttpRpcBridge via POST /rpc)
       bindings.push({ name: "GATEWAY_URL", text: this.deps.getServerUrl() });
       const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
@@ -1339,7 +1406,12 @@ export class WorkerdManager {
       // (meta/vibestudio.yml `providers.*` → e.g. EVAL_ENGINE_SOURCE for EvalDO,
       // BROWSER_DATA_BROKER_ID for BrowserDataDO). Injected here so internal
       // DOs consume workspace unit identities only through the manifest.
-      for (const [name, text] of Object.entries(this.deps.getInternalDoEnv?.(className) ?? {})) {
+      const internalEnv = this.isSemanticControlPlane(doService.source, className)
+        ? {}
+        : this.requireWorkspaceProvider(
+            `internal Durable Object environment for ${className}`
+          ).getInternalDoEnv(className);
+      for (const [name, text] of Object.entries(internalEnv)) {
         bindings.push({ name, text });
       }
 
@@ -1378,9 +1450,6 @@ export class WorkerdManager {
             className,
             uniqueKey: `${doService.source.replace(/\//g, "_")}:${className}`,
             enableSql: true,
-            // Pin EvalDO in memory (workerd skips the ~10s idle eviction) so warm eval
-            // scope/db survive idle gaps. Namespace-wide — applies only to EvalDO's namespace.
-            ...(className === "EvalDO" ? { preventEviction: true } : {}),
           },
         ],
         durableObjectStorage: {
@@ -1745,12 +1814,17 @@ export class WorkerdManager {
   }
 
   private async emitRestartBegin(event: RestartBeginEvent): Promise<void> {
+    const failures: unknown[] = [];
     for (const hook of this.restartBeginHooks) {
       try {
         await hook(event);
       } catch (err) {
         log.warn("restart begin hook failed:", err);
+        failures.push(err);
       }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "workerd restart preparation failed");
     }
   }
 
@@ -1807,7 +1881,6 @@ export class WorkerdManager {
     spawnedProcess.stderr?.on("data", (data: Buffer) => {
       const line = data.toString().trim();
       if (line) {
-        if (this.shouldSuppressWorkerdStderr(line)) return;
         this.rememberWorkerdStartupOutput(`stderr: ${line}`);
         log.warn(`[workerd] ${line}`);
       }
@@ -1953,18 +2026,6 @@ export class WorkerdManager {
     }
   }
 
-  private shouldSuppressWorkerdStderr(line: string): boolean {
-    if (isExpectedEvalIdleEvictionWorkerdStderr(line)) {
-      this.suppressNextExpectedWorkerdStack = !line.includes("\nstack:");
-      return true;
-    }
-    if (this.suppressNextExpectedWorkerdStack) {
-      this.suppressNextExpectedWorkerdStack = false;
-      if (line.startsWith("stack:")) return true;
-    }
-    return false;
-  }
-
   private recentWorkerdOutputSuffix(): string {
     if (this.lastWorkerdStartupOutput.length === 0) return "";
     return `; recent workerd output:\n${this.lastWorkerdStartupOutput.join("\n")}`;
@@ -2050,31 +2111,30 @@ export class WorkerdManager {
       const serviceKey = doServiceKey(source, className);
       if (this.doServices.has(serviceKey)) continue;
 
-      try {
-        const imageId = `do-service:${serviceKey}`;
-        const image = isInternalDOSource(source)
-          ? null
-          : await this.bindRuntimeImage(imageId, source, undefined);
-        const buildKey = isInternalDOSource(source)
-          ? getInternalDOBundle().buildKey
-          : assertPresent(image).buildKey;
-        const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
-        const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
-        this.doServices.set(serviceKey, {
-          buildKey,
-          className,
-          ...(image ? { imageId: image.id } : {}),
-          serviceName,
-          source,
-        });
-        if (!isInternalDOSource(source)) {
-          this.registerRoutesForDoClass(source, className);
-          this.registerDoEgressCaller(source, className, assertPresent(image).effectiveVersion);
-        } else {
-          internalAdded = true;
-        }
-      } catch (err) {
-        log.warn(`Skipping DO class ${source}:${className} — build failed:`, err);
+      if (!this.isSemanticControlPlane(source, className)) {
+        this.requireWorkspaceProvider(`Durable Object class ${source}:${className}`);
+      }
+      const imageId = `do-service:${serviceKey}`;
+      const image = isInternalDOSource(source)
+        ? null
+        : await this.bindRuntimeImage(imageId, source, undefined);
+      const buildKey = isInternalDOSource(source)
+        ? this.internalDOBundle().buildKey
+        : assertPresent(image).buildKey;
+      const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
+      const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+      this.doServices.set(serviceKey, {
+        buildKey,
+        className,
+        ...(image ? { imageId: image.id } : {}),
+        serviceName,
+        source,
+      });
+      if (!isInternalDOSource(source)) {
+        this.registerRoutesForDoClass(source, className);
+        this.registerDoEgressCaller(source, className, assertPresent(image).effectiveVersion);
+      } else {
+        internalAdded = true;
       }
     }
 
@@ -2088,15 +2148,15 @@ export class WorkerdManager {
 
   /** Register DO-backed routes from a source's manifest for the given class. */
   private registerRoutesForDoClass(source: string, className: string): void {
-    if (!this.deps.routeRegistry || !this.deps.getManifestRoutes || !this.deps.singletonRegistry)
-      return;
-    const routes = this.deps.getManifestRoutes(source);
+    if (!this.deps.routeRegistry) return;
+    const provider = this.requireWorkspaceProvider("Durable Object route registration");
+    const routes = provider.getManifestRoutes(source);
     if (routes.length === 0) return;
     this.deps.routeRegistry.registerDoRoutes(
       source,
       className,
       Array.from(routes),
-      this.deps.singletonRegistry
+      provider.singletonRegistry
     );
   }
 
@@ -2114,11 +2174,11 @@ export class WorkerdManager {
     source: string,
     authoritativeDoClasses: Array<{ className: string }> | null = null
   ): void {
-    if (!this.deps.routeRegistry || !this.deps.getManifestRoutes || !this.deps.singletonRegistry)
-      return;
+    if (!this.deps.routeRegistry) return;
+    const provider = this.requireWorkspaceProvider("manifest route reconciliation");
 
     const liveDoClasses = new Set<string>();
-    for (const cls of authoritativeDoClasses ?? this.deps.getManifestDoClasses?.(source) ?? []) {
+    for (const cls of authoritativeDoClasses ?? provider.getManifestDoClasses(source)) {
       liveDoClasses.add(cls.className);
     }
     for (const svc of this.doServices.values()) {
@@ -2132,10 +2192,10 @@ export class WorkerdManager {
 
     this.deps.routeRegistry.reconcileWorkerRoutes(
       source,
-      Array.from(this.deps.getManifestRoutes(source)),
+      Array.from(provider.getManifestRoutes(source)),
       liveDoClasses,
       hasCanonicalInstance ? canonical : null,
-      this.deps.singletonRegistry
+      provider.singletonRegistry
     );
   }
 
@@ -2153,6 +2213,9 @@ export class WorkerdManager {
       stateArgs?: unknown;
     } = {}
   ): Promise<string | undefined> {
+    if (!this.isSemanticControlPlane(source, className, opts.objectKey)) {
+      this.requireWorkspaceProvider(`Durable Object class ${source}:${className}`);
+    }
     const serviceKey = doServiceKey(source, className);
     const isNew = !this.doServices.has(serviceKey);
     let buildKey: string | undefined;
@@ -2163,7 +2226,7 @@ export class WorkerdManager {
         throw new Error(`DO source path must be exactly 2 segments, got: "${source}"`);
       }
       if (isInternalDOSource(source)) {
-        buildKey = getInternalDOBundle().buildKey;
+        buildKey = this.internalDOBundle().buildKey;
       } else {
         image = await this.bindRuntimeImage(`do-service:${serviceKey}`, source, opts.scopeRef);
         buildKey = image.buildKey;
@@ -2185,7 +2248,7 @@ export class WorkerdManager {
     }
 
     const serviceScopeRef =
-      image?.scopeRef ?? this.doServices.get(serviceKey)?.scopeRef ?? opts.scopeRef;
+      image?.scopeRef ?? opts.scopeRef ?? this.doServices.get(serviceKey)?.scopeRef;
     if (!isInternalDOSource(source) && serviceScopeRef && opts.objectKey) {
       const imageId =
         opts.imageId ?? canonicalEntityId({ kind: "do", source, className, key: opts.objectKey });
@@ -2231,8 +2294,8 @@ export class WorkerdManager {
   /**
    * Ensure a Durable Object class is registered and workerd is running.
    * DOs self-bootstrap from env bindings on first request — no external bootstrap call needed.
-   * Used by the unified RPC relay retry path when a DO class is missing after
-   * a rebuild/restart race.
+   * Used by explicit lifecycle and route preparation before a caller dispatches
+   * to the object. Dispatch transports never call this as an implicit retry.
    */
   async ensureDO(
     source: string,
@@ -2240,21 +2303,10 @@ export class WorkerdManager {
     objectKey: string,
     opts: { contextId?: string; ref?: string } = {}
   ): Promise<void> {
-    const explicitRef = explicitScopeRef(opts.ref);
-    const bootstrapMainBound = this.isBootstrapMainBoundDo(source, className);
-    const scopeRef = bootstrapMainBound ? opts.ref : explicitRef;
+    const scopeRef = opts.contextId
+      ? entityScopeRef(opts.ref, opts.contextId)
+      : explicitScopeRef(opts.ref);
     await this.ensureDOClass(source, className, { scopeRef, objectKey });
-  }
-
-  /**
-   * Whether `(source, className)` is a manifest-declared bootstrap main-bound
-   * DO (see WorkerdManagerDeps.getBootstrapMainBoundDos). No declaration ⇒
-   * false — there is no hardcoded fallback unit.
-   */
-  private isBootstrapMainBoundDo(source: string, className: string): boolean {
-    return (this.deps.getBootstrapMainBoundDos?.() ?? []).some(
-      (decl) => decl.source === source && decl.className === className
-    );
   }
 
   private async waitForHttpReady(timeoutMs = 5_000): Promise<void> {
@@ -2421,15 +2473,15 @@ export class WorkerdManager {
   async onSourceRebuilt(
     source: string,
     doClasses: Array<{ className: string }> | null,
-    trigger?: StateAdvancedEvent,
+    trigger?: ProtectedPublicationEvent,
     completedBuildKey?: string
   ): Promise<void> {
-    const head = trigger?.head ?? "main";
+    const provider = this.requireWorkspaceProvider("source rebuild reconciliation");
     // Dynamic loading makes a rebuild a loader-cache eviction, NOT a restart:
     // runtime image generations advance, so the next request loads fresh code.
     // No workerd restart — concurrent agents keep running.
 
-    const completed = completedBuildKey ? this.deps.getBuildByKey(completedBuildKey) : null;
+    const completed = completedBuildKey ? provider.getBuildByKey(completedBuildKey) : null;
     const updateImageFromCompleted = (
       imageId: string,
       scopeRef: string | undefined
@@ -2439,7 +2491,7 @@ export class WorkerdManager {
         id: imageId,
         source,
         unitName: completed.metadata.name,
-        stateHash: trigger.stateHash,
+        stateHash: trigger.workspaceStateHash,
         buildKey: completedBuildKey,
         effectiveVersion: completed.metadata.ev,
         ...(scopeRef ? { scopeRef } : {}),
@@ -2448,7 +2500,7 @@ export class WorkerdManager {
 
     // Workers tracking this head reload on their next request.
     for (const instance of this.instances.values()) {
-      if (instance.source === source && scopeTracksHead(instance.scopeRef, head)) {
+      if (instance.source === source && scopeTracksProtectedMain(instance.scopeRef)) {
         const image = updateImageFromCompleted(instance.runtimeImageId, instance.scopeRef);
         if (image) {
           instance.buildKey = image.buildKey;
@@ -2462,10 +2514,10 @@ export class WorkerdManager {
     // Refresh the build version for this source's userland DO classes so their
     // facets reload. (Internal DOs aren't rebuilt through this push path.)
     const trackedServices = Array.from(this.doServices.values()).filter(
-      (s) => s.source === source && scopeTracksHead(s.scopeRef, head)
+      (s) => s.source === source && scopeTracksProtectedMain(s.scopeRef)
     );
     const trackedObjects = Array.from(this.doObjectBuilds.entries()).filter(
-      ([key, build]) => key.startsWith(`${source}:`) && scopeTracksHead(build.scopeRef, head)
+      ([key, build]) => key.startsWith(`${source}:`) && scopeTracksProtectedMain(build.scopeRef)
     );
     for (const svc of trackedServices) {
       if (!svc.imageId) continue;
@@ -2484,7 +2536,7 @@ export class WorkerdManager {
 
     // Reconcile DO classes for this source against the new manifest — add new,
     // drop removed. All loader-cache changes; no restart.
-    if (doClasses !== null && head === "main") {
+    if (doClasses !== null) {
       const newClassNames = new Set(doClasses.map((c) => c.className));
       for (const [serviceKey, svc] of Array.from(this.doServices.entries())) {
         if (svc.source !== source || newClassNames.has(svc.className)) continue;

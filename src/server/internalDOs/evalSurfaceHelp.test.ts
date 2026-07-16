@@ -48,13 +48,17 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(description).toContain("MIME metadata");
   });
 
-  it("documents runtime-only VCS history signatures", () => {
-    const result = describeEvalBindingSurface("vcs", ["fileHistory", "editsByTurn"], {});
-    expect(result?.methods["fileHistory"]).toMatchObject({
-      description: expect.stringContaining("fileHistory({ path, repoPath?, head?, limit? })"),
+  it("uses the canonical semantic VCS schema and documents the runtime commit wrapper", () => {
+    const historySchema = {
+      description: "history({ root, limit?, cursor? }) → a focused chronological projection",
+      argsSchema: {},
+    };
+    const result = describeEvalBindingSurface("vcs", ["history", "commit"], {
+      history: historySchema,
     });
-    expect(result?.methods["editsByTurn"]).toMatchObject({
-      description: expect.stringContaining("editsByTurn(turnId)"),
+    expect(result?.methods["history"]).toBe(historySchema);
+    expect(result?.methods["commit"]).toMatchObject({
+      description: expect.stringContaining("complete local application chain"),
     });
   });
 

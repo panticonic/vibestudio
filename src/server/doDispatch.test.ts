@@ -82,9 +82,14 @@ describe("DODispatch", () => {
       await expect(dispatch.dispatch(ref, "ping")).rejects.toThrow(
         "DODispatch requires token-backed workerd configuration"
       );
-      await expect(dispatch.dispatchLifecycle(ref, "prepare", {})).rejects.toThrow(
-        "DODispatch requires token-backed workerd configuration"
-      );
+      await expect(
+        dispatch.dispatchLifecycle(ref, "prepare", {
+          epoch: "test",
+          mode: "suspend",
+          reason: "test",
+          deadlineMs: 1,
+        })
+      ).rejects.toThrow("DODispatch requires token-backed workerd configuration");
       await expect(dispatch.dispatchAlarm(ref)).rejects.toThrow(
         "DODispatch requires token-backed workerd configuration"
       );
@@ -92,49 +97,45 @@ describe("DODispatch", () => {
   });
 
   describe("dispatch with token-backed workerd URL", () => {
-    it("retries fetch failures after ensuring the DO and refreshes the workerd URL", async () => {
+    it("does not replay a semantic call after connection refusal", async () => {
       const tokenManager = new TokenManager();
-      const ensureDO = vi.fn().mockResolvedValue(undefined);
-      const getWorkerdUrl = vi
-        .fn()
-        .mockReturnValueOnce("http://127.0.0.1:10001")
-        .mockReturnValueOnce("http://127.0.0.1:10002");
-      const fetchMock = vi
-        .fn()
-        .mockRejectedValueOnce(new TypeError("fetch failed"))
-        .mockResolvedValueOnce(
-          new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          })
-        );
+      const getWorkerdUrl = vi.fn().mockReturnValue("http://127.0.0.1:10001");
+      const fetchFailure = Object.assign(new TypeError("fetch failed"), {
+        cause: new Error("connect ECONNREFUSED 127.0.0.1:10001"),
+      });
+      const fetchMock = vi.fn().mockRejectedValue(fetchFailure);
 
       vi.stubGlobal("fetch", fetchMock);
       dispatch.setTokenManager(tokenManager);
       dispatch.setGetWorkerdUrl(getWorkerdUrl);
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
-      dispatch.setEnsureDO(ensureDO);
 
       const ref = makeRef();
-      await expect(dispatch.dispatch(ref, "ping", "arg")).resolves.toEqual({ ok: true });
+      await expect(dispatch.dispatch(ref, "ping", "arg")).rejects.toBe(fetchFailure);
 
-      expect(ensureDO).toHaveBeenCalledWith(ref.source, ref.className, ref.objectKey);
+      expect(getWorkerdUrl).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenNthCalledWith(
         1,
         `http://127.0.0.1:10001${userlandUrl(ref, "ping")}`,
         expect.any(Object)
       );
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        2,
-        `http://127.0.0.1:10002${userlandUrl(ref, "ping")}`,
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            Authorization: "Bearer workerd-gateway-token",
-            "X-Vibestudio-Dispatch-Secret": "dispatch-secret",
-          }),
-        })
-      );
+    });
+
+    it("does not duplicate an ambiguous fetch failure", async () => {
+      const tokenManager = new TokenManager();
+      const fetchFailure = new TypeError("fetch failed");
+      const fetchMock = vi.fn().mockRejectedValue(fetchFailure);
+
+      vi.stubGlobal("fetch", fetchMock);
+      dispatch.setTokenManager(tokenManager);
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+
+      await expect(dispatch.dispatch(makeRef(), "getRun")).rejects.toBe(fetchFailure);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it("stamps verified server caller identity for lifecycle dispatch", async () => {
@@ -169,6 +170,39 @@ describe("DODispatch", () => {
       );
       expect(body["__caller"]).toEqual({ callerId: "main", callerKind: "server" });
       expect(body["__parentId"]).toBe("main");
+    });
+
+    it("reconstructs structured DO application failures without parsing prose", async () => {
+      const tokenManager = new TokenManager();
+      const errorData = {
+        code: "InvalidReference",
+        message: "revision does not resolve",
+        referenceKind: "head",
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              error: "revision does not resolve",
+              errorKind: "application",
+              errorData,
+            }),
+            { status: 500, headers: { "Content-Type": "application/json" } }
+          )
+        )
+      );
+      dispatch.setTokenManager(tokenManager);
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+
+      await expect(dispatch.dispatch(makeRef(), "resolve")).rejects.toMatchObject({
+        name: "RemoteRpcError",
+        message: "revision does not resolve",
+        errorKind: "application",
+        errorData,
+      });
     });
   });
 });
