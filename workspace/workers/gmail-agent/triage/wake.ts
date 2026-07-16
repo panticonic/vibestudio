@@ -161,6 +161,21 @@ export class WakeQueue {
     });
   }
 
+  /** Exact next wake implied by the durable queue and hourly cap. */
+  nextWakeAt(channelId: string, now = this.now()): number | undefined {
+    const decision = this.decision(channelId, now);
+    switch (decision.kind) {
+      case "idle":
+        return undefined;
+      case "wait":
+        return decision.deadline;
+      case "capped":
+        return decision.retryAt;
+      case "turn":
+        return now + 1000;
+    }
+  }
+
   /** Remove and return all queued hits, recording the wake turn for the cap. */
   drain(channelId: string, now = this.now()): QueuedAttentionHit[] {
     const hits = this.queued(channelId);

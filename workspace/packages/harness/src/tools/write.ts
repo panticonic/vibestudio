@@ -1,20 +1,30 @@
 /**
  * Write tool — GAD-native. Records a whole-file write as an UNCOMMITTED working
- * edit through `vcs.edit` (creates or overwrites; parent dirs are implicit in
- * the content-addressed tree). Disk is a projection of the head, never written
+ * change through `vcs.edit` (creates or overwrites; parent dirs are implicit).
+ * Disk is a projection of the working state, never written
  * directly. It does NOT commit — seal milestones with `vcs.commit` + `vcs.push`.
  */
 
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
+import type { VcsWorkingMutationResult } from "@vibestudio/service-schemas/vcs";
 import {
   canonicalizeWorkspaceFilePath,
   splitRepoPath,
 } from "@vibestudio/shared/runtime/entitySpec";
-import { isPlatformIgnoredVcsPath } from "@workspace/vcs-engine";
+import { semanticVcsPathAdmission } from "@vibestudio/shared/vcs/pathAdmission";
 import type { RuntimeFs } from "./runtime-fs.js";
-import { toVcsPath, withInvocationId, type ToolVcs } from "./tool-vcs.js";
+import {
+  resolveToolFile,
+  resolveToolRepository,
+  resolveToolWorkingState,
+  toVcsPath,
+  toolCommandId,
+  toolContextId,
+  type ToolEditingVcs,
+  type ToolMutationContext,
+} from "./tool-vcs.js";
 
 const writeSchema = Type.Object({
   path: Type.String({
@@ -31,13 +41,16 @@ export interface WriteToolDetails {
   path: string;
   storage: "vcs" | "scratch" | "none";
   /** A recoverable policy mismatch. No file was written. */
-  diagnostic?: "platform-ignored";
+  diagnostic?: "semantic-path-inadmissible";
   suggestedScratchPath?: string;
+  /** Exact canonical semantic result for a managed write. */
+  vcsResult?: VcsWorkingMutationResult;
 }
 
 export function createWriteTool(
   cwd: string,
-  vcs: ToolVcs,
+  vcs: ToolEditingVcs,
+  context: ToolMutationContext,
   fs?: Pick<RuntimeFs, "writeFile">
 ): AgentTool<typeof writeSchema, WriteToolDetails> {
   return {
@@ -46,7 +59,7 @@ export function createWriteTool(
     description:
       "Write a text file. Workspace source paths become uncommitted VCS edits; ordinary non-repo paths are context-local scratch.",
     parameters: writeSchema,
-    execute: async (toolCallId, input, signal) => {
+    execute: async (_toolCallId, input, signal) => {
       const { path, content } = input;
       if (typeof path !== "string" || typeof content !== "string") {
         throw new Error("write requires path and content");
@@ -54,7 +67,8 @@ export function createWriteTool(
       if (signal?.aborted) throw new Error("Operation aborted");
 
       const relPath = canonicalizeWorkspaceFilePath(toVcsPath(path, cwd));
-      if (isPlatformIgnoredVcsPath(relPath)) {
+      const pathAdmission = semanticVcsPathAdmission(relPath);
+      if (!pathAdmission.admissible) {
         const basename = relPath.split("/").filter(Boolean).at(-1) ?? "output.txt";
         const suggestedScratchPath = `.tmp/${basename}`;
         return {
@@ -62,7 +76,7 @@ export function createWriteTool(
             {
               type: "text",
               text:
-                `No file written: ${path} is reserved for platform metadata, generated output, or secrets and cannot enter workspace VCS. ` +
+                `No file written: ${pathAdmission.message}. ` +
                 `For context-local temporary data, retry with ${suggestedScratchPath}.`,
             },
           ],
@@ -70,14 +84,13 @@ export function createWriteTool(
             bytesWritten: 0,
             path: relPath,
             storage: "none",
-            diagnostic: "platform-ignored",
+            diagnostic: "semantic-path-inadmissible",
             suggestedScratchPath,
           },
         };
       }
       const repo = splitRepoPath(relPath);
-      const bareTrackedFile = relPath.length > 0 && !relPath.includes("/");
-      if (!repo && !bareTrackedFile && fs) {
+      if (!repo && fs) {
         await fs.writeFile(relPath, content);
         if (signal?.aborted) throw new Error("Operation aborted");
         return {
@@ -88,12 +101,48 @@ export function createWriteTool(
         };
       }
       // A whole-file write recorded as an uncommitted working edit on the
-      // current head (overwrite semantics). No commit, no build — disk reflects
+      // current working state (overwrite semantics). No commit, no build — disk reflects
       // the working content immediately, sealed later by vcs.commit. Tagged with
-      // the authoring tool-call so file → edit → invocation → turn is traversable;
-      // the invocationId is stamped by the shared adapter seam (T2).
-      await withInvocationId(vcs, toolCallId).edit({
-        edits: [{ kind: "write", path: relPath, content: { kind: "text", text: content } }],
+      // the authoring tool-call so file → edit → invocation → turn is traversable.
+      // The exact causal invocation arrives through verified RPC context and is
+      // intentionally absent from this public semantic payload.
+      if (!repo?.repoRelPath) throw new Error(`${relPath} is not a file in a workspace repository`);
+      const workingHead = await resolveToolWorkingState(vcs, context);
+      const repository = await resolveToolRepository(vcs, workingHead, repo.repoPath);
+      const existing = await resolveToolFile(vcs, workingHead, relPath);
+      const vcsResult = await vcs.edit({
+        contextId: toolContextId(context),
+        expectedWorkingHead: workingHead,
+        commandId: toolCommandId(context),
+        changes: [
+          existing?.content.kind === "text"
+            ? {
+                kind: "text-edit",
+                repositoryId: existing.repositoryId,
+                fileId: existing.fileId,
+                edits: [
+                  {
+                    start: 0,
+                    end: existing.content.text.length,
+                    text: content,
+                  },
+                ],
+              }
+            : existing
+              ? {
+                  kind: "binary-replace",
+                  repositoryId: existing.repositoryId,
+                  fileId: existing.fileId,
+                  base64: Buffer.from(content, "utf8").toString("base64"),
+                }
+              : {
+                  kind: "file-create",
+                  repositoryId: repository.repositoryId,
+                  path: repo.repoRelPath,
+                  content: { kind: "text", text: content },
+                  mode: 0o644,
+                },
+        ],
       });
       if (signal?.aborted) throw new Error("Operation aborted");
 
@@ -101,7 +150,7 @@ export function createWriteTool(
         content: [
           { type: "text", text: `Successfully wrote ${content.length} bytes to ${relPath}` },
         ],
-        details: { bytesWritten: content.length, path: relPath, storage: "vcs" },
+        details: { bytesWritten: content.length, path: relPath, storage: "vcs", vcsResult },
       };
       return out;
     },

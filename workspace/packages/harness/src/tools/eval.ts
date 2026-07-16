@@ -12,7 +12,7 @@ const evalCommonSchema = {
   reset: Type.Optional(
     Type.Boolean({
       description:
-        "Clear this agent/channel sandbox scope and user db atomically before executing this call. Use this for reset lifecycle work; do not call eval.reset or eval.forceReset from inside eval code.",
+        "Clear this agent/channel sandbox scope and user db atomically before executing this call. Use this for reset lifecycle work; do not call eval.reset from inside eval code.",
     })
   ),
   syntax: Type.Optional(
@@ -100,7 +100,8 @@ export function normalizeEvalToolSource(params: {
   sourcePath?: unknown;
   syntax?: "javascript" | "typescript" | "jsx" | "tsx";
 }): NormalizedEvalToolSource {
-  const path = typeof params.path === "string" && params.path.trim() ? params.path.trim() : undefined;
+  const path =
+    typeof params.path === "string" && params.path.trim() ? params.path.trim() : undefined;
   const explicitSourcePath =
     typeof params.sourcePath === "string" && params.sourcePath.trim()
       ? params.sourcePath.trim()
@@ -125,7 +126,7 @@ export function normalizeEvalToolSource(params: {
     path: code === undefined ? path : undefined,
     sourcePath:
       code !== undefined
-        ? explicitSourcePath ?? (path ? inlineSourcePathFromHint(path, params.syntax) : undefined)
+        ? (explicitSourcePath ?? (path ? inlineSourcePathFromHint(path, params.syntax) : undefined))
         : undefined,
   };
 }
@@ -164,7 +165,7 @@ export function createEvalTool(
     name: "eval",
     label: "eval",
     description:
-      "Execute TypeScript/JS in your persistent sandbox (a per-agent EvalDO, not the visible panel). REPL scope persists across calls via `scope`; a synchronous in-DO SQLite `db` is available. Set reset:true to clear scope/db atomically before this call; never call eval.reset or eval.forceReset from inside the running eval. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.",
+      "Execute TypeScript/JS in your persistent sandbox (a per-agent EvalDO, not the visible panel). REPL scope persists across calls via `scope`; a synchronous in-DO SQLite `db` is available. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.",
     parameters: evalSchema,
     execute: async (_toolCallId, params): Promise<AgentToolResult<EvalRunResult>> => {
       // Some model transports materialize an optional string as "". Treat an

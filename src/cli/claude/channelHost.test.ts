@@ -1,17 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { RpcClient } from "../rpcClient.js";
 import {
   bridgeInstructions,
+  bridgeRpcCredential,
   createSkillResources,
   normalizeServerUrl,
   resolveBridgeConfig,
   skillNameFromUri,
   skillResourceUri,
   WORKSPACE_SKILL_ADDENDUM,
-  type AdoptionEnvironment,
   type BridgeConfig,
 } from "./channelHost.js";
 
@@ -32,12 +31,14 @@ const LAUNCH_ENV = {
   VIBESTUDIO_CONTEXT_ID: "ctx-1",
   VIBESTUDIO_CHANNEL_ID: "chan-1",
   VIBESTUDIO_VESSEL_REF: "do:workers/linked-agent:LinkedAgentWorker:linked:ent-1",
+  VIBESTUDIO_LAUNCH_PROFILE: "/tmp/vibestudio-test-profile",
 } as NodeJS.ProcessEnv;
 
 const DEVICE_CREDS = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   kind: "device",
   url: "webrtc://room-1234/_workspace/dev",
+  workspaceId: "workspace-dev",
   workspaceName: "dev",
   serverId: `srv_${"S".repeat(24)}`,
   deviceId: `dev_${"D".repeat(24)}`,
@@ -59,33 +60,6 @@ const DEVICE_CREDS = {
   pairedAt: 1,
 } satisfies NonNullable<ReturnType<typeof import("../credentialStore.js").loadCliCredentials>>;
 
-function fakeClient(handlers: Record<string, (args: unknown[]) => unknown>): RpcClient {
-  return {
-    call: vi.fn(async (method: string, args: unknown[] = []) => {
-      const handler = handlers[method];
-      if (!handler) throw new Error(`unexpected call ${method}`);
-      return handler(args);
-    }),
-    close: vi.fn(async () => {}),
-  } as unknown as RpcClient;
-}
-
-function preparedFor(contextFolder: string) {
-  return {
-    entityId: "ent-9",
-    contextId: "ctx-9",
-    channelId: "chan-9",
-    vesselRef: "do:workers/linked-agent:LinkedAgentWorker:linked:ent-9",
-    contextFolder,
-    env: {
-      VIBESTUDIO_AGENT_TOKEN: "agent:agt_9:s",
-      VIBESTUDIO_SERVER_URL: "http://127.0.0.1:4123",
-      VIBESTUDIO_LAUNCH_PROFILE: path.join(contextFolder, "..", "profile"),
-    },
-    argv: ["claude"],
-  };
-}
-
 describe("normalizeServerUrl", () => {
   it("accepts a canonical base and rejects websocket endpoint aliases", () => {
     expect(normalizeServerUrl("http://127.0.0.1:4123")).toBe("http://127.0.0.1:4123");
@@ -99,22 +73,44 @@ describe("resolveBridgeConfig", () => {
   it("prefers the complete canonical launch-profile env", async () => {
     const config = await resolveBridgeConfig(
       { ...LAUNCH_ENV, VIBESTUDIO_LAUNCH_PROFILE: tmpRoot },
-      { cwd: tmpRoot }
+      {}
     );
     expect(config.mode).toBe("launched");
     expect(config.serverUrl).toBe("http://127.0.0.1:4123");
     expect(config.vesselRef).toBe(LAUNCH_ENV["VIBESTUDIO_VESSEL_REF"]);
     expect(config.hookSocketPaths[0]).toBe(path.join(tmpRoot, "hook.sock"));
-    // Fallback per-context socket is always listened on too.
-    expect(config.hookSocketPaths[1]).toContain("agent-sockets");
+    expect(config.hookSocketPaths).toEqual([path.join(tmpRoot, "hook.sock")]);
   });
 
   it("honors an explicit VIBESTUDIO_VESSEL_REF", async () => {
     const config = await resolveBridgeConfig(
       { ...LAUNCH_ENV, VIBESTUDIO_VESSEL_REF: "do:x:Y:z" },
-      { cwd: tmpRoot }
+      {}
     );
     expect(config.vesselRef).toBe("do:x:Y:z");
+  });
+
+  it("rides a launch-profile agent token over the matching paired WebRTC route", async () => {
+    const config = await resolveBridgeConfig(
+      { ...LAUNCH_ENV, VIBESTUDIO_SERVER_URL: DEVICE_CREDS.url },
+      { loadCredentials: () => DEVICE_CREDS }
+    );
+    expect(config.serverUrl).toBe(DEVICE_CREDS.url);
+    expect(config.workspacePairing).toEqual(DEVICE_CREDS.workspacePairing);
+    expect(bridgeRpcCredential(config)).toEqual({
+      url: DEVICE_CREDS.url,
+      token: LAUNCH_ENV["VIBESTUDIO_AGENT_TOKEN"],
+      workspacePairing: DEVICE_CREDS.workspacePairing,
+    });
+  });
+
+  it("rejects a WebRTC launch route that is not the selected credential route", async () => {
+    await expect(
+      resolveBridgeConfig(
+        { ...LAUNCH_ENV, VIBESTUDIO_SERVER_URL: "webrtc://other/_workspace/dev" },
+        { loadCredentials: () => DEVICE_CREDS }
+      )
+    ).rejects.toThrow(/does not match the paired CLI credential/);
   });
 
   it("parses the subagent duty out of the launch env", async () => {
@@ -125,7 +121,7 @@ describe("resolveBridgeConfig", () => {
         VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID: "chan-parent",
         VIBESTUDIO_SUBAGENT_CONTRACT: "## Subagent Operating Contract\ncontract body",
       },
-      { cwd: tmpRoot }
+      {}
     );
     expect(config.subagent).toEqual({
       runId: "run-1",
@@ -137,121 +133,19 @@ describe("resolveBridgeConfig", () => {
   it("leaves subagent unset without the run-id env", async () => {
     const config = await resolveBridgeConfig(
       { ...LAUNCH_ENV, VIBESTUDIO_SUBAGENT_CONTRACT: "orphan contract" },
-      { cwd: tmpRoot }
+      {}
     );
     expect(config.subagent).toBeUndefined();
   });
 
   it("rejects a partial launch env loudly", async () => {
     await expect(
-      resolveBridgeConfig({ VIBESTUDIO_AGENT_TOKEN: "agent:a:s" } as NodeJS.ProcessEnv, {
-        cwd: tmpRoot,
-      })
+      resolveBridgeConfig({ VIBESTUDIO_AGENT_TOKEN: "agent:a:s" } as NodeJS.ProcessEnv)
     ).rejects.toThrow(/incomplete launch profile env/);
   });
 
-  it("adopts via the cwd marker: resolves the primary channel and prepares", async () => {
-    const contextFolder = path.join(tmpRoot, "ctx");
-    fs.mkdirSync(contextFolder, { recursive: true });
-    fs.writeFileSync(
-      path.join(contextFolder, ".vibestudio-context.json"),
-      JSON.stringify({ contextId: "ctx-9" })
-    );
-    const invocations: Array<{ method: string }> = [];
-    const client = fakeClient({
-      "extensions.invokeProvider": (args) => {
-        const [provider, method, methodArgs] = args as [string, string, unknown[]];
-        expect(provider).toBe("claudeCode");
-        invocations.push({ method });
-        if (method === "resolvePrimaryChannel") return { channelId: "chan-9" };
-        if (method === "prepare") {
-          expect(methodArgs).toEqual([{ channelId: "chan-9" }]);
-          return preparedFor(contextFolder);
-        }
-        throw new Error(`unexpected ${method}`);
-      },
-    });
-    const adoption: AdoptionEnvironment = {
-      cwd: contextFolder,
-      loadCredentials: () => DEVICE_CREDS,
-      makeClient: () => client,
-    };
-    const config = await resolveBridgeConfig({}, adoption);
-    expect(config.mode).toBe("adopted");
-    expect(config.channelId).toBe("chan-9");
-    expect(config.agentToken).toBe("agent:agt_9:s");
-    expect(invocations.map((entry) => entry.method)).toEqual(["resolvePrimaryChannel", "prepare"]);
-  });
-
-  it("refuses adoption outside a context folder without --channel", async () => {
-    const adoption: AdoptionEnvironment = {
-      cwd: tmpRoot, // no marker anywhere under tmp
-      loadCredentials: () => DEVICE_CREDS,
-      makeClient: () => fakeClient({}),
-    };
-    await expect(resolveBridgeConfig({}, adoption)).rejects.toThrow(/adoption refused/);
-  });
-
-  it("divergence guard: explicit --channel outside the context folder warns loudly", async () => {
-    const contextFolder = path.join(tmpRoot, "real-context");
-    fs.mkdirSync(contextFolder, { recursive: true });
-    const elsewhere = path.join(tmpRoot, "elsewhere");
-    fs.mkdirSync(elsewhere, { recursive: true });
-    const warnings: string[] = [];
-    const client = fakeClient({
-      "extensions.invokeProvider": (args) => {
-        const [provider, method] = args as [string, string];
-        expect(provider).toBe("claudeCode");
-        if (method === "prepare") return preparedFor(contextFolder);
-        throw new Error(`unexpected ${method}`);
-      },
-    });
-    const adoption: AdoptionEnvironment = {
-      cwd: elsewhere,
-      channelFlag: "chan-9",
-      loadCredentials: () => DEVICE_CREDS,
-      makeClient: () => client,
-      warn: (message) => warnings.push(message),
-    };
-    const config = await resolveBridgeConfig({}, adoption);
-    expect(config.mode).toBe("adopted");
-    expect(warnings.join("\n")).toMatch(/DIFFERENT trees/);
-  });
-
-  it("divergence guard: marker-resolved channel whose folder excludes cwd refuses", async () => {
-    // Marker present (so a channel resolves), but prepare returns a context
-    // folder that does NOT contain cwd — e.g. a stale/moved marker.
-    const markerDir = path.join(tmpRoot, "stale");
-    fs.mkdirSync(markerDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(markerDir, ".vibestudio-context.json"),
-      JSON.stringify({ contextId: "ctx-9" })
-    );
-    const realFolder = path.join(tmpRoot, "actual-context");
-    fs.mkdirSync(realFolder, { recursive: true });
-    const client = fakeClient({
-      "extensions.invokeProvider": (args) => {
-        const [provider, method] = args as [string, string];
-        expect(provider).toBe("claudeCode");
-        if (method === "resolvePrimaryChannel") return { channelId: "chan-9" };
-        if (method === "prepare") return preparedFor(realFolder);
-        throw new Error(`unexpected ${method}`);
-      },
-    });
-    const adoption: AdoptionEnvironment = {
-      cwd: markerDir,
-      loadCredentials: () => DEVICE_CREDS,
-      makeClient: () => client,
-    };
-    await expect(resolveBridgeConfig({}, adoption)).rejects.toThrow(/outside the context folder/);
-  });
-
-  it("requires a paired device for adoption", async () => {
-    const adoption: AdoptionEnvironment = {
-      cwd: tmpRoot,
-      loadCredentials: () => null,
-    };
-    await expect(resolveBridgeConfig({}, adoption)).rejects.toThrow(/paired device/);
+  it("refuses unmanaged adoption because the bridge cannot contain its parent process", async () => {
+    await expect(resolveBridgeConfig({})).rejects.toThrow(/OS-read-only/);
   });
 });
 
@@ -274,6 +168,9 @@ describe("bridgeInstructions", () => {
     // Discovery pointers are always present.
     expect(text).toContain("vibestudio-agent");
     expect(text).toContain("materializes repos on demand");
+    expect(text).toContain("managed fs/vcs mutations and `vibestudio eval` fail closed");
+    expect(text).toContain("Native Edit/Write/Bash changes");
+    expect(text).not.toContain("full-power surface");
   });
 
   it("states the subagent duty definitively and embeds the contract", () => {
@@ -347,6 +244,7 @@ describe("workspace skill resources", () => {
     const firstText = first.contents[0]!.text;
     expect(firstText.startsWith(WORKSPACE_SKILL_ADDENDUM)).toBe(true);
     expect(firstText).toContain("translate as you read");
+    expect(firstText).toContain("Managed mutations and eval require an in-process");
     expect(firstText.endsWith("# Skill body")).toBe(true);
 
     // Second read (any skill): session already has the translation rules.

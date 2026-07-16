@@ -653,7 +653,7 @@
 
 .subagent-mode-badge,
 .subagent-status-badge,
-.subagent-merge-badge {
+.subagent-integration-badge {
   border-radius: 4px;
   text-transform: none;
 }
@@ -697,26 +697,8 @@
 }
 
 .markdown-preview,
-.markdown-preview :where(
-    p,
-    h1,
-    h2,
-    h3,
-    h4,
-    h5,
-    h6,
-    blockquote,
-    ul,
-    ol,
-    li,
-    table,
-    thead,
-    tbody,
-    tr,
-    th,
-    td,
-    pre
-  ) {
+.markdown-preview
+  :where(p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, li, table, thead, tbody, tr, th, td, pre) {
   display: inline;
   margin: 0;
   padding: 0;
@@ -875,12 +857,14 @@
 }
 
 .subagent-timeline-item:has(.subagent-timeline-title-button:hover) .subagent-timeline-content,
-.subagent-timeline-item:has(.subagent-timeline-title-button:focus-visible) .subagent-timeline-content,
+.subagent-timeline-item:has(.subagent-timeline-title-button:focus-visible)
+  .subagent-timeline-content,
 .subagent-timeline-item:has(.subagent-timeline-body-clamped:hover) .subagent-timeline-content {
   background: var(--gray-a3);
 }
 
-.subagent-timeline-item:has(.subagent-timeline-title-button:focus-visible) .subagent-timeline-content {
+.subagent-timeline-item:has(.subagent-timeline-title-button:focus-visible)
+  .subagent-timeline-content {
   box-shadow: inset 0 0 0 1px var(--accent-a8);
 }
 
@@ -1045,7 +1029,6 @@
 .subagent-copy-button:focus-visible {
   opacity: 1;
 }
-
 
 .supervision-action-summary {
   display: grid;

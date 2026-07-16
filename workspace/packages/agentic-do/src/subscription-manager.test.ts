@@ -5,7 +5,10 @@ import type { ChannelClient } from "./channel-client.js";
 import { DOIdentity } from "./identity.js";
 import { SubscriptionManager } from "./subscription-manager.js";
 
-async function makeManager(channel: Partial<ChannelClient>) {
+async function makeManager(
+  channel: Partial<ChannelClient>,
+  onRecovered?: ConstructorParameters<typeof SubscriptionManager>[3]
+) {
   const sql = (await createInMemorySql()) as unknown as SqlStorage;
   const identity = new DOIdentity(sql);
   identity.createTables();
@@ -13,7 +16,12 @@ async function makeManager(channel: Partial<ChannelClient>) {
     { source: "workers/test-agent", className: "TestAgentWorker", objectKey: "agent-1" },
     "session-1"
   );
-  const manager = new SubscriptionManager(sql, () => channel as ChannelClient, identity);
+  const manager = new SubscriptionManager(
+    sql,
+    () => channel as ChannelClient,
+    identity,
+    onRecovered
+  );
   manager.createTables();
   return { manager, sql };
 }
@@ -21,7 +29,7 @@ async function makeManager(channel: Partial<ChannelClient>) {
 describe("SubscriptionManager", () => {
   it("does not leave a local subscription row when remote subscribe fails", async () => {
     const channel = {
-      subscribe: vi.fn(async () => {
+      openSubscription: vi.fn(async () => {
         throw new Error("duplicate participant");
       }),
     };
@@ -43,8 +51,13 @@ describe("SubscriptionManager", () => {
     const channel = {
       // The manager only stores the row + reads channelConfig/envelope opaquely;
       // a minimal stub cast to the full return type is enough here.
-      subscribe: vi.fn(
-        async () => ({ ok: true }) as Awaited<ReturnType<ChannelClient["subscribe"]>>
+      openSubscription: vi.fn(
+        async () =>
+          ({
+            result: { ok: true },
+            closed: new Promise<void>(() => {}),
+            close: vi.fn(),
+          }) as unknown as Awaited<ReturnType<ChannelClient["openSubscription"]>>
       ),
     };
     const { manager } = await makeManager(channel);
@@ -56,5 +69,123 @@ describe("SubscriptionManager", () => {
 
     manager.rename("ch-1", "ch-2", "ctx-fork");
     expect(manager.getContextId("ch-2")).toBe("ctx-fork");
+  });
+
+  it("reopens an unexpectedly closed response and hands replay to the owner", async () => {
+    vi.useFakeTimers();
+    try {
+      let closeFirst!: () => void;
+      const firstClosed = new Promise<void>((resolve) => {
+        closeFirst = resolve;
+      });
+      const secondClosed = new Promise<void>(() => {});
+      const close = vi.fn();
+      const openSubscription = vi
+        .fn()
+        .mockResolvedValueOnce({
+          result: { ok: true, participantId: "agent-1", envelope: { mode: "none" } },
+          closed: firstClosed,
+          close,
+        })
+        .mockResolvedValueOnce({
+          result: {
+            ok: true,
+            participantId: "agent-1",
+            envelope: { mode: "after", logEvents: [] },
+          },
+          closed: secondClosed,
+          close,
+        });
+      const onRecovered = vi.fn(async () => {});
+      const { manager } = await makeManager({ openSubscription }, onRecovered);
+      await manager.subscribe({
+        channelId: "ch-1",
+        contextId: "ctx-1",
+        config: { wakePolicy: "every-envelope" },
+        descriptor: { name: "Test", type: "agent", handle: "test" },
+      });
+
+      closeFirst();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(openSubscription).toHaveBeenCalledTimes(2);
+      expect(openSubscription.mock.calls[1]?.[1]).toMatchObject({ replay: true });
+      expect(onRecovered).toHaveBeenCalledWith({
+        channelId: "ch-1",
+        config: { wakePolicy: "every-envelope" },
+        envelope: { mode: "after", logEvents: [] },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reopen a response closed by explicit unsubscribe", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: () => void;
+      const closed = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const close = vi.fn(() => finish());
+      const openSubscription = vi.fn(async () => ({
+        result: { ok: true },
+        closed,
+        close,
+      })) as unknown as ChannelClient["openSubscription"];
+      const { manager } = await makeManager({ openSubscription });
+      await manager.subscribe({
+        channelId: "ch-1",
+        contextId: "ctx-1",
+        descriptor: { name: "Test", type: "agent", handle: "test" },
+      });
+
+      await manager.unsubscribeFromChannel("ch-1");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(openSubscription).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases every activation stream without deleting durable membership or recovering", async () => {
+    vi.useFakeTimers();
+    try {
+      const terminals: Array<() => void> = [];
+      const close = vi.fn((index: number) => terminals[index]?.());
+      const openSubscription = vi.fn(async () => {
+        const index = terminals.length;
+        let terminal!: () => void;
+        const closed = new Promise<void>((resolve) => {
+          terminal = resolve;
+        });
+        terminals.push(terminal);
+        return {
+          result: { ok: true, participantId: "agent-1", envelope: { mode: "none" } },
+          closed,
+          close: () => close(index),
+        };
+      }) as unknown as ChannelClient["openSubscription"];
+      const { manager } = await makeManager({ openSubscription });
+      await manager.subscribe({
+        channelId: "ch-1",
+        contextId: "ctx-1",
+        descriptor: { name: "Test", type: "agent", handle: "test" },
+      });
+      await manager.subscribe({
+        channelId: "ch-2",
+        contextId: "ctx-1",
+        descriptor: { name: "Test", type: "agent", handle: "test" },
+      });
+
+      await expect(manager.releaseActivation()).resolves.toBe(2);
+      expect(manager.listChannelIds()).toEqual(["ch-1", "ch-2"]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(openSubscription).toHaveBeenCalledTimes(2);
+      expect(close).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

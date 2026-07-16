@@ -1,224 +1,59 @@
-import { describe, it, expect } from "vitest";
-import { createCommitTool, type CommitClaimsDeps } from "../commit.js";
-import type { RecordClaimResult } from "../claims.js";
+import { describe, expect, it } from "vitest";
+import { createCommitTool } from "../commit.js";
 import { StubVcs } from "./stub-vcs.js";
 
-type RecordClaimInput = Parameters<CommitClaimsDeps["recordClaim"]>[0];
+const authority = { contextId: "context:test", commandId: "command:commit" };
 
-function makeKnowledge(responses: RecordClaimResult[] = []): {
-  deps: CommitClaimsDeps;
-  calls: RecordClaimInput[];
-} {
-  const calls: RecordClaimInput[] = [];
-  const queue = [...responses];
-  const deps: CommitClaimsDeps = {
-    logId: "branch:channel:ch",
-    head: "branch:channel:ch",
-    recordClaim: async (input) => {
-      calls.push(input);
-      return (
-        queue.shift() ?? {
-          claimId: `claim-${calls.length}`,
-          ledgerEntryId: `l${calls.length}`,
-          duplicates: [],
-        }
-      );
-    },
-  };
-  return { deps, calls };
-}
-
-function text(result: { content: ReadonlyArray<unknown> }): string {
-  return result.content.map((c) => (c as { text?: string }).text ?? "").join("\n");
-}
-
-describe("createCommitTool", () => {
-  it("commits and stamps the toolCallId as invocationId (T1/T2)", async () => {
-    const vcs = new StubVcs();
-    const { deps } = makeKnowledge();
-    const tool = createCommitTool(vcs, deps);
-    const result = await tool.execute("call-7", { message: "fix the retry budget" });
-    expect(vcs.lastCommitInput?.invocationId).toBe("call-7");
-    expect(vcs.lastCommitInput?.message).toBe("fix the retry budget");
-    expect(result.details.committed).toBe(1);
-    expect(text(result)).toContain("committed meta");
-  });
-
-  it("records claims anchored to the commit event, never via vcs", async () => {
-    const vcs = new StubVcs({ commitResult: { changedPaths: ["a.ts"], editCount: 1 } });
-    const { deps, calls } = makeKnowledge([
-      { claimId: "claim-abc", ledgerEntryId: "led-1", duplicates: [] },
-    ]);
-    const tool = createCommitTool(vcs, deps);
-    const result = await tool.execute("call-1", {
-      message: "seal retry budget owner",
-      repoPaths: ["packages/x"],
-      claims: [{ text: "retry budget is owned by the scheduler", kind: "ownership" }],
-    });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      logId: "branch:channel:ch",
-      head: "branch:channel:ch",
-      invocationId: "call-1",
-      claim: { text: "retry budget is owned by the scheduler", kind: "ownership" },
-      anchor: { commitEventId: "event-1", repoPath: "packages/x" },
-    });
-    expect(result.details.claimsRecorded).toEqual(["claim-abc"]);
-    expect(text(result)).toContain("recorded claim#claim-abc");
-    // No claims were passed to vcs.commit — layering stays clean.
-    expect(vcs.lastCommitInput).not.toHaveProperty("claims");
-  });
-
-  it("does not guess a commit anchor for multi-repo claims, and honors explicit repoPath", async () => {
-    const vcs = new StubVcs({ commitResult: { changedPaths: ["a.ts"], editCount: 1 } });
-    const { deps, calls } = makeKnowledge([
-      { claimId: "claim-b", ledgerEntryId: "led-b", duplicates: [] },
-      { claimId: "claim-general", ledgerEntryId: "led-general", duplicates: [] },
-    ]);
-    const tool = createCommitTool(vcs, deps);
-    const result = await tool.execute("call-1", {
-      message: "seal two repos",
-      repoPaths: ["packages/a", "packages/b"],
-      claims: [
-        { text: "repo b owns the scheduler boundary", repoPath: "packages/b" },
-        { text: "the two repos share a rollout concern" },
+describe("canonical commit tool", () => {
+  it("commits the complete working application chain into one event", async () => {
+    const vcs = new StubVcs({ files: { "packages/demo/a.ts": "a" } });
+    await vcs.edit({
+      contextId: "context:test",
+      expectedWorkingHead: { kind: "event", eventId: "event:genesis" },
+      commandId: "command:prepare",
+      changes: [
+        {
+          kind: "text-edit",
+          repositoryId: "repository:packages/demo",
+          fileId: "file:packages/demo/a.ts",
+          edits: [{ start: 0, end: 1, text: "b" }],
+        },
       ],
     });
+    const tool = createCommitTool(vcs, authority);
+    const result = await tool.execute("invocation:1", { message: "Unify authorization" });
 
-    expect(calls[0]).toMatchObject({
-      anchor: { commitEventId: "event-1-2", repoPath: "packages/b" },
+    expect(vcs.lastCommitInput).toMatchObject({
+      contextId: "context:test",
+      commandId: "command:commit",
+      expectedWorkingHead: { kind: "application", applicationId: "application:1" },
+      message: "Unify authorization",
     });
-    expect(calls[1]).not.toHaveProperty("anchor");
-    expect(result.details.claimsRecorded).toEqual(["claim-b", "claim-general"]);
-    expect(text(result)).toContain("claim left unanchored");
+    expect(result.details.result.event).toMatchObject({
+      kind: "event",
+      eventId: expect.stringMatching(/^event:/),
+    });
+    expect(result.details.result.committedApplicationIds).toEqual(["application:1"]);
   });
 
-  it("surfaces dedup candidates but never blocks the commit", async () => {
-    const vcs = new StubVcs({ commitResult: { changedPaths: ["a.ts"], editCount: 1 } });
-    const { deps } = makeKnowledge([
-      {
-        duplicates: [
-          { claimId: "claim-old", text: "scheduler owns the retry budget", score: 0.82 },
-        ],
-      },
-    ]);
-    const tool = createCommitTool(vcs, deps);
-    const result = await tool.execute("call-1", {
-      message: "seal retry budget owner",
-      claims: [{ text: "retry budget owned by scheduler" }],
-    });
-    expect(result.details.committed).toBe(1);
-    expect(result.details.claimsRecorded).toEqual([]);
-    expect(result.details.claimDuplicates).toBe(1);
-    const out = text(result);
-    expect(out).toContain("committed");
-    expect(out).toContain("near-duplicate");
-    expect(out).toContain("claim#claim-old");
-  });
-
-  it("nudges on a non-trivial diff (>=3 files) when no claims were passed", async () => {
-    const vcs = new StubVcs({
-      commitResult: { changedPaths: ["a.ts", "b.ts", "c.ts"], editCount: 3 },
-    });
-    const { deps } = makeKnowledge();
-    const tool = createCommitTool(vcs, deps);
-    const result = await tool.execute("call-1", { message: "refactor across files" });
-    expect(result.details.nudged).toBe(true);
-    expect(text(result)).toContain("Anything durable to record?");
-  });
-
-  it("does NOT nudge when claims were passed", async () => {
-    const vcs = new StubVcs({
-      commitResult: { changedPaths: ["a.ts", "b.ts", "c.ts"], editCount: 3 },
-    });
-    const { deps } = makeKnowledge();
-    const tool = createCommitTool(vcs, deps);
-    const result = await tool.execute("call-1", {
-      message: "refactor across files",
-      claims: [{ text: "the three files share one ownership boundary" }],
-    });
-    expect(result.details.nudged).toBe(false);
-    expect(text(result)).not.toContain("Anything durable to record?");
-  });
-
-  it("does NOT nudge on a trivial diff", async () => {
-    const vcs = new StubVcs({ commitResult: { changedPaths: ["a.ts"], editCount: 1 } });
-    const { deps } = makeKnowledge();
-    const tool = createCommitTool(vcs, deps);
-    const result = await tool.execute("call-1", { message: "one small fix" });
-    expect(result.details.nudged).toBe(false);
-  });
-
-  it("returns a recoverable no-op when commit finds no working edits", async () => {
-    const vcs = new StubVcs({
-      commitResult: { status: "unchanged", changedPaths: [], editCount: 0 },
-    });
-    const tool = createCommitTool(vcs, makeKnowledge().deps);
-
-    const result = await tool.execute("call-1", { message: "no-op" });
-    expect(result.details).toMatchObject({
-      committed: 0,
-      unchanged: 1,
-      diagnostic: "nothing-to-commit",
-    });
-  });
-
-  it("reports partial success when requested repos include an unchanged repo", async () => {
-    class MixedCommitVcs extends StubVcs {
-      override async commit(input: Parameters<StubVcs["commit"]>[0]) {
-        this.lastCommitInput = input;
-        return [
-          {
-            repoPath: "packages/a",
-            head: "ctx:test",
-            stateHash: "state-1",
-            eventId: "event-a",
-            headHash: "head-a",
-            editCount: 1,
-            status: "committed" as const,
-            changedPaths: ["a.ts"],
-          },
-          {
-            repoPath: "packages/b",
-            head: "ctx:test",
-            stateHash: "state-1",
-            eventId: null,
-            headHash: null,
-            editCount: 0,
-            status: "unchanged" as const,
-            changedPaths: [],
-          },
-        ];
-      }
-    }
-    const vcs = new MixedCommitVcs();
-    const tool = createCommitTool(vcs, makeKnowledge().deps);
-
-    const result = await tool.execute("call-1", {
-      message: "multi",
-      repoPaths: ["packages/a", "packages/b"],
-    });
-    expect(result.details).toMatchObject({
-      committed: 1,
-      unchanged: 1,
-      diagnostic: "partially-unchanged",
-    });
-  });
-
-  it("ignores claims when the agent class has no knowledge client", async () => {
-    const vcs = new StubVcs({ commitResult: { changedPaths: ["a.ts"], editCount: 1 } });
-    const tool = createCommitTool(vcs);
-    const result = await tool.execute("call-1", {
-      message: "commit without a DO",
-      claims: [{ text: "durable insight that will be dropped" }],
-    });
-    expect(result.details.committed).toBe(1);
-    expect(result.details.claimsRecorded).toEqual([]);
-  });
-
-  it("rejects an empty message", async () => {
+  it("does not expose selective commit inputs", async () => {
     const vcs = new StubVcs();
-    const tool = createCommitTool(vcs, makeKnowledge().deps);
-    await expect(tool.execute("call-1", { message: "   " })).rejects.toThrow(/non-empty message/);
+    const tool = createCommitTool(vcs, authority);
+    expect(tool.parameters.properties).not.toHaveProperty("workUnitIds");
+    await tool.execute("invocation:2", { message: "Commit the chain" });
+    expect(vcs.lastCommitInput).not.toHaveProperty("selection");
+  });
+
+  it("can close a fully-accounted integration with an exact source parent", async () => {
+    const vcs = new StubVcs();
+    const tool = createCommitTool(vcs, authority);
+    await tool.execute("invocation:integration", {
+      message: "Close the incremental integration",
+      integratesEventId: "event:source",
+    });
+    expect(vcs.lastCommitInput).toMatchObject({
+      commandId: "command:commit",
+      integratesEventId: "event:source",
+    });
   });
 });

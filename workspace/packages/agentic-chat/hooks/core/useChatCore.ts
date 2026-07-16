@@ -1054,14 +1054,14 @@ export function useChatCore({
       if (!c) return;
       // An `eval` runs SERVER-SIDE in the owning agent's per-channel EvalDO, not
       // in this panel — there is no transportCallId to abort locally and no
-      // pending_calls row for the channel to cancel. The run is keyed by the
-      // invocation's own id (invocationId === runId), owned by the agent that
-      // emitted it (senderId). Route the cancel THROUGH that agent: it calls
-      // eval.cancel for itself, so the eval service resolves the owner from the
-      // agent caller (the panel can't address another owner's EvalDO).
+      // pending_calls row for the channel to cancel. Route the invocation
+      // coordinate THROUGH the agent that emitted it (senderId): the agent
+      // derives the distinct namespaced eval-effect coordinate and calls
+      // eval.cancel for itself, so the panel can neither manufacture a run id
+      // nor address another owner's EvalDO.
       if (invocation.name === "eval") {
         try {
-          const handle = c.callMethod(senderId, "cancelEval", { runId: invocation.id });
+          const handle = c.callMethod(senderId, "cancelEval", { invocationId: invocation.id });
           await (handle as { result?: Promise<unknown> }).result;
         } catch (err) {
           console.warn("[Chat] Cancel eval failed:", err);

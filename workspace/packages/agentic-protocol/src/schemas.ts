@@ -202,7 +202,7 @@ const failurePayloadSchema = z
 const invocationOutcomeSchema = z.enum(INVOCATION_OUTCOMES);
 
 const subagentTerminalSchema = z
-  .object({ merge: z.enum(["merged", "conflicted", "discarded"]).optional() })
+  .object({ integration: z.enum(["integrated", "conflicted", "discarded"]).optional() })
   .strict();
 
 const invocationFailurePayloadSchema = failurePayloadSchema
@@ -489,24 +489,12 @@ const externalParticipantObservedPayloadSchema = z
   })
   .strict();
 
-const statePayloadSchema = z
-  .object({
-    protocol: protocolSchema,
-    inputStateHash: idSchema.optional(),
-    outputStateHash: idSchema.optional(),
-    parentStateHashes: z.array(z.string()).optional(),
-    summary: z.string().optional(),
-    metadata: z.record(z.unknown()).optional(),
-  })
-  .strict();
-
 const branchPayloadSchema = z
   .object({
     protocol: protocolSchema,
     branchId: idSchema.optional(),
     parentBranchId: idSchema.optional(),
     headEventId: idSchema.optional(),
-    headStateHash: idSchema.optional(),
     forkEventId: idSchema.optional(),
     name: z.string().optional(),
   })
@@ -590,41 +578,6 @@ const buildCompletedPayloadSchema = z
   })
   .strict();
 
-const claimRelationKindSchema = z.enum([
-  "supports",
-  "contradicts",
-  "about",
-  "refines",
-  "depends_on",
-]);
-
-const knowledgeRelationSchema = z
-  .object({
-    src: z.string(),
-    relation: claimRelationKindSchema,
-    dst: z.string(),
-    weight: z.number().optional(),
-  })
-  .strict();
-
-const knowledgePayloadSchema = z
-  .object({
-    protocol: protocolSchema,
-    id: z.string().optional(),
-    subject: z.string().optional(),
-    predicate: z.string().optional(),
-    object: z.string().optional(),
-    claimId: z.string().optional(),
-    ledgerEntryId: z.string().min(1),
-    text: z.string().optional(),
-    kind: z.string().optional(),
-    status: z.string().optional(),
-    relations: z.array(knowledgeRelationSchema).optional(),
-    body: z.unknown().optional(),
-    metadata: z.record(z.unknown()).optional(),
-  })
-  .strict();
-
 function eventSchema<K extends string, P extends z.ZodTypeAny>(kind: K, payload: P) {
   return z
     .object({
@@ -666,9 +619,6 @@ export const eventKindSchemas = {
   "messageType.cleared": eventSchema("messageType.cleared", messageTypeClearedPayloadSchema),
   "custom.started": eventSchema("custom.started", customStartedPayloadSchema),
   "custom.updated": eventSchema("custom.updated", customUpdatedPayloadSchema),
-  "state.transition_recorded": eventSchema("state.transition_recorded", statePayloadSchema),
-  "state.snapshot_ingested": eventSchema("state.snapshot_ingested", statePayloadSchema),
-  "state.merge_applied": eventSchema("state.merge_applied", statePayloadSchema),
   "memory.recalled": eventSchema("memory.recalled", memoryRecalledPayloadSchema),
   "build.completed": eventSchema("build.completed", buildCompletedPayloadSchema),
   "external.envelope_published": eventSchema(
@@ -694,10 +644,6 @@ export const eventKindSchemas = {
   "turn.closed": eventSchema("turn.closed", turnPayloadSchema),
   "system.event": eventSchema("system.event", systemPayloadSchema),
   "system.compaction_recorded": eventSchema("system.compaction_recorded", compactionPayloadSchema),
-  "knowledge.claim_recorded": eventSchema("knowledge.claim_recorded", knowledgePayloadSchema),
-  "knowledge.claim_updated": eventSchema("knowledge.claim_updated", knowledgePayloadSchema),
-  "knowledge.claim_retracted": eventSchema("knowledge.claim_retracted", knowledgePayloadSchema),
-  "knowledge.claims_related": eventSchema("knowledge.claims_related", knowledgePayloadSchema),
 } as const;
 
 export const agenticEventSchema = z

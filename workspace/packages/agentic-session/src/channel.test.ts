@@ -75,6 +75,7 @@ describe("subscribeHeadlessAgent — unified contract", () => {
       // Per-agent config is seeded from creation stateArgs — here the full
       // subscriptionConfig (headless full-auto approval, no extraConfig).
       stateArgs: { agentConfig: { approvalLevel: 2 } },
+      agentChannelId: "ch-1",
     });
     expect(captured.subscribeTarget).toBe("do:workers/agent-worker:AiChatWorker:obj-1");
     expect(result.entityId).toBe("do:workers/agent-worker:AiChatWorker:obj-1");
@@ -100,6 +101,7 @@ describe("subscribeHeadlessAgent — unified contract", () => {
       className: "AiChatWorker",
       key: "obj-1",
       stateArgs: { agentConfig: { approvalLevel: 2 } },
+      agentChannelId: "ch-1",
     });
     expect(result.contextId).toBe("ctx-minted");
     expect(rpcCall).toHaveBeenLastCalledWith(

@@ -26,7 +26,7 @@ Names are exact, not substring filters:
 vibestudio system-test run eval-return-value
 vibestudio system-test run eval-return-value fs-write-read
 vibestudio system-test run --category smoke
-vibestudio system-test run --all --concurrency 2
+vibestudio system-test run --all --concurrency 4
 ```
 
 Useful flags:
@@ -35,9 +35,22 @@ Useful flags:
   investigation. Ordinarily, tests start on
   `openai-codex:gpt-5.3-codex-spark`; only a concrete terminal usage-limit
   result activates `openai-codex:gpt-5.6-luna` at minimal reasoning effort.
-- Tests have no harness deadline by default. `--test-timeout-ms N` is an
-  operator-requested cancellation boundary, not a liveness fix; inspect the
-  trajectory and repair the underlying system whenever it fires.
+- If `doctor` reports that the selected `openai-codex` subscription credential
+  is expired and cannot refresh, do not bypass the failure with a different
+  prompt or hidden token. Ask the operator to run
+  `vibestudio model connect openai-codex` from the paired CLI and finish the
+  canonical browser sign-in. Then rerun `doctor`; the command replaces the
+  credential through the ordinary credential coordinator and never prints
+  OAuth URLs or token material.
+- Each test has one five-minute agent-turn budget by default. Multi-phase tests
+  share it rather than restarting the clock for each phase. `--test-timeout-ms N`
+  replaces that budget for a deliberately longer or shorter investigation.
+  It is not a liveness fix; inspect the terminal errored result and repair the
+  underlying system whenever it fires.
+- Cancellation becomes terminal only after the active test interrupts its agent
+  turn, retires the headless session/context, and cleans any exact repository
+  fixture. Inspect cleanup failures on cancelled records; partial work is never
+  hidden by the cancellation status.
 - `--detach` starts the durable EvalDO job and immediately returns its run ID.
 - `--out-dir DIR` writes result artifacts below `DIR/<run-id>/`. The default is
   the CLI config root with mode `0600` files.
@@ -96,9 +109,12 @@ Rerun includes both failed tests and passing tests that encountered unexpected
 tool failures. Once targeted reruns pass, run the affected category and smoke
 suite to catch regressions.
 
-Tests that create or fork published workspace repos declare a harness-owned
-fixture. The harness gives the agent a unique `system-test-*` project name
-without narrowing the user-like test prompt, removes stale repos in that
-namespace before execution, and removes created repos afterward. A cleanup
-failure or a repo escaping the reserved namespace makes the run non-clean and
-is included in `inspect` diagnostics.
+Tests that create or publish workspace source declare a typed harness-owned
+fixture. Setup imports one stable repository identity into a fresh task context
+and does not publish it. Unpublished work disappears when that context is
+destroyed. If task events reached main, cleanup intersects the task's exact
+first-parent event line with paged current-main history, counteracts only that
+published work in reverse causal order from a fresh main context, then commits
+and pushes once. Any extra task-authored repository identity is removed by the
+same causal walk and reported as a scope failure. Cleanup failures remain
+visible in `inspect` diagnostics.

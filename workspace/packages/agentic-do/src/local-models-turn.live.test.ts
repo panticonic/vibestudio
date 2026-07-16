@@ -18,7 +18,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { DeferrableRpcClient } from "@vibestudio/rpc";
-import { GadWorkspaceDO } from "../../../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../semantic-control-plane/src/index.js";
 import { PubSubChannel } from "../../../workers/pubsub-channel/channel-do.js";
 import { activate as activateLocalModels } from "../../../extensions/local-models/index.js";
 import { AgentVesselBase } from "./agent-vessel.js";
@@ -33,7 +33,7 @@ const CHANNEL = "live-local-chat";
 // callback routing) by the "do:" prefix (pubsub types.ts:79).
 const AGENT_PID = "do:test:LiveVessel:agent-live";
 const USER_PID = "panel:user";
-const GAD_TARGET = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+const GAD_TARGET = "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane";
 const CHANNEL_TARGET = `do:workers/pubsub-channel:PubSubChannel:${CHANNEL}`;
 const AGENTIC_KIND = "agentic.trajectory.v1/event";
 
@@ -134,7 +134,9 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
       // ── real GAD + real channel DO ─────────────────────────────────────
       let envelopesDelivered = 0;
       const deliveredEnvelopes: Array<Record<string, unknown>> = [];
-      const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
+      const gad = await createTestDO(GadWorkspaceDO, {
+        __objectKey: "workspace-semantic-control-plane",
+      });
       const channel = await createTestDO(PubSubChannel, { __objectKey: CHANNEL });
       const blobs = new Map<string, string>();
       let blobSeq = 0;
@@ -183,9 +185,9 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
           }
           return {
             kind: "durable-object",
-            source: "workers/gad-store",
+            source: "vibestudio/internal",
             className: "GadWorkspaceDO",
-            objectKey: "workspace-gad",
+            objectKey: "workspace-semantic-control-plane",
             targetId: GAD_TARGET,
           };
         }

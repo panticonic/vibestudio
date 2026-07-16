@@ -9,6 +9,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.6",
+    "@vibestudio/content-addressing": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/trajectory-identity": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",

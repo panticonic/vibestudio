@@ -6,6 +6,7 @@
  */
 
 import type { InvocationTransport, ParticipantRef } from "@workspace/agentic-protocol";
+import { logIdForChannel } from "@vibestudio/trajectory-identity";
 
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -367,7 +368,7 @@ export interface InitialStateInput {
 }
 
 export function initialAgentState(input: InitialStateInput): AgentState {
-  const logId = input.logId ?? `branch:channel:${input.channelId}`;
+  const logId = input.logId ?? logIdForChannel(input.channelId);
   return {
     logId,
     head: input.head ?? logId,

@@ -133,12 +133,20 @@ export interface HeadlessSessionCloseOptions {
   /**
    * Await remote agent unsubscribe/lifecycle cleanup. Isolated sessions destroy
    * their complete context tree; sessions attached to a caller-owned context
-   * retire only their agent entity. Disable awaiting for harnesses that
-   * must release local waiters even when the remote agent/channel is wedged.
-   * Best-effort cleanup is still started and records asynchronous failures on
-   * this session when they arrive.
+   * first unsubscribe their agent and then retire only that entity. Disable
+   * awaiting for harnesses that must release local waiters even when the remote
+   * agent/channel is wedged. The same ordered cleanup is still started and
+   * records asynchronous failures on this session when they arrive.
    */
   waitForRemoteCleanup?: boolean;
+}
+
+export interface HeadlessWaitOptions {
+  debounce?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** Fail immediately when the durable turn parks on one of these reasons. */
+  terminalWaitingReasons?: readonly string[];
 }
 
 function invocationErrorMessage(value: unknown, fallback: string): string {
@@ -659,13 +667,13 @@ export class HeadlessSession {
     return result.messageId;
   }
 
-  async interrupt(agentId: string): Promise<void> {
+  async interrupt(
+    agentId: string,
+    options?: { timeoutMs?: number; signal?: AbortSignal }
+  ): Promise<void> {
     if (!this._client) return;
-    try {
-      this._client.callMethod(agentId, "pause", {});
-    } catch (err) {
-      console.warn("[HeadlessSession] interrupt failed:", err);
-    }
+    const handle = this._client.callMethod(agentId, "pause", {}, options);
+    unwrapChatMethodResult(await handle.result);
   }
 
   async callMethod(participantId: string, method: string, args: unknown): Promise<unknown> {
@@ -761,33 +769,27 @@ export class HeadlessSession {
         this.recordCleanupError("unsubscribeHeadlessAgent", err);
       });
     };
-    const release = async () => {
+    const cleanupRemote = async () => {
       if (!rpcCall) return;
+      // A context minted for this launch is the lifecycle unit. Destroying it
+      // recursively retires the root and descendants, so it has one owner and
+      // no entity-level fallback path.
       if (ownsContext && contextId) {
-        try {
-          await destroyHeadlessAgentContext({ rpcCall, contextId });
-          return;
-        } catch (err) {
+        await destroyHeadlessAgentContext({ rpcCall, contextId }).catch((err) => {
           this.recordCleanupError("destroyHeadlessAgentContext", err);
-          // Context teardown can fail before it reaches the root entity. Retire
-          // that entity as a best-effort fallback while preserving the original
-          // cleanup diagnostic for the caller.
-        }
+        });
+        return;
       }
+
+      // In a caller-owned context, the session owns only its subscription and
+      // entity. Unsubscription must finish before retirement can delete the DO
+      // that serves unsubscribeChannel. Both terminal results are observed.
+      await unsubscribe();
       if (!entityId) return;
       await retireHeadlessAgent({ rpcCall, entityId }).catch((err) => {
         this.recordCleanupError("retireHeadlessAgent", err);
       });
     };
-
-    // An owned context is the lifecycle unit: recursively destroying it retires
-    // the root agent and descendants together. Calling into that same agent to
-    // unsubscribe first creates an unnecessary dependency on a possibly-wedged
-    // actor and can prevent the authoritative context teardown from starting.
-    // Shared-context sessions cannot destroy their caller's context, so start
-    // unsubscribe and entity retirement together and observe both results.
-    const cleanupRemote = () =>
-      ownsContext && contextId ? release() : Promise.all([unsubscribe(), release()]).then(() => {});
     this.dispose();
     if (opts.waitForRemoteCleanup === false) {
       void cleanupRemote();
@@ -935,11 +937,7 @@ export class HeadlessSession {
   /**
    * Wait for the agent to become idle (no new messages for `debounce` ms).
    */
-  waitForIdle(opts?: {
-    debounce?: number;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  }): Promise<ChatMessage> {
+  waitForIdle(opts?: HeadlessWaitOptions): Promise<ChatMessage> {
     return this.waitForTurn("settled", opts);
   }
 
@@ -949,9 +947,13 @@ export class HeadlessSession {
 
   private waitForTurn(
     completion: "response" | "settled",
-    opts?: { debounce?: number; timeoutMs?: number; signal?: AbortSignal }
+    opts?: HeadlessWaitOptions
   ): Promise<ChatMessage> {
-    const observer = new HeadlessTurnObserver(this._clientId, this.turnSnapshot());
+    const observer = new HeadlessTurnObserver(this._clientId, this.turnSnapshot(), {
+      ...(opts?.terminalWaitingReasons
+        ? { terminalWaitingReasons: opts.terminalWaitingReasons }
+        : {}),
+    });
     const debounceMs = opts?.debounce ?? 3_000;
     const label = completion === "response" ? "agent message" : "idle";
 
@@ -1027,10 +1029,7 @@ export class HeadlessSession {
     });
   }
 
-  async sendAndWait(
-    text: string,
-    opts?: { debounce?: number; timeoutMs?: number; signal?: AbortSignal }
-  ): Promise<ChatMessage> {
+  async sendAndWait(text: string, opts?: HeadlessWaitOptions): Promise<ChatMessage> {
     const wait = this.waitForIdle(opts);
     await this.send(text);
     return wait;

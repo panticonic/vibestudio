@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "../../../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../semantic-control-plane/src/index.js";
 import {
   ids,
   askUserPolicy,
@@ -13,10 +13,11 @@ import {
 import { AgentLoopDriver, type DriverDeps } from "./agent-loop-driver.js";
 import type { ChannelCallPort, EffectExecutor, EphemeralEmit } from "./effect-executors/index.js";
 import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
+import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { summarizeTurn } from "./agent-vessel.js";
 
 const CHANNEL = "chan-d1";
-const LOG_ID = ids.logIdForChannel(CHANNEL);
+const LOG_ID = logIdForChannel(CHANNEL);
 
 const config: AgentLoopConfig = {
   model: "anthropic:claude-sonnet-4-6",
@@ -106,7 +107,7 @@ async function makeHarness(opts: {
   const deps: DriverDeps = {
     sql: driverHost.sql as never,
     gad: {
-      // The driver runs INSIDE the agent DO, so its gad-store calls are attributed
+      // The driver runs INSIDE the agent DO, so its control-plane calls are attributed
       // as a "do" — gad write methods (appendLogEvent/…) are `@rpc({ callers: ["do"] })`.
       call: <T>(method: string, args: Record<string, unknown>) => {
         const fault = opts.gadFault?.(method);
@@ -404,6 +405,122 @@ describe("AgentLoopDriver", () => {
     await alarmA;
   });
 
+  it("awaits an aborted executor leaving the dispatch boundary", async () => {
+    const started = deferred<void>();
+    const releaseCleanup = deferred<void>();
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              execute: ({ signal }) =>
+                new Promise<EffectOutcome>((resolve) => {
+                  started.resolve();
+                  signal.addEventListener(
+                    "abort",
+                    () => {
+                      void releaseCleanup.promise.then(() =>
+                        resolve({ kind: "model", blocks: [], stopReason: "aborted" })
+                      );
+                    },
+                    { once: true }
+                  );
+                }),
+            } as EffectExecutor)
+          : null,
+    });
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-abort"));
+    const alarm = harness.driver.alarm();
+    await started.promise;
+
+    let settled = false;
+    const abort = harness.driver.interruptChannel(CHANNEL).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseCleanup.resolve();
+    await abort;
+    expect(settled).toBe(true);
+    await alarm;
+  });
+
+  it("releases activation executors without journaling a semantic terminal", async () => {
+    const started = deferred<void>();
+    let executions = 0;
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              execute: ({ signal }) =>
+                new Promise<EffectOutcome>((_resolve, reject) => {
+                  executions += 1;
+                  started.resolve();
+                  signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+                }),
+            } as EffectExecutor)
+          : null,
+    });
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-release"));
+    const alarm = harness.driver.alarm();
+    await started.promise;
+
+    await expect(harness.driver.releaseActivation()).resolves.toBe(1);
+    await alarm;
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+    ]);
+    expect(harness.driver.outbox.all()).toEqual([
+      expect.objectContaining({ kind: "model_call", attempts: 0 }),
+    ]);
+
+    await harness.driver.alarm();
+    expect(executions).toBe(1);
+  });
+
+  it("closes effect admission while the interrupt marker is being journaled", async () => {
+    let modelCalls = 0;
+    const interruptEntered = deferred<void>();
+    const releaseInterrupt = deferred<void>();
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              async execute() {
+                modelCalls += 1;
+                return textReply("must not run");
+              },
+            } as EffectExecutor)
+          : null,
+    });
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-admission"));
+    const handleIncoming = harness.driver.handleIncoming.bind(harness.driver);
+    vi.spyOn(harness.driver, "handleIncoming").mockImplementation(async (channelId, incoming) => {
+      if (incoming.type === "command" && incoming.command.kind === "interrupt") {
+        interruptEntered.resolve();
+        await releaseInterrupt.promise;
+      }
+      await handleIncoming(channelId, incoming);
+    });
+
+    const interrupt = harness.driver.interruptChannel(CHANNEL);
+    await interruptEntered.promise;
+    await harness.driver.alarm();
+    expect(modelCalls).toBe(0);
+
+    releaseInterrupt.resolve();
+    await interrupt;
+    expect(harness.driver.outbox.all()).toEqual([]);
+  });
+
   it("does not execute effects outside the alarm owner and propagates alarm failures", async () => {
     let failAppends = false;
     const harness = await makeHarness({
@@ -573,7 +690,7 @@ describe("AgentLoopDriver", () => {
     });
 
     const otherChannel = "chan-other";
-    const otherLog = ids.logIdForChannel(otherChannel);
+    const otherLog = logIdForChannel(otherChannel);
     harness.driver.outbox.insert(LOG_ID, effectFor(CHANNEL), null);
     harness.driver.outbox.insert(otherLog, effectFor(otherChannel), null);
 
@@ -1107,7 +1224,7 @@ describe("AgentLoopDriver", () => {
   it("does not re-expand inherited parent tool calls when waking a forked child turn", async () => {
     const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     const parentChannel = "parent-chan";
-    const parentLogId = ids.logIdForChannel(parentChannel);
+    const parentLogId = logIdForChannel(parentChannel);
     const inheritedInvocationId = "call-parent-spawn";
     await gad.callAs("do", "appendLogEvent", {
       logId: parentLogId,

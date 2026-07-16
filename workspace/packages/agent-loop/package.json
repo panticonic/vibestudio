@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@vibestudio/trajectory-identity": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/pi-core": "workspace:*"
   }

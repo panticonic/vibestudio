@@ -69,6 +69,21 @@ describe("classifyModelFailure", () => {
     });
   });
 
+  it("classifies the ChatGPT plan-limit wording as terminal usage exhaustion", () => {
+    const failure = classifyModelFailure({
+      provider: "openai-codex",
+      rawReason:
+        "You have hit your ChatGPT usage limit (pro plan). Try again in ~7482 min.",
+      now,
+    });
+
+    expect(failure).toMatchObject({
+      code: "usage_limit_terminal",
+      recoverable: false,
+      reason: "You have hit your ChatGPT usage limit (pro plan). Try again in ~7482 min.",
+    });
+  });
+
   it("treats OpenAI-compatible rate limits as retryable", () => {
     const failure = classifyModelFailure({
       provider: "openai",

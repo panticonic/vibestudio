@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
+import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { DODispatch } from "../doDispatch.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import { createEvalService } from "./evalService.js";
@@ -16,6 +21,23 @@ const WORKSPACE_REF = {
 
 function evalKey(ownerId: string, subKey: string): string {
   return createHash("sha256").update(`${ownerId}\0${subKey}`).digest("hex").slice(0, 40);
+}
+
+function activeInvocationContext(
+  caller: VerifiedCaller,
+  channelId = "chan_1",
+  invocationId = "invocation:test"
+): ServiceContext {
+  const trajectory = channelTrajectoryFor(channelId);
+  return {
+    caller,
+    causalParent: {
+      kind: "trajectory-invocation",
+      logId: trajectory.logId,
+      head: trajectory.head,
+      invocationId,
+    },
+  };
 }
 
 function createHarness(contexts: Record<string, string | null>) {
@@ -54,9 +76,6 @@ function createHarness(contexts: Record<string, string | null>) {
       if (method === "cancel") {
         return { ok: true };
       }
-      if (method === "forceReset") {
-        return { ok: true };
-      }
       if (method === "startRun") {
         return { runId: (args[0] as { runId: string }).runId, status: "pending" };
       }
@@ -87,8 +106,21 @@ function createHarness(contexts: Record<string, string | null>) {
     },
     // Always a cache miss → ensureEvalDO takes the activate path, so the existing
     // entityActivate-dispatch assertions still hold.
-    resolveActive() {
-      return null;
+    resolveActive(id: string) {
+      const contextId = contexts[id];
+      if (contextId == null || !id.startsWith("do:")) return null;
+      return {
+        id,
+        kind: "do",
+        source: { repoPath: "workers/agent-worker", effectiveVersion: "test" },
+        contextId,
+        className: "AiChatWorker",
+        key: id,
+        agentBinding: { entityId: `session:${id}`, contextId, channelId: "chan_1" },
+        createdAt: 0,
+        status: "active",
+        cleanupComplete: true,
+      } as EntityRecord;
     },
     // Cache miss for the parent-resolution walk → falls back to entityResolve.
     resolve() {
@@ -155,8 +187,8 @@ describe("createEvalService", () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
-    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "run", [
-      { subKey: "chan_1", channelId: "chan_1", code: "return 1;" },
+    await service.handler(activeInvocationContext(createVerifiedCaller(ownerId, "do")), "run", [
+      { subKey: "chan_1", code: "return 1;" },
     ]);
 
     const objectKey = evalKey(ownerId, "chan_1");
@@ -183,6 +215,20 @@ describe("createEvalService", () => {
     });
   });
 
+  it("refuses an agent-bound eval without invocation scope before activating a relay", async () => {
+    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
+    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
+
+    await expect(
+      service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "run", [
+        { subKey: "chan_1", code: "return 1;" },
+      ])
+    ).rejects.toMatchObject({ code: "EACCES", errorKind: "access" });
+
+    expect(calls.some((call) => call.method === "entityActivate")).toBe(false);
+    expect(calls.some((call) => call.method === "run")).toBe(false);
+  });
+
   it("resolves the eval's parent as the agent caller's owning panel (lineage walk)", async () => {
     // Lineage: an agent DO whose launch parent (recorded at createEntity) is a panel.
     const rec = (
@@ -197,7 +243,16 @@ describe("createEvalService", () => {
       ...over,
     });
     const records: Record<string, EntityRecord> = {
-      "do:src:Agent:k": rec({ id: "do:src:Agent:k", kind: "do", parentId: "panel:p" }),
+      "do:src:Agent:k": rec({
+        id: "do:src:Agent:k",
+        kind: "do",
+        parentId: "panel:p",
+        agentBinding: {
+          entityId: "session:agent",
+          contextId: "ctx_agent",
+          channelId: "c",
+        },
+      }),
       "panel:p": rec({ id: "panel:p", kind: "panel", contextId: "ctx_panel" }),
     };
     const calls: Array<{ method: string; args: unknown[] }> = [];
@@ -224,7 +279,7 @@ describe("createEvalService", () => {
     const entityCache = {
       resolveContext: (id: string) => records[id]?.contextId ?? null,
       resolve: (id: string) => records[id] ?? null,
-      resolveActive: () => null,
+      resolveActive: (id: string) => records[id] ?? null,
       _onActivate() {},
       _onRetire() {},
     } as unknown as EntityCache;
@@ -237,9 +292,11 @@ describe("createEvalService", () => {
       } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
     });
 
-    await service.handler({ caller: createVerifiedCaller("do:src:Agent:k", "do") }, "run", [
-      { channelId: "c", code: "return 1;" },
-    ]);
+    await service.handler(
+      activeInvocationContext(createVerifiedCaller("do:src:Agent:k", "do"), "c"),
+      "run",
+      [{ code: "return 1;" }]
+    );
 
     const runCall = calls.find((c) => c.method === "run");
     // The parent is the owning panel's TREE SLOT id (durable nav→slot of "panel:p" → "panel:tree/p"),
@@ -292,30 +349,42 @@ describe("createEvalService", () => {
     ).rejects.toThrow(/exactly one of code or path/);
   });
 
-  it("startRun: inserts with the caller's runId, returns it, and pushes completion to the agent", async () => {
+  it("keeps eval effect identity distinct from its exact causal parent", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
+    const runId = "effect:eval:42";
+    const agentInvocationId = "invocation:parent:42";
 
-    const ret = await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
-      { subKey: "chan_1", channelId: "chan_1", code: "return 1;", runId: "inv-42" },
-    ]);
-    expect(ret).toEqual({ runId: "inv-42" });
+    const ret = await service.handler(
+      activeInvocationContext(createVerifiedCaller(ownerId, "do"), "chan_1", agentInvocationId),
+      "startRun",
+      [{ subKey: "chan_1", code: "return 1;", runId }]
+    );
+    expect(ret).toEqual({ runId });
 
     const objectKey = evalKey(ownerId, "chan_1");
-    // startRun dispatched to the owner's EvalDO with the CALLER's runId + assembled args.
+    // The run/effect key stays independent while the private causality field
+    // carries the exact already-verified parent invocation.
     expect(calls.find((c) => c.method === "startRun")).toMatchObject({
       ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
-      args: [expect.objectContaining({ runId: "inv-42", channelId: "chan_1", agentRef: ownerId })],
+      args: [
+        expect.objectContaining({
+          runId,
+          agentInvocationId,
+          channelId: "chan_1",
+          agentRef: ownerId,
+        }),
+      ],
     });
 
     // The held run + completion push run on a background task — let them settle.
     await new Promise((r) => setTimeout(r, 10));
     // executeRun was dispatched HELD (the mock records dispatchHeld as a dispatch).
-    expect(calls.find((c) => c.method === "executeRun")).toMatchObject({ args: ["inv-42"] });
+    expect(calls.find((c) => c.method === "executeRun")).toMatchObject({ args: [runId] });
     // Completion pushed to the owning agent DO, content-routed by channelId.
     expect(calls.find((c) => c.method === "onEvalComplete")).toMatchObject({
       ref: { source: "workers/agent-worker", className: "AiChatWorker", objectKey: "abc" },
-      args: [expect.objectContaining({ runId: "inv-42", channelId: "chan_1" })],
+      args: [expect.objectContaining({ runId, agentInvocationId, channelId: "chan_1" })],
     });
   });
 
@@ -324,9 +393,9 @@ describe("createEvalService", () => {
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
     const ret = (await service.handler(
-      { caller: createVerifiedCaller(ownerId, "do") },
+      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
       "startRun",
-      [{ subKey: "chan_1", channelId: "chan_1", code: "return 1;" }]
+      [{ subKey: "chan_1", code: "return 1;" }]
     )) as { runId: string };
     expect(ret.runId).toBeTruthy();
     expect(calls.find((c) => c.method === "startRun")).toMatchObject({
@@ -407,23 +476,6 @@ describe("createEvalService", () => {
       args: ["inv-42"],
     });
   });
-
-  it("forceReset: routes to the owner's EvalDO by (owner, subKey)", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
-
-    const ret = await service.handler(
-      { caller: createVerifiedCaller(ownerId, "do") },
-      "forceReset",
-      [{ subKey: "chan_1" }]
-    );
-    expect(ret).toEqual({ ok: true });
-
-    const objectKey = evalKey(ownerId, "chan_1");
-    expect(calls.find((c) => c.method === "forceReset")).toMatchObject({
-      ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
-    });
-  });
 });
 
 /**
@@ -460,7 +512,25 @@ function createHeldFailHarness(opts: {
   const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
   const entityCache = {
     resolveContext: () => opts.contextId,
-    resolveActive: () => null,
+    resolveActive: (id: string) =>
+      id === ownerId
+        ? ({
+            id,
+            kind: "do",
+            source: { repoPath: "workers/agent-worker", effectiveVersion: "test" },
+            contextId: opts.contextId,
+            className: "AiChatWorker",
+            key: "abc",
+            agentBinding: {
+              entityId: "session:agent",
+              contextId: opts.contextId,
+              channelId: "chan_1",
+            },
+            createdAt: 0,
+            status: "active",
+            cleanupComplete: true,
+          } as EntityRecord)
+        : null,
     resolve: () => null,
     _onActivate() {},
     _onRetire() {},
@@ -484,9 +554,11 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
       getRunResponse: { status: "done", result },
     });
 
-    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
-      { subKey: "chan_1", channelId: "chan_1", code: "return 7;", runId: "inv-h1" },
-    ]);
+    await service.handler(
+      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
+      "startRun",
+      [{ subKey: "chan_1", code: "return 7;", runId: "inv-h1" }]
+    );
     await new Promise((r) => setTimeout(r, 10));
 
     // After the held dispatch threw, the service reconciled via getRun and pushed the REAL result.
@@ -503,9 +575,11 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
       getRunResponse: { status: "cancelled" },
     });
 
-    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
-      { subKey: "chan_1", channelId: "chan_1", code: "return 1;", runId: "inv-h2" },
-    ]);
+    await service.handler(
+      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
+      "startRun",
+      [{ subKey: "chan_1", code: "return 1;", runId: "inv-h2" }]
+    );
     await new Promise((r) => setTimeout(r, 10));
 
     const push = calls.find((c) => c.method === "onEvalComplete");
@@ -520,9 +594,11 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
       getRunResponse: { status: "running" },
     });
 
-    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
-      { subKey: "chan_1", channelId: "chan_1", code: "while(true){}", runId: "inv-h3" },
-    ]);
+    await service.handler(
+      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
+      "startRun",
+      [{ subKey: "chan_1", code: "while(true){}", runId: "inv-h3" }]
+    );
     await new Promise((r) => setTimeout(r, 10));
 
     // The run is genuinely still running elsewhere → leave it alone (its own completion push covers
@@ -543,7 +619,11 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
     };
 
     await service.handler(
-      { caller: createVerifiedCaller("agent:ent_agent", "agent", null, binding) },
+      activeInvocationContext(
+        createVerifiedCaller("agent:ent_agent", "agent", null, binding),
+        binding.channelId,
+        "invocation:bound-agent"
+      ),
       "run",
       [{ code: "return 1;" }]
     );

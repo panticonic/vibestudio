@@ -1,25 +1,27 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import { cp, readFile, rm } from "node:fs/promises";
 import * as path from "node:path";
 import type { ExtensionContext, UserlandApprovalRequest } from "@vibestudio/extension";
+import {
+  assertClaudeCodeVersion,
+  claudeLaunchProfile,
+  materializeClaudeLaunch,
+  removeMaterializedClaudeLaunch,
+  type ClaudeLaunchProfile,
+  type MaterializedClaudeLaunch,
+} from "@vibestudio/shared/claudeLaunchProfile";
+import { confineClaudeReadOnly } from "@vibestudio/shared/claudeReadOnlyLaunch";
 import {
   launchAgentIntoChannel,
   subagentRuntimePrompt,
   type AgentLaunchRpc,
 } from "@workspace/agentic-core";
-import {
-  assertClaudeCodeVersion,
-  removeLaunchProfile,
-  toServerBaseUrl,
-  writeLaunchProfile,
-  type LaunchEnv,
-} from "./profile.js";
+import { toServerBaseUrl } from "./gateway.js";
 
 const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 const LINKED_AGENT_SOURCE = "workers/linked-agent";
 const LINKED_AGENT_CLASS = "LinkedAgentWorker";
-const CONTEXT_MARKER = ".vibestudio-context.json";
 
 function error(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
@@ -27,12 +29,12 @@ function error(code: string, message: string): Error {
 
 /** Durable per-launch bookkeeping, stored in extension storage. */
 interface LaunchRecord {
+  launchId: string;
   entityId: string;
   contextId: string;
   channelId: string;
   vesselRef: string;
-  agentId: string;
-  profileDir: string;
+  agentId: string | null;
   preparedAt: string;
 }
 
@@ -61,9 +63,9 @@ export interface PrepareResult {
   vesselEntityId: string;
   /** The linked vessel's participant id on the channel (task-seed addressing). */
   vesselParticipantId: string | null;
-  contextFolder: string;
-  env: LaunchEnv;
-  argv: string[];
+  /** Portable semantic declaration. Host reach and paths are materialized only
+   * on the machine that actually executes Claude. */
+  profile: ClaudeLaunchProfile;
 }
 
 /** Claude Code CLI options a parent may set per subagent launch (the
@@ -137,6 +139,8 @@ export interface LaunchSubagentResult {
   vesselEntityId: string;
   vesselParticipantId: string | null;
   launchId: string;
+  /** Exact preparation generation owned by this process. */
+  generationId: string;
   pid: number | null;
   logPath: string;
 }
@@ -190,6 +194,7 @@ function buildLaunchApproval(input: {
 export async function activate(ctx: ExtensionContext) {
   interface HeadlessLaunch {
     entityId: string;
+    generationId: string;
     launchId: string;
     runId: string;
     vesselRef: string;
@@ -198,6 +203,7 @@ export async function activate(ctx: ExtensionContext) {
   }
 
   const headlessLaunches = new Map<string, HeadlessLaunch>();
+  const materializedLaunches = new Map<string, MaterializedClaudeLaunch>();
   process.once("exit", () => {
     for (const launch of headlessLaunches.values()) {
       try {
@@ -221,6 +227,7 @@ export async function activate(ctx: ExtensionContext) {
   const channelKey = (id: string): string => `channels/${enc(id)}.json`;
   const entityKey = (id: string): string => `entities/${enc(id)}.json`;
   const contextKey = (id: string): string => `contexts/${enc(id)}.json`;
+  const launchKey = (id: string): string => `launches/${enc(id)}.json`;
 
   async function readJson<T>(key: string): Promise<T | null> {
     try {
@@ -256,38 +263,15 @@ export async function activate(ctx: ExtensionContext) {
     return contextId;
   }
 
-  async function readServerUrlFromMarker(contextFolder: string): Promise<string> {
-    // ctx.storage is sandboxed to extension storage; the marker lives in the
-    // context working tree, so read it directly through node fs.
-    const markerPath = path.join(contextFolder, CONTEXT_MARKER);
-    let raw: string;
-    try {
-      raw = await readFile(markerPath, "utf8");
-    } catch (err) {
+  function currentServerUrl(): string {
+    const gatewayUrl = process.env["VIBESTUDIO_EXTENSION_GATEWAY_URL"];
+    if (!gatewayUrl) {
       throw error(
-        "ENOMARKER",
-        `Context marker not found at ${markerPath} (${
-          err instanceof Error ? err.message : String(err)
-        }). It is written when the context folder is materialized.`
+        "ENOGATEWAY",
+        "Claude Code extension host did not receive VIBESTUDIO_EXTENSION_GATEWAY_URL"
       );
     }
-    const parsed = JSON.parse(raw) as { serverUrl?: string };
-    if (!parsed.serverUrl) {
-      throw error("ENOMARKER", `Context marker at ${markerPath} has no serverUrl`);
-    }
-    return parsed.serverUrl;
-  }
-
-  function skillsDir(): string | undefined {
-    const fromEnv = process.env["VIBESTUDIO_SKILLS_DIR"];
-    return fromEnv && fromEnv.length > 0 ? fromEnv : undefined;
-  }
-
-  async function installLaunchSkill(contextFolder: string, sourceDir: string): Promise<void> {
-    await readFile(path.join(sourceDir, "SKILL.md"), "utf8");
-    const dest = path.join(contextFolder, ".claude", "skills", "vibestudio-agent");
-    await rm(dest, { recursive: true, force: true });
-    await cp(sourceDir, dest, { recursive: true });
+    return toServerBaseUrl(gatewayUrl);
   }
 
   function assertHeadlessSubagentCaller(input: LaunchSubagentInput): void {
@@ -304,9 +288,11 @@ export async function activate(ctx: ExtensionContext) {
     }
   }
 
-  function killHeadlessLaunch(entityId: string): boolean {
+  function killHeadlessLaunch(entityId: string, generationId?: string): boolean {
     const launch = headlessLaunches.get(entityId);
-    if (!launch) return false;
+    if (!launch || (generationId !== undefined && launch.generationId !== generationId)) {
+      return false;
+    }
     headlessLaunches.delete(entityId);
     try {
       launch.child.kill("SIGTERM");
@@ -322,21 +308,26 @@ export async function activate(ctx: ExtensionContext) {
 
   function spawnHeadlessClaude(
     prepared: PrepareResult,
-    input: LaunchSubagentInput
+    input: LaunchSubagentInput,
+    materialized: MaterializedClaudeLaunch,
+    contextFolder: string
   ): LaunchSubagentResult {
     killHeadlessLaunch(prepared.entityId);
     const launchId = `claude-code:${input.subagent.runId}`;
-    const logPath = path.join(prepared.env.VIBESTUDIO_LAUNCH_PROFILE, "headless.log");
+    const logPath = path.join(materialized.profileDir, "headless.log");
     mkdirSync(path.dirname(logPath), { recursive: true });
     const logFd = openSync(logPath, "a");
     let child: ChildProcess | null = null;
     try {
-      const argv = [...prepared.argv, ...subagentCliArgs(input.options), "-p", input.task];
-      const command = argv[0] ?? "claude";
-      const args = argv.slice(1);
-      child = spawn(command, args, {
-        cwd: prepared.contextFolder,
-        env: { ...process.env, ...prepared.env },
+      const argv = [...materialized.argv, ...subagentCliArgs(input.options), "-p", input.task];
+      const confined = confineClaudeReadOnly({
+        argv,
+        profileDir: materialized.profileDir,
+        contextDirectory: contextFolder,
+      });
+      child = spawn(confined.command, confined.args, {
+        cwd: contextFolder,
+        env: { ...process.env, ...materialized.env, ...confined.env },
         stdio: ["ignore", logFd, logFd],
         detached: false,
       });
@@ -351,6 +342,7 @@ export async function activate(ctx: ExtensionContext) {
 
     const launch: HeadlessLaunch = {
       entityId: prepared.entityId,
+      generationId: prepared.profile.launchId,
       launchId,
       runId: input.subagent.runId,
       vesselRef: prepared.vesselRef,
@@ -360,7 +352,7 @@ export async function activate(ctx: ExtensionContext) {
     headlessLaunches.set(prepared.entityId, launch);
     child.on("exit", (code, signal) => {
       const current = headlessLaunches.get(prepared.entityId);
-      const tracked = current?.launchId === launchId;
+      const tracked = current?.generationId === prepared.profile.launchId;
       if (tracked) headlessLaunches.delete(prepared.entityId);
       ctx.log.info?.("Claude Code headless process exited", {
         entityId: prepared.entityId,
@@ -373,19 +365,32 @@ export async function activate(ctx: ExtensionContext) {
       // `complete`, the parent's run must not dangle as "running" forever —
       // report the exit so the vessel settles it (no-op past a real complete).
       if (tracked) {
-        void ctx.rpc
-          .call(prepared.vesselRef, "reportExternalExit", {
-            runId: input.subagent.runId,
-            code: code ?? null,
-            signal: signal ?? null,
-          })
-          .catch((err: unknown) => {
+        void (async () => {
+          try {
+            await ctx.rpc.call(prepared.vesselRef, "reportExternalExit", {
+              runId: input.subagent.runId,
+              code: code ?? null,
+              signal: signal ?? null,
+            });
+          } catch (err) {
             ctx.log.warn?.("Claude Code exit report failed", {
               entityId: prepared.entityId,
               launchId,
               error: err instanceof Error ? err.message : String(err),
             });
-          });
+          } finally {
+            await release({
+              entityId: prepared.entityId,
+              launchId: prepared.profile.launchId,
+            }).catch((err: unknown) => {
+              ctx.log.warn?.("Claude Code launch cleanup failed", {
+                entityId: prepared.entityId,
+                launchId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+          }
+        })();
       }
     });
     child.on("error", (err) => {
@@ -404,6 +409,7 @@ export async function activate(ctx: ExtensionContext) {
       vesselEntityId: prepared.vesselEntityId,
       vesselParticipantId: prepared.vesselParticipantId,
       launchId,
+      generationId: prepared.profile.launchId,
       pid: child.pid ?? null,
       logPath,
     };
@@ -416,10 +422,6 @@ export async function activate(ctx: ExtensionContext) {
   }): Promise<PrepareResult> {
     const { channelId } = input;
     if (!channelId) throw error("EINVAL", "prepare requires a channelId");
-
-    // 0. Fail loudly on an unsupported Claude Code (plan §11).
-    await assertClaudeCodeVersion();
-
     // 1. Context is the channel's context — never create a channel.
     const contextId = await resolveContextFromChannel(channelId);
 
@@ -451,7 +453,6 @@ export async function activate(ctx: ExtensionContext) {
 
     // 3. Ensure the runtime session entity (idempotent by canonical key) and
     //    eagerly materialize the context folder.
-    const workspace = await ctx.workspace.getInfo();
     const sessionHandle = await ctx.rpc.call<{ id: string; contextId?: string }>(
       "main",
       "runtime.createEntity",
@@ -460,12 +461,11 @@ export async function activate(ctx: ExtensionContext) {
         source: "claude-code",
         key: channelId,
         contextId,
+        agentChannelId: channelId,
         ...(input.title ? { title: input.title } : {}),
       }
     );
     const entityId = sessionHandle.id;
-    await ctx.workspace.ensureContextFolder(contextId);
-    const contextFolder = path.join(workspace.contextsPath, contextId);
 
     // 4. Ensure the linked-agent vessel and invite it into the channel with the
     //    standard launch primitives (idempotent: reuses the deterministic key).
@@ -487,92 +487,129 @@ export async function activate(ctx: ExtensionContext) {
     const vesselEntityId = launch.handle.id ?? vesselRef;
     const vesselParticipantId = launch.subscription.participantId ?? null;
 
-    const serverUrl = toServerBaseUrl(await readServerUrlFromMarker(contextFolder));
-
     // 5. Mint the agent credential (rotate on re-prepare so a stale token is
     //    revoked). Bound to entity + host-derived context + channel.
-    if (priorForChannel?.agentId) {
-      await ctx.rpc
-        .call("main", "auth.revokeAgentCredential", priorForChannel.agentId)
-        .catch(() => undefined);
+    const priorLaunch = priorForChannel
+      ? await readJson<LaunchRecord>(launchKey(priorForChannel.launchId))
+      : null;
+    if (priorLaunch?.agentId) {
+      await ctx.rpc.call("main", "auth.revokeAgentCredential", priorLaunch.agentId);
     }
     const credential = await ctx.rpc.call<{ agentId: string; agentToken: string }>(
       "main",
       "auth.mintAgentCredential",
-      { entityId, channelId }
+      { entityId }
     );
 
-    // 6. Install the bundled skill into the context tree, then write the launch profile.
-    const bundledSkillsDir = skillsDir();
-    if (bundledSkillsDir) {
-      await installLaunchSkill(contextFolder, bundledSkillsDir);
+    try {
+      // 6. Return a path-free launch declaration. Workspace skills are exposed
+      //    by the bridge as MCP resources; prepare never edits the context tree.
+      const profile = claudeLaunchProfile({
+        launchId: randomUUID(),
+        environment: {
+          VIBESTUDIO_AGENT_TOKEN: credential.agentToken,
+          VIBESTUDIO_ENTITY_ID: entityId,
+          VIBESTUDIO_CONTEXT_ID: contextId,
+          VIBESTUDIO_CHANNEL_ID: channelId,
+          VIBESTUDIO_VESSEL_REF: vesselRef,
+          // Subagent launches carry their duty into the session env so the bridge
+          // states it definitively in the MCP instructions (§8.2): the contract is
+          // the SAME text a Pi child gets as its immediate prompt.
+          ...(input.subagent
+            ? {
+                VIBESTUDIO_SUBAGENT_RUN_ID: input.subagent.runId,
+                VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID: input.subagent.parentChannelId,
+                VIBESTUDIO_SUBAGENT_CONTRACT: subagentRuntimePrompt(input.subagent),
+              }
+            : {}),
+        },
+      });
+
+      const record: LaunchRecord = {
+        launchId: profile.launchId,
+        entityId,
+        contextId,
+        channelId,
+        vesselRef,
+        agentId: credential.agentId,
+        preparedAt: new Date().toISOString(),
+      };
+      await writeJson(launchKey(record.launchId), record);
+      await writeJson(channelKey(channelId), record);
+      await writeJson(entityKey(entityId), { channelId });
+      await writeJson(contextKey(contextId), { channelId });
+
+      return {
+        entityId,
+        contextId,
+        channelId,
+        vesselRef,
+        vesselEntityId,
+        vesselParticipantId,
+        profile,
+      };
+    } catch (error) {
+      try {
+        await ctx.rpc.call("main", "auth.revokeAgentCredential", credential.agentId);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Claude launch preparation failed and credential revocation also failed"
+        );
+      }
+      throw error;
     }
-    const written = await writeLaunchProfile({
-      statePath: workspace.statePath,
-      entityId,
-      env: {
-        VIBESTUDIO_SERVER_URL: serverUrl,
-        VIBESTUDIO_AGENT_TOKEN: credential.agentToken,
-        VIBESTUDIO_ENTITY_ID: entityId,
-        VIBESTUDIO_CONTEXT_ID: contextId,
-        VIBESTUDIO_CHANNEL_ID: channelId,
-        VIBESTUDIO_VESSEL_REF: vesselRef,
-        ...(bundledSkillsDir ? { VIBESTUDIO_SKILLS_DIR: bundledSkillsDir } : {}),
-        // Subagent launches carry their duty into the session env so the bridge
-        // states it definitively in the MCP instructions (§8.2): the contract is
-        // the SAME text a Pi child gets as its immediate prompt.
-        ...(input.subagent
-          ? {
-              VIBESTUDIO_SUBAGENT_RUN_ID: input.subagent.runId,
-              VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID: input.subagent.parentChannelId,
-              VIBESTUDIO_SUBAGENT_CONTRACT: subagentRuntimePrompt(input.subagent),
-            }
-          : {}),
-      },
-    });
-
-    const record: LaunchRecord = {
-      entityId,
-      contextId,
-      channelId,
-      vesselRef,
-      agentId: credential.agentId,
-      profileDir: written.profileDir,
-      preparedAt: new Date().toISOString(),
-    };
-    await writeJson(channelKey(channelId), record);
-    await writeJson(entityKey(entityId), { channelId });
-    await writeJson(contextKey(contextId), { channelId });
-
-    return {
-      entityId,
-      contextId,
-      channelId,
-      vesselRef,
-      vesselEntityId,
-      vesselParticipantId,
-      contextFolder,
-      env: written.env,
-      argv: written.argv,
-    };
   }
 
-  async function release(input: { entityId: string }): Promise<{ released: boolean }> {
-    const { entityId } = input;
-    if (!entityId) throw error("EINVAL", "release requires an entityId");
-    const killed = killHeadlessLaunch(entityId);
-    const pointer = await readJson<{ channelId: string }>(entityKey(entityId));
-    const record = pointer ? await readJson<LaunchRecord>(channelKey(pointer.channelId)) : null;
-    if (record?.agentId) {
-      await ctx.rpc
-        .call("main", "auth.revokeAgentCredential", record.agentId)
-        .catch(() => undefined);
-    }
+  async function materializeLocalLaunch(prepared: PrepareResult): Promise<{
+    launch: MaterializedClaudeLaunch;
+    contextFolder: string;
+  }> {
+    await assertClaudeCodeVersion();
     const workspace = await ctx.workspace.getInfo();
-    await removeLaunchProfile(workspace.statePath, entityId).catch(() => undefined);
-    // Vessel + channel membership persist for reattach; presence goes offline via
-    // the vessel heartbeat. Storage records are left as the reattach anchor.
-    return { released: record !== null || killed };
+    const { dir: contextFolder } = await ctx.workspace.ensureContextFolder(prepared.contextId);
+    const launch = await materializeClaudeLaunch({
+      profile: prepared.profile,
+      profilesRoot: path.join(workspace.statePath, "agent-launch"),
+      serverUrl: currentServerUrl(),
+    });
+    materializedLaunches.set(prepared.profile.launchId, launch);
+    return { launch, contextFolder };
+  }
+
+  async function release(input: {
+    entityId: string;
+    launchId: string;
+  }): Promise<{ released: boolean }> {
+    const { entityId, launchId } = input;
+    if (!entityId || !launchId) throw error("EINVAL", "release requires entityId and launchId");
+    const killed = killHeadlessLaunch(entityId, launchId);
+    const record = await readJson<LaunchRecord>(launchKey(launchId));
+    if (record && record.entityId !== entityId) {
+      throw error("EINVAL", `Launch ${launchId} does not belong to entity ${entityId}`);
+    }
+    const materialized = materializedLaunches.get(launchId);
+    let cleanupError: unknown;
+    if (record?.agentId) {
+      try {
+        await ctx.rpc.call("main", "auth.revokeAgentCredential", record.agentId);
+        await writeJson(launchKey(launchId), { ...record, agentId: null });
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
+    if (materialized) {
+      try {
+        await removeMaterializedClaudeLaunch(materialized);
+        materializedLaunches.delete(launchId);
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
+    if (cleanupError) throw cleanupError;
+    // Vessel + channel membership persist for reattach; ending the owned bridge
+    // response takes presence offline. Storage records remain the reattach anchor.
+    return { released: record !== null || killed || materialized !== undefined };
   }
 
   async function launchSubagent(input: LaunchSubagentInput): Promise<LaunchSubagentResult> {
@@ -583,9 +620,13 @@ export async function activate(ctx: ExtensionContext) {
       subagent: input.subagent,
     });
     try {
-      return spawnHeadlessClaude(prepared, input);
+      const { launch, contextFolder } = await materializeLocalLaunch(prepared);
+      return spawnHeadlessClaude(prepared, input, launch, contextFolder);
     } catch (err) {
-      await release({ entityId: prepared.entityId }).catch(() => undefined);
+      await release({
+        entityId: prepared.entityId,
+        launchId: prepared.profile.launchId,
+      }).catch(() => undefined);
       throw err;
     }
   }
@@ -603,17 +644,44 @@ export async function activate(ctx: ExtensionContext) {
     argv: string[];
     cwd: string;
     env: Record<string, string>;
-  }): Promise<{ env: Record<string, string>; argv: string[] } | null> {
+    intent?: Record<string, unknown>;
+  }): Promise<{
+    env: Record<string, string>;
+    argv: string[];
+    cleanup: { method: string; args: unknown[] };
+  } | null> {
     // Launch-adapter handler (§4.3): a bare `claude` in a context terminal. With
     // no known conversation channel for the context we return null so the shell
     // extension launches the session untouched — channels are never created here.
-    const primary = await resolvePrimaryChannel({ contextId: input.contextId });
+    const intendedChannel = input.intent?.["channelId"];
+    if (intendedChannel !== undefined && typeof intendedChannel !== "string") {
+      throw error("EINVAL", "Claude launch intent channelId must be a string");
+    }
+    const primary = intendedChannel
+      ? { channelId: intendedChannel }
+      : await resolvePrimaryChannel({ contextId: input.contextId });
     if (!primary) return null;
     const prepared = await prepare({ channelId: primary.channelId });
-    return {
-      env: { ...input.env, ...prepared.env },
-      argv: prepared.argv,
-    };
+    try {
+      if (prepared.contextId !== input.contextId) {
+        throw error(
+          "ECONTEXT",
+          `Channel ${primary.channelId} belongs to context ${prepared.contextId}, not terminal context ${input.contextId}`
+        );
+      }
+      const { launch } = await materializeLocalLaunch(prepared);
+      return {
+        env: { ...input.env, ...launch.env },
+        argv: launch.argv,
+        cleanup: {
+          method: "release",
+          args: [{ entityId: prepared.entityId, launchId: prepared.profile.launchId }],
+        },
+      };
+    } catch (error) {
+      await release({ entityId: prepared.entityId, launchId: prepared.profile.launchId });
+      throw error;
+    }
   }
 
   // Register the launch adapter so a bare `claude` in a context-scoped terminal

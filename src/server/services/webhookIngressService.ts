@@ -10,7 +10,7 @@ import {
   webhookIngressMethods,
 } from "@vibestudio/service-schemas/webhookIngress";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
-import { doTargetId, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
+import { doTargetId, type RpcCallerLike } from "@vibestudio/shared/workspaceServiceRpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import {
   getHeader,

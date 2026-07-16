@@ -1,13 +1,21 @@
 ---
 name: vibestudio-agent
-description: Operate a Vibestudio workspace server from the command line with the vibestudio CLI — durable agent sessions, remote file/VCS access, arbitrary RPC calls, and sandboxed TypeScript eval with a persistent REPL scope. Use when working against a Vibestudio server from a terminal or script — reading/editing workspace context files, committing changes, calling workspace services, or running code on live data.
+description: Use when operating a Vibestudio workspace server from the command line with the vibestudio CLI — paired direct sessions can use remote file/VCS and sandboxed eval, while linked-agent sessions are read-only for managed state and participate through channels.
 ---
 
 # Vibestudio Agent CLI
 
-The `vibestudio` CLI gives an agent full programmatic access to a paired
-Vibestudio workspace server. Everything below assumes the CLI is on PATH (in
-the repo: `pnpm cli ...`).
+The `vibestudio` CLI gives a paired direct caller programmatic access to a
+Vibestudio workspace server. A linked-agent credential is intentionally narrower:
+managed authoring and eval require an exact in-process invocation it does not have.
+Everything below assumes the CLI is on PATH (in the repo: `pnpm cli ...`).
+
+The credential proves only the exact live session entity. It does not carry a
+context, channel, user, scopes, intent, or authorship claim. The host derives the
+current context/channel binding and owner from that session entity on authentication;
+intent and authorship remain walkable causal-provenance queries. If the entity is
+retired, unbound, or no longer has a live owner, authentication fails rather than
+falling back to token metadata.
 
 ## Critical rules
 
@@ -16,12 +24,14 @@ the repo: `pnpm cli ...`).
   (`vibestudio agent attach`). Sessions are durable server entities; a session
   named `default` is used when `--session NAME` is omitted.
 - **Paths are remote.** `fs`/`vcs`/`eval` operate inside the session's
-  _context folder on the server_, not the local filesystem. The context is a
-  copy-on-write checkout of the workspace tree (e.g. `panels/notes/...`).
-  Context folders are **sparse**: repos materialize on disk on demand, so a
-  fresh checkout can look almost empty to local `ls`/glob. Discover the tree
-  with `vibestudio fs ls /` (server-side, authoritative); `fs` operations
-  materialize the repos they touch.
+  _context folder on the server_, not the local filesystem. The context is an
+  exact semantic projection (e.g. `panels/notes/...`). The public
+  `.vibestudio-context.json` file identifies only its protocol, workspace, and
+  context; it carries no endpoint or semantic head. The host's private,
+  disposable materialization receipt tracks the projected basis. A missing or
+  stale projection is repaired before filesystem access from a freshly derived,
+  exact replacement command for the current semantic head—not by replaying an
+  old effect. Discover the tree with `vibestudio fs ls /`.
 - **JSON is automatic when piped.** Results are human text on a TTY and a
   single JSON document when stdout is piped or `--json` is passed. Errors go
   to stderr (`{"error":..., "exitCode":...}` in JSON mode).
@@ -34,27 +44,18 @@ the repo: `pnpm cli ...`).
   skill library (subagents, testing, panel dev, …) is exposed as MCP
   resources on the `vibestudio` MCP server in linked sessions — each served
   with an addendum mapping its Pi-agent idioms to your CLI surfaces.
-- **VCS is per-repo and the loop is edit → commit → push.** Each repo
-  (`panels/notes`, `packages/ui`, `projects/vault`, `meta`) versions itself with
-  three distinct layers:
-  1. **`vcs.edit`** records tracked **WORKING** changes on your context head —
-     durable, full provenance, projected to disk — but it is **not** a commit:
-     no commit-log entry, no head advance, no build, never in `vcs.log`.
-     (`fs write` and the `fs.*` write methods route through `vcs.edit`.)
-  2. **`vcs.commit(message)`** folds your uncommitted edits into one deliberate,
-     **messaged** snapshot **per repo** (`message` is mandatory; `exclude` holds
-     paths back). This is what shows up in `vcs.log`.
-  3. **`vibestudio vcs push`** is the **only** way to advance `main`, and it is
-     **fast-forward-only** and **build-gated**. It rejects if you still have
-     uncommitted edits (commit first). On divergence — `main` moved past your
-     base — it does **not** force; it returns a structured `diverged` error
-     (`upstreamCommits` + `mergeable` + `conflictPaths`) and you reconcile with
-     an explicit `vcs.merge`. A push that returns `build-failed` did **NOT**
-     advance `main` — its structured diagnostics (`file:line:col`) are your next
-     task. Fix them and re-push; never leave a repo red.
-     Builds happen **at push** (use `vcs.previewBuild` for a dev preview without
-     committing). The push report is the **primary build signal** — prefer it over
-     polling diagnostics after the fact. See [BUILDING.md](BUILDING.md).
+- **VCS is one semantic workspace graph.** Before any source comparison,
+  mutation, commit, external import, provenance query, or publication, fetch
+  `skills/vibestudio-vcs` from the attached workspace with
+  `vibestudio agent skills skills/vibestudio-vcs`. It is the only maintained
+  protocol source. A context has one committed event and one working head;
+  repositories and paths do not own independent history. Every local mutation
+  advances the working head with a command ID, commit consumes the complete
+  local chain, and protected publication validates semantic ancestry and
+  integration, obtains approval, and atomically advances refs. Builds are
+  explicit advisory checks or post-publication projections; failed activation
+  retains the previous runnable artifact. See [FILES.md](FILES.md) for CLI transport and
+  [BUILDING.md](BUILDING.md) for build/publication boundaries.
 
 ## Quick start
 
@@ -77,17 +78,22 @@ one credential** with a fixed precedence — so inside a launched session (or a
 2. `VIBESTUDIO_CONTEXT_ID` env — and if `VIBESTUDIO_AGENT_TOKEN` is also set,
    the raw **agent** credential + `VIBESTUDIO_SERVER_URL` are used (caller kind
    `agent`; no device credential or session file involved);
-3. cwd-upward search for `.vibestudio-context.json` (its `contextId` +
-   `serverUrl`, over the paired device credential);
+3. cwd-upward search for `.vibestudio-context.json` (its exact `workspaceId` +
+   `contextId`; reach comes from the selected paired device credential);
 4. the named default session file (`vibestudio agent attach` bookkeeping).
 
 **Probe your tier** (what's available depends on how you were started). Check
 in this order and state what's missing:
 
-- `VIBESTUDIO_AGENT_TOKEN` set ⇒ **linked-agent** tier: full `fs`/`vcs`/`eval`
-  auto-scoped, plus `channel send/history/roster` and live `channel tail` (WS
-  push). This is a launched or plugin session.
-- else a `.vibestudio-context.json` marker up-tree ⇒ **paired-CLI (Tier 0)**:
+- `VIBESTUDIO_AGENT_TOKEN` set ⇒ **linked-agent** tier: read-only `fs`/`vcs`
+  orientation plus `channel send/history/roster` and live `channel tail`. Managed
+  mutations and `eval` fail closed because this external process has no exact
+  in-process tool-invocation edge. Native Edit/Write/Bash changes touch projection
+  bytes only and are not semantic work; do not use them. Ask an in-process workspace
+  agent to implement through `say`. Supported linked sessions are launched only by
+  `vibestudio claude`, which OS-confines the context projection read-only; unmanaged
+  plugin/adoption sessions are refused.
+- else a `.vibestudio-context.json` binding up-tree ⇒ **paired-CLI (Tier 0)**:
   full `fs`/`vcs`/`eval` and `channel send/history` over the device credential,
   but **no vessel presence, no permission relay, and `channel tail` push only
   works if the device credential can hold a WS connection**. Say so.
@@ -99,14 +105,16 @@ in this order and state what's missing:
 
 `vibestudio eval` runs TypeScript **inside the system** (an EvalDO in workerd),
 scoped to your entity's context, with a persistent per-entity REPL scope. Prefer
-it over stringing together CLI calls for anything programmatic. Canonical shapes
+it over stringing together CLI calls for anything programmatic from paired human/device
+sessions. Agent-bound linked sessions are refused because they have no canonical
+in-process tool invocation; do not fabricate one. Canonical shapes
 (see [EVAL.md](EVAL.md) for bindings/imports):
 
 ```bash
 # Call any service and return a structured value (JSON when piped):
 vibestudio eval run -e 'return await services.docs.listServices()'
-# VCS operations against your own context tree:
-vibestudio eval run -e 'return await services.vcs.status("panels/notes","ctx:"+contextId)'
+# Discover the one canonical VCS surface:
+vibestudio eval run -e 'return await help("vcs")'
 # CLI-owned eval has no chat binding. Use `vibestudio channel send` when the
 # current workflow needs to post to a conversation channel.
 ```
@@ -149,11 +157,11 @@ Full loop with build preview in [RECIPES.md](RECIPES.md).
 Two directions, both one-way:
 
 - **If you ARE a subagent** (a workspace agent spawned you): your MCP server
-  instructions say so explicitly and carry your operating contract. The short
-  version: work in this context, `say` sparingly for parent-visible progress,
-  **commit** durable work here (the parent merges this context — only committed
-  work merges; never push `main`), and finish exactly once by calling the
-  `complete` MCP tool — a normal final message does not end the run.
+  instructions say so explicitly and carry your operating contract. Linked
+  subagents are currently reviewers/orienters, not managed-source implementers:
+  inspect the exact context, `say` findings or an implementation request to the
+  parent, and finish exactly once by calling the `complete` MCP tool. A normal
+  final message does not end the run.
 - **You cannot spawn subagents from a linked session.** `spawn_subagent` is a
   workspace-side vessel tool with no CLI/eval/RPC surface. If work needs
   delegation, `say` it to the workspace agent in your conversation — it can
@@ -161,16 +169,16 @@ Two directions, both one-way:
 
 ## Command groups
 
-| Group                | Commands                                                                                | Purpose                                                                                                                                       |
-| -------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibestudio remote`  | `pair`, `status`, `invite`, `logout`, `discover`, `start`, `serve`                      | Device pairing and credentials                                                                                                                |
-| `vibestudio agent`   | `attach`, `status`, `detach`, `sessions`, `call`, `services`, `skills`, `logs`, `skill` | Sessions, raw RPC, introspection                                                                                                              |
-| `vibestudio fs`      | `ls`, `read`, `write`, `rm`, `mv`, `cp`, `mkdir`, `stat`, `grep`, `glob`                | Files in the session context                                                                                                                  |
-| `vibestudio vcs`     | `push`, `push-status`, `status`, `diff`, `log`, `fork-repo`                             | Per-repo, build-gated VCS (push). `vcs.edit`/`vcs.commit`/`vcs.merge` are RPCs — see below                                                    |
-| `vibestudio eval`    | `run`, `repl-reset`                                                                     | Sandboxed TS/JS against the server — **the full-power surface** (see below)                                                                   |
-| `vibestudio channel` | `list`, `history`, `send`, `tail`, `roster`                                             | Conversation channels: read/post messages, follow live, inspect the roster                                                                    |
-| `vibestudio context` | `mirror`                                                                                | Materialize a context's repos into a local dir (`--watch` writes local edits back as context edit ops)                                        |
-| `vibestudio panel`   | `list`, `screenshot`, `console`                                                         | Look at running UI: enumerate live panels, capture one to an image file, read its console/errors — the frontend-dev feedback loop (see below) |
+| Group                | Commands                                                                                                              | Purpose                                                                                                                                       |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vibestudio remote`  | `pair`, `invite-user`, `pair-device`, `add-member`, `remove-member`, `list-users`, `list-devices`, `revoke-device`, `status`, `workspaces`, `select`, `terminal`, `host`, `logout`, `deploy`, `doctor`, `repair-identity`, `serve` | Stable-hub pairing, account/workspace/device administration, and remote clients |
+| `vibestudio agent`   | `attach`, `status`, `detach`, `sessions`, `call`, `services`, `skills`, `logs`, `skill`                               | Sessions, raw RPC, introspection                                                                                                              |
+| `vibestudio fs`      | `ls`, `read`, `write`, `rm`, `mkdir`, `stat`, `grep`, `glob`                                                          | Files in the session context; use VCS move/copy commands for managed identity changes                                                         |
+| `vibestudio eval`    | `run`, `repl-reset`                                                                                                   | Sandboxed TS/JS against the server — **the full-power surface** (see below)                                                                   |
+| `vibestudio channel` | `list`, `history`, `send`, `tail`, `roster`                                                                           | Conversation channels: read/post messages, follow live, inspect the roster                                                                    |
+| `vibestudio context` | `mirror`                                                                                                              | Export a context snapshot into a local directory and write its identity binding                                                               |
+| `vibestudio vcs`     | `status`, `compare`, `integrate`, `revert`, `history`, `blame`, `commit`, `discard`, `move-file`, `copy-file`, `push` | Event/application semantic VCS; read the canonical workspace `skills/vibestudio-vcs` package before use                                       |
+| `vibestudio panel`   | `list`, `screenshot`, `console`                                                                                       | Look at running UI: enumerate live panels, capture one to an image file, read its console/errors — the frontend-dev feedback loop (see below) |
 
 `--help` works at the group level (`vibestudio fs --help`) and per command
 (`vibestudio fs write --help`).
@@ -181,18 +189,19 @@ shell-callable, so create workers (and DOs) via RPC —
 — and retire them with `runtime.retireEntity`. See
 [RECIPES.md](RECIPES.md) for a full example.
 
-For workers/DOs, omitted `ref` means the main build. `contextId` selects runtime
-state/files only; if the worker/DO code was created or edited on the current
-context branch, pass both `contextId` and an explicit build ref such as
-`"ref":"ctx:<contextId>"`.
+For workers/DOs, `contextId` selects both runtime state and the default semantic
+working state. Omit `ref` to follow that owning context. Pass `ref: "main"`
+only when deliberately pinning protected-main code, or another exact selector
+when intentionally running a different state. Panels and apps retain their
+explicit build-ref semantics.
 
 ## Files in this skill
 
-| File                                   | Read when                                                                                                                                                                                                                     |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [FILES.md](FILES.md)                   | Doing file or VCS operations (`fs`/`vcs` flags, binary handling, repo paths, the edit→commit→push loop, `vcs.edit`/`vcs.commit`/`vcs.merge`/`vcs.discardEdits`, provenance queries, creating/forking a repo, `VcsPushResult`) |
-| [BUILDING.md](BUILDING.md)             | A push returned `build-failed` or `diverged`, or you need a dev preview (`vcs.previewBuild`) or to read a package's multi-target report — how the push gate builds, esbuild vs tsc diagnostics, group pushes, first push      |
-| [EVAL.md](EVAL.md)                     | Running code with `vibestudio eval` (bindings, imports, persistent scope)                                                                                                                                                     |
-| [API.md](API.md)                       | Looking up which RPC services/methods exist (generated reference)                                                                                                                                                             |
-| [RECIPES.md](RECIPES.md)               | End-to-end workflows (edit→push→fix loop, data analysis, debugging units)                                                                                                                                                     |
-| [SYSTEM_TESTING.md](SYSTEM_TESTING.md) | Running exact headless agentic tests, inspecting trajectories, and iterating through the automatic repair loop                                                                                                                |
+| File                                   | Read when                                                                                                          |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| [FILES.md](FILES.md)                   | Remote filesystem behavior, explicit managed move/copy, loading the canonical VCS skill, and generic RPC transport |
+| [BUILDING.md](BUILDING.md)             | Explicit context builds, semantic publication, post-publication projections, and activation diagnostics            |
+| [EVAL.md](EVAL.md)                     | Running code with `vibestudio eval` (bindings, imports, persistent scope)                                          |
+| [API.md](API.md)                       | Looking up which RPC services/methods exist (generated reference)                                                  |
+| [RECIPES.md](RECIPES.md)               | CLI transport, eval, unit diagnostics, isolated sessions, channels, and frontend observation                       |
+| [SYSTEM_TESTING.md](SYSTEM_TESTING.md) | Running exact headless agentic tests, inspecting trajectories, and iterating through the automatic repair loop     |

@@ -35,7 +35,6 @@ class TestNewsAgentWorker extends NewsAgentWorker {
   >();
   blobs = new Map<string, string>();
   clock: number = 1_750_000_000_000;
-  capturedAlarms: number[] = [];
 
   execSqlForTest(query: string, ...args: unknown[]): void {
     this.sql.exec(query, ...args);
@@ -58,17 +57,17 @@ class TestNewsAgentWorker extends NewsAgentWorker {
     return this.getLoopTools(channelId).find((tool) => tool.name === name);
   }
 
-  async alarmAt(time: number): Promise<void> {
+  async alarmAt(time: number) {
     this.clock = time;
-    await this.alarm();
+    return this.alarm();
+  }
+
+  nextAlarmForTest() {
+    return this.nextAlarmAfterRequest();
   }
 
   protected override now(): number {
     return this.clock;
-  }
-
-  protected override setAlarmAt(timeMs: number): void {
-    this.capturedAlarms.push(timeMs);
   }
 
   protected override politenessSleep(): Promise<void> {
@@ -79,9 +78,6 @@ class TestNewsAgentWorker extends NewsAgentWorker {
     if (method === "runtime.resolveContext") return "ctx-1";
     if (method === "workers.resolveService") {
       return { kind: "durable-object", targetId: "do:channel:test" };
-    }
-    if (method === "subscribe") {
-      return { ok: true, participantId: "agent-news", channelConfig: {} };
     }
     if (method === "workspace.getAgentsMd") return "";
     if (method === "workspace.listSkills") return [];
@@ -153,12 +149,22 @@ class TestNewsAgentWorker extends NewsAgentWorker {
 
   protected override createChannelClient() {
     return {
-      subscribe: async () => ({
-        ok: true,
-        channelConfig: undefined,
-        envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
-      }),
-      unsubscribe: async () => undefined,
+      openSubscription: async (participantId: string) => {
+        let settleClosed = () => {};
+        const closed = new Promise<void>((resolve) => {
+          settleClosed = resolve;
+        });
+        return {
+          result: {
+            ok: true,
+            participantId,
+            channelConfig: undefined,
+            envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
+          },
+          closed,
+          close: settleClosed,
+        };
+      },
       getConfig: async () => null,
       getParticipants: async () => [],
       getReplayAfter: async () => ({
@@ -312,7 +318,9 @@ describe("NewsAgentWorker", () => {
 
     const jobs = worker.rowsForTest(`SELECT job_id FROM recurring_jobs ORDER BY job_id`);
     expect(jobs.map((row) => row["job_id"])).toEqual(["briefing:ch-1", "poll:ch-1"]);
-    expect(worker.capturedAlarms.length).toBeGreaterThan(0);
+    const recurringWakeAt = worker.schedulerForTest().nextWakeAt();
+    expect(recurringWakeAt).toBeDefined();
+    expect(worker.nextAlarmForTest()?.wakeAt).toBeLessThanOrEqual(recurringWakeAt!);
 
     expect(worker.agentInitiatedTurns).toHaveLength(1);
     expect(worker.agentInitiatedTurns[0]!.content).toContain("fresh personal news channel");

@@ -2,11 +2,12 @@
  * ChannelClient — Typed wrapper for channel DO operations.
  *
  * All operations go through the RPC bridge, which routes to the
- * channel service DO via the server's userland service resolver.
+ * channel service DO via the server's workspace service resolver.
  */
 import type { RpcCaller } from "@vibestudio/rpc";
 import {
   iterateChannelReplayAfterPages,
+  readChannelSubscriptionRecords,
   type ChannelReplayAfterRequest,
   type ChannelReplayEnvelope,
 } from "@workspace/pubsub";
@@ -60,6 +61,20 @@ interface ResolvedService {
   kind: "durable-object" | "worker";
   targetId?: string;
 }
+
+export interface ChannelSubscription {
+  result: {
+    ok: boolean;
+    participantId: string;
+    channelConfig?: Record<string, unknown>;
+    envelope: ChannelReplayEnvelope;
+  };
+  /** Settles when the routed response body reaches its terminal state. */
+  closed: Promise<void>;
+  /** Cancel the response body; this is the exact channel leave operation. */
+  close(): void;
+}
+
 export class ChannelClient {
   private targetPromise: Promise<string> | null = null;
   constructor(
@@ -192,24 +207,50 @@ export class ChannelClient {
   async setTypingState(participantId: string, typing: boolean): Promise<void> {
     await this.call("setTypingState", participantId, typing);
   }
-  async subscribe(
+  async openSubscription(
     participantId: string,
     metadata: Record<string, unknown>
-  ): Promise<{
-    ok: boolean;
-    participantId: string;
-    channelConfig?: Record<string, unknown>;
-    envelope: ChannelReplayEnvelope;
-  }> {
-    return this.call("subscribe", participantId, metadata) as Promise<{
+  ): Promise<ChannelSubscription> {
+    type Result = {
       ok: boolean;
       participantId: string;
       channelConfig?: Record<string, unknown>;
       envelope: ChannelReplayEnvelope;
-    }>;
-  }
-  async unsubscribe(participantId: string, sessionId: string): Promise<void> {
-    await this.call("unsubscribe", participantId, sessionId);
+    };
+    const controller = new AbortController();
+    const response = await this.rpc.stream(
+      await this.target(),
+      "subscribe",
+      [participantId, metadata],
+      { signal: controller.signal }
+    );
+    const records = readChannelSubscriptionRecords<Result, unknown>(response);
+    const first = await records.next();
+    if (first.done || first.value.kind !== "subscribed") {
+      await records.return();
+      throw new Error("Channel subscription closed without a subscription ACK");
+    }
+    let explicitlyClosed = false;
+    const closed = (async () => {
+      for await (const record of records) {
+        if (record.kind === "subscribed") {
+          throw new Error("Channel subscription sent more than one ACK");
+        }
+        // Agent vessels receive live data through onChannelEnvelope. Draining
+        // this response owns their exact session lifetime; it is not a second
+        // semantic delivery path.
+      }
+      if (!explicitlyClosed) throw new Error("Channel subscription closed unexpectedly");
+    })();
+    closed.catch(() => {});
+    return {
+      result: first.value.result,
+      closed,
+      close: () => {
+        explicitlyClosed = true;
+        controller.abort();
+      },
+    };
   }
   async getParticipants(): Promise<
     Array<{

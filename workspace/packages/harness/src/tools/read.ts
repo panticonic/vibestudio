@@ -11,14 +11,10 @@ import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import { Buffer } from "node:buffer";
-import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
-import type { VcsProvenanceForFileResult } from "@vibestudio/service-schemas/vcs";
 import type { RuntimeFs } from "./runtime-fs.js";
 import type { RpcCaller } from "@vibestudio/rpc";
 import { createExtensionProxy } from "@vibestudio/extension";
-import { resolveReadPath } from "./path-utils.js";
-import { toVcsPath } from "./tool-vcs.js";
-import { renderProvenanceBlock } from "./provenance-format.js";
+import { resolveToCwd } from "./path-utils.js";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -40,29 +36,10 @@ const readLocationSchema = Type.Union([
 ]);
 
 const readOptionsSchema = Type.Object({
-  // Optional (§7.1): the agent's context budget for this read. Choose from what
-  // you are doing right now (merely using code / executing a set plan / planning
-  // a change) crossed with how provenance has been behaving on this codebase
-  // lately (insightful vs redundant) — not a fixed lookup.
-  //  · none     — file content only, no attachment.
-  //  · moderate — blame + FTS recall + 1-hop density re-rank (cheap, ~5 items).
-  //  · deep     — moderate + 2-hop density + claim-relation walk (~10 items).
-  provenance: Type.Optional(
-    Type.Union([Type.Literal("none"), Type.Literal("moderate"), Type.Literal("deep")], {
-      description:
-        "Optional context budget for this read. Omit to read content only. 'none' = content only; 'moderate' = blame + recall + 1-hop density (~5 items); 'deep' = + 2-hop density + claim relations (~10 items). Choose from your situation and how useful provenance has been lately, not a constant.",
-    })
-  ),
   offset: Type.Optional(
     Type.Number({ description: "Line number to start reading from (1-indexed)" })
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
-  recallKeywords: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        "Optional keywords to steer the provenance recall leg beyond the file's own text (e.g. a concept you're chasing). Used sporadically; the file + session anchors carry recall on their own.",
-    })
-  ),
 });
 const readSchema = Type.Intersect([readLocationSchema, readOptionsSchema]);
 export type ReadToolInput = Static<typeof readSchema>;
@@ -114,39 +91,10 @@ const IMAGE_SERVICE_EXTENSION = "@workspace-extensions/image-service";
 const FILE_TOOLS_EXTENSION = "@workspace-extensions/file-tools";
 const DEFAULT_FILE_TOOLS_READ_TIMEOUT_MS = 3000;
 
-/** The §6/§7 read-time attachment client + session identity threaded into the
- *  read tool. When absent (agent classes without a gad-store DO), the read tool
- *  accepts and ignores the `provenance` arg — the schema stays uniform so every
- *  agent's model still makes the tier choice, but no attachment is computed. */
-export interface ReadProvenanceDeps {
-  /** One gad-store DO call: provenance ∪ recall, density-ranked, §7.5-rendered.
-   *  Never moves file content onto the DO (§7.2) — bytes are read in parallel. */
-  provenanceForFile(input: {
-    repoPath: string;
-    path: string;
-    head: string;
-    tier: "none" | "moderate" | "deep";
-    sessionLogId: string;
-    sessionHead: string;
-    invocationId?: string | null;
-    recallKeywords?: string[] | null;
-  }): Promise<VcsProvenanceForFileResult>;
-  /** The vcs head where reads resolve (`ctx:<contextId>`), resolved lazily — the
-   *  context subscription may not exist while the tool surface is merely built. */
-  head: string | (() => string);
-  /** The agent's own trajectory branch (logId === head for the loop). Touches,
-   *  touch_version, and session-recency are keyed here, NOT on the vcs head. */
-  sessionLogId: string;
-  sessionHead: string;
-}
-
 export interface ReadToolDeps {
   /** RPC caller — needed for image resize. */
   rpc?: RpcCaller;
   fileToolsReadTimeoutMs?: number;
-  /** §7.1 read-time provenance attachment. Omit for agent classes with no
-   *  gad-store DO — the `provenance` arg is then accepted and ignored. */
-  provenance?: ReadProvenanceDeps;
 }
 export function createReadTool(
   cwd: string,
@@ -158,7 +106,6 @@ export function createReadTool(
   const imageService = deps?.rpc
     ? createExtensionProxy<ImageServiceApi>(deps.rpc, IMAGE_SERVICE_EXTENSION, () => false)
     : null;
-  const provenanceDeps = deps?.provenance ?? null;
 
   const resolveWorkspaceSkillAlias = async (requestedPath: string): Promise<ReadResult | null> => {
     if (!fileToolsRpc) return null;
@@ -188,7 +135,10 @@ export function createReadTool(
     }
   };
 
-  const missingResult = async (requestedPath: string, absolutePath: string): Promise<ReadResult> => {
+  const missingResult = async (
+    requestedPath: string,
+    absolutePath: string
+  ): Promise<ReadResult> => {
     const skillAlias = await resolveWorkspaceSkillAlias(requestedPath);
     if (skillAlias) return skillAlias;
     const slash = absolutePath.lastIndexOf("/");
@@ -223,61 +173,12 @@ export function createReadTool(
     };
   };
 
-  /** Fire the §7.2 provenance attachment for a read, or return `null` to skip it
-   *  silently (no client, tier `none`, or the path is outside any tracked repo —
-   *  `skills/` docs, absolute non-repo paths). Best-effort: a rejection resolves
-   *  to `null` so the attachment can never fail the read. Resolves with the
-   *  workspace-relative `label` so the caller renders the header + drill handle. */
-  const startProvenance = (
-    toolCallId: string,
-    input: { path?: string; provenance?: "none" | "moderate" | "deep"; recallKeywords?: string[] }
-  ): Promise<{ label: string; result: VcsProvenanceForFileResult } | null> | null => {
-    if (!provenanceDeps) return null;
-    const tier = input.provenance;
-    // Call at EVERY tier (§7.4: every read leaves one coalesced `observed` touch);
-    // tier `none` writes the touch DO-side and returns empty items (no block).
-    if (tier !== "none" && tier !== "moderate" && tier !== "deep") return null;
-    if (typeof input.path !== "string") return null;
-    let vcsPath: string;
-    try {
-      vcsPath = toVcsPath(input.path, cwd);
-    } catch {
-      return null; // path escapes the workspace root
-    }
-    const repo = splitRepoPath(vcsPath);
-    if (!repo) return null; // outside any repo
-    // skills/ resolves to a repo by section taxonomy, but it is a documentation
-    // overlay agents READ, not code they vcs-edit; skip it (C8) so skill reads
-    // never write touches or spend a DO round-trip.
-    if (repo.repoPath.split("/")[0] === "skills") return null;
-    const head =
-      typeof provenanceDeps.head === "function" ? provenanceDeps.head() : provenanceDeps.head;
-    if (!head || head.endsWith(":") || head.includes("undefined")) return null;
-    const recallKeywords = Array.isArray(input.recallKeywords) ? input.recallKeywords : null;
-    return provenanceDeps
-      .provenanceForFile({
-        repoPath: repo.repoPath,
-        path: vcsPath,
-        head,
-        tier,
-        sessionLogId: provenanceDeps.sessionLogId,
-        sessionHead: provenanceDeps.sessionHead,
-        invocationId: toolCallId || null,
-        recallKeywords,
-      })
-      .then((result) => ({ label: vcsPath, result }))
-      .catch((err: unknown) => {
-        console.warn(`[read] provenance attachment failed for ${vcsPath}: ${String(err)}`);
-        return null;
-      });
-  };
-
   return {
     name: "read",
     label: "read",
     description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
     parameters: readSchema,
-    execute: async (toolCallId, input, signal, onUpdate) => {
+    execute: async (_toolCallId, input, signal, onUpdate) => {
       const path = normalizeReadLocation(input);
       if (!path) {
         return {
@@ -301,7 +202,7 @@ export function createReadTool(
       // available through workspace.listSkills/readSkill.
       const skillAlias = await resolveWorkspaceSkillAlias(path);
       if (skillAlias) return skillAlias;
-      const absolutePath = resolveReadPath(path, cwd);
+      const absolutePath = resolveToCwd(path, cwd);
       // A file-or-directory probe is a reasonable discovery action. Return a
       // bounded listing here so callers do not need to recover from EISDIR and
       // repeat the same request through another tool.
@@ -336,37 +237,15 @@ export function createReadTool(
       } catch {
         // stat failures fall through — the read below reports them naturally.
       }
-      // §7.2: content NEVER moves onto the DO. Start provenance only after the
-      // read has succeeded so failed reads do not record false observed touches.
-      // `attach` appends the §7.5 block AFTER the file content, on text results
-      // only, unless the block is suppressed/empty.
-      const attach = async (result: ReadResult): Promise<ReadResult> => {
-        const provenancePromise = startProvenance(toolCallId, input);
-        if (!provenancePromise) return result;
-        const prov = await provenancePromise;
-        if (!prov || prov.result.suppressed) return result;
-        if (result.content.some((item) => item.type === "image")) return result;
-        const block = renderProvenanceBlock({
-          label: prov.label,
-          items: prov.result.items,
-          shown: prov.result.shown,
-          total: prov.result.total,
-          nextCursor: prov.result.nextCursor,
-        });
-        if (!block) return result;
-        return { ...result, content: [...result.content, { type: "text", text: block }] };
-      };
       let fileToolsFallbackReason: string | undefined;
       let skipImageExtensionDetection = false;
       if (fileToolsRpc && !isLikelyImagePath(path)) {
         try {
-          return await attach(
-            await callFileToolsRead(
-              fileToolsRpc,
-              { path, cwd, offset, limit },
-              fileToolsReadTimeoutMs,
-              signal
-            )
+          return await callFileToolsRead(
+            fileToolsRpc,
+            { path, cwd, offset, limit },
+            fileToolsReadTimeoutMs,
+            signal
           );
         } catch (err) {
           if (isFileToolsReadAbort(err)) throw err;
@@ -424,7 +303,7 @@ export function createReadTool(
           if (resized.dimensionNote) {
             content.unshift({ type: "text", text: resized.dimensionNote });
           }
-          return await attach({
+          return {
             content,
             details: {
               path: absolutePath,
@@ -435,14 +314,12 @@ export function createReadTool(
               dimensions: { width: resized.width, height: resized.height },
               wasResized: resized.wasResized,
             },
-          });
+          };
         }
       }
       // --- Text branch -------------------------------------------------------------------
       const textContent = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8");
-      return await attach(
-        formatTextResult(textContent, path, offset, limit, fileToolsFallbackReason)
-      );
+      return formatTextResult(textContent, path, offset, limit, fileToolsFallbackReason);
     },
   };
 }
@@ -459,7 +336,9 @@ function normalizeReadLocation(input: { path?: unknown; target?: unknown }): str
 function isMissingReadError(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   const message = error instanceof Error ? error.message : String(error);
-  return code === "ENOENT" || /\b(?:ENOENT|file not found|path not found|no such file)\b/i.test(message);
+  return (
+    code === "ENOENT" || /\b(?:ENOENT|file not found|path not found|no such file)\b/i.test(message)
+  );
 }
 
 function similarityScore(candidate: string, wanted: string): number {

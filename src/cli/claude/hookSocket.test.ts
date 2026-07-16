@@ -79,7 +79,7 @@ describe("mapHookEvent + TurnTracker", () => {
     ) as Extract<BridgeHookEvent, { hook: "PreToolUse" }>;
     expect(pre.toolName).toBe("Write");
     expect(pre.toolUseId).toBe("tu2");
-    expect(pre.inputSummary!.length).toBeLessThanOrEqual(501);
+    expect(pre.request).toEqual({ content: long });
 
     const post = map(
       "PostToolUse",

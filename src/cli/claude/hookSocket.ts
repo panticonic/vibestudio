@@ -3,9 +3,8 @@
  *
  * Claude Code hooks run `vibestudio claude emit <event>`, which writes one JSON
  * line `{ event, payload, ts }` to a unix socket the bridge listens on:
- * `$VIBESTUDIO_LAUNCH_PROFILE/hook.sock` for launched sessions, or the
- * per-context fallback under the user config dir for adopted sessions (whose
- * hooks have no launch-profile env). This module owns the socket server and the
+ * `$VIBESTUDIO_LAUNCH_PROFILE/hook.sock` inside the controlled launch profile.
+ * This module owns the socket server and the
  * mapping from raw Claude Code hook payloads to the vessel's `LinkedHookEvent`
  * shapes — including the turnKey scheme that frames turns.
  */
@@ -19,7 +18,7 @@ import * as path from "node:path";
 export type BridgeHookEvent =
   | { hook: "SessionStart"; model?: string; cwd?: string }
   | { hook: "UserPromptSubmit"; promptText: string; turnKey: string }
-  | { hook: "PreToolUse"; toolName: string; toolUseId: string; inputSummary?: string }
+  | { hook: "PreToolUse"; toolName: string; toolUseId: string; request?: unknown }
   | {
       hook: "PostToolUse";
       toolUseId: string;
@@ -113,6 +112,9 @@ let syntheticToolUse = 0;
  * `PreToolUse`/`PostToolUse` `tool_name`/`tool_input`/`tool_use_id` (+
  * `tool_response` on Post); `SessionStart.model`/`source`. Older builds omit
  * `tool_use_id` — a per-run synthetic id keeps Pre/Post pairing best-effort.
+ * Tool input is retained structurally and unabridged because it is the
+ * canonical request on `invocation.started`; only terminal output is a bounded
+ * diagnostic summary.
  */
 export function mapHookEvent(
   line: EmittedHookLine,
@@ -155,7 +157,7 @@ export function mapHookEvent(
         hook: "PreToolUse",
         toolName,
         toolUseId,
-        inputSummary: summarize(payload["tool_input"]),
+        ...(payload["tool_input"] !== undefined ? { request: payload["tool_input"] } : {}),
       };
     }
     case "PostToolUse": {

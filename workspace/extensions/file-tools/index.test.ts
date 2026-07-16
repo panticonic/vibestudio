@@ -27,8 +27,8 @@ afterEach(async () => {
 describe("@workspace-extensions/file-tools", () => {
   it("searches a context workspace with glob and context lines", async () => {
     const workspaceRoot = await makeTempRoot();
-    const contextsPath = path.join(workspaceRoot, ".contexts");
-    const contextRoot = path.join(contextsPath, "ctx-test");
+    const contextProjectionsPath = path.join(workspaceRoot, ".context-projections", "v5");
+    const contextRoot = path.join(contextProjectionsPath, "ctx-test");
     await fs.mkdir(path.join(contextRoot, "src"), { recursive: true });
     await fs.writeFile(
       path.join(contextRoot, "src", "entities.ts"),
@@ -45,7 +45,7 @@ describe("@workspace-extensions/file-tools", () => {
 
     const api = await activate({
       workspace: {
-        getInfo: async () => ({ path: workspaceRoot, contextsPath }),
+        getInfo: async () => ({ path: workspaceRoot, contextProjectionsPath }),
       },
       fs: { realpath: async () => contextRoot },
       log: { info: vi.fn() },
@@ -76,7 +76,7 @@ describe("@workspace-extensions/file-tools", () => {
       workspace: {
         getInfo: async () => ({
           path: workspaceRoot,
-          contextsPath: path.join(workspaceRoot, ".contexts"),
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
         }),
       },
       fs: { realpath: async () => workspaceRoot },
@@ -101,7 +101,7 @@ describe("@workspace-extensions/file-tools", () => {
       workspace: {
         getInfo: async () => ({
           path: workspaceRoot,
-          contextsPath: path.join(workspaceRoot, ".contexts"),
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
         }),
       },
       fs: { realpath: async () => workspaceRoot },
@@ -120,7 +120,7 @@ describe("@workspace-extensions/file-tools", () => {
       workspace: {
         getInfo: async () => ({
           path: workspaceRoot,
-          contextsPath: path.join(workspaceRoot, ".contexts"),
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
         }),
       },
       fs: { realpath: async () => workspaceRoot },
@@ -143,7 +143,7 @@ describe("@workspace-extensions/file-tools", () => {
       workspace: {
         getInfo: async () => ({
           path: workspaceRoot,
-          contextsPath: path.join(workspaceRoot, ".contexts"),
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
         }),
       },
       fs: { realpath: async () => workspaceRoot },
@@ -167,7 +167,7 @@ describe("@workspace-extensions/file-tools", () => {
       workspace: {
         getInfo: async () => ({
           path: workspaceRoot,
-          contextsPath: path.join(workspaceRoot, ".contexts"),
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
         }),
       },
       fs: { realpath: async () => workspaceRoot },
@@ -189,7 +189,7 @@ describe("@workspace-extensions/file-tools", () => {
       workspace: {
         getInfo: async () => ({
           path: workspaceRoot,
-          contextsPath: path.join(workspaceRoot, ".contexts"),
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
         }),
       },
       fs: { realpath: async () => workspaceRoot },
@@ -207,15 +207,15 @@ describe("@workspace-extensions/file-tools", () => {
 
   it("finds files with ripgrep file listing", async () => {
     const workspaceRoot = await makeTempRoot();
-    const contextsPath = path.join(workspaceRoot, ".contexts");
-    const contextRoot = path.join(contextsPath, "ctx-test");
+    const contextProjectionsPath = path.join(workspaceRoot, ".context-projections", "v5");
+    const contextRoot = path.join(contextProjectionsPath, "ctx-test");
     await fs.mkdir(path.join(contextRoot, "src"), { recursive: true });
     await fs.writeFile(path.join(contextRoot, "src", "a.ts"), "export const a = 1;\n");
     await fs.writeFile(path.join(contextRoot, "src", "b.md"), "# b\n");
 
     const api = await activate({
       workspace: {
-        getInfo: async () => ({ path: workspaceRoot, contextsPath }),
+        getInfo: async () => ({ path: workspaceRoot, contextProjectionsPath }),
       },
       fs: { realpath: async () => contextRoot },
       log: { info: vi.fn() },
@@ -237,7 +237,7 @@ describe("@workspace-extensions/file-tools", () => {
       workspace: {
         getInfo: async () => ({
           path: workspaceRoot,
-          contextsPath: path.join(workspaceRoot, ".contexts"),
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
         }),
       },
       fs: { realpath: async () => workspaceRoot },
@@ -263,7 +263,7 @@ describe("@workspace-extensions/file-tools", () => {
       workspace: {
         getInfo: async () => ({
           path: workspaceRoot,
-          contextsPath: path.join(workspaceRoot, ".contexts"),
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
         }),
       },
       fs: { realpath: async () => workspaceRoot },
@@ -287,7 +287,7 @@ describe("@workspace-extensions/file-tools", () => {
       workspace: {
         getInfo: async () => ({
           path: workspaceRoot,
-          contextsPath: path.join(workspaceRoot, ".contexts"),
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
         }),
       },
       fs: { realpath: async () => workspaceRoot },
@@ -310,7 +310,7 @@ describe("@workspace-extensions/file-tools", () => {
       workspace: {
         getInfo: async () => ({
           path: workspaceRoot,
-          contextsPath: path.join(workspaceRoot, ".contexts"),
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
         }),
       },
       fs: { realpath: async () => workspaceRoot },

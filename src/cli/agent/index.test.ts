@@ -42,15 +42,16 @@ function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequ
   return { rpcBodies: transportMock.rpcBodies };
 }
 
-function writeCredentials(tmpDir: string): void {
+function writeCredentials(tmpDir: string, overrides: Record<string, unknown> = {}): void {
   const dir = path.join(tmpDir, ".config", "vibestudio");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
     JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 4,
       kind: "device",
       url: "webrtc://room-cli/_workspace/dev",
+      workspaceId: "ws_dev",
       workspaceName: "dev",
       serverId: `srv_${"S".repeat(24)}`,
       deviceId: `dev_${"D".repeat(24)}`,
@@ -70,6 +71,7 @@ function writeCredentials(tmpDir: string): void {
         ice: "all",
       },
       pairedAt: 1,
+      ...overrides,
     })
   );
 }
@@ -140,9 +142,11 @@ describe("vibestudio agent commands", () => {
     const filePath = sessionFile(tmpDir, "work");
     const stored = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
     expect(stored).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 3,
       name: "work",
-      serverUrl: "webrtc://room-cli/_workspace/dev",
+      serverId: `srv_${"S".repeat(24)}`,
+      workspaceId: "ws_dev",
+      workspaceName: "dev",
       entityId: "session:work",
       contextId: "ctx_1",
       scopeKey: "work",
@@ -169,6 +173,30 @@ describe("vibestudio agent commands", () => {
     await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
     expect(rpcBodies.map((body) => body.method)).toEqual(["runtime.listEntities"]);
     expect(fs.readFileSync(sessionFile(tmpDir, "work"), "utf8")).toBe(before);
+  });
+
+  it("keeps a live session across a workspace rename by stable workspace id", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    stubServer((body) => (body.method === "runtime.createEntity" ? SESSION_HANDLE : []));
+    await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
+
+    writeCredentials(tmpDir, {
+      workspaceName: "renamed",
+      url: "webrtc://room-cli/_workspace/renamed",
+    });
+    const { rpcBodies } = stubServer((body) => {
+      if (body.method === "runtime.listEntities") return [LIVE_SESSION_ROW];
+      throw new Error(`unexpected method ${body.method}`);
+    });
+    await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
+
+    expect(rpcBodies.map((body) => body.method)).toEqual(["runtime.listEntities"]);
+    expect(JSON.parse(fs.readFileSync(sessionFile(tmpDir, "work"), "utf8"))).toMatchObject({
+      workspaceId: "ws_dev",
+      workspaceName: "renamed",
+      entityId: "session:work",
+    });
   });
 
   it("attach recreates the entity when it is gone", async () => {
@@ -200,16 +228,18 @@ describe("vibestudio agent commands", () => {
     await expect(main(["agent", "attach", "work", link, "--json"])).resolves.toBe(2);
   });
 
-  it("attach warns on stderr before overwriting a session from another server", async () => {
+  it("attach warns before overwriting a session from another server", async () => {
     writeCredentials(tmpDir);
     const dir = path.join(tmpDir, ".config", "vibestudio", "agent-sessions");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       sessionFile(tmpDir, "work"),
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 3,
         name: "work",
-        serverUrl: "https://old.ts.net",
+        serverId: `srv_${"O".repeat(24)}`,
+        workspaceId: "ws_old",
+        workspaceName: "old",
         entityId: "session:old",
         contextId: "ctx_old",
         scopeKey: "work",
@@ -221,14 +251,15 @@ describe("vibestudio agent commands", () => {
     const { main } = await import("../client.js");
     await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
     const warnings = vi.mocked(console.error).mock.calls.map((call) => String(call[0]));
-    expect(warnings.some((line) => line.includes("https://old.ts.net"))).toBe(true);
+    expect(warnings.some((line) => line.includes(`srv_${"O".repeat(24)}/ws_old`))).toBe(true);
     const stored = JSON.parse(fs.readFileSync(sessionFile(tmpDir, "work"), "utf8")) as Record<
       string,
       unknown
     >;
     expect(stored).toMatchObject({
       entityId: "session:work",
-      serverUrl: "webrtc://room-cli/_workspace/dev",
+      serverId: `srv_${"S".repeat(24)}`,
+      workspaceName: "dev",
     });
   });
 
@@ -330,9 +361,11 @@ describe("vibestudio agent commands", () => {
     fs.writeFileSync(
       sessionFile(tmpDir, "work"),
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 3,
         name: "work",
-        serverUrl: "https://host.tailnet.ts.net",
+        serverId: `srv_${"S".repeat(24)}`,
+        workspaceId: "ws_dev",
+        workspaceName: "dev",
         entityId: "session:work",
         contextId: "ctx_1",
         scopeKey: "work",

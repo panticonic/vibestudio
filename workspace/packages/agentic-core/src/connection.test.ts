@@ -12,7 +12,6 @@ function createConfig(): ConnectionConfig {
         targetId: CHANNEL_TARGET,
       });
     }
-    if (method === "subscribe") return new Promise(() => {});
     return Promise.resolve(undefined);
   }) as NonNullable<ConnectionConfig["rpc"]>["call"];
   return {
@@ -20,6 +19,27 @@ function createConfig(): ConnectionConfig {
     rpc: {
       selfId: "panel:panel-1",
       call,
+      stream: vi.fn((_target, _method, _args, options) =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    `${JSON.stringify({
+                      kind: "subscribed",
+                      result: { ok: true, participantId: "panel:panel-1" },
+                    })}\n`
+                  )
+                );
+                options?.signal?.addEventListener("abort", () => controller.close(), {
+                  once: true,
+                });
+              },
+            })
+          )
+        )
+      ),
       on: vi.fn(() => vi.fn()),
     },
   };
@@ -37,20 +57,26 @@ describe("ConnectionManager", () => {
 
     const connectPromise = manager.connect({ channelId: "chat-1", methods: {} });
     await vi.waitFor(() => {
-      expect(config.rpc!.call).toHaveBeenCalledWith(CHANNEL_TARGET, "subscribe", [
-        "panel:panel-1",
-        expect.objectContaining({
-          replayMessageLimit: 50,
-        }),
-      ]);
+      expect(config.rpc!.stream).toHaveBeenCalledWith(
+        CHANNEL_TARGET,
+        "subscribe",
+        [
+          "panel:panel-1",
+          expect.objectContaining({
+            replayMessageLimit: 50,
+          }),
+        ],
+        { signal: expect.any(AbortSignal) }
+      );
     });
     manager.disconnect();
 
     await expect(connectPromise).rejects.toThrow("ready aborted");
-    expect(config.rpc!.call).toHaveBeenCalledWith(CHANNEL_TARGET, "unsubscribe", [
-      "panel:panel-1",
-      expect.any(String),
-    ]);
+    expect(config.rpc!.call).not.toHaveBeenCalledWith(
+      CHANNEL_TARGET,
+      "unsubscribe",
+      expect.any(Array)
+    );
   });
 
   it("bounds an explicit replay message limit to the canonical page maximum", async () => {
@@ -59,12 +85,17 @@ describe("ConnectionManager", () => {
 
     const connectPromise = manager.connect({ channelId: "chat-1", methods: {} });
     await vi.waitFor(() => {
-      expect(config.rpc.call).toHaveBeenCalledWith(CHANNEL_TARGET, "subscribe", [
-        "panel:panel-1",
-        expect.objectContaining({
-          replayMessageLimit: 500,
-        }),
-      ]);
+      expect(config.rpc.stream).toHaveBeenCalledWith(
+        CHANNEL_TARGET,
+        "subscribe",
+        [
+          "panel:panel-1",
+          expect.objectContaining({
+            replayMessageLimit: 500,
+          }),
+        ],
+        { signal: expect.any(AbortSignal) }
+      );
     });
     manager.disconnect();
 

@@ -34,8 +34,11 @@ import {
 import { pickRecommendedModelId } from "@workspace/model-catalog/modelRecommendations";
 import {
   findMatchingUrlAudience,
-  type UrlAudience,
 } from "@vibestudio/credential-client/urlAudience";
+import {
+  isStoredCredentialUsable,
+  type StoredCredentialSummary,
+} from "@vibestudio/credential-client";
 
 const AGENT_THINKING_LEVELS = new Set<string>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -242,25 +245,33 @@ function localAvailability(entry: LocalModelEntry): ModelAvailability {
 
 export function applyCloudAvailability(
   entry: ModelCatalogEntry,
-  audiences: readonly UrlAudience[]
+  credentials: readonly StoredCredentialSummary[]
 ): ModelCatalogEntry {
   if (entry.auth !== "url-bound") return entry;
-  // Credential presence establishes readiness today; the TTL'd live probe
-  // (design §7.1) lands with the connect-time standing grant for this worker
-  // — probing without that grant would raise approval prompts, which is
-  // strictly worse than presence-based availability.
-  const matched = (() => {
+  // The credential owner projects expiry and refresh capability into each
+  // secret-free summary. A stored credential is not enough: it must be active
+  // or carry persisted material that can renew it.
+  const matching = credentials.filter((credential) => {
     try {
-      return findMatchingUrlAudience(entry.baseUrl, audiences) !== null;
+      return findMatchingUrlAudience(entry.baseUrl, credential.audience) !== null;
     } catch {
       return false;
     }
-  })();
-  const availability: ModelAvailability = matched
+  });
+  const matchedUsable = matching.some(isStoredCredentialUsable);
+  const matchedExpired = matching.some(
+    (credential) =>
+      credential.lifecycle.state === "expired" && !credential.lifecycle.canRefresh
+  );
+  const availability: ModelAvailability = matchedUsable
     ? { state: "ready", detail: "credentialed" }
     : {
         state: "needs-setup",
-        detail: entry.connectable ? "no-credential" : "not-installed",
+        detail: matchedExpired
+          ? "credential-expired"
+          : entry.connectable
+            ? "no-credential"
+            : "not-installed",
       };
   return { ...entry, availability };
 }
@@ -341,13 +352,13 @@ export class ModelSettingsDO extends DurableObjectBase {
 
   /** Static pi catalog + live availability overlay + live local entries. */
   protected async assembleCatalog(): Promise<ModelCatalog> {
-    const [base, audiences, localEntries] = await Promise.all([
+    const [base, credentials, localEntries] = await Promise.all([
       this.getCatalog(),
-      this.credentialAudiences(),
+      this.storedCredentials(),
       this.fetchLocalModels(),
     ]);
     const models = [
-      ...base.models.map((entry) => applyCloudAvailability(entry, audiences)),
+      ...base.models.map((entry) => applyCloudAvailability(entry, credentials)),
       ...localEntries.map(localEntryToCatalogEntry),
     ];
     const providers: ModelCatalogProvider[] = localEntries.length
@@ -365,18 +376,18 @@ export class ModelSettingsDO extends DurableObjectBase {
     return { providers, models };
   }
 
-  /** Stored-credential audiences (worker-computed availability, design §7.1).
+  /** Secret-free stored-credential lifecycle summaries (design §7.1).
    *  Failure degrades to "nothing credentialed", never an error snapshot. */
-  protected async credentialAudiences(): Promise<UrlAudience[]> {
+  protected async storedCredentials(): Promise<StoredCredentialSummary[]> {
     try {
-      const creds = await this.rpc.call<Array<{ audience?: UrlAudience[] }>>(
+      const credentials = await this.rpc.call<StoredCredentialSummary[]>(
         "main",
         "credentials.listStoredCredentials",
         []
       );
-      return Array.isArray(creds) ? creds.flatMap((cred) => cred.audience ?? []) : [];
+      return Array.isArray(credentials) ? credentials : [];
     } catch (err) {
-      console.warn("[model-settings] credential audience lookup failed:", err);
+      console.warn("[model-settings] credential status lookup failed:", err);
       return [];
     }
   }

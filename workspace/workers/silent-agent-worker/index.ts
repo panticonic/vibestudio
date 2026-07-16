@@ -1,6 +1,7 @@
 import { AiChatWorker } from "../agent-worker/ai-chat-worker.js";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
+import type { AgentToolExecutionContext } from "@workspace/agentic-do";
 
 type SilentAgentConfig = {
   handle?: string;
@@ -40,10 +41,13 @@ export class SilentAgentWorker extends AiChatWorker {
     return "say-only";
   }
 
-  protected override getLoopTools(channelId: string): AgentTool[] {
+  protected override getLoopTools(
+    channelId: string,
+    execution?: AgentToolExecutionContext
+  ): AgentTool[] {
     const cfg = asSilentAgentConfig(this.subscriptions.getConfig(channelId));
     // The generalized `say` tool is provided by AgentWorkerBase.getLoopTools.
-    const tools = super.getLoopTools(channelId);
+    const tools = super.getLoopTools(channelId, execution);
     if (!cfg.allowedTools || cfg.allowedTools.length === 0) return tools;
     const allowed = new Set([...cfg.allowedTools, "say"]);
     return tools.filter((tool) => allowed.has(tool.name));

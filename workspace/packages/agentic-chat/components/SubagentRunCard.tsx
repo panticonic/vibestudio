@@ -1,12 +1,6 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { Badge, Box, Flex, IconButton, Text } from "@radix-ui/themes";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  CopyIcon,
-  ExternalLinkIcon,
-  MagnifyingGlassIcon,
-} from "@radix-ui/react-icons";
+import { CheckIcon, ChevronDownIcon, CopyIcon, ExternalLinkIcon } from "@radix-ui/react-icons";
 import type {
   ChatMessage,
   SubagentProgressEntry,
@@ -20,9 +14,9 @@ import { MessageContent } from "./MessageContent";
 /**
  * SubagentRunCard — a standalone, richer render for an invocation that spawned a
  * subagent (its `invocation.subagent` payload is populated). Unlike the inline
- * tool pill, it presents the run's label, status, and merge state, plus "Open"
- * (child chat panel on the task channel) and "Review & pick" (diff overlay
- * against the subagent's context). Routed here from `MessageList.renderItem`.
+ * tool pill, it presents the run's label, status, and integration state, plus
+ * "Open" (child chat panel on the task channel).
+ * Routed here from `MessageList.renderItem`.
  *
  * The child's activity arrives as structured `execution.progress` entries
  * (SubagentProgressEntry: kind + tool + text + timestamp), relayed from the
@@ -55,11 +49,11 @@ const STATUS_LABEL: Record<CardStatus, string> = {
   abandoned: "Abandoned",
 };
 
-const MERGE_LABEL: Record<
-  NonNullable<SubagentRunState["merge"]>,
+const INTEGRATION_LABEL: Record<
+  NonNullable<SubagentRunState["integration"]>,
   { label: string; color: "green" | "amber" | "gray" }
 > = {
-  merged: { label: "Merged", color: "green" },
+  integrated: { label: "Integrated", color: "green" },
   conflicted: { label: "Conflicted", color: "amber" },
   discarded: { label: "Discarded", color: "gray" },
 };
@@ -91,9 +85,7 @@ function agentMessageTitle(text: string | undefined): string {
   const trimmed = text.trim();
   const firstLine = trimmed.split(/\r?\n/, 1)[0] ?? trimmed;
   const heading = firstLine.match(/^[ \t]{0,3}#{1,6}[ \t]+(.+)$/)?.[1];
-  const bold =
-    firstLine.match(/^\*\*([^*\n]+)\*\*/)?.[1] ??
-    firstLine.match(/^__([^_\n]+)__/)?.[1];
+  const bold = firstLine.match(/^\*\*([^*\n]+)\*\*/)?.[1] ?? firstLine.match(/^__([^_\n]+)__/)?.[1];
   const source = heading ?? bold ?? firstLine;
   const plain = markdownPlainText(source) || markdownPlainText(trimmed);
   return plain ? shorten(plain, 72) : "Message";
@@ -281,9 +273,8 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   if (!invocation || !subagent) return null;
 
   const label = subagent.label || invocation.name || "Subagent";
-  const merge = subagent.merge ? MERGE_LABEL[subagent.merge] : undefined;
+  const integration = subagent.integration ? INTEGRATION_LABEL[subagent.integration] : undefined;
   const canOpen = Boolean(forkState && subagent.taskChannelId && subagent.contextId);
-  const canReview = Boolean(forkState && subagent.contextId);
   const latestEntry = progressFeed.length > 0 ? progressFeed[progressFeed.length - 1] : null;
   const latestPreview = latestEntry
     ? progressPreview(latestEntry)
@@ -305,11 +296,6 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   const handleOpen = () => {
     if (subagent.taskChannelId && subagent.contextId) {
       forkState?.actions.openInNewPanel(subagent.taskChannelId, subagent.contextId);
-    }
-  };
-  const handleReview = () => {
-    if (subagent.contextId) {
-      forkState?.actions.reviewContext({ kind: "subagent", contextId: subagent.contextId, label });
     }
   };
 
@@ -351,9 +337,14 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                   Claude Code
                 </Badge>
               )}
-              {merge && (
-                <Badge className="subagent-merge-badge" size="1" variant="soft" color={merge.color}>
-                  {merge.label}
+              {integration && (
+                <Badge
+                  className="subagent-integration-badge"
+                  size="1"
+                  variant="soft"
+                  color={integration.color}
+                >
+                  {integration.label}
                 </Badge>
               )}
               <span
@@ -387,16 +378,6 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                 aria-label="Open subagent chat"
               >
                 <ExternalLinkIcon />
-              </IconButton>
-              <IconButton
-                size="1"
-                variant="ghost"
-                disabled={!canReview}
-                onClick={handleReview}
-                title="Review and pick changes"
-                aria-label="Review and pick changes"
-              >
-                <MagnifyingGlassIcon />
               </IconButton>
             </Flex>
           </Flex>

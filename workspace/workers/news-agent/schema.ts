@@ -115,11 +115,3 @@ export function createNewsTables(sql: SqlStorage): void {
     )
   `);
 }
-
-export function dropNewsTables(sql: SqlStorage): void {
-  sql.exec(`DROP TABLE IF EXISTS news_channel_state`);
-  sql.exec(`DROP TABLE IF EXISTS news_feeds`);
-  sql.exec(`DROP TABLE IF EXISTS news_topics`);
-  sql.exec(`DROP TABLE IF EXISTS news_articles`);
-  sql.exec(`DROP TABLE IF EXISTS news_briefings`);
-}

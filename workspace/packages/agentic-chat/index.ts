@@ -28,7 +28,6 @@ export type {
   ForkUiState,
   ForkEntry,
   ForkTreeNode,
-  ReviewTarget,
   ChannelProvenance,
 } from "./types";
 
@@ -89,8 +88,6 @@ export { ChatHeader } from "./components/ChatHeader";
 export { ForkSwitcher } from "./components/ForkSwitcher";
 export { ForkTreeView } from "./components/ForkTreeView";
 export { SubagentRunCard } from "./components/SubagentRunCard";
-export { ReviewAndPickSurface } from "./components/ReviewAndPickSurface";
-export type { ReviewAndPickSurfaceProps } from "./components/ReviewAndPickSurface";
 export { useForkLineage } from "./hooks/useForkLineage";
 export type { UseForkLineageOptions } from "./hooks/useForkLineage";
 export { ChatMessageArea } from "./components/ChatMessageArea";
@@ -136,7 +133,11 @@ export { ChatConnectionErrorBanner } from "./components/ChatConnectionErrorBanne
 export { ContextUsageRing } from "./components/ContextUsageRing";
 export { JsonSchemaForm } from "./components/JsonSchemaForm";
 export { ErrorBoundary } from "./components/ErrorBoundary";
-export { markdownComponents, mdxComponents, streamingMarkdownComponents } from "./components/markdownComponents";
+export {
+  markdownComponents,
+  mdxComponents,
+  streamingMarkdownComponents,
+} from "./components/markdownComponents";
 export { MermaidDiagram, Diagram } from "./components/MermaidDiagram";
 
 // --- Utilities ---

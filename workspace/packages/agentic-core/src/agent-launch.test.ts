@@ -7,6 +7,7 @@ import {
   launchAgentIntoChannel,
   publishAgentTaskSeed,
   subscribeAgentToChannel,
+  unsubscribeAgentFromChannel,
 } from "./agent-launch.js";
 import type { AgentLaunchRpc } from "./agent-launch.js";
 
@@ -82,21 +83,17 @@ describe("agent launch primitive", () => {
       subscription: { ok: true, participantId: "participant-1" },
       contextId: "ctx-1",
     });
-    expect(rpc.call).toHaveBeenNthCalledWith(
-      1,
-      "main",
-      "runtime.createEntity",
-      [
-        expect.objectContaining({
-          stateArgs: expect.objectContaining({
-            agentConfig: expect.objectContaining({
-              model: "openai:gpt-5.3",
-              approvalLevel: 1,
-            }),
+    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "runtime.createEntity", [
+      expect.objectContaining({
+        agentChannelId: "ch-1",
+        stateArgs: expect.objectContaining({
+          agentConfig: expect.objectContaining({
+            model: "openai:gpt-5.3",
+            approvalLevel: 1,
           }),
         }),
-      ]
-    );
+      }),
+    ]);
     expect(rpc.call).toHaveBeenNthCalledWith(2, "target-1", "subscribeChannel", [
       {
         channelId: "ch-1",
@@ -130,9 +127,7 @@ describe("agent launch primitive", () => {
       })
     ).rejects.toThrow("subscribe failed");
 
-    expect(rpc.call).toHaveBeenLastCalledWith("main", "runtime.retireEntity", [
-      { id: "entity-1" },
-    ]);
+    expect(rpc.call).toHaveBeenLastCalledWith("main", "runtime.retireEntity", [{ id: "entity-1" }]);
   });
 
   it("refuses to subscribe an existing active agent into a different channel context", async () => {
@@ -180,6 +175,31 @@ describe("agent launch primitive", () => {
         config: { handle: "child", wakePolicy: "turn-final" },
       },
     ]);
+  });
+
+  it("unsubscribes through the deterministic target without resolving or reactivating it", async () => {
+    const rpc = makeRpc();
+
+    await expect(
+      unsubscribeAgentFromChannel(rpc, {
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        key: "agent-1",
+        channelId: "ch-1",
+      })
+    ).resolves.toEqual({ ok: true, participantId: "participant-1" });
+
+    expect(rpc.call).toHaveBeenCalledOnce();
+    expect(rpc.call).toHaveBeenCalledWith(
+      "do:workers/agent-worker:AiChatWorker:agent-1",
+      "unsubscribeChannel",
+      ["ch-1"]
+    );
+    expect(rpc.call).not.toHaveBeenCalledWith(
+      "main",
+      "workers.resolveDurableObject",
+      expect.anything()
+    );
   });
 
   it("creates subagent contexts through runtime.createSubagentContext", async () => {
@@ -236,24 +256,24 @@ describe("agent launch primitive", () => {
       })
     ).resolves.toEqual({ id: 7 });
 
-    expect(channel.publishAgenticEvent).toHaveBeenCalledWith(
-      "parent-participant",
-      event,
-      {
-        idempotencyKey: "subagent-seed:run-1",
-        senderMetadata: { type: "headless", name: "Subagent task" },
-      }
-    );
+    expect(channel.publishAgenticEvent).toHaveBeenCalledWith("parent-participant", event, {
+      idempotencyKey: "subagent-seed:run-1",
+      senderMetadata: { type: "headless", name: "Subagent task" },
+    });
   });
 
   it("subscribes a handle target directly", async () => {
     const rpc = makeRpc();
 
-    await subscribeAgentToChannel(rpc, { targetId: "target-1" }, {
-      channelId: "ch-1",
-      contextId: "ctx-1",
-      config: { model: "openai:gpt-5.3", handle: "agent" },
-    });
+    await subscribeAgentToChannel(
+      rpc,
+      { targetId: "target-1" },
+      {
+        channelId: "ch-1",
+        contextId: "ctx-1",
+        config: { model: "openai:gpt-5.3", handle: "agent" },
+      }
+    );
 
     expect(rpc.call).toHaveBeenCalledWith("target-1", "subscribeChannel", [
       {

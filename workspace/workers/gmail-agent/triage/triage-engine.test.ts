@@ -76,7 +76,6 @@ describe("TriageEngine surface-failure handling", () => {
       runTriageModel: async () => JSON.stringify([{ i: 1, decision: "surface", reason: "r" }]),
       isConfigured: () => true,
       applyDecision,
-      onWakeEnqueued: () => undefined,
       now: () => NOW,
     });
 
@@ -100,7 +99,6 @@ describe("TriageEngine surface-failure handling", () => {
       runTriageModel: async () => JSON.stringify([{ i: 1, decision: "surface", reason: "r" }]),
       isConfigured: () => true,
       applyDecision,
-      onWakeEnqueued: () => undefined,
       now: () => NOW,
     });
 
@@ -127,7 +125,6 @@ describe("TriageEngine surface-failure handling", () => {
         ]),
       isConfigured: () => true,
       applyDecision,
-      onWakeEnqueued: () => undefined,
       now: () => NOW,
     });
 

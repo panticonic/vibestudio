@@ -42,7 +42,7 @@ export const participantMetadataSchema = z
     replayMessageLimit: z.number().int().positive().max(MAX_CHANNEL_REPLAY_PAGE_LIMIT).optional(),
     // Opt-in: this participant handles the STRUCTURED `onChannelEnvelope` delivery
     // (set by agent vessels). DO participants that omit it (RPC-style clients like
-    // the eval's connectViaRpc) receive only the `channel:message` event stream.
+    // the eval's connectViaRpc) receive only the subscription stream.
     receivesChannelEnvelopes: z.boolean().optional(),
   })
   .passthrough();
@@ -73,7 +73,7 @@ export interface ParticipantInfo {
  * whose participant id is just the host DO's id) — settles method calls the RPC way: the broadcast
  * `started` event + `submitMethodResult`.
  *
- * Use THIS for any *behavioral* decision (method-call dispatch, pending-call redelivery, fork-cloning,
+ * Use THIS for any *behavioral* decision (method-call dispatch, fork-cloning,
  * structured-envelope delivery) — NOT the `transport` ("do"/"rpc") field, which only names the
  * EVENT-delivery mechanism (postToDO vs WS) and is classified purely by participant-id shape. A
  * connectionless DO client is `transport === "do"` yet is NOT an agent vessel.

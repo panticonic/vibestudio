@@ -1,5 +1,5 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { evalMethods, type EvalRunArgs } from "@vibestudio/service-schemas/eval";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
@@ -8,6 +8,8 @@ import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createHash, randomUUID } from "node:crypto";
+import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
+import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 
 /** Parse a `do:<source>:<className>:<objectKey>` runtime id into a DO ref (source may contain '/'). */
 function parseDoRef(
@@ -39,15 +41,21 @@ async function pushEvalComplete(
   agentRef: string | undefined,
   channelId: string | undefined,
   runId: string,
+  agentInvocationId: string | undefined,
   result: unknown
 ): Promise<void> {
   if (!agentRef) return;
   const agentDoRef = parseDoRef(agentRef);
   if (!agentDoRef) return;
-  // `channelId` lets the agent route the resume (deliverEffectOutcome needs the channel
-  // address); `runId` is the invocationId → effect id.
+  // `channelId` lets the agent route the resume; `runId` addresses the eval
+  // effect while `agentInvocationId` preserves its parent tool causality.
   await doDispatch
-    .dispatch(agentDoRef, "onEvalComplete", { runId, result, channelId })
+    .dispatch(agentDoRef, "onEvalComplete", {
+      runId,
+      agentInvocationId,
+      result,
+      channelId,
+    })
     .catch((err) => {
       console.warn(
         `[eval] onEvalComplete push to ${agentRef} failed (getRun poll backstop covers it):`,
@@ -61,11 +69,12 @@ async function runHeldAndDeliver(
   evalDoRef: { source: string; className: string; objectKey: string },
   runId: string,
   agentRef: string | undefined,
-  channelId: string | undefined
+  channelId: string | undefined,
+  agentInvocationId: string | undefined
 ): Promise<void> {
   try {
     const result = await doDispatch.dispatchHeld(evalDoRef, "executeRun", runId);
-    await pushEvalComplete(doDispatch, agentRef, channelId, runId, result);
+    await pushEvalComplete(doDispatch, agentRef, channelId, runId, agentInvocationId, result);
   } catch (err) {
     console.warn(`[eval] held run ${runId} failed:`, err instanceof Error ? err.message : err);
     // F2: the held dispatch died (e.g. a server restart dropped the connection). The agent's own
@@ -83,11 +92,18 @@ async function runHeldAndDeliver(
       };
       const status = String(reconciled?.status ?? "unknown");
       if (status === "done" && reconciled.result != null) {
-        await pushEvalComplete(doDispatch, agentRef, channelId, runId, reconciled.result);
+        await pushEvalComplete(
+          doDispatch,
+          agentRef,
+          channelId,
+          runId,
+          agentInvocationId,
+          reconciled.result
+        );
       } else if (status === "cancelled" || status === "unknown") {
         // No durable result to deliver — synthesize a terminal failure so the parked invocation
         // settles instead of hanging. (`pending`/`running` deliberately fall through: do not bound.)
-        await pushEvalComplete(doDispatch, agentRef, channelId, runId, {
+        await pushEvalComplete(doDispatch, agentRef, channelId, runId, agentInvocationId, {
           success: false,
           console: "",
           error:
@@ -262,7 +278,8 @@ export function createEvalService(deps: {
   async function ensureEvalDO(
     owner: EvalOwner,
     subKey: string,
-    ownerUserId: string | undefined
+    ownerUserId: string | undefined,
+    agentBinding: RuntimeAgentBinding | undefined
   ): Promise<{ objectKey: string }> {
     const { ownerId, contextId } = owner;
     const objectKey = evalDoKey(ownerId, subKey);
@@ -274,7 +291,11 @@ export function createEvalService(deps: {
     // process (empty cache) re-activates; the cache IS the source of truth the
     // server's principal resolution reads.
     const active = store.cache.resolveActive(evalDoEntityId(objectKey));
-    if (active && active.contextId === contextId) {
+    if (
+      active &&
+      active.contextId === contextId &&
+      JSON.stringify(active.agentBinding ?? null) === JSON.stringify(agentBinding ?? null)
+    ) {
       return { objectKey };
     }
     // Register/refresh the EvalDO entity with the owner's context so the kernel's
@@ -297,6 +318,7 @@ export function createEvalService(deps: {
       // §6). Write-once, so the first activation's owner sticks; undefined for a
       // bootstrap caller with no subject.
       ownerUserId,
+      agentBinding,
       stateArgs: { ownerPrincipalId: ownerId, subKey },
     });
     return { objectKey };
@@ -324,15 +346,34 @@ export function createEvalService(deps: {
     );
   }
 
+  function trustedAgentRelay(ctx: ServiceContext): RuntimeAgentBinding | undefined {
+    if (ctx.caller.runtime.kind === "agent") {
+      const binding = ctx.caller.agentBinding;
+      return binding
+        ? {
+            entityId: binding.entityId,
+            contextId: binding.contextId,
+            channelId: binding.channelId,
+          }
+        : undefined;
+    }
+    if (ctx.caller.runtime.kind !== "do" && ctx.caller.runtime.kind !== "worker") {
+      return undefined;
+    }
+    return store.cache.resolveActive(ctx.caller.runtime.id)?.agentBinding;
+  }
+
   async function evalDoRefFor(
     ctx: ServiceContext,
     route: EvalRoute
   ): Promise<{ source: string; className: string; objectKey: string }> {
     const owner = await resolveOwnerForCaller(ctx, route);
+    const agentBinding = trustedAgentRelay(ctx);
     const { objectKey } = await ensureEvalDO(
       owner,
       route.subKey ?? "default",
-      ctx.caller.subject?.userId
+      ctx.caller.subject?.userId,
+      agentBinding
     );
     return { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
   }
@@ -344,17 +385,45 @@ export function createEvalService(deps: {
     evalDoRef: { source: string; className: string; objectKey: string };
     assembledArgs: Record<string, unknown>;
     agentRef: string | undefined;
+    channelId: string | undefined;
   }> {
     assertRunSource(runArgs);
     const ownerId = ctx.caller.runtime.id;
     const owner = await resolveOwnerForCaller(ctx, runArgs);
+    const agentBinding = trustedAgentRelay(ctx);
+    if (agentBinding && !ctx.causalParent) {
+      throw new ServiceError(
+        "eval",
+        "run",
+        "Agent-bound eval execution requires an exact causal tool invocation",
+        "EACCES",
+        undefined,
+        "access"
+      );
+    }
+    if (agentBinding && ctx.causalParent) {
+      const expected = channelTrajectoryFor(agentBinding.channelId);
+      if (ctx.causalParent.logId !== expected.logId || ctx.causalParent.head !== expected.head) {
+        throw new ServiceError(
+          "eval",
+          "run",
+          "Agent eval cause does not belong to the relay's host-bound trajectory",
+          "EACCES",
+          undefined,
+          "access"
+        );
+      }
+    }
+    // Refuse an unscoped or trajectory-drifting agent relay before activating
+    // an EvalDO or minting any presenter delegation.
     const { objectKey } = await ensureEvalDO(
       owner,
       runArgs.subKey ?? "default",
-      ctx.caller.subject?.userId
+      ctx.caller.subject?.userId,
+      agentBinding
     );
-    const isAgent = ctx.caller.runtime.kind === "do" && Boolean(runArgs.channelId);
-    const chatBinding = isAgent ? { channelId: runArgs.channelId, agentRef: ownerId } : {};
+    const isAgentDo = ctx.caller.runtime.kind === "do" && agentBinding !== undefined;
+    const chatBinding = isAgentDo ? { channelId: agentBinding.channelId, agentRef: ownerId } : {};
     const parent = (await resolveParentPanel(ownerId)) ?? undefined;
     return {
       evalDoRef: { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
@@ -367,12 +436,15 @@ export function createEvalService(deps: {
         imports: runArgs.imports,
         contextId: owner.contextId,
         gatewayToken: mintGatewayToken(objectKey),
+        causalParent: ctx.causalParent,
+        agentInvocationId: ctx.causalParent?.invocationId,
         parent,
         timeoutMs: runArgs.timeoutMs,
         readOnly: runArgs.readOnly,
         ...chatBinding,
       },
-      agentRef: isAgent ? ownerId : undefined,
+      agentRef: isAgentDo ? ownerId : undefined,
+      channelId: isAgentDo ? agentBinding.channelId : undefined,
     };
   }
 
@@ -399,8 +471,8 @@ export function createEvalService(deps: {
         // works immediately), kick off the held execution + completion push on a background Node
         // task, and return the runId at once.
         const runId = runArgs.runId ?? randomUUID();
-        const { evalDoRef, assembledArgs, agentRef } = await prepareRun(ctx, runArgs);
-        const started = await deps.doDispatch.dispatch(evalDoRef, "startRun", {
+        const { evalDoRef, assembledArgs, agentRef, channelId } = await prepareRun(ctx, runArgs);
+        const started: unknown = await deps.doDispatch.dispatch(evalDoRef, "startRun", {
           ...assembledArgs,
           runId,
         });
@@ -418,8 +490,11 @@ export function createEvalService(deps: {
             evalDoRef,
             runId,
             agentRef,
-            runArgs.channelId
-          ).finally(() => deps.activity?.end(`eval:${runId}`));
+            channelId,
+            ctx.causalParent?.invocationId
+          ).finally(() => {
+            deps.activity?.end(`eval:${runId}`);
+          });
         }
         return { runId };
       },
@@ -443,8 +518,6 @@ export function createEvalService(deps: {
         deps.doDispatch.dispatch(await evalDoRefFor(ctx, resetArgs), "reset"),
       cancel: async (ctx, [cancelArgs]) =>
         deps.doDispatch.dispatch(await evalDoRefFor(ctx, cancelArgs), "cancel", cancelArgs.runId),
-      forceReset: async (ctx, [forceArgs = {}]) =>
-        deps.doDispatch.dispatch(await evalDoRefFor(ctx, forceArgs), "forceReset"),
     }),
   };
 }

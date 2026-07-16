@@ -6,10 +6,6 @@
  */
 
 export const ids = {
-  logIdForChannel(channelId: string): string {
-    return `branch:channel:${channelId}`;
-  },
-
   turnId(channelId: string, triggerEnvelopeId: string, actorId: string): string {
     // Actor-scoped: the responding agent's participant id is part of the turn
     // identity, so two agents reacting to the SAME trigger in the SAME channel

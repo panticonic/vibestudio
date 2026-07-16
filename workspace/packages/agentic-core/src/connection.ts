@@ -116,7 +116,6 @@ export class ConnectionManager {
         ...(this.metadata.handle !== undefined ? { handle: this.metadata.handle } : {}),
         name: this.metadata.name,
         type: this.metadata.type,
-        reconnect: true,
         clientId: this.config.clientId,
         protocol: this.config.protocol,
         // Roster reads stay `ChatParticipantMetadata` (the channel fills the

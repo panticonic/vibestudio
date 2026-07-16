@@ -16,7 +16,7 @@ const GREP_MAX_LINE_LENGTH = 500;
 
 interface ExtensionContextLike {
   workspace: {
-    getInfo(): Promise<{ path: string; contextsPath: string }>;
+    getInfo(): Promise<{ path: string; contextProjectionsPath: string }>;
   };
   fs: {
     realpath(path: string): Promise<string>;

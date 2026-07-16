@@ -134,6 +134,10 @@ describe("agent-loop core lifecycle", () => {
 
     // journal-before-dispatch: recv + turn.opened + message.started all durable
     expect(kinds(s)).toEqual(["message.completed", "turn.opened", "message.started"]);
+    expect(s.log[1]!.causality).toMatchObject({
+      turnId: turn1,
+      messageId: ids.recvUserMessage("chan-1", "env-1"),
+    });
     expect(s.log[2]!.envelopeId).toBe(ids.messageStarted(msg0));
     expect(pendingEffectIds(s)).toEqual([ids.modelEffect(msg0)]);
 
@@ -773,9 +777,7 @@ describe("agent-loop core lifecycle", () => {
 
     resolveEffect(s, ids.modelEffect(msg1), {
       kind: "model",
-      blocks: [
-        { type: "toolCall", id: "tc-fallback", name: "read", arguments: { path: "a.ts" } },
-      ],
+      blocks: [{ type: "toolCall", id: "tc-fallback", name: "read", arguments: { path: "a.ts" } }],
       stopReason: "completed",
     });
     resolveEffect(s, ids.invocationEffect("tc-fallback"), {
@@ -1687,7 +1689,16 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
     expect(s.state.deferredPostTurnQueue.map((d) => d.sourceMessageId)).toEqual(["d2"]);
     expect(s.state.openTurn).not.toBeNull();
     // promoted recv used a fresh deterministic id (not the arrival env-2)
-    expect(s.log.some((row) => row.envelopeId.startsWith("recv:promoted:d1:"))).toBe(true);
+    const promoted = s.log.find((row) => row.envelopeId.startsWith("recv:promoted:d1:"));
+    expect(promoted).toBeDefined();
+    const promotedTurn = s.log.find(
+      (row) =>
+        row.payloadKind === "turn.opened" &&
+        (row.causality as { turnId?: string } | undefined)?.turnId === s.state.openTurn?.turnId
+    );
+    expect((promotedTurn?.causality as { messageId?: string } | undefined)?.messageId).toBe(
+      promoted?.envelopeId
+    );
 
     // d1's turn closes → promote d2
     const d1Msg = ids.messageId(s.state.openTurn!.turnId, 0);

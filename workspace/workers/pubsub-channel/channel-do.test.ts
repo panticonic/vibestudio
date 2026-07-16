@@ -5,13 +5,36 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   invocationAbandonedPayload,
   invocationCompletedPayload,
+  type AgenticEvent,
   type BlockId,
 } from "@workspace/agentic-protocol";
-import { GadWorkspaceDO } from "../gad-store/index.js";
+import { GadWorkspaceDO } from "../../packages/semantic-control-plane/src/index.js";
 import { PubSubChannel } from "./channel-do.js";
 
 type TestDO<T> = Awaited<ReturnType<typeof createTestDO<T>>>;
 const sessionWrappedInstances = new WeakSet<object>();
+const subscriptionSinks = new WeakMap<object, { emitted?: unknown[]; emittedTargets?: string[] }>();
+const testSubscriptions = new WeakMap<
+  object,
+  Map<string, ReadableStreamDefaultReader<Uint8Array>>
+>();
+
+function testSubscriptionKey(participantId: string, deliveryId: string): string {
+  return `${participantId}\u0000${deliveryId}`;
+}
+
+async function closeTestSubscription(
+  instance: PubSubChannel,
+  participantId: string,
+  deliveryId: string
+): Promise<void> {
+  const reader = testSubscriptions
+    .get(instance)
+    ?.get(testSubscriptionKey(participantId, deliveryId));
+  if (!reader) return;
+  testSubscriptions.get(instance)?.delete(testSubscriptionKey(participantId, deliveryId));
+  await reader.cancel();
+}
 
 function deferred<T = void>(): {
   promise: Promise<T>;
@@ -37,14 +60,52 @@ function setRpcCaller(
   if (!sessionWrappedInstances.has(instance)) {
     sessionWrappedInstances.add(instance);
     const original = instance.subscribe.bind(instance);
-    (instance as unknown as { subscribe: PubSubChannel["subscribe"] }).subscribe = (
+    (instance as unknown as { subscribe: PubSubChannel["subscribe"] }).subscribe = async (
       participantId,
       metadata
-    ) =>
-      original(participantId, {
-        __participantSessionId: `${participantId}:test-session`,
-        ...metadata,
-      });
+    ) => {
+      const caller = (
+        instance as unknown as {
+          _currentVerifiedCaller?: { callerId?: string; callerPanelId?: string };
+        }
+      )._currentVerifiedCaller;
+      const deliveryId = caller?.callerPanelId ?? caller?.callerId ?? participantId;
+      const response = await original(participantId, metadata);
+      if (!response.body) throw new Error("test subscription returned no body");
+      const reader = response.body.getReader();
+      const firstChunk = await reader.read();
+      const first = firstChunk.done
+        ? null
+        : (JSON.parse(new TextDecoder().decode(firstChunk.value).trim()) as {
+            kind?: string;
+            result?: Record<string, unknown>;
+          });
+      if (first?.kind !== "subscribed" || !first.result) {
+        throw new Error("test subscription did not receive its ACK");
+      }
+      const result = first.result;
+      const canonicalParticipantId = String(result["participantId"] ?? participantId);
+      const byKey = testSubscriptions.get(instance) ?? new Map();
+      testSubscriptions.set(instance, byKey);
+      byKey.set(testSubscriptionKey(canonicalParticipantId, deliveryId), reader);
+      const sink = subscriptionSinks.get(instance);
+      void (async () => {
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) return;
+          const record = JSON.parse(new TextDecoder().decode(chunk.value).trim()) as {
+            kind?: string;
+            payload?: unknown;
+          };
+          if (record.kind !== "message") continue;
+          sink?.emitted?.push(record.payload);
+          sink?.emittedTargets?.push(participantId);
+        }
+      })();
+      // Unit tests call the method directly, so surface the first stream record
+      // while the reader above continues to own the real response resource.
+      return result as unknown as Response;
+    };
   }
   (instance as unknown as { _currentRpcCallerId: string | null })._currentRpcCallerId = callerId;
   (instance as unknown as { _currentRpcCallerKind: string | null })._currentRpcCallerKind =
@@ -109,14 +170,25 @@ async function createGadBackedChannel(
     channelKey?: string;
     gad?: TestDO<GadWorkspaceDO>;
     blobstorePutText?: (value: string) => Promise<{ digest: string; size: number }>;
-    rpcCall?: (target: string, method: string, args: unknown[]) => Promise<unknown> | unknown;
+    rpcCall?: (
+      target: string,
+      method: string,
+      args: unknown[],
+      options?: { readOnly?: boolean; timeoutMs?: number }
+    ) => Promise<unknown> | unknown;
   } = {}
 ) {
-  const gad = options.gad ?? (await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" }));
+  const gad =
+    options.gad ??
+    (await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-semantic-control-plane" }));
   const channel = await createTestDO(PubSubChannel, {
     __objectKey: options.channelKey ?? "channel-1",
   });
-  const gadTarget = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+  subscriptionSinks.set(channel.instance, {
+    emitted: options.emitted,
+    emittedTargets: options.emittedTargets,
+  });
+  const gadTarget = "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane";
   const blobs = new Map<string, string>();
   // Inject a mock RPC client. The DO base now holds a ConnectionlessRpcClient
   // ({ client, respond, deliver }) behind the `rpc` getter; pre-setting
@@ -126,59 +198,66 @@ async function createGadBackedChannel(
       options.emittedTargets?.push(target);
       options.emitted?.push(payload);
     }),
-    call: vi.fn(async (target: string, method: string, args: unknown[]) => {
-      const custom = await options.rpcCall?.(target, method, args);
-      if (custom !== undefined) return custom;
-      if (target === "main" && method === "workers.resolveService") {
-        return {
-          kind: "durable-object",
-          source: "workers/gad-store",
-          className: "GadWorkspaceDO",
-          objectKey: "workspace-gad",
-          targetId: gadTarget,
-        };
+    call: vi.fn(
+      async (
+        target: string,
+        method: string,
+        args: unknown[],
+        callOptions?: { readOnly?: boolean; timeoutMs?: number }
+      ) => {
+        const custom = await options.rpcCall?.(target, method, args, callOptions);
+        if (custom !== undefined) return custom;
+        if (target === "main" && method === "workers.resolveService") {
+          return {
+            kind: "durable-object",
+            source: "vibestudio/internal",
+            className: "GadWorkspaceDO",
+            objectKey: "workspace-semantic-control-plane",
+            targetId: gadTarget,
+          };
+        }
+        if (target === "main" && method === "runtime.setTitle") {
+          // Title registry isn't relevant in unit tests; treat as a no-op.
+          return undefined;
+        }
+        if (
+          target === "main" &&
+          (method === "workspace-state.alarmSet" || method === "workspace-state.alarmClear")
+        ) {
+          // DurableBase persists alarm metadata through main; these channel tests
+          // exercise channel behavior, so acknowledge the lifecycle write.
+          return undefined;
+        }
+        if (target === "main" && method === "blobstore.putText") {
+          const value = String(args[0] ?? "");
+          const blob = options.blobstorePutText
+            ? await options.blobstorePutText(value)
+            : { digest: `test-digest-${blobs.size + 1}`, size: value.length };
+          blobs.set(blob.digest, value);
+          return blob;
+        }
+        if (target === "main" && method === "blobstore.getText") {
+          return blobs.get(String(args[0] ?? "")) ?? null;
+        }
+        if (target === gadTarget) {
+          const callerId = `do:workers/pubsub-channel:PubSubChannel:${options.channelKey ?? "channel-1"}`;
+          const internal = gad.instance as unknown as {
+            _currentRpcCallerId: string | null;
+            _currentRpcCallerKind: string | null;
+            _currentVerifiedCaller: unknown;
+          };
+          internal._currentRpcCallerId = callerId;
+          internal._currentRpcCallerKind = "do";
+          internal._currentVerifiedCaller = { callerId, callerKind: "do" };
+          const callable = gad.instance as unknown as Record<
+            string,
+            (...methodArgs: unknown[]) => unknown
+          >;
+          return await callable[method]!(...args);
+        }
+        throw new Error(`unexpected rpc call ${target}.${method}`);
       }
-      if (target === "main" && method === "runtime.setTitle") {
-        // Title registry isn't relevant in unit tests; treat as a no-op.
-        return undefined;
-      }
-      if (
-        target === "main" &&
-        (method === "workspace-state.alarmSet" || method === "workspace-state.alarmClear")
-      ) {
-        // DurableBase persists alarm metadata through main; these channel tests
-        // exercise channel behavior, so acknowledge the lifecycle write.
-        return undefined;
-      }
-      if (target === "main" && method === "blobstore.putText") {
-        const value = String(args[0] ?? "");
-        const blob = options.blobstorePutText
-          ? await options.blobstorePutText(value)
-          : { digest: `test-digest-${blobs.size + 1}`, size: value.length };
-        blobs.set(blob.digest, value);
-        return blob;
-      }
-      if (target === "main" && method === "blobstore.getText") {
-        return blobs.get(String(args[0] ?? "")) ?? null;
-      }
-      if (target === gadTarget) {
-        const callerId = `do:workers/pubsub-channel:PubSubChannel:${options.channelKey ?? "channel-1"}`;
-        const internal = gad.instance as unknown as {
-          _currentRpcCallerId: string | null;
-          _currentRpcCallerKind: string | null;
-          _currentVerifiedCaller: unknown;
-        };
-        internal._currentRpcCallerId = callerId;
-        internal._currentRpcCallerKind = "do";
-        internal._currentVerifiedCaller = { callerId, callerKind: "do" };
-        const callable = gad.instance as unknown as Record<
-          string,
-          (...methodArgs: unknown[]) => unknown
-        >;
-        return await callable[method]!(...args);
-      }
-      throw new Error(`unexpected rpc call ${target}.${method}`);
-    }),
+    ),
     expose: () => {},
     exposeAll: () => {},
     on: () => () => {},
@@ -196,6 +275,34 @@ async function createGadBackedChannel(
 }
 
 describe("PubSubChannel", () => {
+  it("terminates a subscription instead of buffering an unread live tail without bound", async () => {
+    const { instance } = await createGadBackedChannel();
+    const internal = instance as unknown as {
+      openSubscriptionResponse(
+        participantId: string,
+        deliveryId: string,
+        replaceParticipant: boolean,
+        result: never
+      ): Response;
+      deliverParticipantPayload(participantId: string, payload: unknown): Promise<void>;
+      participantSubscriptionCount(participantId: string): number;
+    };
+    const response = internal.openSubscriptionResponse("panel:slow", "delivery:slow", false, {
+      ok: true,
+      participantId: "panel:slow",
+    } as never);
+
+    for (let index = 0; index < 80; index += 1) {
+      await internal.deliverParticipantPayload("panel:slow", {
+        index,
+        content: "x".repeat(16_000),
+      });
+    }
+
+    expect(internal.participantSubscriptionCount("panel:slow")).toBe(0);
+    await expect(response.body!.getReader().read()).rejects.toThrow(/response-buffer-full/);
+  });
+
   it("stores durable publishes as opaque channel envelopes", async () => {
     const { instance, gad } = await createGadBackedChannel();
     setRpcCaller(instance, "panel:user", "panel");
@@ -247,7 +354,7 @@ describe("PubSubChannel", () => {
     );
   });
 
-  it("does not let agent callers inject or evict arbitrary roster participants", async () => {
+  it("does not let agent callers inject arbitrary roster participants", async () => {
     const { instance } = await createGadBackedChannel();
 
     setRpcCaller(instance, "panel:user", "panel");
@@ -257,9 +364,6 @@ describe("PubSubChannel", () => {
     await expect(
       instance.subscribe("panel:phantom", { contextId: "ctx-1", name: "Fake", type: "agent" })
     ).rejects.toThrow("Participant panel:phantom cannot be subscribed by caller agent:session-1");
-    await expect(instance.unsubscribe("panel:user", "panel:user:test-session")).rejects.toThrow(
-      "unsubscribe: participant panel:user cannot be used by caller agent:session-1"
-    );
     await expect(
       instance.subscribe("agent:session-1", {
         contextId: "ctx-1",
@@ -281,36 +385,29 @@ describe("PubSubChannel", () => {
     ).resolves.toMatchObject({ ok: true });
   });
 
-  it("canonicalizes one human across panels while preserving per-session delivery and ownership", async () => {
+  it("canonicalizes one human across panels while each response owns its delivery", async () => {
     const emittedTargets: string[] = [];
     const { instance, sql } = await createGadBackedChannel({ emittedTargets });
 
     setRpcCaller(instance, "panel:nav-a", "panel", "panel:slot-a", "usr_alice");
-    const first = await instance.subscribe("panel:slot-a", {
+    const first = (await instance.subscribe("panel:slot-a", {
       contextId: "ctx-1",
       name: "Chat panel A",
       type: "panel",
-      __participantSessionId: "session-a",
-    });
+    })) as unknown as { participantId: string };
     setRpcCaller(instance, "panel:nav-b", "panel", "panel:slot-b", "usr_alice");
-    const second = await instance.subscribe("panel:slot-b", {
+    const second = (await instance.subscribe("panel:slot-b", {
       contextId: "ctx-1",
       name: "Chat panel B",
       type: "panel",
-      __participantSessionId: "session-b",
-    });
+    })) as unknown as { participantId: string };
 
     expect(first.participantId).toBe("user:usr_alice");
     expect(second.participantId).toBe("user:usr_alice");
     expect(sql.exec(`SELECT id FROM participants`).toArray()).toEqual([{ id: "user:usr_alice" }]);
-    expect(
-      sql
-        .exec(`SELECT session_id, delivery_id FROM participant_sessions ORDER BY session_id`)
-        .toArray()
-    ).toEqual([
-      { session_id: "session-a", delivery_id: "panel:slot-a" },
-      { session_id: "session-b", delivery_id: "panel:slot-b" },
-    ]);
+    await expect(instance.getChannelPresence()).resolves.toMatchObject({
+      entries: [{ participantId: "user:usr_alice", sessionCount: 2 }],
+    });
 
     emittedTargets.length = 0;
     await instance.publish("user:usr_alice", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent(), {
@@ -319,25 +416,15 @@ describe("PubSubChannel", () => {
     await Promise.resolve();
     expect(new Set(emittedTargets)).toEqual(new Set(["panel:slot-a", "panel:slot-b"]));
 
-    // A second endpoint of the same account cannot keep alive or release the
-    // first endpoint's session even though both share the canonical actor id.
-    await expect(instance.touch("user:usr_alice", "session-a")).rejects.toThrow(
-      /different client endpoint/
-    );
-    await expect(instance.unsubscribe("user:usr_alice", "session-a")).rejects.toThrow(
-      /different client endpoint/
-    );
-    await instance.unsubscribe("user:usr_alice", "session-b");
+    // Each endpoint owns only its response body. Cancelling one releases just
+    // that response even though both share the canonical actor id.
+    await closeTestSubscription(instance, "user:usr_alice", "panel:slot-b");
     expect(sql.exec(`SELECT id FROM participants`).toArray()).toHaveLength(1);
 
-    setRpcCaller(instance, "panel:nav-a", "panel", "panel:slot-a", "usr_alice");
-    await instance.unsubscribe("user:usr_alice", "session-a");
+    await closeTestSubscription(instance, "user:usr_alice", "panel:slot-a");
     expect(sql.exec(`SELECT id FROM participants`).toArray()).toHaveLength(0);
-    // A concurrent stale-session alarm may have won the same cleanup race.
-    // Repeating the caller-owned unsubscribe remains a successful no-op.
-    await expect(
-      instance.unsubscribe("user:usr_alice", "session-a")
-    ).resolves.toBeUndefined();
+    // Repeating response cancellation remains a successful no-op.
+    await closeTestSubscription(instance, "user:usr_alice", "panel:slot-a");
     await expect(instance.getChannelPresence()).resolves.toMatchObject({
       entries: [
         {
@@ -351,96 +438,59 @@ describe("PubSubChannel", () => {
     });
   });
 
-  it("rolls back a newly-created participant when its delivery/session pair collides", async () => {
+  it("reaps persisted subscription rows that have no response resource on activation", async () => {
+    const { instance, sql } = await createGadBackedChannel();
+    sql.exec(
+      `INSERT INTO participants
+         (id, metadata, transport, last_active_at, presence_status)
+       VALUES ('user:usr_orphan', '{}', 'rpc', 1, 'online')`
+    );
+    (
+      instance as unknown as { reapOrphanedSubscriptionProjection(): void }
+    ).reapOrphanedSubscriptionProjection();
+
+    expect(sql.exec(`SELECT id FROM participants`).toArray()).toEqual([]);
+    expect(
+      sql
+        .exec(
+          `SELECT participant_id, last_seen FROM presence_last_seen WHERE participant_id = ?`,
+          "user:usr_orphan"
+        )
+        .toArray()
+    ).toEqual([{ participant_id: "user:usr_orphan", last_seen: expect.any(Number) }]);
+  });
+
+  it("uses authenticated delivery identity without a client session namespace", async () => {
     const { instance, sql } = await createGadBackedChannel();
     setRpcCaller(instance, "panel:alice-nav", "panel", "panel:shared-slot", "usr_alice");
     await instance.subscribe("panel:shared-slot", {
       contextId: "ctx-1",
       name: "Alice",
       type: "panel",
-      __participantSessionId: "shared-session",
     });
 
-    // A malformed host routing collision presents the same endpoint/session as
-    // a different verified account. The session UNIQUE constraint must roll
-    // back the identity INSERT from the same transaction.
+    // The host owns endpoint/account integrity. The channel keeps no parallel
+    // client-asserted session namespace or uniqueness authority.
     setRpcCaller(instance, "panel:bob-nav", "panel", "panel:shared-slot", "usr_bob");
-    await expect(
-      instance.subscribe("panel:shared-slot", {
-        contextId: "ctx-1",
-        name: "Bob",
-        type: "panel",
-        __participantSessionId: "shared-session",
-      })
-    ).rejects.toThrow(/unique constraint/i);
+    await instance.subscribe("panel:shared-slot", {
+      contextId: "ctx-1",
+      name: "Bob",
+      type: "panel",
+    });
 
     expect(sql.exec(`SELECT id FROM participants ORDER BY id`).toArray()).toEqual([
       { id: "user:usr_alice" },
-    ]);
-    expect(
-      sql
-        .exec(
-          `SELECT participant_id, session_id, delivery_id FROM participant_sessions ORDER BY participant_id`
-        )
-        .toArray()
-    ).toEqual([
-      {
-        participant_id: "user:usr_alice",
-        session_id: "shared-session",
-        delivery_id: "panel:shared-slot",
-      },
+      { id: "user:usr_bob" },
     ]);
   });
 
-  it("eager reconnect cleanup performs the canonical stale-session release", async () => {
-    const { instance, gad, sql } = await createGadBackedChannel();
-    setRpcCaller(instance, "panel:alice-a", "panel", "panel:alice-a", "usr_alice");
-    await instance.subscribe("panel:alice-a", {
-      contextId: "ctx-1",
-      name: "Alice",
-      type: "panel",
-      __participantSessionId: "stale-session",
-    });
-    sql.exec(`UPDATE participant_sessions SET last_seen = 0`);
-
-    const callTransport = (
-      instance as unknown as {
-        calls: { failPendingCallsTargeting(id: string, reason: string): Promise<void> };
-      }
-    ).calls;
-    const failPending = vi.spyOn(callTransport, "failPendingCallsTargeting");
-
-    setRpcCaller(instance, "panel:alice-b", "panel", "panel:alice-b", "usr_alice");
-    await instance.subscribe("panel:alice-b", {
-      contextId: "ctx-1",
-      name: "Alice",
-      type: "panel",
-      __participantSessionId: "fresh-session",
-    });
-
-    expect(failPending).toHaveBeenCalledWith("user:usr_alice", "disconnect");
-    expect(sql.exec(`SELECT session_id, delivery_id FROM participant_sessions`).toArray()).toEqual([
-      { session_id: "fresh-session", delivery_id: "panel:alice-b" },
-    ]);
-    expect(sql.exec(`SELECT id FROM participants`).toArray()).toEqual([{ id: "user:usr_alice" }]);
-    expect(sql.exec(`SELECT * FROM presence_last_seen`).toArray()).toEqual([]);
-    const presence = gad.sql
-      .exec(`SELECT payload_ref_json FROM log_events WHERE payload_kind = 'presence' ORDER BY seq`)
-      .toArray()
-      .map((row) => JSON.parse(String(row["payload_ref_json"])) as Record<string, unknown>);
-    expect(presence).toContainEqual(
-      expect.objectContaining({ action: "leave", leaveReason: "disconnect" })
-    );
-  });
-
-  it("derives online, idle, away, and offline from activity without treating heartbeat as activity", async () => {
+  it("derives online, idle, away, and offline from domain activity", async () => {
     const { instance, sql } = await createGadBackedChannel();
     setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "usr_alice");
     await instance.subscribe("panel:alice", {
       contextId: "ctx-1",
       name: "Alice panel",
       type: "panel",
-      __participantSessionId: "alice-session",
     });
     const internal = instance as unknown as { advancePresenceStatuses(): void };
     const now = Date.now();
@@ -450,7 +500,6 @@ describe("PubSubChannel", () => {
       now - 6 * 60_000,
       "user:usr_alice"
     );
-    await instance.touch("user:usr_alice", "alice-session");
     internal.advancePresenceStatuses();
     expect((await instance.getChannelPresence()).entries[0]?.status).toBe("idle");
 
@@ -481,7 +530,6 @@ describe("PubSubChannel", () => {
       contextId: "ctx-1",
       name: "Alice",
       type: "panel",
-      __participantSessionId: "alice-session",
     });
     const before = gad.sql.exec(`SELECT COUNT(*) AS count FROM log_events`).one()["count"];
     await expect(instance.addMember({ userId: "usr_bob" })).resolves.toMatchObject({
@@ -542,7 +590,7 @@ describe("PubSubChannel", () => {
     );
   });
 
-  it("retries a lost workspace invite-index write from the durable channel journal", async () => {
+  it("retries a lost workspace invite-index write from the durable alarm", async () => {
     let failFirstPut = true;
     const { instance, gad, sql } = await createGadBackedChannel({
       rpcCall: (target, method, args) => {
@@ -601,8 +649,9 @@ describe("PubSubChannel", () => {
     expect(sql.exec(`SELECT COUNT(*) AS count FROM channel_members`).one()["count"]).toBe(1);
 
     isWorkspaceMember = false;
-    sql.exec(`UPDATE invite_index_ops SET updated_at = 0`);
-    await instance.alarm();
+    await expect(instance.removeMember({ userId: "usr_bob" })).resolves.toEqual({
+      removed: true,
+    });
 
     expect(putAttempts).toBe(1);
     expect(deleteAttempts).toBe(1);
@@ -756,11 +805,6 @@ describe("PubSubChannel", () => {
       })
     ).rejects.toThrow(`Participant ${arbitraryLabel} cannot be subscribed by caller ${evalDoId}`);
     await expect(
-      instance.unsubscribe(arbitraryLabel, `${arbitraryLabel}:test-session`)
-    ).rejects.toThrow(
-      `unsubscribe: participant ${arbitraryLabel} cannot be used by caller ${evalDoId}`
-    );
-    await expect(
       instance.publish(arbitraryLabel, AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent())
     ).rejects.toThrow(
       `publish: participant ${arbitraryLabel} cannot be used by caller ${evalDoId}`
@@ -780,12 +824,14 @@ describe("PubSubChannel", () => {
     const releaseAppend = deferred();
     let appendCalls = 0;
     let blockAppend = false;
-    const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
+    const gad = await createTestDO(GadWorkspaceDO, {
+      __objectKey: "workspace-semantic-control-plane",
+    });
     const { instance } = await createGadBackedChannel({
       gad,
       rpcCall: async (target, method, args) => {
         if (
-          target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" &&
+          target === "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane" &&
           method === "appendLogEvent" &&
           blockAppend
         ) {
@@ -998,7 +1044,7 @@ describe("PubSubChannel", () => {
     ).toBe(true);
   });
 
-  it("evicts missing DO subscribers during replay delivery without noisy fatal logs", async () => {
+  it("does not infer DO liveness from a failed semantic delivery", async () => {
     const missingDoId = "do:workers/agent-worker:AiChatWorker:headless-missing";
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const { instance, sql } = await createGadBackedChannel({
@@ -1037,9 +1083,9 @@ describe("PubSubChannel", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 5));
 
-      expect(sql.exec(`SELECT id FROM participants WHERE id = ?`, missingDoId).toArray()).toEqual(
-        []
-      );
+      expect(sql.exec(`SELECT id FROM participants WHERE id = ?`, missingDoId).toArray()).toEqual([
+        { id: missingDoId },
+      ]);
       expect(consoleError).not.toHaveBeenCalledWith(
         expect.stringContaining("[Channel] delivery failed"),
         expect.anything()
@@ -1187,7 +1233,7 @@ describe("PubSubChannel", () => {
   it("routes method calls to an RPC-style DO client (eval HeadlessSession) via the broadcast, not onMethodCall", async () => {
     // The eval's connectViaRpc / HeadlessSession must subscribe under the EvalDO's own DO id (a
     // do-ref shape ⇒ transport classifies as "do"), but it has NO onMethodCall handler — it settles
-    // method calls the RPC way: the broadcast `started` (delivered as channel:message to every
+    // method calls the RPC way: the broadcast `started` (delivered on every subscription to every
     // participant) + submitMethodResult. It must NOT be routed through deliverDoMethodCall, which
     // would dispatch onMethodCall to a missing handler and never settle the call (the redelivery echo).
     const evalPid = "do:vibestudio/internal:EvalDO:eval-1";
@@ -1292,16 +1338,7 @@ describe("PubSubChannel", () => {
     const rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
     const { instance } = await createGadBackedChannel({
       rpcCall: (target, method, args) => {
-        if (target === "main" && method === "workers.resolveDurableObject") {
-          return {
-            kind: "durable-object",
-            source: "workers/agent-worker",
-            className: "AiChatWorker",
-            objectKey: "agent-recently-active",
-            targetId: targetPid,
-          };
-        }
-        if (target === targetPid && method === "onMethodCall") {
+        if (target === targetPid && method === "readAgentInspection") {
           rpcCalls.push({ target, method, args });
           return { result: { loops: { "channel-1": { turnStatus: "idle" } } } };
         }
@@ -1320,10 +1357,75 @@ describe("PubSubChannel", () => {
     expect(rpcCalls).toEqual([
       {
         target: targetPid,
-        method: "onMethodCall",
-        args: ["channel-1", expect.stringMatching(/^admin-inspect:/u), "getDebugState", {}],
+        method: "readAgentInspection",
+        args: ["channel-1", "getDebugState"],
       },
     ]);
+  });
+
+  it("keeps activation-local inspection off the ordinary agent method-call path", async () => {
+    const targetPid = "do:workers/agent-worker:AiChatWorker:agent-stalled-turn";
+    const routedMethods: string[] = [];
+    let inspectionOptions: { readOnly?: boolean; timeoutMs?: number } | undefined;
+    const { instance } = await createGadBackedChannel({
+      rpcCall: (target, method, _args, options) => {
+        if (target === targetPid) {
+          routedMethods.push(method);
+          if (method === "onMethodCall") return new Promise(() => {});
+          if (method === "readAgentInspection") {
+            inspectionOptions = options;
+            return {
+              result: {
+                loops: {
+                  "channel-1": {
+                    loaded: true,
+                    turnStatus: "running",
+                  },
+                },
+              },
+            };
+          }
+        }
+        return undefined;
+      },
+    });
+
+    setRpcCaller(instance, "server:test", "server");
+    await expect(instance.adminInspectAgent(targetPid, "getDebugState")).resolves.toMatchObject({
+      result: {
+        loops: {
+          "channel-1": { loaded: true, turnStatus: "running" },
+        },
+      },
+    });
+    expect(routedMethods).toEqual(["readAgentInspection"]);
+    expect(inspectionOptions).toEqual({ readOnly: true, timeoutMs: 5_000 });
+  });
+
+  it("lets the direct relay reject a retired or missing inspected agent without reactivation", async () => {
+    const targetPid = "do:workers/agent-worker:AiChatWorker:agent-retired";
+    const routedMethods: string[] = [];
+    const { instance } = await createGadBackedChannel({
+      rpcCall: (target, method) => {
+        if (target === "main" && method === "workers.resolveDurableObject") {
+          throw new Error("agent inspection must not resolve or reactivate its target");
+        }
+        if (target === targetPid) {
+          routedMethods.push(method);
+          throw Object.assign(new Error("agent entity is not active or missing"), {
+            code: "DO_NOT_CREATED",
+          });
+        }
+        return undefined;
+      },
+    });
+
+    setRpcCaller(instance, "server:test", "server");
+    await expect(instance.adminInspectAgent(targetPid, "getDebugState")).rejects.toMatchObject({
+      message: "agent entity is not active or missing",
+      code: "DO_NOT_CREATED",
+    });
+    expect(routedMethods).toEqual(["readAgentInspection"]);
   });
 
   it("allows non-privileged callers to inspect standard read-only agent debug methods after approval", async () => {
@@ -1335,16 +1437,7 @@ describe("PubSubChannel", () => {
           rpcCalls.push({ target, method, args });
           return { kind: "choice", choice: "allow" };
         }
-        if (target === "main" && method === "workers.resolveDurableObject") {
-          return {
-            kind: "durable-object",
-            source: "workers/agent-worker",
-            className: "AiChatWorker",
-            objectKey: "agent-recently-active",
-            targetId: targetPid,
-          };
-        }
-        if (target === targetPid && method === "onMethodCall") {
+        if (target === targetPid && method === "readAgentInspection") {
           rpcCalls.push({ target, method, args });
           return { result: { settings: { model: "test:model" } } };
         }
@@ -1380,8 +1473,8 @@ describe("PubSubChannel", () => {
       },
       {
         target: targetPid,
-        method: "onMethodCall",
-        args: ["channel-1", expect.stringMatching(/^admin-inspect:/u), "getAgentSettings", {}],
+        method: "readAgentInspection",
+        args: ["channel-1", "getAgentSettings"],
       },
     ]);
   });
@@ -1559,12 +1652,15 @@ describe("PubSubChannel", () => {
 
     expect(await parent.instance.listForks()).toEqual({ forks: [] });
 
-    const result = await parent.instance.fork({
+    const forkInput = {
+      operationId: "fork-operation-1",
       forkPointPubsubId: 1,
       reason: "deep dive",
       label: "My fork",
-    });
+    };
+    const result = await parent.instance.fork(forkInput);
     expect(result.forkedChannelId).toBe("channel-lf-child");
+    await expect(parent.instance.fork(forkInput)).resolves.toEqual(result);
 
     const { forks } = await parent.instance.listForks();
     expect(forks).toHaveLength(1);
@@ -1589,6 +1685,37 @@ describe("PubSubChannel", () => {
       label: "Renamed fork",
       archived: true,
     });
+  });
+
+  it("keeps failed fork cleanup retryable until context destruction succeeds", async () => {
+    let destroyAttempts = 0;
+    const { instance, sql } = await createGadBackedChannel({
+      rpcCall: (_target, method) => {
+        if (method !== "runtime.destroyContext") return undefined;
+        destroyAttempts += 1;
+        if (destroyAttempts === 1) throw new Error("cleanup unavailable");
+        return null;
+      },
+    });
+    const now = Date.now();
+    sql.exec(
+      `INSERT INTO fork_ops
+         (fork_id, fork_point_id, opts, phase, forked_channel_id,
+          forked_context_id, created_at, updated_at)
+       VALUES (?, 1, ?, 'cloned', 'child-1', 'context-child-1', ?, ?)`,
+      "fork-cleanup-1",
+      JSON.stringify({ operationId: "fork-cleanup-1", forkPointPubsubId: 1, reason: "test" }),
+      now,
+      now
+    );
+    const internal = instance as unknown as {
+      rollbackForkOp(forkId: string): Promise<boolean>;
+    };
+
+    await expect(internal.rollbackForkOp("fork-cleanup-1")).resolves.toBe(false);
+    expect(sql.exec(`SELECT phase FROM fork_ops`).one()["phase"]).toBe("rollback-pending");
+    await expect(internal.rollbackForkOp("fork-cleanup-1")).resolves.toBe(true);
+    expect(sql.exec(`SELECT phase FROM fork_ops`).one()["phase"]).toBe("rolledback");
   });
 
   it("re-homes the channel's context when postClone threads a new contextId", async () => {
@@ -1714,8 +1841,8 @@ describe("PubSubChannel", () => {
     expect(cancelled).toHaveLength(1);
   });
 
-  it("records a deadline_at on a timed call so the sweep can settle a stuck target", async () => {
-    const { instance, sql } = await createGadBackedChannel();
+  it("settles an expired timed call from the durable alarm", async () => {
+    const { instance, sql, gad } = await createGadBackedChannel();
 
     setRpcCaller(instance, "panel:caller", "panel");
     await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
@@ -1745,6 +1872,137 @@ describe("PubSubChannel", () => {
       .exec(`SELECT deadline_at FROM pending_calls WHERE transport_call_id = ?`, "transport-timed")
       .toArray()[0] as { deadline_at: number | null } | undefined;
     expect(row?.deadline_at).toEqual(expect.any(Number));
+
+    sql.exec(
+      `UPDATE pending_calls SET deadline_at = ? WHERE transport_call_id = ?`,
+      Date.now() - 1,
+      "transport-timed"
+    );
+    await instance.alarm();
+
+    expect(
+      sql
+        .exec(`SELECT 1 FROM pending_calls WHERE transport_call_id = ?`, "transport-timed")
+        .toArray()
+    ).toEqual([]);
+    expect(
+      gad.sql
+        .exec(`SELECT 1 FROM log_events WHERE envelope_id = ?`, "terminal:transport-timed")
+        .toArray()
+    ).toHaveLength(1);
+  });
+
+  it("redelivers a stale pending call from the durable alarm", async () => {
+    const emitted: unknown[] = [];
+    const { instance, sql } = await createGadBackedChannel({ emitted });
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", {
+      contextId: "ctx-1",
+      name: "Caller",
+      type: "panel",
+    });
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.callMethod(
+      "panel:caller",
+      "panel:provider",
+      "transport-redelivery",
+      "slow_method",
+      { value: 1 },
+      { invocationId: "invocation-redelivery", transportCallId: "transport-redelivery" }
+    );
+    sql.exec(
+      `UPDATE pending_calls SET created_at = ? WHERE transport_call_id = ?`,
+      Date.now() - 60_000,
+      "transport-redelivery"
+    );
+    emitted.length = 0;
+
+    await instance.alarm();
+
+    await vi.waitFor(() => {
+      expect(
+        emitted.some((payload) => {
+          const message = (payload as { message?: { payload?: AgenticEvent } }).message;
+          return (
+            message?.payload?.kind === "invocation.started" &&
+            message.payload.causality?.transportCallId === "transport-redelivery"
+          );
+        })
+      ).toBe(true);
+    });
+  });
+
+  it("redelivers a stale agent call through onMethodCall, not its ignored response stream", async () => {
+    const targetPid = "do:workers/agent-worker:AiChatWorker:agent-redelivery";
+    const methodCalls: unknown[][] = [];
+    const emitted: unknown[] = [];
+    const { instance, sql } = await createGadBackedChannel({
+      emitted,
+      rpcCall: async (target, method, args) => {
+        if (target === "main" && method === "workers.resolveDurableObject") return {};
+        if (target === targetPid && method === "onChannelEnvelope") return null;
+        if (target === targetPid && method === "onMethodCall") {
+          methodCalls.push(args);
+          return new Promise(() => {});
+        }
+        return undefined;
+      },
+    });
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", {
+      contextId: "ctx-1",
+      name: "Caller",
+      type: "panel",
+    });
+    setRpcCaller(instance, targetPid, "durable-object");
+    await instance.subscribe(targetPid, {
+      contextId: "ctx-1",
+      name: "Agent",
+      type: "agent",
+      receivesChannelEnvelopes: true,
+    });
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.callMethod(
+      "panel:caller",
+      targetPid,
+      "transport-agent-redelivery",
+      "slow_method",
+      { value: 1 },
+      {
+        invocationId: "invocation-agent-redelivery",
+        transportCallId: "transport-agent-redelivery",
+      }
+    );
+    expect(methodCalls).toHaveLength(1);
+    sql.exec(
+      `UPDATE pending_calls SET created_at = ? WHERE transport_call_id = ?`,
+      Date.now() - 60_000,
+      "transport-agent-redelivery"
+    );
+    emitted.length = 0;
+
+    await instance.alarm();
+
+    expect(methodCalls).toHaveLength(2);
+    expect(methodCalls[1]).toEqual([
+      "channel-1",
+      "transport-agent-redelivery",
+      "slow_method",
+      { value: 1 },
+      { invocationId: "invocation-agent-redelivery", turnId: undefined },
+    ]);
+    expect(
+      emitted.some((payload) => {
+        const message = (payload as { message?: { payload?: AgenticEvent } }).message;
+        return message?.payload?.causality?.transportCallId === "transport-agent-redelivery";
+      })
+    ).toBe(false);
   });
 
   it("settles pending method calls as an error from malformed terminal invocation events", async () => {
@@ -2145,12 +2403,14 @@ describe("PubSubChannel", () => {
     // and result.recovered is never set.
     const blockStarted = deferred();
     let blockedOnce = false;
-    const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
+    const gad = await createTestDO(GadWorkspaceDO, {
+      __objectKey: "workspace-semantic-control-plane",
+    });
     const { instance } = await createGadBackedChannel({
       gad,
       rpcCall: async (target, method, args) => {
         if (
-          target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" &&
+          target === "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane" &&
           method === "appendLogEvent"
         ) {
           const event = (args[0] as { events?: Array<{ payloadKind?: string; payload?: unknown }> })
@@ -2814,7 +3074,7 @@ describe("PubSubChannel", () => {
       { code: "1 + 1" },
       { invocationId: "invocation-left", transportCallId: "transport-left", turnId: "turn-left" }
     );
-    await instance.unsubscribe("panel:caller", "panel:caller:test-session");
+    await closeTestSubscription(instance, "panel:caller", "panel:caller");
 
     const resultId = await instance.handleMethodResult("transport-left", { ok: true }, false);
 
@@ -3206,7 +3466,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
     expect(sql.exec(`SELECT COUNT(*) AS cnt FROM pending_calls`).toArray()[0]?.["cnt"]).toBe(0);
   });
 
-  it("does not redeliver a stale pending feedback call after the user already answered", async () => {
+  it("does not turn subscription recovery into a pending-call redelivery lifecycle", async () => {
     const emitted: unknown[] = [];
     let countRedeliveryTerminalProbes = false;
     let redeliveryTerminalProbeCount = 0;
@@ -3246,7 +3506,6 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
       contextId: "ctx-1",
       name: "User",
       type: "panel",
-      __participantSessionId: "session-1",
     });
 
     setRpcCaller(instance, "agent:caller", "worker");
@@ -3291,7 +3550,6 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
       contextId: "ctx-1",
       name: "User",
       type: "panel",
-      __participantSessionId: "session-2",
     });
     countRedeliveryTerminalProbes = false;
     await Promise.resolve();
@@ -3316,6 +3574,12 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
     });
 
     expect(redeliveredFeedback).toHaveLength(0);
+    expect(redeliveryTerminalProbeCount).toBe(0);
+    expect(redeliveryFullLogReadCount).toBe(0);
+    expect(redeliveryBatchProbeCount).toBe(0);
+    // Cache repair remains an explicit fold of the durable log; subscribing has
+    // no hidden cleanup or synthetic invocation delivery side effect.
+    await instance.reconcilePendingCalls(true);
     expect(
       sql
         .exec(
@@ -3324,51 +3588,6 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
         )
         .toArray()
     ).toHaveLength(0);
-    expect(redeliveryTerminalProbeCount).toBe(0);
-    expect(redeliveryFullLogReadCount).toBe(0);
-    expect(redeliveryBatchProbeCount).toBe(1);
-  });
-
-  it("does not busy-loop the alarm on a long-running pending call (CH-4)", async () => {
-    const { instance, sql } = await createGadBackedChannel();
-    const internal = instance as unknown as {
-      nextPendingRedeliveryAt(now: number): number | null;
-      getStateValue(key: string): string | null;
-      setStateValue(key: string, value: string): void;
-    };
-
-    const now = Date.now();
-    // A pending call created 60s ago (handler is genuinely slow, deadline 5min).
-    const createdAt = now - 60_000;
-    sql.exec(
-      `INSERT INTO pending_calls (transport_call_id, invocation_id, turn_id, caller_id,
-        target_id, method, args, created_at, deadline_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      "tc-slow",
-      "inv-slow",
-      null,
-      "agent:self",
-      "panel:user",
-      "longMethod",
-      null,
-      createdAt,
-      now + 5 * 60_000
-    );
-
-    // First redelivery is anchored to creation (it may be in the past — that's
-    // fine, it fires once); critically it is NOT pinned to created_at+10s
-    // forever.
-    const first = internal.nextPendingRedeliveryAt(now);
-    expect(first).toBe(createdAt + 10_000);
-
-    // Simulate a sweep advancing the marker (what alarm() does).
-    internal.setStateValue("pendingRedeliverySweptAt", String(now));
-
-    // The next deadline is now anchored to the LAST sweep + interval — a real
-    // future time, so scheduleNextAlarm cannot clamp to now+100ms repeatedly.
-    const second = internal.nextPendingRedeliveryAt(now);
-    expect(second).toBe(now + 15_000);
-    expect(second!).toBeGreaterThan(now);
   });
 });
 

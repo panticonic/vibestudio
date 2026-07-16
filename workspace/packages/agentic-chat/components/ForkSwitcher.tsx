@@ -10,19 +10,17 @@ import type { ForkEntry } from "../types";
  * current branch label, the parent breadcrumb (when this is a fork), the
  * current channel's direct-child forks and any siblings, plus "New fork" and
  * "Show tree". Each fork entry switches in place (primary), or opens in a new
- * panel / opens Review & pick (secondary). Reconciles on open (§H).
+ * panel. Reconciles on open (§H).
  */
 
 function ForkItem({
   entry,
   onSwitch,
   onOpen,
-  onReview,
 }: {
   entry: ForkEntry;
   onSwitch: (e: ForkEntry) => void;
   onOpen: (e: ForkEntry) => void;
-  onReview: (e: ForkEntry) => void;
 }) {
   return (
     <DropdownMenu.Sub>
@@ -44,7 +42,6 @@ function ForkItem({
         </DropdownMenu.Label>
         <DropdownMenu.Item onSelect={() => onSwitch(entry)}>Switch to this fork</DropdownMenu.Item>
         <DropdownMenu.Item onSelect={() => onOpen(entry)}>Open in new panel</DropdownMenu.Item>
-        <DropdownMenu.Item onSelect={() => onReview(entry)}>Review &amp; pick…</DropdownMenu.Item>
       </DropdownMenu.SubContent>
     </DropdownMenu.Sub>
   );
@@ -55,13 +52,12 @@ export function ForkSwitcher() {
   const [treeOpen, setTreeOpen] = useState(false);
   if (!forkState) return null;
 
-  const { provenance, currentLabel, children, siblings, parent, forking, refresh, actions } = forkState;
+  const { provenance, currentLabel, children, siblings, parent, forking, refresh, actions } =
+    forkState;
   const hasForks = children.length > 0 || siblings.length > 0;
 
   const handleSwitch = (e: ForkEntry) => actions.switchTo(e.channelId, e.contextId);
   const handleOpen = (e: ForkEntry) => actions.openInNewPanel(e.channelId, e.contextId);
-  const handleReview = (e: ForkEntry) =>
-    actions.reviewContext({ kind: "fork", contextId: e.contextId, label: e.label });
 
   return (
     <>
@@ -82,7 +78,11 @@ export function ForkSwitcher() {
         <DropdownMenu.Content align="start">
           {parent && (
             <>
-              <DropdownMenu.Item onSelect={() => parent.contextId && actions.switchTo(parent.channelId, parent.contextId)}>
+              <DropdownMenu.Item
+                onSelect={() =>
+                  parent.contextId && actions.switchTo(parent.channelId, parent.contextId)
+                }
+              >
                 ↑ Parent conversation
               </DropdownMenu.Item>
               <DropdownMenu.Separator />
@@ -97,7 +97,6 @@ export function ForkSwitcher() {
                   entry={entry}
                   onSwitch={handleSwitch}
                   onOpen={handleOpen}
-                  onReview={handleReview}
                 />
               ))}
               <DropdownMenu.Separator />
@@ -112,7 +111,6 @@ export function ForkSwitcher() {
                   entry={entry}
                   onSwitch={handleSwitch}
                   onOpen={handleOpen}
-                  onReview={handleReview}
                 />
               ))}
               <DropdownMenu.Separator />

@@ -583,7 +583,7 @@ export default function NewsPanel() {
     setConnecting(true);
     setError(null);
     try {
-      const request = toPanelConnectRequest(modelConnect.providerId, modelConnect.baseUrl);
+      const request = toPanelConnectRequest(modelConnect.providerId);
       if (!request) {
         setError(`No connect flow available for ${modelConnect.providerId}`);
         return;

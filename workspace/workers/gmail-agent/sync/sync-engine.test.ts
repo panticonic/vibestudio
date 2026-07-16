@@ -30,7 +30,6 @@ function makeEngine(sql: SqlStorage): SyncEngine {
     getChannelState: () => ({}) as never,
     saveChannelState: () => undefined,
     publishSetup: async () => undefined,
-    schedulePoll: () => undefined,
     now: () => 123,
   });
 }
@@ -59,8 +58,6 @@ describe("SyncEngine.applyTriageDecision", () => {
 
     // The only statement run is the SELECT lookup; no UPDATE on a missing row.
     expect(queries.some((q) => q.includes("UPDATE gmail_threads"))).toBe(false);
-    expect(console.warn).toHaveBeenCalledWith(
-      expect.stringContaining("no cached thread row")
-    );
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("no cached thread row"));
   });
 });

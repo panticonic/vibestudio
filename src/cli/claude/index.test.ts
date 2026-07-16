@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { findContextMarker, writeToHookSocket } from "./index.js";
+import { executePreparedClaudeLaunch, findContextBinding, writeToHookSocket } from "./index.js";
+import { contextBinding } from "@vibestudio/shared/contextBinding";
+import { claudeLaunchProfile } from "@vibestudio/shared/claudeLaunchProfile";
+import type { MaterializedClaudeLaunch } from "@vibestudio/shared/claudeLaunchProfile";
 
 let tmpRoot: string;
 
@@ -15,40 +18,132 @@ afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-describe("findContextMarker", () => {
-  it("discovers the marker in a parent directory (cwd-upward search)", () => {
-    const marker = {
-      contextId: "ctx-42",
-      workspaceId: "ws",
-      serverUrl: "http://127.0.0.1:5000/_workspace/dev",
-    };
-    fs.writeFileSync(path.join(tmpRoot, ".vibestudio-context.json"), JSON.stringify(marker));
+describe("findContextBinding", () => {
+  it("discovers the binding in a parent directory (cwd-upward search)", () => {
+    const binding = contextBinding({ contextId: "ctx-42", workspaceId: "ws" });
+    fs.writeFileSync(path.join(tmpRoot, ".vibestudio-context.json"), JSON.stringify(binding));
     const nested = path.join(tmpRoot, "a", "b", "c");
     fs.mkdirSync(nested, { recursive: true });
 
-    const found = findContextMarker(nested);
+    const found = findContextBinding(nested);
     expect(found).not.toBeNull();
     expect(found?.contextId).toBe("ctx-42");
-    expect(found?.serverUrl).toBe("http://127.0.0.1:5000/_workspace/dev");
+    expect(found?.workspaceId).toBe("ws");
   });
 
-  it("returns null when no marker exists in any ancestor", () => {
+  it("returns null when no binding exists in any ancestor", () => {
     const nested = path.join(tmpRoot, "x", "y");
     fs.mkdirSync(nested, { recursive: true });
-    expect(findContextMarker(nested)).toBeNull();
+    expect(findContextBinding(nested)).toBeNull();
   });
 
-  it("returns null for an invalid marker file", () => {
+  it("rejects an invalid binding file", () => {
     fs.writeFileSync(path.join(tmpRoot, ".vibestudio-context.json"), "{ not json");
-    expect(findContextMarker(tmpRoot)).toBeNull();
+    expect(() => findContextBinding(tmpRoot)).toThrow(/invalid context binding/);
   });
 
-  it("rejects marker fields outside the canonical schema", () => {
+  it("rejects fields outside the canonical schema", () => {
     fs.writeFileSync(
       path.join(tmpRoot, ".vibestudio-context.json"),
-      JSON.stringify({ contextId: "ctx-1", entityHint: "retired-alias" })
+      JSON.stringify({
+        ...contextBinding({ contextId: "ctx-1", workspaceId: "ws" }),
+        serverUrl: "http://legacy",
+      })
     );
-    expect(findContextMarker(tmpRoot)).toBeNull();
+    expect(() => findContextBinding(tmpRoot)).toThrow(/unknown field/);
+  });
+});
+
+describe("remote Claude launch materialization", () => {
+  function prepared(contextId = "ctx-remote") {
+    const vesselRef = "do:workers/linked-agent:LinkedAgentWorker:linked:entity-remote";
+    return {
+      entityId: "entity-remote",
+      contextId,
+      channelId: "channel-remote",
+      vesselRef,
+      profile: claudeLaunchProfile({
+        launchId: "entity-remote",
+        environment: {
+          VIBESTUDIO_AGENT_TOKEN: "agent:remote:secret",
+          VIBESTUDIO_ENTITY_ID: "entity-remote",
+          VIBESTUDIO_CONTEXT_ID: contextId,
+          VIBESTUDIO_CHANNEL_ID: "channel-remote",
+          VIBESTUDIO_VESSEL_REF: vesselRef,
+        },
+      }),
+    };
+  }
+
+  it("uses only local cwd/profile paths and the selected paired route, then cleans both sides", async () => {
+    const contextDirectory = path.join(tmpRoot, "local-context");
+    const profilesRoot = path.join(tmpRoot, "local-cli-state", "claude-launches");
+    fs.mkdirSync(contextDirectory, { recursive: true });
+    const release = vi.fn(async () => {});
+    const spawnLaunch = vi.fn(async (launch: MaterializedClaudeLaunch, cwd: string) => {
+      expect(cwd).toBe(contextDirectory);
+      expect(launch.profileDir.startsWith(profilesRoot)).toBe(true);
+      expect(launch.argv.join(" ")).toContain(profilesRoot);
+      expect(launch.env.VIBESTUDIO_SERVER_URL).toBe("webrtc://paired/_workspace/dev");
+      expect(fs.existsSync(path.join(launch.profileDir, "mcp.json"))).toBe(true);
+      return 7;
+    });
+
+    await expect(
+      executePreparedClaudeLaunch({
+        prepared: prepared(),
+        expectedContextId: "ctx-remote",
+        contextDirectory,
+        profilesRoot,
+        serverUrl: "webrtc://paired/_workspace/dev",
+        release,
+        spawnLaunch,
+      })
+    ).resolves.toBe(7);
+
+    expect(release).toHaveBeenCalledExactlyOnceWith("entity-remote", "entity-remote");
+    expect(fs.readdirSync(profilesRoot)).toEqual([]);
+  });
+
+  it("releases a minted credential when local and prepared context identities diverge", async () => {
+    const release = vi.fn(async () => {});
+    const spawnLaunch = vi.fn(async () => 0);
+    await expect(
+      executePreparedClaudeLaunch({
+        prepared: prepared("ctx-server"),
+        expectedContextId: "ctx-local",
+        contextDirectory: tmpRoot,
+        profilesRoot: path.join(tmpRoot, "profiles"),
+        serverUrl: "http://local",
+        release,
+        spawnLaunch,
+      })
+    ).rejects.toThrow(/local tree is ctx-local/);
+    expect(spawnLaunch).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledExactlyOnceWith("entity-remote", "entity-remote");
+  });
+
+  it("preserves the launch failure when credential cleanup also fails", async () => {
+    const launchError = new Error("claude process failed");
+    const cleanupError = new Error("credential release failed");
+    const contextDirectory = path.join(tmpRoot, "local-context");
+    fs.mkdirSync(contextDirectory, { recursive: true });
+
+    await expect(
+      executePreparedClaudeLaunch({
+        prepared: prepared(),
+        expectedContextId: "ctx-remote",
+        contextDirectory,
+        profilesRoot: path.join(tmpRoot, "profiles"),
+        serverUrl: "http://local",
+        release: vi.fn(async () => {
+          throw cleanupError;
+        }),
+        spawnLaunch: vi.fn(async () => {
+          throw launchError;
+        }),
+      })
+    ).rejects.toBe(launchError);
   });
 });
 

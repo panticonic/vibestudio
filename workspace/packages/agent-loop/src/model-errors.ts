@@ -340,8 +340,12 @@ function codexUsageLimitMessage(
 
   const subject = limitName ? ` for ${limitName}` : "";
   const reset = resetAt ? ` Try again after ${formatResetTime(resetAt)}.` : "";
+  const readable = (readableMessage(message) || GENERIC_USAGE_LIMIT_MESSAGE).replace(
+    /[.!?]+$/,
+    ""
+  );
   return {
-    reason: `${readableMessage(message) || GENERIC_USAGE_LIMIT_MESSAGE}${subject}.${reset}`,
+    reason: `${readable}${subject}.${reset}`,
     resetAt: resetAt ?? undefined,
   };
 }
@@ -567,7 +571,9 @@ function baseNow(input: { now?: string }): number {
 
 function looksLikeUsageLimit(reason: string): boolean {
   return (
-    /usage[_ -]?limit[_ -]?reached/i.test(reason) || /usage limit has been reached/i.test(reason)
+    /usage[_ -]?limit[_ -]?reached/i.test(reason) ||
+    /usage limit has been reached/i.test(reason) ||
+    /\b(?:you(?:'ve| have)?\s+)?hit (?:your )?(?:chatgpt )?usage limit\b/i.test(reason)
   );
 }
 

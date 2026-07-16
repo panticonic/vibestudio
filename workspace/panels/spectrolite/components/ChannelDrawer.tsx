@@ -10,7 +10,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Box, Flex, IconButton, ScrollArea, Text, TextArea } from "@radix-ui/themes";
-import { ChevronUpIcon, ChevronDownIcon, Cross2Icon, PaperPlaneIcon, ChatBubbleIcon } from "@radix-ui/react-icons";
+import {
+  ChevronUpIcon,
+  ChevronDownIcon,
+  Cross2Icon,
+  PaperPlaneIcon,
+  ChatBubbleIcon,
+} from "@radix-ui/react-icons";
 import { useIsMobile, useViewportHeight } from "@workspace/react";
 import { MessageContent } from "@workspace/agentic-chat";
 import { useApp, useAppState } from "../app/context";
@@ -46,14 +52,18 @@ export function ChannelDrawer() {
 
   const unreadCount = useMemo(() => {
     if (open) return 0;
-    return messages.filter((m) => m.ts > lastReadAt && m.senderType && m.senderType !== "panel").length;
+    return messages.filter((m) => m.ts > lastReadAt && m.senderType && m.senderType !== "panel")
+      .length;
   }, [messages, lastReadAt, open]);
 
-  const mdxActions = useMemo(() => ({
-    publishMessage: async (content: string) => {
-      await app.session.send(content);
-    },
-  }), [app]);
+  const mdxActions = useMemo(
+    () => ({
+      publishMessage: async (content: string) => {
+        await app.session.send(content);
+      },
+    }),
+    [app]
+  );
 
   const send = async () => {
     const content = draft.trim();
@@ -98,18 +108,31 @@ export function ChannelDrawer() {
         <Flex align="center" gap="2">
           {open ? <ChevronDownIcon /> : <ChevronUpIcon />}
           <ChatBubbleIcon width="12" height="12" color="var(--gray-9)" />
-          <Text size={isMobile ? "2" : "1"} color="gray" weight="medium">Channel</Text>
+          <Text size={isMobile ? "2" : "1"} color="gray" weight="medium">
+            Channel
+          </Text>
           {!open && unreadCount > 0 ? (
             <Badge color="amber" variant="soft" size={isMobile ? "2" : "1"}>
               {unreadCount} new
             </Badge>
           ) : null}
           {!open && unreadCount === 0 && messages.length > 0 ? (
-            <Text size="1" color="gray">· {messages.length} messages</Text>
+            <Text size="1" color="gray">
+              · {messages.length} messages
+            </Text>
           ) : null}
         </Flex>
         {open && isMobile ? (
-          <IconButton size="2" variant="ghost" color="gray" aria-label="Close channel" onClick={(e) => { e.stopPropagation(); setOpen(false); }}>
+          <IconButton
+            size="2"
+            variant="ghost"
+            color="gray"
+            aria-label="Close channel"
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+            }}
+          >
             <Cross2Icon />
           </IconButton>
         ) : null}
@@ -129,7 +152,9 @@ export function ChannelDrawer() {
             <ScrollArea>
               <Flex direction="column" gap="2" p="1">
                 {messages.length === 0 ? (
-                  <Text size="1" color="gray">No messages yet. @-mention an agent in a doc, or say hi below.</Text>
+                  <Text size="1" color="gray">
+                    No messages yet. @-mention an agent in a doc, or say hi below.
+                  </Text>
                 ) : (
                   messages.map((m) => {
                     const isAgent = m.senderType && m.senderType !== "panel";
@@ -144,7 +169,11 @@ export function ChannelDrawer() {
                           </Text>
                         </Flex>
                         <Box style={{ fontSize: "var(--font-size-1)" }}>
-                          <MessageContent content={m.content} isStreaming={false} mdxActions={mdxActions} />
+                          <MessageContent
+                            content={m.content}
+                            isStreaming={false}
+                            mdxActions={mdxActions}
+                          />
                         </Box>
                       </Box>
                     );
@@ -160,7 +189,10 @@ export function ChannelDrawer() {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
               }}
               style={{ flex: 1 }}
               rows={2}

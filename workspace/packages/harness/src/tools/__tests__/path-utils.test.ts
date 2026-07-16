@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveToCwd, resolveReadPath, expandPath } from "../path-utils.js";
+import { resolveToCwd, expandPath } from "../path-utils.js";
 
 describe("path-utils", () => {
   it("resolveToCwd: relative path joined with cwd", () => {
@@ -24,12 +24,6 @@ describe("path-utils", () => {
 
   it("resolveToCwd: strips @ prefix", () => {
     expect(resolveToCwd("@foo.txt", "/work/ctx")).toBe("/work/ctx/foo.txt");
-  });
-
-  it("resolveReadPath: identical to resolveToCwd in workerd port", () => {
-    expect(resolveReadPath("foo.txt", "/work/ctx")).toBe(
-      resolveToCwd("foo.txt", "/work/ctx"),
-    );
   });
 
   it("expandPath: normalises unicode whitespace", () => {

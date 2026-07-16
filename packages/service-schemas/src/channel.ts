@@ -6,12 +6,12 @@
  * the host never imports workspace code. The methods here mirror the DO surfaces
  * the CLI drives, with the field shapes the CLI shapes on top of the raw relay:
  *
- *   list    → gad-store `listChannelLogs` (durable channel-log enumeration)
+ *   list    → semantic control plane `listChannelLogs` (durable channel-log enumeration)
  *             + per-channel `getContextId` annotation
  *   history → channel DO `getReplayAfter` (durable log read, paged client-side)
  *   send    → channel DO `sendAsCaller` (durable message as the verified caller)
  *   roster  → channel DO `getParticipants`
- *   tail    → channel DO `subscribe` + `channel:message` push (client-side)
+ *   tail    → channel DO `subscribe` response stream (the response owns membership)
  *
  * They are NOT registered as a host `ServiceDefinition` (there is no host
  * `channel` service — the channel is a userland DO), so they carry no policy in
@@ -21,6 +21,90 @@
 
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+
+/**
+ * One record in the destructive `subscribe` response.
+ *
+ * The response body is the subscription resource. Cancelling its reader or
+ * losing the routed RPC connection releases the exact participant generation
+ * that produced it; there is deliberately no separate unsubscribe command.
+ */
+export type ChannelSubscriptionRecord<TResult = unknown, TMessage = unknown> =
+  | { kind: "subscribed"; result: TResult }
+  | { kind: "message"; payload: TMessage };
+
+/** Maximum unread data retained by a response-owned channel subscription. */
+export const CHANNEL_SUBSCRIPTION_BUFFER_BYTES = 1024 * 1024;
+
+export type ChannelSubscriptionEnqueueResult =
+  | "enqueued"
+  | "backpressured"
+  | "oversized"
+  | "closed";
+
+const subscriptionRecordEncoder = new TextEncoder();
+
+export function encodeChannelSubscriptionRecord(record: ChannelSubscriptionRecord): Uint8Array {
+  return subscriptionRecordEncoder.encode(`${JSON.stringify(record)}\n`);
+}
+
+/**
+ * Enqueue only when the stream owns enough byte capacity. ReadableStream's
+ * `enqueue()` does not reject when its high-water mark is exceeded, so every
+ * producer must make this check explicitly.
+ */
+export function enqueueChannelSubscriptionBytes(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  bytes: Uint8Array
+): ChannelSubscriptionEnqueueResult {
+  if (bytes.byteLength > CHANNEL_SUBSCRIPTION_BUFFER_BYTES) return "oversized";
+  const capacity = controller.desiredSize;
+  if (capacity === null) return "closed";
+  if (bytes.byteLength > capacity) return "backpressured";
+  controller.enqueue(bytes);
+  return "enqueued";
+}
+
+export function channelSubscriptionQueuingStrategy(): ByteLengthQueuingStrategy {
+  return new ByteLengthQueuingStrategy({ highWaterMark: CHANNEL_SUBSCRIPTION_BUFFER_BYTES });
+}
+
+export async function* readChannelSubscriptionRecords<TResult = unknown, TMessage = unknown>(
+  response: Response
+): AsyncGenerator<ChannelSubscriptionRecord<TResult, TMessage>, void, void> {
+  if (!response.ok) {
+    throw new Error(`Channel subscription failed with HTTP ${response.status}`);
+  }
+  if (!response.body) throw new Error("Channel subscription returned no response body");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  let terminal = false;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        terminal = true;
+        pending += decoder.decode();
+        break;
+      }
+      pending += decoder.decode(chunk.value, { stream: true });
+      for (;;) {
+        const newline = pending.indexOf("\n");
+        if (newline < 0) break;
+        const line = pending.slice(0, newline).trim();
+        pending = pending.slice(newline + 1);
+        if (line) yield JSON.parse(line) as ChannelSubscriptionRecord<TResult, TMessage>;
+      }
+    }
+    const finalLine = pending.trim();
+    if (finalLine) yield JSON.parse(finalLine) as ChannelSubscriptionRecord<TResult, TMessage>;
+  } finally {
+    if (!terminal) await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
 
 /** One channel in the workspace, as surfaced by `channel list`. */
 export const channelSummarySchema = z
@@ -107,7 +191,7 @@ export const channelMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.array(channelSummarySchema),
     description:
-      "List the workspace's durable channels (gad-store listChannelLogs), annotated with each channel's bound context. Reflects durable truth: every channel that has received a durable envelope.",
+      "List the workspace's durable channels (semantic control plane listChannelLogs), annotated with each channel's bound context. Reflects durable truth: every channel that has received a durable envelope.",
     access: { sensitivity: "read" },
   },
   history: {

@@ -91,7 +91,6 @@ export interface GmailHandlersDeps {
   getChannelState: (channelId: string) => GmailChannelState;
   saveChannelState: (state: GmailChannelState) => void;
   publishSetup: (channelId: string) => Promise<void>;
-  setPollAlarm: (ms: number) => void;
   generateDraftReplyBody: (channelId: string, thread: GmailThread) => Promise<string>;
   isSubscribed: (channelId: string) => boolean;
   /** Workspace file write (worker fs) — used by attachment saving. */
@@ -129,7 +128,6 @@ export class GmailHandlers {
     const state = this.deps.getChannelState(channelId);
     state.pollIntervalMs = pollIntervalMs;
     this.deps.saveChannelState(state);
-    this.deps.setPollAlarm(pollIntervalMs);
     return { pollIntervalMs };
   }
 
@@ -511,8 +509,6 @@ export class GmailHandlers {
       const archived = await this.archiveThread(channelId, { threadId });
       if ("error" in archived) return archived;
     }
-    // The worker alarm fires the reminder; nudge it to recompute scheduling.
-    this.deps.setPollAlarm(Math.max(remindAt - now, 1000));
     return {
       snoozed: true,
       threadId,

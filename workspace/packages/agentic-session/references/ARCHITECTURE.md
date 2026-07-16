@@ -32,6 +32,7 @@
 ## What Lives Where
 
 **agentic-core** (no React, no tool-ui, no browser APIs):
+
 - `ConnectionManager` — PubSub connection lifecycle
 - `useChannelMessages` / `HeadlessSession` — reduce typed PubSub channel events
   into the same channel view model
@@ -42,11 +43,13 @@
 - `createPanelSandboxConfig(rpc)` — panel SandboxConfig factory
 
 **agentic-session** (no React, no browser APIs):
+
 - `HeadlessSession` — headless PubSub client + typed channel reducer
 - `getRecommendedChannelConfig()` — full-auto approval channel config
 - `subscribeHeadlessAgent()` — subscribe a DO agent to a channel with full-auto approval
 
 **agentic-chat** (React adapter):
+
 - `useChatCore()` — owns the PubSub client, subscribes to the typed channel log, returns React state
 - `useAgenticChat()` — composes useChatCore + feedback/tools/debug/inlineUi hooks
 - UI-only types: `ChatContextValue`, `ChatInputContextValue`, `InlineUiComponentEntry`
@@ -76,7 +79,7 @@ enter the UI through typed channel events and the same reducer/selector path.
 Do not add hidden transcript side channels or merge legacy method history into
 React state.
 
-GAD stores private branchable provenance separately from transmitted channel
+The semantic control plane stores private branchable provenance separately from transmitted channel
 history. When a trajectory event is published to a channel, GAD records a
 `trajectory_channel_publications` row so tools can join:
 
@@ -95,8 +98,8 @@ transcript UX.
 HeadlessSession provides two teardown paths:
 
 - **`dispose(): void`** — synchronous best-effort: aborts the message consumer and disconnects. Use when the surrounding context is being torn down hard.
-- **`close(): Promise<void>`** — awaitable: unsubscribes and retires the agent it subscribed (when created via `createWithAgent`), then disposes. Use for ordinary headless consumers.
-- **`close({ waitForRemoteCleanup: false })`** — detach mode for harnesses: disposes local state immediately and starts remote unsubscribe/retire cleanup best-effort without awaiting it. Use this instead of wrapping session cleanup in a timeout.
+- **`close(): Promise<void>`** — awaitable: disposes locally, then completes shared-context unsubscribe before entity retirement. An isolated session destroys its owned context tree as one lifecycle unit. Use for ordinary headless consumers.
+- **`close({ waitForRemoteCleanup: false })`** — detach mode for harnesses: disposes local state immediately and starts the same ordered remote cleanup without awaiting it. Use this instead of wrapping session cleanup in a timeout.
 - **`Symbol.asyncDispose`** — supports `await using session = ...` syntax (calls `close()`).
 
 ## Eval, scope, and db ownership

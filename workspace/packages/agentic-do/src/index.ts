@@ -14,6 +14,7 @@ export type {
   AgentSettings,
   AgentInitiatedTurnOptions,
   AgentAlarmSource,
+  AgentToolExecutionContext,
   ApprovalLevel,
   ClonedChannelContext,
   CustomMessageReducer,

@@ -14,11 +14,12 @@
  *   channel roster <id>                current participants
  */
 
-import type {
-  ChannelHistoryEntry,
-  ChannelRosterEntry,
-  ChannelSendResult,
-  ChannelSummary,
+import {
+  readChannelSubscriptionRecords,
+  type ChannelHistoryEntry,
+  type ChannelRosterEntry,
+  type ChannelSendResult,
+  type ChannelSummary,
 } from "@vibestudio/service-schemas/channel";
 import {
   JSON_FLAG,
@@ -309,29 +310,77 @@ async function tail(inv: ParsedInvocation): Promise<number> {
       console.log(`#${entry.seq}\t${who}\t${body}`);
     };
 
-    // Subscribe under the connection's own principal so `channel:message` emits
-    // route back to us. Register the listener before subscribing so no live
-    // event slips between the initial replay and the push stream.
-    const off = await client.onEvent("channel:message", (payload) => {
-      const p = payload as {
-        channelId?: string;
-        message?: { kind?: string; event?: ServerLogEvent };
-      };
-      if (p.channelId !== channelId) return;
-      if (p.message?.kind === "log" && p.message.event) render(p.message.event);
-    });
-
     const handle = `cli-${callerId.slice(-8)}`;
+    let generation = 0;
+    let active:
+      | { generation: number; controller: AbortController; terminal: Promise<void> }
+      | undefined;
     const subscribe = async (): Promise<void> => {
-      const result = await client.callTargetPush<{ envelope?: ReplayEnvelope }>(
-        target,
-        "subscribe",
-        [
-          callerId,
-          { handle, receivesChannelEnvelopes: false, replay: true, replayMessageLimit: 10 },
-        ]
-      );
-      for (const event of result.envelope?.logEvents ?? []) render(event);
+      const previous = active;
+      const currentGeneration = ++generation;
+      const controller = new AbortController();
+      previous?.controller.abort();
+
+      let resolveAck!: () => void;
+      let rejectAck!: (error: Error) => void;
+      const ack = new Promise<void>((resolve, reject) => {
+        resolveAck = resolve;
+        rejectAck = reject;
+      });
+      let acknowledged = false;
+      const terminal = (async () => {
+        try {
+          const response = await client.stream(
+            target,
+            "subscribe",
+            [
+              callerId,
+              {
+                handle,
+                receivesChannelEnvelopes: false,
+                replay: true,
+                replayMessageLimit: 10,
+                ...(lastRenderedSeq > 0 ? { sinceId: lastRenderedSeq } : {}),
+              },
+            ],
+            { signal: controller.signal }
+          );
+          for await (const record of readChannelSubscriptionRecords<
+            { envelope?: ReplayEnvelope },
+            {
+              channelId?: string;
+              message?: { kind?: string; event?: ServerLogEvent };
+            }
+          >(response)) {
+            if (active?.generation !== currentGeneration) break;
+            if (record.kind === "subscribed") {
+              if (acknowledged) throw new Error("channel subscription sent more than one ACK");
+              acknowledged = true;
+              for (const event of record.result.envelope?.logEvents ?? []) render(event);
+              resolveAck();
+              continue;
+            }
+            if (!acknowledged)
+              throw new Error("channel subscription delivered data before its ACK");
+            const payload = record.payload;
+            if (payload.channelId !== channelId) continue;
+            if (payload.message?.kind === "log" && payload.message.event) {
+              render(payload.message.event);
+            }
+          }
+          if (!acknowledged) throw new Error("channel subscription closed before its ACK");
+        } catch (error) {
+          const failure = error instanceof Error ? error : new Error(String(error));
+          if (!acknowledged) rejectAck(failure);
+          if (!controller.signal.aborted && active?.generation === currentGeneration) {
+            console.error(`channel subscription closed: ${failure.message}`);
+          }
+          throw failure;
+        }
+      })();
+      terminal.catch(() => {});
+      active = { generation: currentGeneration, controller, terminal };
+      await ack;
     };
     const offRecovery = await client.onRecovery(async () => {
       await subscribe();
@@ -345,8 +394,8 @@ async function tail(inv: ParsedInvocation): Promise<number> {
       process.on("SIGTERM", stop);
     });
     offRecovery();
-    off();
-    await client.callTargetPush(target, "unsubscribe", [callerId]).catch(() => undefined);
+    active?.controller.abort();
+    await active?.terminal.catch(() => {});
     await client.close();
     return 0;
   } catch (error) {

@@ -19,6 +19,11 @@ export interface HeadlessTurnObservation {
   terminal?: HeadlessTurnTerminalOutcome;
 }
 
+export interface HeadlessTurnObserverOptions {
+  /** Waiting reasons that this non-interactive observer cannot satisfy. */
+  terminalWaitingReasons?: readonly string[];
+}
+
 function isAgentTurn(turn: ProjectedTurn): boolean {
   return turn.actor.kind === "agent";
 }
@@ -124,11 +129,14 @@ export class HeadlessTurnObserver {
   private targetTurnId: string | undefined;
   private latestResponse: ChatMessage | undefined;
   private pendingFailure: string | undefined;
+  private readonly terminalWaitingReasons: ReadonlySet<string>;
 
   constructor(
     private readonly clientId: string,
-    baseline: HeadlessTurnSnapshot
+    baseline: HeadlessTurnSnapshot,
+    options: HeadlessTurnObserverOptions = {}
   ) {
+    this.terminalWaitingReasons = new Set(options.terminalWaitingReasons ?? []);
     for (const message of baseline.messages) {
       this.seenMessageRevisions.set(message.id, messageRevision(message));
     }
@@ -183,7 +191,16 @@ export class HeadlessTurnObserver {
       ...(this.latestResponse ? { response: this.latestResponse } : {}),
     };
 
-    if (turn && turn.status === "closed") {
+    if (
+      turn?.status === "waiting" &&
+      turn.reason &&
+      this.terminalWaitingReasons.has(turn.reason)
+    ) {
+      observation.terminal = {
+        kind: "failed",
+        reason: `Agent turn requires unavailable external action (${turn.reason})`,
+      };
+    } else if (turn && turn.status === "closed") {
       const integrityFailure = closedTurnIntegrityFailure(turn.turnId, snapshot.channelView);
       if (integrityFailure) {
         observation.terminal = { kind: "failed", reason: integrityFailure };

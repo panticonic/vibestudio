@@ -43,6 +43,7 @@
 
 import type { SqlStorage } from "@workspace/runtime/worker";
 import type { AgentTurnContextPolicy } from "@workspace/agent-loop";
+import { assertExactSqlTableSchema } from "./sql-table-schema.js";
 
 export type HeartbeatStatus = "running" | "paused" | "stopped";
 
@@ -217,23 +218,27 @@ export class AgentHeartbeatLoop {
         spec_hash TEXT NOT NULL
       )
     `);
-    for (const [column, ddl] of [
-      ["name", "TEXT NOT NULL DEFAULT 'default'"],
-      ["next_run_at", "INTEGER"],
-      ["last_decision", "TEXT NOT NULL DEFAULT ''"],
-      ["last_action_summary", "TEXT NOT NULL DEFAULT ''"],
-      ["last_error", "TEXT NOT NULL DEFAULT ''"],
-      ["fail_count", "INTEGER NOT NULL DEFAULT 0"],
-      ["backoff_until", "INTEGER"],
-      ["config_json", "TEXT NOT NULL DEFAULT ''"],
-      ["spec_hash", "TEXT NOT NULL DEFAULT ''"],
-    ] as const) {
-      try {
-        this.sql().exec(`ALTER TABLE ${this.table} ADD COLUMN ${column} ${ddl}`);
-      } catch {
-        // Column already exists.
-      }
-    }
+    assertExactSqlTableSchema(this.sql(), {
+      table: this.table,
+      columns: [
+        ["id", "INTEGER", false],
+        ["name", "TEXT", true],
+        ["status", "TEXT", true],
+        ["cadence_ms", "INTEGER", true],
+        ["next_run_at", "INTEGER", false],
+        ["objective", "TEXT", true],
+        ["last_wake_at", "INTEGER", true],
+        ["last_observed_digest", "TEXT", true],
+        ["last_decision", "TEXT", true],
+        ["last_action_summary", "TEXT", true],
+        ["last_error", "TEXT", true],
+        ["fail_count", "INTEGER", true],
+        ["backoff_until", "INTEGER", false],
+        ["config_json", "TEXT", true],
+        ["spec_hash", "TEXT", true],
+      ],
+      primaryKey: ["id"],
+    });
   }
 
   private sql(): SqlStorage {

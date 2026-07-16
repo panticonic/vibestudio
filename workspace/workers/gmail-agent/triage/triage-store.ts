@@ -81,7 +81,7 @@ export class TriageStore {
     };
   }
 
-  /** Whether the user (or migration) has explicitly saved preferences. */
+  /** Whether the user has explicitly saved preferences. */
   hasSavedPrefs(channelId: string): boolean {
     return (
       this.sql

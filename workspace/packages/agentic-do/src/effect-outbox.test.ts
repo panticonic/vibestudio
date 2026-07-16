@@ -1,10 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "../../../workers/gad-store/index.js";
+import { createInMemorySql, createTestDO } from "@workspace/runtime/worker/test-utils";
+import type { SqlStorage } from "@workspace/runtime/worker";
+import { GadWorkspaceDO } from "../../semantic-control-plane/src/index.js";
 import { EffectOutbox } from "./effect-outbox.js";
 import type { EffectDescriptor } from "@workspace/agent-loop";
 
 describe("EffectOutbox.lease — deferred-effect redrive", () => {
+  it("rejects an obsolete globally keyed outbox instead of replacing it", async () => {
+    const sql = (await createInMemorySql()) as unknown as SqlStorage;
+    sql.exec(`
+      CREATE TABLE effect_outbox (
+        effect_id TEXT PRIMARY KEY,
+        branch_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        descriptor_json TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER,
+        lease_expires_at INTEGER,
+        created_at INTEGER NOT NULL
+      )
+    `);
+
+    expect(() => new EffectOutbox(sql)).toThrow(
+      "Unsupported effect_outbox schema; delete this pre-release agent state"
+    );
+  });
+
   it("clears next_attempt_at on lease so a deferred effect backstops instead of hot-looping", async () => {
     const host = await createTestDO(GadWorkspaceDO, { __objectKey: "outbox-lease-host" });
     const outbox = new EffectOutbox(host.sql as never);

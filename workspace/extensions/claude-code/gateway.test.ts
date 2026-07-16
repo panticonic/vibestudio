@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toServerBaseUrl } from "./profile.js";
+import { toServerBaseUrl } from "./gateway.js";
 
 describe("toServerBaseUrl", () => {
   it("normalizes websocket marker URLs to the HTTP server base", () => {

@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.6",
+    "@vibestudio/trajectory-identity": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",

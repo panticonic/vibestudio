@@ -1,7 +1,7 @@
 /**
  * Typed append-failure contract for the unified log.
  *
- * gad-store's appendLogEvent failures cross the workerd RPC boundary as
+ * Semantic control-plane appendLogEvent failures cross the workerd RPC boundary as
  * plain Error messages, so the machine-readable code is embedded in the
  * message with a stable marker. Callers MUST use classifyGadAppendError to
  * branch on failure kind — never match prose.

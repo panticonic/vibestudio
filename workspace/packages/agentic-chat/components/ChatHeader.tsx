@@ -123,7 +123,7 @@ export function ChatHeader() {
 
   // Live account-profile projection for channel-stamped `user:<userId>`
   // participants (WP6 §6): handle/displayName/avatar/color resolve from the
-  // host, so an account.updateProfile re-renders here without roster rewrites.
+  // host, so a hubControl.updateProfile re-renders here without roster rewrites.
   const participantIds = React.useMemo(() => Object.keys(participants), [participants]);
   const accountProfiles = useAccountProfiles(
     (chat as { rpc?: AccountRpc } | undefined)?.rpc,

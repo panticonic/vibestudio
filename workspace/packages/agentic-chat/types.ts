@@ -275,20 +275,12 @@ export interface ForkTreeNode {
   unread?: boolean;
 }
 
-/** What "Review & pick" opens the diff overlay against. */
-export type ReviewTarget =
-  | { kind: "fork"; contextId: string; label: string }
-  | { kind: "subagent"; contextId: string; label: string };
-
-/** Panel-supplied navigation + overlay handlers (the panel owns the runtime
- *  `rpc`, `panel.stateArgs.set`, `openPanel`, and the review overlay host). */
+/** Panel-supplied navigation handlers. */
 export interface ForkNavHandlers {
   /** In-place switch: rebind the panel's channel + context and reconnect. */
   switchTo: (channelId: string, contextId: string) => void;
   /** Side-by-side: open the fork in a NEW chat panel. */
   openInNewPanel: (channelId: string, contextId: string) => void;
-  /** Open the Review & pick diff overlay for a fork/subagent context. */
-  reviewContext: (target: ReviewTarget) => void;
   /** A fork the local user did NOT initiate just landed while the panel was
    *  unfocused — the panel raises a shell toast (with a Switch action). */
   onExternalFork?: (fork: {

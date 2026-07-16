@@ -9,15 +9,37 @@ import type { SqlStorage } from "@workspace/runtime/worker";
 import type { ChannelSubscriptionConfig } from "@workspace/agentic-core";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
-import { PARTICIPANT_SESSION_METADATA_KEY } from "@workspace/pubsub/internal-constants";
 import type { DOIdentity } from "./identity.js";
-import type { ChannelClient } from "./channel-client.js";
+import type { ChannelClient, ChannelSubscription } from "./channel-client.js";
+
+const INITIAL_RECOVERY_DELAY_MS = 250;
+const MAX_RECOVERY_DELAY_MS = 10_000;
+
+interface LiveSubscription {
+  generation: number;
+  subscription: ChannelSubscription;
+  participantId: string;
+  metadata: Record<string, unknown>;
+  config?: unknown;
+  retryDelayMs: number;
+  retryTimer?: ReturnType<typeof setTimeout>;
+}
+
+export interface RecoveredChannelSubscription {
+  channelId: string;
+  config?: unknown;
+  envelope?: ChannelReplayEnvelope;
+}
 
 export class SubscriptionManager {
+  private readonly liveSubscriptions = new Map<string, LiveSubscription>();
+  private generation = 0;
+
   constructor(
     private sql: SqlStorage,
     private channelFactory: (channelId: string) => ChannelClient,
-    private identity: DOIdentity
+    private identity: DOIdentity,
+    private onRecovered?: (subscription: RecoveredChannelSubscription) => Promise<void>
   ) {}
 
   createTables(): void {
@@ -62,12 +84,9 @@ export class SubscriptionManager {
     // This DO participant (an agent vessel) consumes the channel's STRUCTURED
     // `onChannelEnvelope` delivery. RPC-style clients (connectViaRpc — e.g. the
     // eval running system tests) do NOT set this and receive only the
-    // `channel:message` event stream, so the channel won't push onChannelEnvelope
+    // subscription stream, so the channel won't push onChannelEnvelope
     // to them (they have no handler for it).
     metadata["receivesChannelEnvelopes"] = true;
-    if (this.identity.sessionId) {
-      metadata[PARTICIPANT_SESSION_METADATA_KEY] = this.identity.sessionId;
-    }
     if (opts.config && typeof opts.config === "object") {
       metadata["channelConfig"] = opts.config;
     }
@@ -78,13 +97,22 @@ export class SubscriptionManager {
       metadata["replay"] = opts.replay;
     }
 
-    const channel = this.channelFactory(opts.channelId);
-    if (!this.identity.sessionId) {
-      throw new Error(
-        "Cannot subscribe before the durable-object session identity is bootstrapped"
-      );
-    }
-    const subResult = await channel.subscribe(participantId, metadata);
+    this.closeLiveSubscription(opts.channelId);
+    const subscription = await this.channelFactory(opts.channelId).openSubscription(
+      participantId,
+      metadata
+    );
+    const live: LiveSubscription = {
+      generation: ++this.generation,
+      subscription,
+      participantId,
+      metadata,
+      ...(opts.config !== undefined ? { config: opts.config } : {}),
+      retryDelayMs: INITIAL_RECOVERY_DELAY_MS,
+    };
+    this.liveSubscriptions.set(opts.channelId, live);
+    this.watchUnexpectedClose(opts.channelId, live);
+    const subResult = subscription.result;
 
     this.sql.exec(
       `INSERT OR REPLACE INTO subscriptions
@@ -105,16 +133,96 @@ export class SubscriptionManager {
     };
   }
 
-  /** Unsubscribe from channel DO. Does NOT clean up other tables — caller handles that. */
+  /** Close the response resource. Does NOT clean up other tables — caller handles that. */
   async unsubscribeFromChannel(channelId: string): Promise<void> {
-    const participantId = this.getParticipantId(channelId);
-    if (participantId) {
-      const channel = this.channelFactory(channelId);
-      const sessionId = this.identity.sessionId;
-      if (!sessionId) {
-        throw new Error("Cannot unsubscribe without the owning durable-object session id");
+    const live = this.liveSubscriptions.get(channelId);
+    if (!live) return;
+    this.closeLiveSubscription(channelId);
+    await live.subscription.closed.catch(() => {});
+  }
+
+  /**
+   * Release every response resource owned by this activation without changing
+   * durable membership. Removing each entry before cancellation makes the
+   * close terminal for this activation: its unexpected-close watcher cannot
+   * schedule recovery while lifecycle replacement is in progress.
+   */
+  async releaseActivation(): Promise<number> {
+    const live = [...this.liveSubscriptions.entries()];
+    for (const [channelId] of live) this.closeLiveSubscription(channelId);
+    await Promise.all(live.map(([, entry]) => entry.subscription.closed.catch(() => {})));
+    return live.length;
+  }
+
+  private closeLiveSubscription(channelId: string): void {
+    const live = this.liveSubscriptions.get(channelId);
+    if (!live) return;
+    this.liveSubscriptions.delete(channelId);
+    if (live.retryTimer) clearTimeout(live.retryTimer);
+    live.subscription.close();
+  }
+
+  private watchUnexpectedClose(channelId: string, live: LiveSubscription): void {
+    void live.subscription.closed.then(
+      () => this.recoverAfterUnexpectedClose(channelId, live),
+      () => this.recoverAfterUnexpectedClose(channelId, live)
+    );
+  }
+
+  private recoverAfterUnexpectedClose(channelId: string, live: LiveSubscription): void {
+    if (this.liveSubscriptions.get(channelId)?.generation !== live.generation) return;
+    this.scheduleRecovery(channelId, live);
+  }
+
+  private scheduleRecovery(channelId: string, live: LiveSubscription): void {
+    if (this.liveSubscriptions.get(channelId)?.generation !== live.generation || live.retryTimer) {
+      return;
+    }
+    const delayMs = live.retryDelayMs;
+    live.retryDelayMs = Math.min(delayMs * 2, MAX_RECOVERY_DELAY_MS);
+    live.retryTimer = setTimeout(() => {
+      live.retryTimer = undefined;
+      void this.recover(channelId, live);
+    }, delayMs);
+    (live.retryTimer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+  }
+
+  private async recover(channelId: string, live: LiveSubscription): Promise<void> {
+    if (this.liveSubscriptions.get(channelId)?.generation !== live.generation) return;
+    let subscription: ChannelSubscription | null = null;
+    let recovered: LiveSubscription | null = null;
+    try {
+      subscription = await this.channelFactory(channelId).openSubscription(live.participantId, {
+        ...live.metadata,
+        replay: true,
+      });
+      if (this.liveSubscriptions.get(channelId)?.generation !== live.generation) {
+        subscription.close();
+        return;
       }
-      await channel.unsubscribe(participantId, sessionId);
+      recovered = {
+        ...live,
+        generation: ++this.generation,
+        subscription,
+        retryDelayMs: INITIAL_RECOVERY_DELAY_MS,
+      };
+      this.liveSubscriptions.set(channelId, recovered);
+      await this.onRecovered?.({
+        channelId,
+        ...(live.config !== undefined ? { config: live.config } : {}),
+        envelope: subscription.result.envelope,
+      });
+      this.watchUnexpectedClose(channelId, recovered);
+    } catch {
+      subscription?.close();
+      const currentGeneration = this.liveSubscriptions.get(channelId)?.generation;
+      if (
+        currentGeneration === live.generation ||
+        (recovered !== null && currentGeneration === recovered.generation)
+      ) {
+        this.liveSubscriptions.set(channelId, live);
+        this.scheduleRecovery(channelId, live);
+      }
     }
   }
 
@@ -166,12 +274,25 @@ export class SubscriptionManager {
       }));
   }
 
+  listStored(): Array<{ channelId: string; contextId: string; config?: unknown }> {
+    return this.sql
+      .exec(`SELECT channel_id, context_id, config FROM subscriptions ORDER BY channel_id`)
+      .toArray()
+      .map((row) => ({
+        channelId: String(row["channel_id"]),
+        contextId: String(row["context_id"]),
+        ...(typeof row["config"] === "string"
+          ? { config: JSON.parse(String(row["config"])) as unknown }
+          : {}),
+      }));
+  }
+
   /** Delete subscription record only (no channel call). Used during unsubscribeChannel cleanup. */
   deleteSubscription(channelId: string): void {
     this.sql.exec(`DELETE FROM subscriptions WHERE channel_id = ?`, channelId);
   }
 
-  /** Number of live subscriptions (fork preflight). */
+  /** Number of durable membership rows (fork preflight and lifecycle registration). */
   count(): number {
     const row = this.sql.exec(`SELECT COUNT(*) AS cnt FROM subscriptions`).toArray()[0];
     return Number(row?.["cnt"] ?? 0);

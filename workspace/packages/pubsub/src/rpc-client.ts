@@ -60,13 +60,13 @@ import {
 import { AgenticError } from "./protocol-types.js";
 import { ErrorMessageSchema, SignalMessageSchema } from "./protocol.js";
 import { createFanout } from "./async-queue.js";
-import { PARTICIPANT_SESSION_METADATA_KEY } from "./internal-constants.js";
 import { base64ToUint8Array } from "./image-utils.js";
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
 import { z } from "zod";
 import type { PubSubClient } from "./client.js";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import { iterateChannelReplayAfterPages } from "./channel-replay.js";
+import { readChannelSubscriptionRecords } from "@vibestudio/service-schemas/channel";
 
 const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 /** Wire attachment shape — base64 data string, not Uint8Array. */
@@ -156,7 +156,12 @@ interface PresencePayload {
 export interface RpcConnectOptions<T extends ParticipantMetadata = ParticipantMetadata> {
   rpc: {
     call<R = unknown>(targetId: string, method: string, args: unknown[]): Promise<R>;
-    on(event: string, listener: (event: { payload: unknown }) => void): () => void;
+    stream(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: { signal?: AbortSignal }
+    ): Promise<Response>;
     selfId: string;
   };
   channel: string;
@@ -164,7 +169,6 @@ export interface RpcConnectOptions<T extends ParticipantMetadata = ParticipantMe
   channelConfig?: ChannelConfig;
   sinceId?: number;
   replayMessageLimit?: number;
-  reconnect?: boolean;
   metadata?: T;
   protocol?: string;
   /** Stable participant id. Panel callers should pass runtime `slotId`, not `rpc.selfId`. */
@@ -174,7 +178,15 @@ export interface RpcConnectOptions<T extends ParticipantMetadata = ParticipantMe
   handle?: string;
   replayMode?: "collect" | "stream" | "skip";
   methods?: Record<string, MethodDefinition>;
-  recoveryCoordinator?: Pick<RecoveryCoordinator, "registerColdRecoverHandler">;
+  /**
+   * The sole automatic recovery owner. Without a coordinator this client is a
+   * one-generation response resource and remains disconnected after terminal
+   * transport loss.
+   */
+  recoveryCoordinator?: Pick<
+    RecoveryCoordinator,
+    "registerResubscribeHandler" | "registerColdRecoverHandler"
+  >;
 }
 
 export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadata>(
@@ -330,11 +342,10 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   const registeredMethods: Record<string, MethodDefinition> = { ...(providedMethods ?? {}) };
 
   // Track AbortControllers (+ start time) for methods we're executing, keyed by callId. When a caller
-  // cancels, we abort the controller so the handler sees signal.aborted; the start time lets us treat
-  // a routine redelivery-vs-in-flight race as benign while still surfacing a genuinely WEDGED handler.
+  // cancels, we abort the controller so the handler sees signal.aborted; duplicate durable delivery
+  // is ignored while the exact call is already running.
   const executingMethods = new Map<string, { controller: AbortController; startedAt: number }>();
-  // A redelivery skip is only worth logging when the handler has been running implausibly long (a hung
-  // handler), not for the normal at-least-once race against a fast handler.
+  // A duplicate is worth logging only when the existing handler looks genuinely wedged.
   const STILL_EXECUTING_WARN_MS = 30_000;
   const submittedMethodTransportCallIds = new Set<string>();
   const MAX_SUBMITTED_METHOD_TRANSPORT_CALL_IDS = 2000;
@@ -363,10 +374,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   }
   const methodCallStates = new Map<string, MethodCallState>();
   const methodResultChains = new Map<string, Promise<void>>();
-
-  // Stable for the lifetime of this client instance. Re-subscribe attempts
-  // reuse it; a panel reload creates a new one.
-  const participantSessionId = crypto.randomUUID();
 
   function handleError(error: PubSubError): void {
     for (const handler of errorHandlers) handler(error);
@@ -1025,9 +1032,8 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       executingMethods.has(event.transportCallId) ||
       submittedMethodTransportCallIds.has(event.transportCallId)
     ) {
-      // Redelivery while a previous execution is still running (or already terminally submitted). This
-      // is the at-least-once delivery racing our in-flight (or just-settled) handler — the dedup is
-      // working and it's benign in the normal case. Only a handler still running WELL past any sane
+      // Duplicate delivery while a previous execution is still running (or already terminally
+      // submitted). The dedup is working and this is benign in the normal case. Only a handler WELL past
       // settle time is a real signal (a hung handler), so stay quiet for the routine race and warn
       // only past the wedge threshold — so a genuine wedge stands out instead of drowning in noise.
       const executing = executingMethods.get(event.transportCallId);
@@ -1035,7 +1041,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       if (elapsed > STILL_EXECUTING_WARN_MS) {
         console.warn(
           `[PubSub] Method ${event.methodName} (${event.transportCallId}) still executing after ` +
-            `${Math.round(elapsed / 1000)}s — possible hung handler; skipping redelivery`
+            `${Math.round(elapsed / 1000)}s — possible hung handler; skipping duplicate delivery`
         );
       }
       return;
@@ -1130,7 +1136,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           .catch((e) =>
             console.error(
               `[PubSub] Failed to submit watchdog timeout for ${event.methodName} ` +
-                `(${event.transportCallId}) — a later redelivery may retry it:`,
+                `(${event.transportCallId}); the channel deadline remains authoritative:`,
               e
             )
           )
@@ -1279,10 +1285,9 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   let repairingGap = false;
   const gapBuffer: ClientIngressMessage[] = [];
 
-  // Register event listener for channel messages
-  const removeEventListener = rpc.on("channel:message", (event: { payload: unknown }) => {
+  function handleSubscriptionPayload(payload: unknown): void {
     if (closed) return;
-    const data = event.payload as { channelId?: string; message?: RpcChannelMessage };
+    const data = payload as { channelId?: string; message?: RpcChannelMessage };
     if (data.channelId !== channel) return;
     if (data.message) {
       const raw = data.message;
@@ -1403,7 +1408,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       }
       handleServerMessage(msg);
     }
-  });
+  }
 
   // Subscribe to channel
   const subscribeMetadata: Record<string, unknown> = {
@@ -1411,7 +1416,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     ...(opts.name !== undefined ? { name: opts.name } : {}),
     ...(opts.type !== undefined ? { type: opts.type } : {}),
     ...(opts.handle !== undefined ? { handle: opts.handle } : {}),
-    [PARTICIPANT_SESSION_METADATA_KEY]: participantSessionId,
     contextId: opts.contextId,
     channelConfig: opts.channelConfig ? opts.channelConfig : undefined,
     replay: replayMode !== "skip",
@@ -1420,32 +1424,87 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   };
   if (methodAdvertisements) subscribeMetadata["methods"] = methodAdvertisements;
 
-  // Heartbeat to prevent stale participant eviction
-  const TOUCH_INTERVAL_MS = 60_000; // 1 minute
-  let consecutiveTouchFailures = 0;
-  let reconnecting = false;
-  let reconnectAttempts = 0;
-  const MAX_RECONNECT_ATTEMPTS = 5;
+  interface ActiveSubscription {
+    generation: number;
+    controller: AbortController;
+    terminal: Promise<void>;
+  }
 
-  async function attemptResubscription(): Promise<void> {
-    if (reconnecting || closed) return;
-    reconnecting = true;
-    reconnectAttempts++;
-    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-      handleError(new PubSubError("Max reconnection attempts exceeded", "connection"));
-      reconnecting = false;
-      return;
-    }
-    if (closed) {
-      reconnecting = false;
-      return;
-    }
+  let subscriptionGeneration = 0;
+  let activeSubscription: ActiveSubscription | null = null;
+  let recovering = false;
+
+  async function openSubscription(metadata: Record<string, unknown>): Promise<void> {
+    const previous = activeSubscription;
+    const generation = ++subscriptionGeneration;
+    const controller = new AbortController();
+    previous?.controller.abort();
+
+    let resolveAck!: () => void;
+    let rejectAck!: (error: Error) => void;
+    const ack = new Promise<void>((resolve, reject) => {
+      resolveAck = resolve;
+      rejectAck = reject;
+    });
+    let acknowledged = false;
+
+    const terminal = (async () => {
+      try {
+        const response = await rpc.stream(
+          await getDoTarget(),
+          "subscribe",
+          [deliveryId, metadata],
+          { signal: controller.signal }
+        );
+        for await (const record of readChannelSubscriptionRecords<
+          SubscribeResult,
+          { channelId?: string; message?: RpcChannelMessage }
+        >(response)) {
+          if (generation !== activeSubscription?.generation) break;
+          if (record.kind === "subscribed") {
+            if (acknowledged) throw new Error("Channel subscription sent more than one ACK");
+            acknowledged = true;
+            await applySubscribeAckFallback(record.result);
+            resolveAck();
+            continue;
+          }
+          if (!acknowledged) throw new Error("Channel subscription delivered data before its ACK");
+          handleSubscriptionPayload(record.payload);
+        }
+        if (!acknowledged) throw new Error("Channel subscription closed before its ACK");
+        if (
+          !closed &&
+          !controller.signal.aborted &&
+          generation === activeSubscription?.generation
+        ) {
+          throw new Error("Channel subscription closed unexpectedly");
+        }
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        if (!acknowledged) rejectAck(failure);
+        if (
+          !closed &&
+          !controller.signal.aborted &&
+          generation === activeSubscription?.generation
+        ) {
+          replayComplete = false;
+          const pubsubError = new PubSubError(failure.message, "connection");
+          rejectReady(pubsubError);
+          handleError(pubsubError);
+          for (const handler of disconnectHandlers) handler();
+        }
+        throw failure;
+      }
+    })();
+    terminal.catch(() => {});
+    activeSubscription = { generation, controller, terminal };
+    await ack;
+  }
+
+  async function recoverSubscription(): Promise<void> {
+    if (recovering || closed) return;
+    recovering = true;
     try {
-      // Best-effort unsubscribe old session (session-scoped: a shared
-      // `user:<userId>` row only drops THIS client's ref, WP6 §4)
-      await callChannel("unsubscribe", pid, participantSessionId).catch((err) => {
-        console.warn(`[PubSubClient] Failed to unsubscribe stale session ${pid}:`, err);
-      });
       // Reset local roster and presence dedup state so replayed presence events are accepted
       currentRoster = {};
       rosterOpIds.clear();
@@ -1455,67 +1514,38 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       replayCatchupPromise = null;
       bufferingReplay = replayMode !== "skip";
       replayComplete = false;
-      // Re-subscribe with sinceId for catch-up replay
+      // Replacing the stream generation cancels the exact old resource. The
+      // durable replay cursor catches this generation up without a liveness
+      // lease, timer, or best-effort unary cleanup call.
       const resubMeta = { ...subscribeMetadata, sinceId: lastSeenSeq, replay: true };
-      const result = await callChannel<SubscribeResult | undefined>(
-        "subscribe",
-        deliveryId,
-        resubMeta
-      );
-      await applySubscribeAckFallback(result);
+      await openSubscription(resubMeta);
       // In-flight method calls are recovered from replayed invocation.* events
       // (handleInvocationLifecycle), not a settled-results read-back.
-      consecutiveTouchFailures = 0;
-      reconnectAttempts = 0;
-      reconnecting = false;
       for (const handler of reconnectHandlers) handler();
-    } catch (err) {
-      console.error("[RpcPubSubClient] Resubscription failed:", err);
-      reconnecting = false;
-      // Try again on next heartbeat failure
+    } finally {
+      recovering = false;
     }
   }
 
+  const unregisterResubscribe = opts.recoveryCoordinator?.registerResubscribeHandler(
+    `pubsub:${channel}:${pid}`,
+    recoverSubscription
+  );
   const unregisterColdRecover = opts.recoveryCoordinator?.registerColdRecoverHandler(
     `pubsub:${channel}:${pid}`,
-    attemptResubscription
+    recoverSubscription
   );
 
-  const touchInterval = setInterval(() => {
-    if (closed) return;
-    callChannel("touch", pid, participantSessionId)
-      .then(() => {
-        consecutiveTouchFailures = 0;
-      })
-      .catch((err) => {
-        consecutiveTouchFailures++;
-        if (consecutiveTouchFailures >= 3) {
-          console.error(`[PubSub] Heartbeat failed ${consecutiveTouchFailures} times:`, err);
-          handleError(
-            new PubSubError("Channel heartbeat failing — connection may be lost", "connection")
-          );
-          // Phase 3A: Auto-resubscribe
-          void attemptResubscription();
-        }
-      });
-  }, TOUCH_INTERVAL_MS);
-
-  // Fire subscribe. Replay normally arrives through ordered channel events; the
-  // result also carries the same ordered initial replay as a fallback so losing
-  // the ready event does not let ready resolve ahead of replay delivery.
-  callChannel<SubscribeResult | undefined>("subscribe", deliveryId, subscribeMetadata)
-    .then(async (result) => {
-      await applySubscribeAckFallback(result);
+  // Opening the stream creates the subscription resource. Its first record is
+  // the replay ACK; all subsequent records are live delivery on that resource.
+  openSubscription(subscribeMetadata)
+    .then(() => {
       subscribeAckResolve?.();
       subscribeAckResolve = null;
       subscribeAckReject = null;
-      if (closed) {
-        void callChannel("unsubscribe", pid, participantSessionId);
-      }
     })
     .catch((err: unknown) => {
       const error = err instanceof Error ? err : new Error(String(err));
-      clearInterval(touchInterval);
       const pubsubError = new PubSubError(error.message, "connection");
       subscribeAckReject?.(pubsubError);
       subscribeAckResolve = null;
@@ -1891,11 +1921,11 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
 
   function close(): void {
     closed = true;
+    unregisterResubscribe?.();
     unregisterColdRecover?.();
+    activeSubscription?.controller.abort();
     rejectReady(new PubSubError("connection closed before ready", "connection"));
-    clearInterval(touchInterval);
     eventsFanout.close();
-    removeEventListener();
     // Reject all pending method calls so callers don't hang
     for (const [callId, state] of methodCallStates) {
       if (!state.complete) {
@@ -1912,9 +1942,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     }
     executingMethods.clear();
     for (const handler of disconnectHandlers) handler();
-    callChannel("unsubscribe", pid, participantSessionId).catch((err) => {
-      console.warn(`[PubSubClient] Failed to unsubscribe session ${pid} during close:`, err);
-    });
   }
 
   async function sendRaw(_message: Record<string, unknown>): Promise<void> {
@@ -2076,7 +2103,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       return !closed && replayComplete;
     },
     get reconnecting() {
-      return false;
+      return recovering;
     },
     get contextId() {
       return serverContextId;
