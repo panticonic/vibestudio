@@ -7,6 +7,27 @@ import type { DORef } from "@vibestudio/shared/doDispatcher";
 
 type Alarm = { source: string; className: string; objectKey: string; wakeAt: number };
 
+function replaceAlarm(alarms: Alarm[], alarm: Alarm): void {
+  const index = alarms.findIndex(
+    (candidate) =>
+      candidate.source === alarm.source &&
+      candidate.className === alarm.className &&
+      candidate.objectKey === alarm.objectKey
+  );
+  if (index === -1) alarms.push(alarm);
+  else alarms[index] = alarm;
+}
+
+function clearAlarm(alarms: Alarm[], key: Pick<Alarm, "source" | "className" | "objectKey">): void {
+  const index = alarms.findIndex(
+    (candidate) =>
+      candidate.source === key.source &&
+      candidate.className === key.className &&
+      candidate.objectKey === key.objectKey
+  );
+  if (index !== -1) alarms.splice(index, 1);
+}
+
 function makeHarness(initial: Alarm[] = []) {
   const alarms = [...initial];
   const fired: DORef[] = [];
@@ -16,17 +37,23 @@ function makeHarness(initial: Alarm[] = []) {
       if (method === "alarmNextWakeAt") {
         return alarms.length ? Math.min(...alarms.map((a) => a.wakeAt)) : null;
       }
-      if (method === "alarmTakeDue") {
+      if (method === "alarmListDue") {
         const now = args[0] as number;
-        const due = alarms.filter((a) => a.wakeAt <= now);
-        for (const d of due) alarms.splice(alarms.indexOf(d), 1);
-        return due;
+        return alarms.filter((a) => a.wakeAt <= now);
+      }
+      if (method === "alarmSet") {
+        replaceAlarm(alarms, args[0] as Alarm);
+        return undefined;
+      }
+      if (method === "alarmClear") {
+        clearAlarm(alarms, args[0] as Alarm);
+        return undefined;
       }
       return undefined;
     },
     dispatchAlarm: async (ref: DORef) => {
       fired.push(ref);
-      return { result: "ok" };
+      return { nextAlarm: null };
     },
   } as unknown as DODispatch;
 
@@ -102,11 +129,56 @@ describe("AlarmDriver", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(fired).toHaveLength(0);
   });
+
+  it("persists the next schedule returned by an alarm handler after dispatch completes", async () => {
+    vi.setSystemTime(0);
+    const alarms: Alarm[] = [
+      { source: "workers/poller", className: "PollerDO", objectKey: "p-1", wakeAt: 100 },
+    ];
+    const dispatch = vi.fn(async (_ref: DORef, method: string, ...args: unknown[]) => {
+      if (method === "alarmNextWakeAt") {
+        return alarms.length ? Math.min(...alarms.map((alarm) => alarm.wakeAt)) : null;
+      }
+      if (method === "alarmListDue") {
+        const now = args[0] as number;
+        return alarms.filter((alarm) => alarm.wakeAt <= now);
+      }
+      if (method === "alarmSet") {
+        replaceAlarm(alarms, args[0] as Alarm);
+        return undefined;
+      }
+      if (method === "alarmClear") {
+        clearAlarm(alarms, args[0] as Alarm);
+        return undefined;
+      }
+      return undefined;
+    });
+    const dispatchAlarm = vi
+      .fn()
+      .mockResolvedValueOnce({ nextAlarm: { wakeAt: 250 } })
+      .mockResolvedValue({ nextAlarm: null });
+    const driver = new AlarmDriver({
+      workspaceId: "ws-1",
+      doDispatch: { dispatch, dispatchAlarm },
+    });
+
+    driver.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(alarms).toContainEqual({
+      source: "workers/poller",
+      className: "PollerDO",
+      objectKey: "p-1",
+      wakeAt: 250,
+    });
+
+    await vi.advanceTimersByTimeAsync(150);
+    expect(dispatchAlarm).toHaveBeenCalledTimes(2);
+    driver.stop();
+  });
 });
 
-/** Harness whose `dispatchAlarm` always fails (as when an EvalDO aborts itself in
- *  `alarm()`), recording any re-arm so we can assert the re-arm decision. */
-function makeFailingHarness(initial: Array<Alarm & { bestEffort?: boolean }>) {
+/** Harness whose `dispatchAlarm` always fails, recording the durable retry. */
+function makeFailingHarness(initial: Alarm[]) {
   const alarms = [...initial];
   const reArmed: Array<{ objectKey: string }> = [];
   const doDispatch = {
@@ -114,19 +186,21 @@ function makeFailingHarness(initial: Array<Alarm & { bestEffort?: boolean }>) {
       if (method === "alarmNextWakeAt") {
         return alarms.length ? Math.min(...alarms.map((a) => a.wakeAt)) : null;
       }
-      if (method === "alarmTakeDue") {
+      if (method === "alarmListDue") {
         const now = args[0] as number;
-        const due = alarms.filter((a) => a.wakeAt <= now);
-        for (const d of due) alarms.splice(alarms.indexOf(d), 1);
-        return due; // carries bestEffort through to the driver
+        return alarms.filter((a) => a.wakeAt <= now);
       }
       if (method === "alarmSet") {
         reArmed.push(args[0] as { objectKey: string });
+        replaceAlarm(alarms, args[0] as Alarm);
+      }
+      if (method === "alarmClear") {
+        clearAlarm(alarms, args[0] as Alarm);
       }
       return undefined;
     },
     dispatchAlarm: async () => {
-      throw new Error("dispatch failed (DO aborted itself)");
+      throw new Error("alarm transport failed");
     },
   } as unknown as DODispatch;
   const driver = new AlarmDriver({ doDispatch, workspaceId: "ws-1" });
@@ -153,21 +227,217 @@ describe("AlarmDriver re-arm on dispatch failure", () => {
     driver.stop();
   });
 
-  it("does NOT re-arm a best-effort alarm whose dispatch fails (EvalDO idle eviction — no resurrection loop)", async () => {
+  it("treats an invalid alarm response as a failed dispatch and preserves a normal wake", async () => {
     vi.setSystemTime(0);
-    const { driver, reArmed } = makeFailingHarness([
-      {
-        source: "vibestudio/internal",
-        className: "EvalDO",
-        objectKey: "k",
-        wakeAt: 1_000,
-        bestEffort: true,
+    const alarm = {
+      source: "workers/poller",
+      className: "PollerDO",
+      objectKey: "k",
+      wakeAt: 0,
+    };
+    const pending = [alarm];
+    const reArmed: unknown[] = [];
+    const dispatch = vi.fn(async (_ref: DORef, method: string, ...args: unknown[]) => {
+      if (method === "alarmNextWakeAt") {
+        return pending.length ? Math.min(...pending.map((item) => item.wakeAt)) : null;
+      }
+      if (method === "alarmListDue") return [...pending];
+      if (method === "alarmSet") {
+        reArmed.push(args[0]);
+        replaceAlarm(pending, args[0] as Alarm);
+      }
+      if (method === "alarmClear") {
+        clearAlarm(pending, args[0] as Alarm);
+      }
+      return undefined;
+    });
+    const driver = new AlarmDriver({
+      workspaceId: "ws-1",
+      doDispatch: {
+        dispatch,
+        dispatchAlarm: vi.fn(async () => ({ result: "legacy-shape" }) as never),
       },
-    ]);
+    });
+
     driver.start();
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(1_000); // fire → dispatch fails → best-effort → no re-arm
-    expect(reArmed).toEqual([]);
+    expect(reArmed).toHaveLength(1);
+    expect(reArmed[0]).toMatchObject({ objectKey: "k" });
+    driver.stop();
+  });
+
+  it("retries a completed alarm when durable acknowledgement fails", async () => {
+    vi.setSystemTime(0);
+    const due: Alarm = {
+      source: "workers/poller",
+      className: "PollerDO",
+      objectKey: "k",
+      wakeAt: 0,
+    };
+    let pending = true;
+    let clearAttempts = 0;
+    const dispatch = vi.fn(async (_ref: DORef, method: string) => {
+      if (method === "alarmNextWakeAt") return pending ? due.wakeAt : null;
+      if (method === "alarmListDue") return pending ? [due] : [];
+      if (method === "alarmClear") {
+        clearAttempts++;
+        if (clearAttempts === 1) throw new TypeError("workspace acknowledgement unavailable");
+        pending = false;
+      }
+      return undefined;
+    });
+    const dispatchAlarm = vi.fn(async () => ({ nextAlarm: null }));
+    const driver = new AlarmDriver({
+      workspaceId: "ws-1",
+      doDispatch: { dispatch, dispatchAlarm } as unknown as DODispatch,
+    });
+
+    driver.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatchAlarm).toHaveBeenCalledTimes(1);
+    expect(pending).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(dispatchAlarm).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(dispatchAlarm).toHaveBeenCalledTimes(2);
+    expect(pending).toBe(false);
+    driver.stop();
+  });
+});
+
+describe("AlarmDriver single-flight scheduling", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("coalesces mutation notifications while a schedule read is in flight", async () => {
+    let releaseFirst!: (value: number | null) => void;
+    const first = new Promise<number | null>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const dispatch = vi
+      .fn()
+      .mockImplementationOnce(async () => first)
+      .mockResolvedValue(null);
+    const driver = new AlarmDriver({
+      workspaceId: "ws-1",
+      doDispatch: {
+        dispatch,
+        dispatchAlarm: vi.fn(async () => ({ nextAlarm: null })),
+      } as unknown as DODispatch,
+    });
+
+    driver.start();
+    for (let i = 0; i < 100; i++) driver.notifyChanged();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    releaseFirst(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    driver.stop();
+  });
+
+  it("never overlaps a recurring target with its still-running prior alarm", async () => {
+    vi.setSystemTime(0);
+    const alarms: Alarm[] = [
+      { source: "workers/poller", className: "PollerDO", objectKey: "same", wakeAt: 0 },
+    ];
+    let releaseFirst!: () => void;
+    const firstDispatch = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let activeDispatches = 0;
+    let maxActiveDispatches = 0;
+    const dispatchAlarm = vi.fn(async () => {
+      activeDispatches++;
+      maxActiveDispatches = Math.max(maxActiveDispatches, activeDispatches);
+      try {
+        if (dispatchAlarm.mock.calls.length === 1) await firstDispatch;
+      } finally {
+        activeDispatches--;
+      }
+      return dispatchAlarm.mock.calls.length === 1
+        ? { nextAlarm: { wakeAt: Date.now() + 100 } }
+        : { nextAlarm: null };
+    });
+    const dispatch = vi.fn(async (_ref: DORef, method: string, ...args: unknown[]) => {
+      if (method === "alarmNextWakeAt") {
+        return alarms.length ? Math.min(...alarms.map((alarm) => alarm.wakeAt)) : null;
+      }
+      if (method === "alarmListDue") {
+        const now = args[0] as number;
+        return alarms.filter((alarm) => alarm.wakeAt <= now);
+      }
+      if (method === "alarmSet") {
+        replaceAlarm(alarms, args[0] as Alarm);
+        return undefined;
+      }
+      if (method === "alarmClear") {
+        clearAlarm(alarms, args[0] as Alarm);
+        return undefined;
+      }
+      return undefined;
+    });
+    const driver = new AlarmDriver({
+      workspaceId: "ws-1",
+      doDispatch: { dispatch, dispatchAlarm } as unknown as DODispatch,
+    });
+
+    driver.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(dispatchAlarm).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(dispatchAlarm).toHaveBeenCalledTimes(2);
+    expect(maxActiveDispatches).toBe(1);
+    driver.stop();
+  });
+
+  it("recovers a transient due-list failure through one bounded retry timer", async () => {
+    vi.setSystemTime(0);
+    const due = { source: "workers/poller", className: "PollerDO", objectKey: "same", wakeAt: 0 };
+    let takeAttempts = 0;
+    let pending = true;
+    const dispatch = vi.fn(async (_ref: DORef, method: string) => {
+      if (method === "alarmNextWakeAt") return pending ? 0 : null;
+      if (method === "alarmListDue") {
+        takeAttempts++;
+        if (takeAttempts === 1) throw new TypeError("fetch failed");
+        return pending ? [due] : [];
+      }
+      if (method === "alarmClear") pending = false;
+      return undefined;
+    });
+    const dispatchAlarm = vi.fn(async () => ({ nextAlarm: null }));
+    const driver = new AlarmDriver({
+      workspaceId: "ws-1",
+      doDispatch: {
+        dispatch,
+        dispatchAlarm,
+      } as unknown as DODispatch,
+    });
+
+    driver.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatch.mock.calls.filter((call) => call[1] === "alarmListDue")).toHaveLength(1);
+
+    // A concurrent durable-row notification must not replace the fire failure's
+    // bounded retry with an immediate refresh of the same past-due row.
+    driver.notifyChanged();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(dispatch.mock.calls.filter((call) => call[1] === "alarmNextWakeAt")).toHaveLength(1);
+    expect(dispatch.mock.calls.filter((call) => call[1] === "alarmListDue")).toHaveLength(1);
+    expect(dispatchAlarm).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(dispatch.mock.calls.filter((call) => call[1] === "alarmListDue")).toHaveLength(2);
+    expect(dispatchAlarm).toHaveBeenCalledOnce();
     driver.stop();
   });
 });

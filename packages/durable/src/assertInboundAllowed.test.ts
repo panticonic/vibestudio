@@ -73,7 +73,7 @@ describe("assertInboundAllowed path distinction", () => {
     const { instance } = await createTestDO(ServerOnlyProbeDO);
     // An event envelope (message.type != request) POSTed to __rpc by a channel DO.
     const res = await post(instance, "test-key/__rpc", {
-      message: { type: "event", event: "vcs:head:main", payload: { ok: true } },
+      message: { type: "event", event: "vcs:publication", payload: { ok: true } },
       delivery: { caller: { callerId: "do:workers/pubsub-channel:PubSubChannel:c", callerKind: "do" } },
     });
     // The guard must NOT reject it — delivery returns 200 (no listener is fine).

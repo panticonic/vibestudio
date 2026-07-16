@@ -1,4 +1,9 @@
 import * as path from "node:path";
+import {
+  contextProjectionsBasePath,
+  currentContextProjectionsPath,
+} from "@vibestudio/workspace/contextProjections";
+import { gitCheckoutsPath } from "@vibestudio/workspace/gitCheckouts";
 
 /**
  * Declared on-disk contract for one workspace's host state directory.
@@ -10,19 +15,23 @@ import * as path from "node:path";
  */
 export function stateLayout(statePath: string) {
   const databases = path.join(statePath, ".databases");
+  const contextProjectionsBase = contextProjectionsBasePath(statePath);
   const units = path.join(statePath, "units");
-  const webrtc = path.join(statePath, "webrtc");
   return {
     root: statePath,
     adminTokenFile: path.join(statePath, "admin-token"),
     bootGenerationFile: path.join(statePath, ".boot-generation"),
-    contextsDir: path.join(statePath, ".contexts"),
+    contextProjections: {
+      base: contextProjectionsBase,
+      current: currentContextProjectionsPath(statePath),
+    },
     logsDir: path.join(statePath, "logs"),
     credentialsAuditDir: path.join(statePath, "credentials-audit"),
     credentialUseGrantsFile: path.join(statePath, "credential-use-grants.json"),
     capabilityGrantsFile: path.join(statePath, "capability-grants.json"),
     userlandApprovalGrantsFile: path.join(statePath, "userland-approval-grants.json"),
     disposableGitRemotesDir: path.join(statePath, "disposable-git-remotes"),
+    gitCheckoutsDir: gitCheckoutsPath(statePath),
     runtimeImagesFile: path.join(statePath, "runtime-images.json"),
     runtimeDiagnosticsDir: path.join(statePath, "runtime-diagnostics"),
     refsDir: path.join(statePath, "refs"),
@@ -38,11 +47,6 @@ export function stateLayout(statePath: string) {
       root: databases,
       workerdDoDir: path.join(databases, "workerd-do"),
       workerdUniversalDoDir: path.join(databases, "workerd-universal-do"),
-    },
-    webrtc: {
-      root: webrtc,
-      routesFile: path.join(webrtc, "routes.json"),
-      pairingActivationsFile: path.join(webrtc, "pairing-activations.json"),
     },
   } as const;
 }

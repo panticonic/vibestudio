@@ -1,5 +1,11 @@
 import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
-import type { AuthenticatedCaller } from "@vibestudio/rpc";
+import {
+  type AuthenticatedCaller,
+  type RpcCallOptions,
+  type RpcCausalParent,
+  type RpcClient,
+  type RpcStreamOptions,
+} from "@vibestudio/rpc";
 import {
   createBuildServiceClient,
   createEvalImportLoader,
@@ -7,7 +13,6 @@ import {
   type BuildServiceClient,
   type EvalImportLoader,
 } from "@vibestudio/service-schemas/clients/evalImportLoader";
-import { eventsMethods } from "@vibestudio/service-schemas/events";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import { fsMethods } from "@vibestudio/service-schemas/fs";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
@@ -53,12 +58,6 @@ import {
 const RESERVED_TABLE = /\b(state|repl_scopes|sqlite_[A-Za-z0-9_]*)\b/i;
 const DESTRUCTIVE_STMT = /^\s*(DROP|DELETE|ALTER|UPDATE|INSERT|REPLACE|TRUNCATE|CREATE)\b/i;
 
-/**
- * Idle window before an EvalDO discards its in-memory instance. `preventEviction` keeps the
- * DO warm (nothing evicts it otherwise), so it self-evicts to reclaim memory. Long, because
- * eviction forces a cold reload of the engine + a scope rehydrate on the next run.
- */
-const IDLE_EVICT_MS = 30 * 60_000;
 const RESULT_CONSOLE_MAX_CHARS = 80_000;
 const RESULT_RETURN_PREVIEW_CHARS = 60_000;
 const RESULT_ERROR_MAX_CHARS = 20_000;
@@ -165,8 +164,18 @@ type GlobalBag = Record<string, unknown>;
 type FsClient = TypedServiceClient<typeof fsMethods>;
 type BlobstoreClient = TypedServiceClient<typeof blobstoreMethods>;
 type DocsClient = TypedServiceClient<typeof docsMethods>;
-type EventsClient = TypedServiceClient<typeof eventsMethods>;
 type ExternalOpenClient = TypedServiceClient<typeof externalOpenMethods>;
+
+/** One run's immutable outbound authority/provenance boundary. */
+interface EvalExecutionContext {
+  readonly rpc: RpcClient;
+  readonly contextId: string;
+  readonly build: BuildServiceClient;
+  readonly fs: FsClient;
+  readonly blobstore: BlobstoreClient;
+  readonly docs: DocsClient;
+  readonly externalOpen: ExternalOpenClient;
+}
 
 interface RunArgs {
   code?: string;
@@ -199,13 +208,17 @@ interface RunArgs {
    * the owner. Server→DO arg only — never user-supplied.
    */
   gatewayToken?: string;
+  /** Exact non-authorizing parent tool invocation for outbound service effects. */
+  causalParent?: RpcCausalParent;
+  /** Exact parent tool invocation used to route the eventual tool completion. */
+  agentInvocationId?: string;
   /**
    * The owner's nearest panel ancestor (resolved server-side by the eval service
    * from verified entity lineage), or absent when there is none. Backs the
    * portable `parent`/`getParent`/`getParentWithContract`. Server→DO arg only.
    */
   parent?: { parentId: string; parentEntityId: string; parentKind: "panel" | "worker" | "do" };
-  /** Caller-provided idempotency key for the run (agents: the raw invocationId). */
+  /** Caller-provided idempotency key for the run (agents: a namespaced invocation-effect id). */
   runId?: string;
   /** Opt-in deadline; the run is aborted after this many ms. Absent ⇒ unbounded. */
   timeoutMs?: number;
@@ -222,25 +235,6 @@ interface RunResult {
   scopeKeys?: string[];
 }
 
-interface DurableRunActivity {
-  count: number;
-  oldestStartedAt: number | null;
-  activeRuns: Array<{
-    runId: string;
-    status: string;
-    startedAt: number;
-    deadlineAt: number | null;
-  }>;
-  latestRuns: Array<{
-    runId: string;
-    status: string;
-    startedAt: number;
-    deadlineAt: number | null;
-    agentRef: string | null;
-    channelId: string | null;
-  }>;
-}
-
 export class EvalDO extends DurableObjectBase {
   static override schemaVersion = 1;
 
@@ -250,28 +244,14 @@ export class EvalDO extends DurableObjectBase {
   private runChain: Promise<unknown> = Promise.resolve();
   /** In-flight runs in THIS instance, keyed by runId → the single execution promise. A concurrent
    *  `executeRun` (e.g. a deferRedrive that races the first dispatch) SHARES this promise instead of
-   *  starting a second sandbox run; also lets `reset` abort live runs and `alarm` skip mid-run. */
+   *  starting a second sandbox run; it also lets `reset` abort live runs. */
   private readonly inFlightRuns = new Map<string, Promise<RunResult>>();
-  /** Independent in-memory activity marker for claimed rows, used as an alarm safety net. */
-  private readonly activeRunIds = new Set<string>();
   /** Abort controllers per in-flight run — used by `reset` and the `timeoutMs` deadline. */
   private readonly runAborts = new Map<string, AbortController>();
   /** Run-scoped cleanup registered by evaluated orchestration code. Cancel
    *  executes these BEFORE aborting outbound RPC so child runtimes can retire
    *  through the normal authority path instead of becoming orphans. */
   private readonly runCancelHandlers = new Map<string, Set<() => void | Promise<void>>>();
-  private buildClient: BuildServiceClient | null = null;
-  private fsClient: FsClient | null = null;
-  private blobstoreClient: BlobstoreClient | null = null;
-  private docsClient: DocsClient | null = null;
-  private eventsClient: EventsClient | null = null;
-  private externalOpenClient: ExternalOpenClient | null = null;
-  /**
-   * The portable runtime surface (createHostedRuntime) — the SAME assembly panel
-   * and worker run, so `import { … } from "@workspace/runtime"` resolves to the
-   * identical surface in eval. Cached per-object (its rpc/fs are owner-scoped).
-   */
-  private hostedRuntime: WorkspaceRuntimeLike | null = null;
   /**
    * Factories from the manifest-declared runtime unit (providers.evalRuntime),
    * loaded dynamically via the build service (see ensureRuntimeSupport). The
@@ -280,7 +260,7 @@ export class EvalDO extends DurableObjectBase {
   private runtimeSupport: RuntimeSupportModule | null = null;
   /** The declared runtime unit's `./portable` helpers (z, defineContract, …). */
   private portableHelpers: Record<string, unknown> | null = null;
-  /** Owner identity baked into the cached hosted runtime at first init. A warm
+  /** Owner identity established by the first hosted runtime. A warm
    *  EvalDO serves exactly one owner (objectKey = sha256(ownerId\0subKey)), so a
    *  later run arriving with a different contextId/gatewayToken is a routing or
    *  ownership bug — refuse loudly rather than silently run under stale identity
@@ -288,20 +268,6 @@ export class EvalDO extends DurableObjectBase {
   private hostedRuntimeIdentity: { contextId: string; gatewayToken: string } | null = null;
   private cdpLoaded = false;
   private warnedNoCdpProvider = false;
-  /**
-   * The owner's nearest panel ancestor (server-supplied via `RunArgs.parent`),
-   * read by the hosted runtime's `resolveParent`. Mutable so a re-resolved parent
-   * is reflected even though `hostedRuntime` is cached (the closure reads it live).
-   */
-  private parentMeta: RunArgs["parent"] | null = null;
-
-  /**
-   * Per-run containment for eval-authored RPC calls. Read LIVE by the cached
-   * hosted-runtime rpc wrapper so cached imports of `@workspace/runtime` still
-   * get the current run's abort signal/read-only flag.
-   */
-  private currentRunReadOnly = false;
-  private currentRunAbortSignal: AbortSignal | null = null;
 
   /**
    * Per-OBJECT module registry passed to the engine on every run. Many owners' EvalDOs share
@@ -311,13 +277,6 @@ export class EvalDO extends DurableObjectBase {
    * DO's runs for import continuity (a module loaded in one run is reusable by the next).
    */
   private moduleMap: Record<string, unknown> = {};
-
-  /** Per-object require paired with `moduleMap` (resolves only THIS owner's loaded modules). */
-  private engineRequire = (id: string): unknown => {
-    const m = this.moduleMap[id];
-    if (m !== undefined) return m;
-    throw new Error(`Module "${id}" not available in EvalDO; use the imports parameter.`);
-  };
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -375,107 +334,94 @@ export class EvalDO extends DurableObjectBase {
     );
   }
 
-  private rearmIdleEviction(): void {
-    this.setAlarmAt(Date.now() + IDLE_EVICT_MS, { bestEffort: true });
-  }
-
-  private durableRunActivity(): DurableRunActivity {
-    const row = this.sql
-      .exec(
-        `SELECT COUNT(*) AS count, MIN(started_at) AS oldest_started_at
-         FROM runs
-         WHERE status IN ('pending', 'running')`
-      )
-      .toArray()[0];
-    const activeRuns = this.sql
-      .exec(
-        `SELECT run_id, status, started_at, deadline_at
-         FROM runs
-         WHERE status IN ('pending', 'running')
-         ORDER BY started_at ASC
-         LIMIT 5`
-      )
-      .toArray()
-      .map((r) => ({
-        runId: String(r["run_id"]),
-        status: String(r["status"]),
-        startedAt: Number(r["started_at"]),
-        deadlineAt: r["deadline_at"] == null ? null : Number(r["deadline_at"]),
-      }));
-    const latestRuns = this.sql
-      .exec(
-        `SELECT run_id, status, started_at, deadline_at, agent_ref, channel_id
-         FROM runs
-         ORDER BY started_at DESC
-         LIMIT 5`
-      )
-      .toArray()
-      .map((r) => ({
-        runId: String(r["run_id"]),
-        status: String(r["status"]),
-        startedAt: Number(r["started_at"]),
-        deadlineAt: r["deadline_at"] == null ? null : Number(r["deadline_at"]),
-        agentRef: r["agent_ref"] == null ? null : String(r["agent_ref"]),
-        channelId: r["channel_id"] == null ? null : String(r["channel_id"]),
-      }));
-    return {
-      count: Number(row?.["count"] ?? 0),
-      oldestStartedAt: row?.["oldest_started_at"] == null ? null : Number(row["oldest_started_at"]),
-      activeRuns,
-      latestRuns,
+  private createExecutionContext(
+    input: {
+      contextId?: string;
+      causalParent?: RpcCausalParent | null;
+      readOnly?: boolean;
+    },
+    signal?: AbortSignal
+  ): EvalExecutionContext {
+    const causalParent = input.causalParent ? Object.freeze({ ...input.causalParent }) : null;
+    const readOnly = input.readOnly === true;
+    const base = this.rpc;
+    const mergeOptions = <T extends RpcCallOptions | RpcStreamOptions>(value?: T): T => {
+      const options = {
+        ...(value ?? {}),
+        ...(signal ? { signal } : {}),
+        ...(readOnly ? { readOnly: true } : {}),
+      };
+      if (causalParent) options.causalParent = causalParent;
+      else Reflect.deleteProperty(options, "causalParent");
+      return options as T;
     };
+    const call = <T = unknown>(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: RpcCallOptions
+    ) => base.call<T>(targetId, method, args, mergeOptions(options));
+    const emit = (targetId: string, event: string, payload: unknown, options?: RpcCallOptions) =>
+      base.emit(targetId, event, payload, mergeOptions(options));
+    const peerFor = (targetId: string) => {
+      const inbound = base.peer(targetId);
+      const contextual = {
+        id: targetId,
+        call: new Proxy(
+          {},
+          {
+            get:
+              (_target, method) =>
+              (...args: unknown[]) =>
+                call(targetId, String(method), args),
+          }
+        ),
+        on: inbound.on.bind(inbound),
+        emit: (event: string, payload: unknown) => emit(targetId, event, payload),
+        withContract: () => contextual,
+      };
+      return contextual;
+    };
+    const rpc: RpcClient = Object.freeze({
+      selfId: base.selfId,
+      expose: base.expose.bind(base),
+      exposeAll: base.exposeAll.bind(base),
+      exposeStreaming: base.exposeStreaming.bind(base),
+      call,
+      stream: (targetId: string, method: string, args: unknown[], options?: RpcStreamOptions) =>
+        base.stream(targetId, method, args, mergeOptions(options)),
+      streamReadable: (
+        targetId: string,
+        method: string,
+        args: unknown[],
+        options?: RpcStreamOptions
+      ) => base.streamReadable(targetId, method, args, mergeOptions(options)),
+      emit,
+      on: base.on.bind(base),
+      peer: ((targetId: string) => peerFor(targetId)) as RpcClient["peer"],
+      status: base.status.bind(base),
+      ready: base.ready.bind(base),
+      onStatusChange: base.onStatusChange.bind(base),
+    });
+    const callMainService = (service: string, method: string, args: unknown[]) =>
+      rpc.call("main", `${service}.${method}`, args);
+    return Object.freeze({
+      rpc,
+      contextId: input.contextId ?? "",
+      build: createBuildServiceClient(callMainService),
+      fs: createTypedServiceClient("fs", fsMethods, callMainService),
+      blobstore: createTypedServiceClient("blobstore", blobstoreMethods, callMainService),
+      docs: createTypedServiceClient("docs", docsMethods, callMainService),
+      externalOpen: createTypedServiceClient("externalOpen", externalOpenMethods, callMainService),
+    });
   }
 
-  private readonly callMainService = (
-    service: string,
-    method: string,
-    args: unknown[]
-  ): Promise<unknown> =>
-    this.rpc.call(
-      "main",
-      `${service}.${method}`,
-      args,
-      this.currentRunReadOnly ? { readOnly: true } : undefined
-    );
-
-  private mainBuild(): BuildServiceClient {
-    return (this.buildClient ??= createBuildServiceClient(this.callMainService));
-  }
-
-  private mainFs(): FsClient {
-    return (this.fsClient ??= createTypedServiceClient("fs", fsMethods, this.callMainService));
-  }
-
-  private mainBlobstore(): BlobstoreClient {
-    return (this.blobstoreClient ??= createTypedServiceClient(
-      "blobstore",
-      blobstoreMethods,
-      this.callMainService
-    ));
-  }
-
-  private mainDocs(): DocsClient {
-    return (this.docsClient ??= createTypedServiceClient(
-      "docs",
-      docsMethods,
-      this.callMainService
-    ));
-  }
-
-  private mainEvents(): EventsClient {
-    return (this.eventsClient ??= createTypedServiceClient(
-      "events",
-      eventsMethods,
-      this.callMainService
-    ));
-  }
-
-  private mainExternalOpen(): ExternalOpenClient {
-    return (this.externalOpenClient ??= createTypedServiceClient(
-      "externalOpen",
-      externalOpenMethods,
-      this.callMainService
-    ));
+  private infrastructureExecution(): EvalExecutionContext {
+    return this.createExecutionContext({
+      contextId: this.hostedRuntimeIdentity?.contextId ?? "",
+      causalParent: null,
+      readOnly: false,
+    });
   }
 
   /**
@@ -488,13 +434,14 @@ export class EvalDO extends DurableObjectBase {
    */
   private async describeInjectedSurface(
     name: string,
-    obj: Record<string, unknown>
+    obj: Record<string, unknown>,
+    docs: DocsClient
   ): Promise<unknown | null> {
     const liveMethods = Object.keys(obj).filter((k) => typeof obj[k] === "function");
     if (liveMethods.length === 0) return null;
     let serviceMethods: Record<string, unknown> = {};
     try {
-      const svc = (await this.mainDocs().describeService(name)) as {
+      const svc = (await docs.describeService(name)) as {
         methods?: Record<string, unknown>;
       };
       serviceMethods = svc?.methods ?? {};
@@ -532,7 +479,7 @@ export class EvalDO extends DurableObjectBase {
    * caller and registers the owner context). The generic DO relay is open
    * (rpcServer.checkRelayAuth) AND `exposeAll` reflects every method — including
    * TS-private helpers like `runLocked` (runs arbitrary owner code) and
-   * `callMainService` (arbitrary `main` call as the owner), which are
+   * execution-context construction (arbitrary `main` calls as the owner), which are
    * runtime-public. So we reject EVERY non-server inbound CALL as a blanket guard.
    *
    * Event DELIVERIES are different: the EvalDO (or eval code) subscribes to topics
@@ -577,10 +524,15 @@ export class EvalDO extends DurableObjectBase {
   @rpc
   async startRun(args: RunArgs & { runId: string }): Promise<{ runId: string; status: string }> {
     const runId = args.runId;
-    const existing = this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0];
+    const existing = this.sql
+      .exec(`SELECT status, args FROM runs WHERE run_id = ?`, runId)
+      .toArray()[0];
     if (existing) {
       const status = String(existing["status"]);
-      if (status === "pending" || status === "running") this.rearmIdleEviction();
+      const prior = JSON.parse(String(existing["args"])) as RunArgs;
+      if (JSON.stringify(prior) !== JSON.stringify(args)) {
+        throw new Error(`eval: runId ${runId} was reused with different input`);
+      }
       return { runId, status };
     }
     // Reset and enqueue are one DO turn and ordered before insertion. This is
@@ -598,7 +550,6 @@ export class EvalDO extends DurableObjectBase {
       Date.now(),
       deadlineAt
     );
-    this.rearmIdleEviction();
     return { runId, status: "pending" };
   }
 
@@ -649,7 +600,6 @@ export class EvalDO extends DurableObjectBase {
     let cancellationCleanupError: unknown;
 
     let result: RunResult;
-    this.activeRunIds.add(runId);
     try {
       if (deadlineAt != null) {
         const remaining = deadlineAt - Date.now();
@@ -704,10 +654,7 @@ export class EvalDO extends DurableObjectBase {
     } finally {
       if (timer) clearTimeout(timer);
       this.runAborts.delete(runId);
-      this.activeRunIds.delete(runId);
       if (!controller.signal.aborted) this.runCancelHandlers.delete(runId);
-      // Arm best-effort idle-eviction now that the run is done (never fires mid-run — see alarm()).
-      this.rearmIdleEviction();
     }
 
     const terminalResult = this.compactRunResult(result);
@@ -768,7 +715,8 @@ export class EvalDO extends DurableObjectBase {
       throw new Error("eval: scope page limit must be an integer between 1 and 131072");
     }
     const read = this.runChain.then(async () => {
-      const manager = await this.ensureScopeManager(await this.ensureEngine());
+      const execution = this.infrastructureExecution();
+      const manager = await this.ensureScopeManager(await this.ensureEngine(execution));
       const source = manager.current[key];
       if (typeof source !== "string") {
         throw new Error(`eval: scope value ${JSON.stringify(key)} is unavailable or is not text`);
@@ -784,18 +732,15 @@ export class EvalDO extends DurableObjectBase {
       () => undefined,
       () => undefined
     );
-    try {
-      return await read;
-    } finally {
-      this.rearmIdleEviction();
-    }
+    return read;
   }
 
   /** Persistently remove one temporary large-result cache key. */
   @rpc
   async deleteScopeValue(key: string): Promise<{ ok: boolean; existed: boolean }> {
     const remove = this.runChain.then(async () => {
-      const manager = await this.ensureScopeManager(await this.ensureEngine());
+      const execution = this.infrastructureExecution();
+      const manager = await this.ensureScopeManager(await this.ensureEngine(execution));
       const existed = Object.prototype.hasOwnProperty.call(manager.current, key);
       manager.enterEval();
       try {
@@ -809,11 +754,7 @@ export class EvalDO extends DurableObjectBase {
       () => undefined,
       () => undefined
     );
-    try {
-      return await remove;
-    } finally {
-      this.rearmIdleEviction();
-    }
+    return remove;
   }
 
   /** Persist a bounded, JSON-safe heartbeat for the currently executing run. */
@@ -936,8 +877,7 @@ export class EvalDO extends DurableObjectBase {
    * safely — and even if the orphan later runs `exitEval` against the wiped scope, its `cancelled`
    * status already discarded its result, so a fresh run is unaffected.
    */
-  @rpc
-  async forceReset(): Promise<{ ok: boolean }> {
+  private async forceReset(): Promise<{ ok: boolean }> {
     this.sql.exec(`UPDATE runs SET status = 'cancelled' WHERE status IN ('pending', 'running')`);
     const runIds = new Set([...this.runAborts.keys(), ...this.runCancelHandlers.keys()]);
     const cleanupResults = await Promise.allSettled(
@@ -980,66 +920,23 @@ export class EvalDO extends DurableObjectBase {
     return { ok: true };
   }
 
-  /**
-   * Idle GC. The only alarm we arm is the best-effort idle-eviction alarm; when it fires,
-   * discard the in-memory instance to reclaim RAM (`preventEviction` means workerd never
-   * evicts us). Scope is already persisted after every run (exitEval), so `abort()` is safe:
-   * it preserves SQLite, and the next run lazily reconstructs + rehydrates. The aborted
-   * `__alarm` dispatch "fails", but the alarm is best-effort so the AlarmDriver does not
-   * re-arm it — no resurrection loop.
-   */
-  override async alarm(): Promise<void> {
-    const durableActivity = this.durableRunActivity();
-
-    // Never evict mid-run. The in-memory map catches normal held executeRun calls, activeRunIds is
-    // a second marker tied to the claimed row lifetime, and the durable queue catches async agent
-    // runs that are pending before the held dispatch arrives plus reconstruction/race edges.
-    if (this.inFlightRuns.size > 0 || this.activeRunIds.size > 0 || durableActivity.count > 0) {
-      const inMemoryRunIds = Array.from(
-        new Set([...this.inFlightRuns.keys(), ...this.activeRunIds.keys()])
-      ).slice(0, 10);
-      console.info("[EvalDO] idle eviction alarm", {
-        objectKey: this.objectKey,
-        inFlightRuns: this.inFlightRuns.size,
-        activeRunIds: this.activeRunIds.size,
-        inMemoryRunIds,
-        durableRuns: durableActivity.count,
-        oldestDurableRunStartedAt: durableActivity.oldestStartedAt,
-        activeDurableRuns: durableActivity.activeRuns,
-        latestRuns: durableActivity.latestRuns,
-      });
-      this.rearmIdleEviction();
-      return;
-    }
-    // Drop any lingering server-side event subscriptions (e.g. an eval that
-    // called vcs.subscribeHead without unsubscribing) BEFORE discarding the
-    // instance. The in-memory rpc.on listeners die with the abort, so an
-    // un-torn-down server subscription would otherwise re-wake this DO on every
-    // matching emit — defeating the idle eviction. A later run can re-subscribe.
-    await this.mainEvents()
-      .unsubscribeAll()
-      .catch(() => {});
-    this.ctx.abort("EvalDO: idle eviction (reclaim memory; SQLite preserved)");
-  }
-
   // ── internals ─────────────────────────────────────────────────────────────────
 
   private async runLocked(args: RunArgs, signal?: AbortSignal, runId?: string): Promise<RunResult> {
-    const engine = await this.ensureEngine();
-    const support = await this.ensureRuntimeSupport();
+    const execution = this.createExecutionContext(args, signal);
+    const engine = await this.ensureEngine(execution);
+    const support = await this.ensureRuntimeSupport(execution);
     const scopeManager = await this.ensureScopeManager(engine);
-    // The hosted runtime's `resolveParent` reads `this.parentMeta` live, so set it
-    // before (re)building the host. Server-supplied; defaults to no parent.
-    this.parentMeta = args.parent ?? null;
-    this.currentRunReadOnly = args.readOnly ?? false;
-    this.currentRunAbortSignal = signal ?? null;
-    const rt = this.ensureHostedRuntime(support, args.contextId ?? "", args.gatewayToken);
 
-    // Thread THIS run's abort signal + read-only flag into EVERY outbound rpc.call the eval makes: the
-    // abort signal so a `cancel(runId)`/`forceReset()` that aborts `controller` unwinds a run wedged on
-    // an outbound call (the rpc client honors `options.signal`), and `readOnly` so a read-only run's
-    // service calls are refused by the server dispatcher unless they declare `sensitivity:"read"`.
-    const callOptions = this.currentRunCallOptions();
+    // Every runtime/client below closes over this immutable run context. A force
+    // reset may orphan this execution and start another one, but neither run can
+    // replace or clear the other's causal edge, containment, or abort signal.
+    const rt = this.createRunHostedRuntime(
+      support,
+      execution,
+      args.gatewayToken,
+      args.parent ?? null
+    );
     // `services` is the complete convenience namespace (createServicesProxy): service names that
     // don't collide with runtime bindings are reachable as `services.<name>.<method>(...)`, while
     // rich runtime clients win on collisions (`services.workers` is the same ergonomic `workers`
@@ -1101,7 +998,8 @@ export class EvalDO extends DurableObjectBase {
             if (binding && typeof binding === "object") {
               const described = await this.describeInjectedSurface(
                 bindingName,
-                binding as Record<string, unknown>
+                binding as Record<string, unknown>,
+                execution.docs
               );
               if (described && typeof described === "object") {
                 const surface = described as { methods?: Record<string, unknown> };
@@ -1129,7 +1027,8 @@ export class EvalDO extends DurableObjectBase {
             if (injected && typeof injected === "object") {
               const described = await this.describeInjectedSurface(
                 serviceName,
-                injected as Record<string, unknown>
+                injected as Record<string, unknown>,
+                execution.docs
               );
               if (described) return described;
             }
@@ -1149,13 +1048,13 @@ export class EvalDO extends DurableObjectBase {
           // Not a rich runtime binding — a plain RPC service. It is reachable as
           // `services.${serviceName}.<method>(...)` (dynamic proxy) or, always, via
           // `rpc.call("main", "${serviceName}.<method>", [...])`.
-          return this.mainDocs().describeService(serviceName);
+          return execution.docs.describeService(serviceName);
         }
         return {
           // Names only — keeps the eval scope lean. For a service's methods +
           // typed schemas, call help('<name>') (rich bindings show the ergonomic
           // surface) or use the docs_open/docs_search tools (raw catalog).
-          services: (await this.mainDocs().listServices()).map((s) => s.name),
+          services: (await execution.docs.listServices()).map((s) => s.name),
           importable: Object.keys(rt).sort(),
           ambient: [...EVAL_AMBIENT_ONLY],
           guidance:
@@ -1187,26 +1086,47 @@ export class EvalDO extends DurableObjectBase {
       bindings,
       // Same signal threading as `rpcBinding`: the `chat`/`agent` ops the owning agent forwards
       // are outbound rpc.calls too, so a cancelled run unwinds them instead of wedging the chain.
-      buildOwnerBindings(args, (t, m, a) => this.rpc.call(t, m, a, callOptions))
+      buildOwnerBindings(args, (target, method, values) =>
+        execution.rpc.call(target, method, values)
+      )
     );
+
+    // In path mode, load the entry file. The eval service validates exactly one of
+    // `code` or `path`; this fallback remains defensive for direct/internal calls.
+    const entryCode =
+      args.code !== undefined
+        ? args.code
+        : args.path
+          ? await this.readSourceFile(args.path, execution)
+          : "";
+    const sourcePath = args.sourcePath ?? args.path;
+
     // Eval-only helpers are ambient for terse REPL use, but importing them is a
     // reasonable TypeScript habit. Mirror the same live references onto this
     // owner's runtime module so importing help/scope/db is compatibility-
     // equivalent to using the ambient binding and cannot shadow it with
     // undefined.
-    const evalRuntimeModule = this.moduleMap[runtimeModuleName];
+    if (this.referencesCdp(entryCode, args.imports)) {
+      await this.ensureCdpModule(execution);
+    }
+
+    const runtimeFs = rt["fs"];
+    if (!runtimeFs || typeof runtimeFs !== "object") {
+      throw new Error("eval: hosted runtime did not expose its scoped filesystem");
+    }
+    const runLocalModules = createEvalNodeCompat(runtimeFs as Record<string, unknown>);
+    const runModuleMap: Record<string, unknown> = {
+      ...this.moduleMap,
+      ...runLocalModules,
+      [runtimeModuleName]: { ...rt, ...(this.portableHelpers ?? {}) },
+    };
+    const evalRuntimeModule = runModuleMap[runtimeModuleName];
     if (evalRuntimeModule && typeof evalRuntimeModule === "object") {
       const namespace = evalRuntimeModule as Record<string, unknown>;
       for (const name of EVAL_AMBIENT_ONLY) {
         if (name in bindings) namespace[name] = bindings[name];
       }
     }
-
-    // In path mode, load the entry file. The eval service validates exactly one of
-    // `code` or `path`; this fallback remains defensive for direct/internal calls.
-    const entryCode =
-      args.code !== undefined ? args.code : args.path ? await this.readSourceFile(args.path) : "";
-    const sourcePath = args.sourcePath ?? args.path;
 
     // Lazily build the cdp-client bundle ONLY when this run references CDP. Most
     // evals (fs/vcs/git) never touch it, and the build is a cold-path round-trip
@@ -1216,21 +1136,20 @@ export class EvalDO extends DurableObjectBase {
     // conservative — every route to the client (the import specifier,
     // `handle.cdp`, `CdpConnection`, `getCdpEndpoint`) contains "cdp", so a
     // no-match guarantees no CDP use; a false positive just restores prior cost.
-    if (this.referencesCdp(entryCode, args.imports)) {
-      await this.ensureCdpModule();
-    }
-
     // Live console streaming — agent-owned eval only (`agentRef`+`channelId` set by the eval service).
     // Each chunk is forwarded to the owning agent's `onEvalProgress` (gated there by
     // `assertOwnEvalCaller`), which publishes it as an `invocation.output` event so the chat panel
     // renders the console live. CLI/panel eval (no `agentRef`) gets the full console in the result.
     const agentRef = args.agentRef;
     const channelId = args.channelId;
+    const agentInvocationId = args.agentInvocationId;
     const streamer =
-      agentRef && channelId && runId
+      agentRef && channelId && agentInvocationId
         ? new ConsoleStreamer((chunk) =>
             this.rpc
-              .call(agentRef, "onEvalProgress", [{ runId, channelId, output: chunk }])
+              .call(agentRef, "onEvalProgress", [
+                { runId, agentInvocationId, channelId, output: chunk },
+              ])
               .then(() => undefined)
           )
         : null;
@@ -1242,13 +1161,19 @@ export class EvalDO extends DurableObjectBase {
         syntax: args.syntax ?? "tsx",
         imports: args.imports,
         sourcePath,
-        loadImport: this.makeLoadImport(),
-        loadSourceFile: sourcePath ? (p: string) => this.readSourceFile(p) : undefined,
+        loadImport: this.makeLoadImport(execution),
+        loadSourceFile: sourcePath
+          ? (path: string) => this.readSourceFile(path, execution)
+          : undefined,
         bindings,
         // Per-object map/require so this owner's loaded imports never leak to other owners
         // sharing the isolate (the engine's global module map is the multi-tenant leak).
-        moduleMap: this.moduleMap,
-        require: this.engineRequire,
+        moduleMap: runModuleMap,
+        require: (id: string): unknown => {
+          const value = runModuleMap[id];
+          if (value !== undefined) return value;
+          throw new Error(`Module "${id}" not available in EvalDO; use the imports parameter.`);
+        },
         // Opt-in deadline (timeoutMs) → AbortSignal. Best-effort: the engine may not honor it
         // mid-synchronous-CPU; it fires reliably at await points.
         signal,
@@ -1274,23 +1199,14 @@ export class EvalDO extends DurableObjectBase {
         scopeKeys: Object.keys(scopeManager.current),
       };
     } finally {
-      try {
-        await scopeManager.exitEval();
-      } finally {
-        this.currentRunAbortSignal = null;
-        this.currentRunReadOnly = false;
+      if (!signal?.aborted) {
+        const localKeys = new Set([runtimeModuleName, ...Object.keys(runLocalModules)]);
+        for (const [specifier, value] of Object.entries(runModuleMap)) {
+          if (!localKeys.has(specifier)) this.moduleMap[specifier] = value;
+        }
       }
+      await scopeManager.exitEval();
     }
-  }
-
-  private currentRunCallOptions<T extends Record<string, unknown> | undefined>(opts?: T): T {
-    const signal = this.currentRunAbortSignal;
-    if (!signal && !this.currentRunReadOnly) return opts as T;
-    return {
-      ...(opts ?? {}),
-      ...(signal ? { signal } : {}),
-      ...(this.currentRunReadOnly ? { readOnly: true } : {}),
-    } as T;
   }
 
   private compactRunResult(result: RunResult): RunResult {
@@ -1462,12 +1378,13 @@ export class EvalDO extends DurableObjectBase {
    */
   private async loadLibraryModule(
     specifier: string,
+    execution: EvalExecutionContext,
     opts: { externals?: string[] } = {}
   ): Promise<unknown> {
     const g = globalThis as GlobalBag;
     const moduleMap = this.ensureIsolateModuleGlobals();
     if (!moduleMap[specifier]) {
-      const built = await this.mainBuild().getBuild(specifier, undefined, {
+      const built = await execution.build.getBuild(specifier, undefined, {
         library: true,
         externals: opts.externals ?? [],
         libraryTarget: "worker",
@@ -1496,11 +1413,11 @@ export class EvalDO extends DurableObjectBase {
    * the internal bundle lean, lets the volatile engine update without a kernel
    * rebuild, and keeps host code free of hardcoded workspace unit names.
    */
-  private async ensureEngine(): Promise<EvalEngine> {
+  private async ensureEngine(execution: EvalExecutionContext): Promise<EvalEngine> {
     if (this.engine) return this.engine;
     const engineSource = this.requireDeclaredProviderSource("EVAL_ENGINE_SOURCE", "evalEngine");
     const moduleMap = this.ensureIsolateModuleGlobals();
-    const loaded = await this.loadLibraryModule(engineSource, {
+    const loaded = await this.loadLibraryModule(engineSource, execution, {
       externals: Object.keys(moduleMap),
     });
     this.engine = loaded as EvalEngine;
@@ -1518,13 +1435,15 @@ export class EvalDO extends DurableObjectBase {
    * share across owners). `externals: []` matches the server's boot pre-warm
    * so the cold build is usually already cached.
    */
-  private async ensureRuntimeSupport(): Promise<RuntimeSupportModule> {
+  private async ensureRuntimeSupport(
+    execution: EvalExecutionContext
+  ): Promise<RuntimeSupportModule> {
     if (this.runtimeSupport && this.portableHelpers) return this.runtimeSupport;
     const runtimeSource = this.requireDeclaredProviderSource("EVAL_RUNTIME_SOURCE", "evalRuntime");
     const [hosted, panelRuntime, portable] = await Promise.all([
-      this.loadLibraryModule(`${runtimeSource}/hosted`),
-      this.loadLibraryModule(`${runtimeSource}/panel-runtime`),
-      this.loadLibraryModule(`${runtimeSource}/portable`),
+      this.loadLibraryModule(`${runtimeSource}/hosted`, execution),
+      this.loadLibraryModule(`${runtimeSource}/panel-runtime`, execution),
+      this.loadLibraryModule(`${runtimeSource}/portable`, execution),
     ]);
     const support = {
       ...(panelRuntime as Record<string, unknown>),
@@ -1545,7 +1464,10 @@ export class EvalDO extends DurableObjectBase {
 
   private async ensureScopeManager(engine: EvalEngine): Promise<ScopeManagerLike> {
     if (this.scopeManager) return this.scopeManager;
-    const blobstore = this.mainBlobstore();
+    // Scope persistence is owner infrastructure, not an eval-authored effect.
+    // The cached manager must never retain the causal edge, containment, or
+    // abort signal of whichever run happened to initialize it first.
+    const blobstore = this.infrastructureExecution().blobstore;
     const persistence = new engine.SqlScopePersistence(this.sql, {
       putText: (valueJson: string) => blobstore.putText(valueJson),
       getText: (digest: string) => blobstore.getText(digest),
@@ -1566,19 +1488,16 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /** loadImport over the build service (same on-demand build surface as the in-app eval tool). */
-  private makeLoadImport(): EvalImportLoader {
+  private makeLoadImport(execution: EvalExecutionContext): EvalImportLoader {
     // The eval sandbox runs in this workerd DO — resolve imports as a worker,
     // from the same caller context that backs its fs/vcs/runtime surfaces.
-    return createEvalImportLoader(this.mainBuild(), "worker", {
-      defaultWorkspaceRef: () => {
-        const contextId = this.hostedRuntimeIdentity?.contextId;
-        return contextId ? `ctx:${contextId}` : undefined;
-      },
+    return createEvalImportLoader(execution.build, "worker", {
+      defaultWorkspaceRef: () => (execution.contextId ? `ctx:${execution.contextId}` : undefined),
     });
   }
 
-  private async readSourceFile(path: string): Promise<string> {
-    const contents = await this.mainFs().readFile(path, "utf8");
+  private async readSourceFile(path: string, execution: EvalExecutionContext): Promise<string> {
+    const contents = await execution.fs.readFile(path, "utf8");
     if (typeof contents !== "string") {
       throw new Error(`fs.readFile returned non-text content for eval source file: ${path}`);
     }
@@ -1586,54 +1505,38 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /**
-   * Build the portable runtime surface once, via the ONE shared
-   * `createHostedRuntime` — identical to panel/worker. `import { … } from
-   * "@workspace/runtime"` resolves to `rt` (seeded into the per-object module
-   * map). `host.rpc` is the real `createRpcClient` (so `vcs.subscribeHead` /
-   * `workspace.units.watch` receive server→DO pushes), and `panelRuntime` is
-   * fed the real `rpc.on` (no `()=>()=>{}` no-op).
+   * Build one run-local portable runtime surface via the shared stateless
+   * factories. `host.rpc`, filesystem clients, services, imported runtime
+   * bindings, and parent resolution all close over one immutable execution
+   * context; only the factories and owner identity are cached.
    */
-  private ensureHostedRuntime(
+  private createRunHostedRuntime(
     support: RuntimeSupportModule,
-    contextId: string,
-    gatewayToken?: string
+    execution: EvalExecutionContext,
+    gatewayToken: string | undefined,
+    parent: RunArgs["parent"] | null
   ): WorkspaceRuntimeLike {
     // Owner-scoped gateway token from the eval service (Finding 4 hardening); the
     // env `RPC_AUTH_TOKEN` (shared internal-DO service bearer) is only a fallback
     // for direct/internal calls. gatewayFetch is `relativeOnly` so the bearer
     // never reaches a non-gateway host (eval code is prompt-injectable).
     const token = gatewayToken ?? String(this.env["RPC_AUTH_TOKEN"] ?? "");
-    if (this.hostedRuntime) {
-      const prev = this.hostedRuntimeIdentity;
-      if (prev && (prev.contextId !== contextId || prev.gatewayToken !== token)) {
-        throw new Error(
-          `eval: hosted-runtime identity drift — this EvalDO was initialized with contextId=${prev.contextId} but a run requested contextId=${contextId}` +
-            (prev.gatewayToken === token ? "" : " (and a different gateway token)") +
-            `. A warm EvalDO serves one owner; this indicates a routing/ownership bug.`
-        );
-      }
-      return this.hostedRuntime;
+    const previous = this.hostedRuntimeIdentity;
+    if (
+      previous &&
+      (previous.contextId !== execution.contextId || previous.gatewayToken !== token)
+    ) {
+      throw new Error(
+        `eval: hosted-runtime identity drift — this EvalDO was initialized with contextId=${previous.contextId} but a run requested contextId=${execution.contextId}` +
+          (previous.gatewayToken === token ? "" : " (and a different gateway token)") +
+          `. A warm EvalDO serves one owner; this indicates a routing/ownership bug.`
+      );
     }
-    // Per-run containment: wrap outbound calls so the current eval run's abort signal/read-only flag
-    // is added to every authored service/runtime call. The proxy is stable and reads live fields, so
-    // cached imports of @workspace/runtime remain correct across runs. DO-infrastructure calls use
-    // `this.rpc` directly (unwrapped), so durable/trajectory writes are never read-only-blocked.
-    const baseRpc = this.rpc;
-    const rpc = new Proxy(baseRpc, {
-      get: (t, prop, receiver) =>
-        prop === "call"
-          ? (...callArgs: unknown[]) => {
-              const opts = callArgs[3] as Record<string, unknown> | undefined;
-              const merged = this.currentRunCallOptions(opts);
-              return (baseRpc.call as (...a: unknown[]) => Promise<unknown>)(
-                callArgs[0],
-                callArgs[1],
-                callArgs[2],
-                merged
-              );
-            }
-          : Reflect.get(t, prop, receiver),
-    }) as typeof baseRpc;
+    this.hostedRuntimeIdentity ??= {
+      contextId: execution.contextId,
+      gatewayToken: token,
+    };
+    const rpc = execution.rpc;
     const gatewayConfig = {
       serverUrl: String(this.env["GATEWAY_URL"] ?? ""),
       token,
@@ -1641,15 +1544,11 @@ export class EvalDO extends DurableObjectBase {
     const panelRuntime = support.createPanelRuntime({
       rpc,
       selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
-      // A panel openPanel()'d without an explicit parentId defaults to the eval owner's nearest panel
-      // ancestor (server-resolved into this.parentMeta), so an agent/eval launch nests UNDER its owning
-      // panel — parity with a panel, which defaults to its own id. A function (not a value) because the
-      // runtime is cached while parentMeta is set/re-resolved per run — read live, like resolveParent.
-      defaultOpenParentId: () => this.parentMeta?.parentId ?? null,
+      defaultOpenParentId: () => parent?.parentId ?? null,
     });
     const host: Record<string, unknown> = {
       id: this.rpcSelfId,
-      contextId,
+      contextId: execution.contextId,
       rpc,
       fs: support.createRpcFs(rpc),
       gatewayConfig,
@@ -1657,41 +1556,22 @@ export class EvalDO extends DurableObjectBase {
       panelRuntime,
       workers: support.createWorkerdClient(rpc),
       openExternal: (url: string, options?: unknown) =>
-        this.mainExternalOpen().openExternal(
+        execution.externalOpen.openExternal(
           url,
           options as Parameters<ExternalOpenClient["openExternal"]>[1]
         ),
-      // The owner's nearest panel ancestor (server-supplied via RunArgs.parent →
-      // this.parentMeta). Read live so the cached host reflects a re-resolved
-      // parent. null when the owner has no panel ancestor.
+      // The owner's nearest panel ancestor is captured for this run.
       resolveParent: () =>
-        this.parentMeta
+        parent
           ? support.createRuntimeParentHandle(
               (pid) => panelRuntime.getPanelHandle(pid),
-              this.parentMeta.parentId,
-              this.parentMeta.parentEntityId,
-              this.parentMeta.parentKind
+              parent.parentId,
+              parent.parentEntityId,
+              parent.parentKind
             )
           : null,
     };
     const rt = support.createHostedRuntime(host);
-    const runtimeFs = rt["fs"];
-    if (!runtimeFs || typeof runtimeFs !== "object") {
-      throw new Error("eval: hosted runtime did not expose its scoped filesystem");
-    }
-    Object.assign(this.moduleMap, createEvalNodeCompat(runtimeFs as Record<string, unknown>));
-    // The declared runtime module in eval (e.g. `@workspace/runtime`) = the
-    // hosted runtime instance + the pure authoring helpers
-    // (z/defineContract/journal/…), matching panel/worker barrels. Keyed by the
-    // manifest-declared unit name so `import { … } from "<declared runtime>"`
-    // resolves to it.
-    const runtimeModuleKey = this.requireDeclaredProviderSource(
-      "EVAL_RUNTIME_SOURCE",
-      "evalRuntime"
-    );
-    this.moduleMap[runtimeModuleKey] = { ...rt, ...(this.portableHelpers ?? {}) };
-    this.hostedRuntime = rt;
-    this.hostedRuntimeIdentity = { contextId, gatewayToken: token };
     return rt;
   }
 
@@ -1719,7 +1599,7 @@ export class EvalDO extends DurableObjectBase {
    * disabled (logged once); eval imports of an undeclared module fail with the
    * regular module-resolution diagnostic.
    */
-  private async ensureCdpModule(): Promise<void> {
+  private async ensureCdpModule(execution: EvalExecutionContext): Promise<void> {
     if (this.cdpLoaded) return;
     const cdpSource = this.declaredProviderSource("EVAL_CDP_CLIENT_SOURCE");
     if (!cdpSource) {
@@ -1732,7 +1612,7 @@ export class EvalDO extends DurableObjectBase {
       return;
     }
     const globalMap = this.ensureIsolateModuleGlobals();
-    const loaded = (await this.loadLibraryModule(cdpSource, {
+    const loaded = (await this.loadLibraryModule(cdpSource, execution, {
       externals: Object.keys(globalMap),
     })) as { CdpConnection?: unknown } | undefined;
     if (typeof loaded?.CdpConnection !== "function") {

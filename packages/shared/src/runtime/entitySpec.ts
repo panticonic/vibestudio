@@ -36,16 +36,11 @@ export type EntityStatus = "active" | "retired";
 /** A workspace-relative repo path (`packages/foo`, `panels/chat`, `meta`). */
 export type RepoPath = string;
 
-/** Per-repo context head name (`ctx:{contextId}`) on `vcs:repo:{repoPath}`. */
-export function contextHeadName(contextId: string): string {
-  return `ctx:${contextId}`;
-}
-
 /**
- * A runtime context is a full logical workspace branch. The VCS layer presents
- * the same workspace tree to every context and records per-repo ctx heads lazily
- * as that context edits repos. Repo membership is not part of the runtime
- * context contract; callers inspect changes through VCS status APIs.
+ * A runtime context names one semantic workspace timeline. Its complete
+ * working head, provenance graph, and repository membership belong to the
+ * semantic workspace state machine; runtime identity deliberately carries
+ * only the context id.
  */
 export interface WorkspaceContext {
   contextId: string;
@@ -275,6 +270,7 @@ export type RuntimeEntityCreateSpec =
       stateArgs?: unknown;
       env?: Record<string, string>;
       agentBinding?: RuntimeAgentBindingInput;
+      agentChannelId?: string;
     }
   | {
       kind: "do";
@@ -285,14 +281,17 @@ export type RuntimeEntityCreateSpec =
       contextId?: string | null;
       stateArgs?: unknown;
       agentBinding?: RuntimeAgentBindingInput;
+      agentChannelId?: string;
     }
   | {
-      /** Inert session entity: no workerd/panel runtime, just identity + context. */
+      /** Inert session entity: identity, context, and optional external-agent binding. */
       kind: "session";
       source: string;
       contextId?: string | null;
       key?: string;
       title?: string;
+      /** Channel this session's external agent identity serves. */
+      agentChannelId?: string;
     };
 
 export interface RuntimeEntityHandle {

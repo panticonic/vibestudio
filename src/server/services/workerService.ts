@@ -3,7 +3,8 @@
  *
  * Provides:
  * - listSources: launchable worker sources (including manifest entry + durable classes)
- * - listServices / resolveService: manifest-declared userland services
+ * - listServices: workspace-authored services declared in the manifest
+ * - resolveService: workspace-authored services plus product-sealed workspace services
  */
 
 import { z } from "zod";
@@ -13,7 +14,7 @@ import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispa
 import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import type { BuildSystemV2 } from "../buildV2/index.js";
-import { resolveUserlandService, type ResolvedUserlandService } from "../userlandServices.js";
+import { resolveWorkspaceService, type ResolvedWorkspaceService } from "../workspaceServices.js";
 import { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 
 type ServiceListRow =
@@ -84,11 +85,11 @@ export function createWorkerService(deps: {
       returns: z.array(WorkerSourceSchema),
     },
     listServices: {
-      description: "List manifest-declared userland services",
+      description: "List workspace-authored services declared in the manifest",
       args: z.tuple([]),
     },
     resolveService: {
-      description: "Resolve a userland service by name or protocol",
+      description: "Resolve a workspace service by name or protocol",
       args: z.tuple([z.string(), z.string().nullable().optional()]),
     },
     resolveDurableObject: {
@@ -99,7 +100,7 @@ export function createWorkerService(deps: {
 
   return {
     name: "workers",
-    description: "Worker discovery and userland service resolution",
+    description: "Worker discovery and workspace service resolution",
     policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
     methods,
     handler: defineServiceHandler("workers", methods, {
@@ -131,9 +132,9 @@ export function createWorkerService(deps: {
         ];
       },
       resolveService: async (ctx, [query, objectKey]) => {
-        const scoped = await resolveUserlandServiceForCaller(ctx, query, objectKey);
+        const scoped = await resolveWorkspaceServiceForCaller(ctx, query, objectKey);
         const service = scoped.service;
-        assertUserlandServiceAccess(service.name, service.policy, ctx.caller.runtime.kind);
+        assertWorkspaceServiceAccess(service.name, service.policy, ctx.caller.runtime.kind);
         if (service.kind === "durable-object") {
           const singleton = scoped.decls.singletons.find(service.source, service.className);
           const contextId = singleton?.contextId ?? scoped.contextId;
@@ -187,14 +188,14 @@ export function createWorkerService(deps: {
     };
   }
 
-  async function resolveUserlandServiceForCaller(
+  async function resolveWorkspaceServiceForCaller(
     ctx: ServiceContext,
     query: string,
     objectKey: string | null | undefined
-  ): Promise<ScopedDeclarations & { service: ResolvedUserlandService }> {
+  ): Promise<ScopedDeclarations & { service: ResolvedWorkspaceService }> {
     try {
       return {
-        service: resolveUserlandService(workspaceDecls, query, objectKey),
+        service: resolveWorkspaceService(workspaceDecls, query, objectKey),
         decls: workspaceDecls,
         scope: "main",
       };
@@ -203,10 +204,10 @@ export function createWorkerService(deps: {
     }
 
     const scoped = await declarationsForCallerContext(ctx);
-    if (!scoped) throw new Error(`No userland service registered for ${query}`);
+    if (!scoped) throw new Error(`No workspace service registered for ${query}`);
     return {
       ...scoped,
-      service: resolveUserlandService(scoped.decls, query, objectKey),
+      service: resolveWorkspaceService(scoped.decls, query, objectKey),
     };
   }
 
@@ -236,7 +237,7 @@ export function createWorkerService(deps: {
 }
 
 function isMissingServiceError(err: unknown, query: string): boolean {
-  return err instanceof Error && err.message === `No userland service registered for ${query}`;
+  return err instanceof Error && err.message === `No workspace service registered for ${query}`;
 }
 
 function missingDurableObjectMessage(source: string, className: string): string {
@@ -342,11 +343,11 @@ function assertDurableObjectBackingServiceAccess(
       policy: service.policy as { allowed?: CallerKind[] } | undefined,
     }));
   for (const service of backingPolicies) {
-    assertUserlandServiceAccess(service.name, service.policy, callerKind);
+    assertWorkspaceServiceAccess(service.name, service.policy, callerKind);
   }
 }
 
-function assertUserlandServiceAccess(
+function assertWorkspaceServiceAccess(
   serviceName: string,
   policy: { allowed?: CallerKind[] } | undefined,
   callerKind: CallerKind
@@ -354,14 +355,14 @@ function assertUserlandServiceAccess(
   const allowed = policy?.allowed;
   if (!allowed || allowed.length === 0) {
     const err = new Error(
-      `Userland service '${serviceName}' has no access policy`
+      `Workspace service '${serviceName}' has no access policy`
     ) as NodeJS.ErrnoException;
     err.code = "EACCES";
     throw err;
   }
   if (!callerKindAllowedByPolicy(callerKind, allowed)) {
     const err = new Error(
-      `Caller kind '${callerKind}' cannot resolve userland service '${serviceName}'`
+      `Caller kind '${callerKind}' cannot resolve workspace service '${serviceName}'`
     ) as NodeJS.ErrnoException;
     err.code = "EACCES";
     throw err;

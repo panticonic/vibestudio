@@ -15,7 +15,12 @@ import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
-import { WorkerdManager, type WorkerdManagerDeps } from "./workerdManager.js";
+import {
+  WorkerdManager,
+  type WorkerdManagerDeps,
+  type WorkerdWorkspaceProvider,
+} from "./workerdManager.js";
+import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import { encodeUniversalKey } from "./doDispatch.js";
 import type { BuildResult } from "./buildV2/buildStore.js";
 import {
@@ -115,6 +120,19 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
     tokenManager,
     fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
+    workspaceId: "workspace:universal-do-host-test",
+    workerdPrograms: compiledWorkerdPrograms,
+    workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-ws-")),
+    statePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-state-")),
+    getProxyPort: () => 1,
+    getSharedEgressPort: () => Promise.resolve(59999),
+    registerEgressCaller: () => {},
+    unregisterEgressCaller: () => {},
+    egressSecret: "universal-do-host-egress-secret",
+    getWorkerdGatewayToken: () => "udo-gateway-token",
+    workerdStartupReadyTimeoutMs: 15_000,
+  };
+  const provider: WorkerdWorkspaceProvider = {
     bindRuntimeImage: async (source: string, ref?: string) => {
       const b = builds[source];
       if (!b) throw new Error(`no build for ${source}`);
@@ -132,18 +150,13 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
       );
       return entry?.[1] ?? null;
     },
-    workerdPrograms: compiledWorkerdPrograms,
-    workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-ws-")),
-    statePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-state-")),
-    getProxyPort: () => 1,
-    getSharedEgressPort: () => Promise.resolve(59999),
-    registerEgressCaller: () => {},
-    unregisterEgressCaller: () => {},
-    egressSecret: "universal-do-host-egress-secret",
-    getWorkerdGatewayToken: () => "udo-gateway-token",
-    workerdStartupReadyTimeoutMs: 15_000,
+    getManifestRoutes: () => [],
+    getManifestDoClasses: () => [],
+    singletonRegistry: new SingletonRegistry([]),
+    getInternalDoEnv: () => ({}),
   };
   const manager = new WorkerdManager(deps);
+  manager.bindWorkspaceProvider(provider);
 
   const gateway = createServer((req, res) => {
     const url = req.url ?? "";

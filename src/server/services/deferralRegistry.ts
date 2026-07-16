@@ -11,9 +11,9 @@
  *
  * This registry owns the detached work: it dedups reissued calls (so a DO
  * re-driving after a missed push doesn't double-prompt), enforces a TTL, and
- * isolates delivery failures. Correctness across a *server* restart still comes
- * from DO-side re-drive against durable state (grant stores); this registry is
- * the in-memory fast path, deliberately not durable.
+ * isolates delivery failures. The result push is a wake-up hint, not a durable
+ * queue: callers recover from their own journaled effect and the service's
+ * durable state. A retired caller has no notification obligation to satisfy.
  */
 
 import {
@@ -50,16 +50,9 @@ export interface DeferralRegistryDeps {
     isError: boolean
   ) => Promise<void>;
   ttlMs?: number;
-  logger?: { warn: (...args: unknown[]) => void; error?: (...args: unknown[]) => void };
+  logger?: { warn: (...args: unknown[]) => void };
   /** Injectable timer (tests). Defaults to an unref'd setTimeout. */
   setTimer?: (fn: () => void, ms: number) => TimerHandle;
-  /**
-   * Max delivery attempts for a settled result before giving up (DO-side
-   * re-drive remains the durable backstop). Default 4.
-   */
-  deliveryRetries?: number;
-  /** Injectable delay (tests). Defaults to `setTimeout`. */
-  sleep?: (ms: number) => Promise<void>;
 }
 
 interface PendingEntry {
@@ -88,14 +81,10 @@ export class DeferralRegistry {
   private pending = new Map<string, PendingEntry>();
   private readonly ttlMs: number;
   private readonly setTimer: (fn: () => void, ms: number) => TimerHandle;
-  private readonly deliveryRetries: number;
-  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly deps: DeferralRegistryDeps) {
     this.ttlMs = deps.ttlMs ?? DEFAULT_TTL_MS;
     this.setTimer = deps.setTimer ?? defaultTimer;
-    this.deliveryRetries = deps.deliveryRetries ?? 4;
-    this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
   /**
@@ -154,45 +143,13 @@ export class DeferralRegistry {
     entry.timer.cancel();
     const value = isError ? errorPayload(payload) : payload;
     for (const requestId of entry.requestIds) {
-      void this.deliverWithRetry(entry.callerId, requestId, value, isError);
-    }
-  }
-
-  /**
-   * Deliver a settled result, retrying with exponential backoff. A dropped
-   * delivery would otherwise leave the caller relying solely on its own
-   * re-drive (a delay) or, worse, never settling. Exhausting all retries is an
-   * error-level event (the DO-side re-drive against durable grant state is the
-   * remaining backstop), not a silent swallow.
-   */
-  private async deliverWithRetry(
-    callerId: string,
-    requestId: string,
-    value: unknown,
-    isError: boolean
-  ): Promise<void> {
-    for (let attempt = 0; attempt < this.deliveryRetries; attempt++) {
-      try {
-        await this.deps.deliver(callerId, requestId, value, isError);
-        return;
-      } catch (err) {
-        const last = attempt === this.deliveryRetries - 1;
-        if (last) {
-          const log = this.deps.logger?.error ?? this.deps.logger?.warn;
-          log?.(
-            `[DeferralRegistry] onDeferredResult delivery FAILED after ${this.deliveryRetries} ` +
-              `attempts for ${requestId} (caller ${callerId}); DO re-drive is the backstop:`,
-            err
-          );
-          return;
-        }
+      void this.deps.deliver(entry.callerId, requestId, value, isError).catch((err) => {
         this.deps.logger?.warn?.(
-          `[DeferralRegistry] onDeferredResult delivery attempt ${attempt + 1} failed for ` +
-            `${requestId}, retrying:`,
+          `[DeferralRegistry] onDeferredResult delivery failed for ${requestId} ` +
+            `(caller ${entry.callerId}); the caller will recover from durable state:`,
           err
         );
-        await this.sleep(100 * Math.pow(2, attempt));
-      }
+      });
     }
   }
 

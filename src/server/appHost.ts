@@ -28,6 +28,7 @@ import {
 } from "@vibestudio/unit-host";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName } from "@vibestudio/shared/events";
+import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import {
   isAuthorizedChromeAppSource,
   normalizeAppSourcePath,
@@ -198,13 +199,13 @@ interface BuildSystemLike {
   getGraph(): {
     allNodes(): AppGraphNode[];
   };
-  onPushBuild(callback: (source: string, trigger?: { head: string }) => void): void;
+  onPushBuild(callback: (source: string, trigger?: ProtectedPublicationEvent) => void): void;
   onUnitChange?(
     callback: (event: {
       name: string;
       relativePath: string;
       kind: string;
-      trigger: { head: string };
+      trigger: ProtectedPublicationEvent;
     }) => void
   ): () => void;
 }
@@ -298,7 +299,7 @@ export interface AppHostDeps {
   statePath: string;
   workspacePath: string;
   workspaceId: string;
-  readWorkspaceFileAtCommit(commit: string, filePath: string): Promise<string | null>;
+  readWorkspaceFileAtState(stateHash: string, filePath: string): Promise<string | null>;
   buildSystem: BuildSystemLike;
   eventService: EventService;
   approvalQueue: ApprovalQueueLike;
@@ -513,7 +514,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     commit: string
   ): Promise<{ units: UnitBatchEntry[]; identityKeys: string[] }> {
     const approval = this.unitHost.approvalForDeclarations(
-      await this.readDeclaredAppsFromCommit(commit)
+      await this.readDeclaredAppsFromState(commit)
     );
     return { units: approval.entries, identityKeys: approval.identityKeys };
   }
@@ -1933,7 +1934,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
   private async handleChangedAppUnit(event: {
     name: string;
     relativePath: string;
-    trigger?: { head: string };
+    trigger?: ProtectedPublicationEvent;
   }): Promise<void> {
     const entry =
       this.registry.get(event.name) ??
@@ -1949,14 +1950,17 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
   }
 
   private sourceChangeAppliesToEntry(
-    trigger: { head: string } | undefined,
+    trigger: ProtectedPublicationEvent | undefined,
     entry: AppRegistryEntry
   ): boolean {
-    if (!trigger?.head) return true;
-    return normalizeRef(trigger.head) === normalizeRef(entry.source.ref);
+    if (!trigger) return true;
+    return normalizeRef(entry.source.ref) === "main";
   }
 
-  private async handleSourceRebuilt(source: string, trigger?: { head: string }): Promise<void> {
+  private async handleSourceRebuilt(
+    source: string,
+    trigger?: ProtectedPublicationEvent
+  ): Promise<void> {
     const normalized = normalizeRepoPath(source);
     const entry = this.registry
       .list()
@@ -2045,9 +2049,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     }
   }
 
-  private async readDeclaredAppsFromCommit(commit: string): Promise<WorkspaceAppDeclaration[]> {
+  private async readDeclaredAppsFromState(stateHash: string): Promise<WorkspaceAppDeclaration[]> {
     try {
-      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/vibestudio.yml");
+      const content = await this.deps.readWorkspaceFileAtState(stateHash, "meta/vibestudio.yml");
       if (!content) return [];
       return resolveDeclaredApps(parseWorkspaceConfigContentWithId(content, this.deps.workspaceId));
     } catch {

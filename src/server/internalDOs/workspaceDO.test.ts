@@ -54,9 +54,24 @@ function doInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]
   };
 }
 
-describe("WorkspaceDO schema migration", () => {
-  it("recreates current tables after destructive pre-release migrations", async () => {
+function activateAlarmKey(
+  instance: WorkspaceDO,
+  key: { source: string; className: string; objectKey: string }
+): EntityRecord {
+  return instance.entityActivate(
+    doInput({
+      source: { repoPath: key.source, effectiveVersion: VERSION },
+      className: key.className,
+      key: key.objectKey,
+    })
+  );
+}
+
+describe("WorkspaceDO schema epoch", () => {
+  it("recreates the exact current schema after a destructive pre-release epoch cut", async () => {
     const db = await createDbAtSchemaVersion(CURRENT_SCHEMA_VERSION - 1);
+    db.run(`INSERT INTO state (key, value) VALUES ('application-state', 'obsolete')`);
+    db.run(`CREATE TABLE retired_workspace_shape (id TEXT PRIMARY KEY)`);
     const { sql } = await createTestDO(WorkspaceDOTestable, undefined, { db });
 
     for (const table of WORKSPACE_TABLES) {
@@ -67,6 +82,12 @@ describe("WorkspaceDO schema migration", () => {
     expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
       value: String(CURRENT_SCHEMA_VERSION),
     });
+    expect(sql.exec(`SELECT value FROM state WHERE key = 'application-state'`).toArray()).toEqual(
+      []
+    );
+    expect(
+      sql.exec(`SELECT name FROM sqlite_master WHERE name = 'retired_workspace_shape'`).toArray()
+    ).toEqual([]);
   });
 
   it("repairs a stamped current schema that is missing required tables", async () => {
@@ -111,16 +132,82 @@ describe("WorkspaceDO.entityActivate", () => {
     expect(b.createdAt).toBe(a.createdAt);
   });
 
-  it("backfills a missing owner exactly once and rejects a different owner", () => {
+  it("treats a missing-to-bound owner transition as an identity collision", () => {
     const initial = instance.entityActivate(doInput());
     expect(initial.ownerUserId).toBeUndefined();
 
-    const owned = instance.entityActivate(doInput({ ownerUserId: "usr_alice" }));
-    expect(owned.ownerUserId).toBe("usr_alice");
-    expect(instance.entityActivate(doInput()).ownerUserId).toBe("usr_alice");
-    expect(() => instance.entityActivate(doInput({ ownerUserId: "usr_bob" }))).toThrow(
+    expect(() => instance.entityActivate(doInput({ ownerUserId: "usr_alice" }))).toThrow(
       /ownerUserId/
     );
+  });
+
+  it("treats a missing-to-bound agent binding transition as an identity collision", () => {
+    instance.entityActivate(doInput());
+
+    expect(() =>
+      instance.entityActivate(
+        doInput({
+          agentBinding: {
+            entityId: "agent-1",
+            contextId: "ctx-1",
+            channelId: "channel-1",
+          },
+        })
+      )
+    ).toThrow(/agentBinding/);
+  });
+
+  it("normalizes agent bindings into only the non-derivable entity edge and channel", async () => {
+    const { instance: isolated, sql } = await createTestDO(WorkspaceDOTestable);
+    const sessionId = canonicalEntityId({ kind: "session", key: "external" });
+    const session = isolated.entityActivate({
+      kind: "session",
+      source: { repoPath: "claude-code", effectiveVersion: "" },
+      contextId: "ctx-agent",
+      key: "external",
+      agentBinding: {
+        entityId: sessionId,
+        contextId: "ctx-agent",
+        channelId: "channel:external",
+      },
+    });
+    const relay = isolated.entityActivate(
+      doInput({
+        contextId: "ctx-agent",
+        agentBinding: {
+          entityId: session.id,
+          contextId: "ctx-agent",
+          channelId: "channel:external",
+        },
+      })
+    );
+
+    expect(
+      sql
+        .exec(`SELECT agent_entity_id, agent_channel_id FROM entities WHERE id = ?`, session.id)
+        .one()
+    ).toEqual({ agent_entity_id: null, agent_channel_id: "channel:external" });
+    expect(
+      sql
+        .exec(`SELECT agent_entity_id, agent_channel_id FROM entities WHERE id = ?`, relay.id)
+        .one()
+    ).toEqual({ agent_entity_id: session.id, agent_channel_id: "channel:external" });
+    expect(
+      sql
+        .exec(`PRAGMA table_info(entities)`)
+        .toArray()
+        .map((row) => row["name"])
+    ).not.toContain("agent_binding");
+    expect(isolated.entityResolve(session.id)?.agentBinding).toEqual({
+      entityId: session.id,
+      contextId: "ctx-agent",
+      channelId: "channel:external",
+    });
+    expect(isolated.entityResolve(relay.id)?.agentBinding).toEqual({
+      entityId: session.id,
+      contextId: "ctx-agent",
+      channelId: "channel:external",
+    });
   });
 
   it("reactivates a retired row with identical identity", () => {
@@ -564,9 +651,11 @@ describe("WorkspaceDO lifecycle registry", () => {
     expect(instance.lifecycleListLeases()).toEqual([]);
   });
 
-  it("sets, replaces, lists, and drains server-driven DO alarms", () => {
+  it("lists due alarms without consuming them and acknowledges explicitly", () => {
     const a = { source: "workers/poller", className: "PollerDO", objectKey: "p-1" };
     const b = { source: "workers/poller", className: "PollerDO", objectKey: "p-2" };
+    activateAlarmKey(instance, a);
+    activateAlarmKey(instance, b);
 
     instance.alarmSet({ ...a, wakeAt: 5_000 });
     instance.alarmSet({ ...b, wakeAt: 2_000 });
@@ -575,14 +664,16 @@ describe("WorkspaceDO lifecycle registry", () => {
 
     expect(instance.alarmNextWakeAt()).toBe(1_000);
 
-    // Drain only those due at/before the cutoff; the rest remain.
-    expect(instance.alarmTakeDue(1_500)).toEqual([{ ...a, wakeAt: 1_000, bestEffort: false }]);
+    // Listing does not consume the row; explicit outcome acknowledgement does.
+    expect(instance.alarmListDue(1_500)).toEqual([{ ...a, wakeAt: 1_000 }]);
+    expect(instance.alarmNextWakeAt()).toBe(1_000);
+    instance.alarmClear(a);
     expect(instance.alarmNextWakeAt()).toBe(2_000);
 
     // Clearing removes a pending alarm.
     instance.alarmClear(b);
     expect(instance.alarmNextWakeAt()).toBeNull();
-    expect(instance.alarmTakeDue(10_000)).toEqual([]);
+    expect(instance.alarmListDue(10_000)).toEqual([]);
   });
 
   it("opens an epoch and snapshots live leases into prepare and resume ops", () => {
@@ -642,6 +733,49 @@ describe("WorkspaceDO lifecycle registry", () => {
     instance.entityRetire(rec.id);
 
     expect(instance.lifecycleListLeases()).toEqual([]);
+  });
+
+  it("clears a DO alarm on retirement and rejects late scheduling", () => {
+    const rec = instance.entityActivate(doInput());
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    instance.alarmSet({ ...key, wakeAt: 1_000 });
+
+    instance.entityRetire(rec.id);
+    expect(instance.alarmListDue(1_000)).toEqual([]);
+    expect(() => instance.alarmSet({ ...key, wakeAt: 2_000 })).toThrow(/is not active/u);
+    expect(instance.alarmListDue(2_000)).toEqual([]);
+  });
+
+  it("rejects scheduling when no matching active DO exists", () => {
+    expect(() =>
+      instance.alarmSet({
+        source: "workers/missing",
+        className: "MissingDO",
+        objectKey: "missing",
+        wakeAt: 1_000,
+      })
+    ).toThrow(/is not active/u);
+    expect(instance.alarmNextWakeAt()).toBeNull();
+  });
+
+  it("repairs a persisted retired-entity alarm during startup", async () => {
+    const first = await createTestDO(WorkspaceDOTestable);
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    const rec = first.instance.entityActivate(doInput());
+    first.instance.entityRetire(rec.id);
+
+    // Model a crash-era stale row without passing through the guarded ingress.
+    first.sql.exec(
+      `INSERT INTO do_alarms (source, class_name, object_key, wake_at) VALUES (?, ?, ?, ?)`,
+      key.source,
+      key.className,
+      key.objectKey,
+      2_000
+    );
+    expect(first.instance.alarmListDue(2_000)).toEqual([{ ...key, wakeAt: 2_000 }]);
+
+    const restarted = await createTestDO(WorkspaceDOTestable, undefined, { db: first.db });
+    expect(restarted.instance.alarmListDue(2_000)).toEqual([]);
   });
 });
 

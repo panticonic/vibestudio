@@ -4,95 +4,56 @@ import initSqlJs from "sql.js";
 import { DurableObjectBase, rpc } from "@vibestudio/durable";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 
-class MigrationProbeDO extends DurableObjectBase {
+class SchemaEpochProbeDO extends DurableObjectBase {
   static override schemaVersion = 2;
 
   protected createTables(): void {
-    this.sql.exec(
-      `CREATE TABLE IF NOT EXISTS migration_log (from_version INTEGER, to_version INTEGER)`
-    );
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS epoch_rows (id TEXT PRIMARY KEY)`);
   }
 
-  protected override migrate(fromVersion: number, toVersion: number): void {
-    this.createTables();
-    this.sql.exec(
-      `INSERT INTO migration_log (from_version, to_version) VALUES (?, ?)`,
-      fromVersion,
-      toVersion
-    );
+  protected override requiredTables(): readonly string[] {
+    return ["epoch_rows"];
   }
 
   @rpc
-  countMigrations(): number {
-    return (this.sql.exec(`SELECT COUNT(*) as count FROM migration_log`).one() as { count: number })
+  countRows(): number {
+    return (this.sql.exec(`SELECT COUNT(*) as count FROM epoch_rows`).one() as { count: number })
       .count;
   }
 }
 
-class DestructiveMigrationProbeDO extends DurableObjectBase {
-  static override schemaVersion = 2;
+describe("DurableObjectBase schema epochs", () => {
+  it("initializes and stamps the exact current schema", async () => {
+    const { call, sql } = await createTestDO(SchemaEpochProbeDO);
 
-  protected createTables(): void {
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS required_table (id TEXT PRIMARY KEY)`);
-  }
+    expect(await call("countRows")).toBe(0);
+    expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
+      value: "2",
+    });
+  });
 
-  protected override requiredTables(): readonly string[] {
-    return ["required_table"];
-  }
+  it("replaces an older epoch wholesale before recording the current epoch", async () => {
+    const SQL = await initSqlJs();
+    const db = new SQL.Database();
+    db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    db.run(`INSERT INTO state (key, value) VALUES ('schema_version', ?)`, ["1"]);
+    db.run(`INSERT INTO state (key, value) VALUES ('application-state', 'obsolete')`);
+    db.run(`CREATE TABLE epoch_rows (id TEXT PRIMARY KEY)`);
+    db.run(`INSERT INTO epoch_rows (id) VALUES ('old-row')`);
+    db.run(`CREATE TABLE retired_shape (id TEXT PRIMARY KEY)`);
+    db.run(`CREATE VIEW retired_view AS SELECT id FROM retired_shape`);
 
-  protected override migrate(fromVersion: number, _toVersion: number): void {
-    if (fromVersion > 0) this.sql.exec(`DROP TABLE IF EXISTS required_table`);
-  }
+    const { call, sql } = await createTestDO(SchemaEpochProbeDO, undefined, { db });
 
-  @rpc
-  hasRequiredTable(): boolean {
-    return (
-      this.sql
-        .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'required_table'`)
-        .toArray().length === 1
+    expect(await call("countRows")).toBe(0);
+    expect(
+      sql
+        .exec(`SELECT name FROM sqlite_master WHERE name IN ('retired_shape', 'retired_view')`)
+        .toArray()
+    ).toEqual([]);
+    expect(sql.exec(`SELECT value FROM state WHERE key = 'application-state'`).toArray()).toEqual(
+      []
     );
-  }
-}
-
-describe("DurableObjectBase migration hook", () => {
-  it("initializes a new schema without running migrations", async () => {
-    const { call, sql } = await createTestDO(MigrationProbeDO);
-
-    expect(await call("countMigrations")).toBe(0);
-    expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
-      value: "2",
-    });
-  });
-
-  it("runs migrate on old schemas before recording the target schema version", async () => {
-    const SQL = await initSqlJs();
-    const db = new SQL.Database();
-    db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    db.run(`INSERT INTO state (key, value) VALUES ('schema_version', ?)`, ["1"]);
-
-    const { call, sql } = await createTestDO(MigrationProbeDO, undefined, { db });
-
-    expect(await call("countMigrations")).toBe(1);
-    expect(sql.exec(`SELECT * FROM migration_log`).one()).toEqual({
-      from_version: 1,
-      to_version: 2,
-    });
-    expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
-      value: "2",
-    });
-  });
-
-  it("recreates current tables after a destructive migration before recording readiness", async () => {
-    const SQL = await initSqlJs();
-    const db = new SQL.Database();
-    db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    db.run(`INSERT INTO state (key, value) VALUES ('schema_version', ?)`, ["1"]);
-
-    const { call, sql } = await createTestDO(DestructiveMigrationProbeDO, undefined, { db });
-
-    expect(await call("hasRequiredTable")).toBe(true);
-    sql.exec(`INSERT INTO required_table (id) VALUES ('row-1')`);
-    expect(sql.exec(`SELECT id FROM required_table`).one()).toEqual({ id: "row-1" });
     expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
       value: "2",
     });
@@ -104,9 +65,9 @@ describe("DurableObjectBase migration hook", () => {
     db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     db.run(`INSERT INTO state (key, value) VALUES ('schema_version', ?)`, ["2"]);
 
-    const { call, sql } = await createTestDO(DestructiveMigrationProbeDO, undefined, { db });
+    const { call, sql } = await createTestDO(SchemaEpochProbeDO, undefined, { db });
 
-    expect(await call("hasRequiredTable")).toBe(true);
+    expect(await call("countRows")).toBe(0);
     expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
       value: "2",
     });
@@ -118,8 +79,8 @@ describe("DurableObjectBase migration hook", () => {
     db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     db.run(`INSERT INTO state (key, value) VALUES ('schema_version', ?)`, ["3"]);
 
-    const { call } = await createTestDO(DestructiveMigrationProbeDO, undefined, { db });
+    const { call } = await createTestDO(SchemaEpochProbeDO, undefined, { db });
 
-    await expect(call("hasRequiredTable")).rejects.toThrow(/newer than supported version 2/);
+    await expect(call("countRows")).rejects.toThrow(/newer than supported version 2/);
   });
 });

@@ -27,9 +27,10 @@ import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
 import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { stateLayout } from "./stateLayout.js";
-import { accountProfileSchema } from "@vibestudio/service-schemas/account";
 import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
 import { createGitInteropProviderInvoker } from "./gitInteropProviderInvoker.js";
+import { retireRoutedReach } from "./routedReachRetirement.js";
+import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -363,7 +364,7 @@ async function main() {
   const {
     identityDbPath,
     hubUrl,
-    hubControlToken,
+    workspaceChildToken,
     adminToken: childAdminToken,
     relaySigningSecret,
   } = consumeWorkspaceChildSecrets(process.env);
@@ -385,7 +386,6 @@ async function main() {
       wsDir,
       name: wsName,
       init: args.init,
-      isDev: !!args.ephemeral,
       requireExplicitSelection: isWorkspaceServer,
     });
     // Managed directory names are storage coordinates, not workspace
@@ -407,6 +407,14 @@ async function main() {
   // Set user data path to workspace state dir for env-paths compatibility
   setUserDataPath(workspace.statePath);
   const layout = stateLayout(workspace.statePath);
+  if (
+    path.resolve(workspace.contextProjectionsPath) !==
+    path.resolve(layout.contextProjections.current)
+  ) {
+    throw new Error(
+      `Workspace context-projection topology mismatch: ${workspace.contextProjectionsPath} is not the current epoch root`
+    );
+  }
   // Structured host-log persistence next to the spawn-time stdout log.
   serverLogStore.attachJsonlSink(layout.logsDir);
 
@@ -422,11 +430,8 @@ async function main() {
   // runs eagerly here — bad workspaces fail fast at startup with a clear msg.
   const { buildWorkspaceDeclarations } = await import("@vibestudio/workspace/singletonRegistry");
   const workspaceDecls = buildWorkspaceDeclarations(workspaceConfig);
-  // The gad-store DO backing the userland `vcs` service — the ONE manifest
-  // declaration (services[] row + its singletonObjects row) that names the
-  // durable VCS store. The host's attach/follower and workerd's bootstrap
-  // main-binding resolve through it; there is no separate provider slot.
-  const { resolveUserlandService, resolveVcsStoreBinding } = await import("./userlandServices.js");
+  const { resolveWorkspaceService } = await import("./workspaceServices.js");
+  const { SEMANTIC_CONTROL_PLANE } = await import("./internalDOs/controlPlane.js");
   const {
     resolveWorkspaceTrustGrants,
     resolveHostTargetDecl,
@@ -438,8 +443,8 @@ async function main() {
   const restartBoundManifestChanges = (
     previousConfig: typeof workspaceConfig,
     nextConfig: typeof workspaceConfig,
-    previousDecls: typeof workspaceDecls,
-    nextDecls: typeof workspaceDecls
+    _previousDecls: typeof workspaceDecls,
+    _nextDecls: typeof workspaceDecls
   ): string[] => {
     const changes: string[] = [];
     const compare = (field: string, previousValue: unknown, nextValue: unknown): void => {
@@ -471,14 +476,6 @@ async function main() {
       workspaceProviderExtensionPackageName(previousConfig, "browserData"),
       workspaceProviderExtensionPackageName(nextConfig, "browserData")
     );
-
-    const previousVcs = resolveVcsStoreBinding(previousDecls);
-    const nextVcs = resolveVcsStoreBinding(nextDecls);
-    if (JSON.stringify(previousVcs ?? null) !== JSON.stringify(nextVcs ?? null)) {
-      changes.push(
-        "vibestudio.vcs.v1 service binding changed; restart the server to attach the new VCS store"
-      );
-    }
 
     return changes;
   };
@@ -562,15 +559,6 @@ async function main() {
   let primePanelRuntimeImage: (source: string, ref?: string) => void = () => {};
   entityCache.registerBootstrap({ id: "server", kind: "server" });
   entityCache.registerBootstrap({ id: "electron-main", kind: "shell" });
-  // Reap a connectionless DO/worker's event-push subscriptions when its entity is
-  // retired/deleted. WS panels/shells self-reap on socket close; a DoPushSubscriber
-  // has no socket, so without this the server would keep re-waking a torn-down DO on
-  // every matching emit. (resolve() is null post-delete — the preceding retire reaped.)
-  entityCache.onChange((id, change) => {
-    if (change === "activate") return;
-    const kind = entityCache.resolve(id)?.kind;
-    if (kind === "do" || kind === "worker") eventService.unsubscribeAll(id);
-  });
   // The single owner of WorkspaceDO entity state: pairs every durable
   // activate/retire with the hot-cache mirror so they can't drift. The
   // write-owners (runtime + eval services) receive this instead of raw entity
@@ -613,10 +601,6 @@ async function main() {
     db: identityDb,
     serverIdPath: path.join(path.dirname(identityDbPath), "server-id.json"),
   });
-  const { createHubControlClient } = await import("./services/hubControlService.js");
-  const { HubWorkspaceRouteSchema } = await import("@vibestudio/service-schemas/hubControl");
-  const { WorkspaceEntrySchema } = await import("@vibestudio/service-schemas/workspace");
-  const hubControlClient = createHubControlClient({ hubUrl, controlToken: hubControlToken });
   const listWorkspaceMemberUserIds = (): string[] => {
     const explicit = membershipStore
       .listMembers(entryWorkspaceId)
@@ -626,60 +610,10 @@ async function main() {
       .find((user) => user.role === "root" && user.revokedAt === undefined)?.id;
     return [...new Set(root ? [root, ...explicit] : explicit)];
   };
-  const workspaceCatalog: import("./services/workspaceService.js").WorkspaceCatalogClient = {
-    list: async (actorUserId) => {
-      const result = await hubControlClient.call("hubControl.listWorkspaces", [], {
-        userId: actorUserId,
-        handle: actorUserId,
-      });
-      return WorkspaceEntrySchema.array().parse(result);
-    },
-    create: async (actorUserId, name, opts) => {
-      const result = await hubControlClient.call(
-        "hubControl.createWorkspace",
-        [{ workspace: name, ...(opts?.forkFrom ? { forkFrom: opts.forkFrom } : {}) }],
-        { userId: actorUserId, handle: actorUserId }
-      );
-      return WorkspaceEntrySchema.parse(result);
-    },
-    delete: async (actorUserId, name) => {
-      await hubControlClient.call("hubControl.deleteWorkspace", [{ workspace: name }], {
-        userId: actorUserId,
-        handle: actorUserId,
-      });
-    },
-    select: async (actorUserId, deviceId, name) => {
-      const result = await hubControlClient.call(
-        "hubControl.routeWorkspace",
-        [{ workspace: name }],
-        { userId: actorUserId, handle: actorUserId },
-        deviceId
-      );
-      return HubWorkspaceRouteSchema.parse(result);
-    },
-  };
-  const callHubInternal = async (
-    route: string,
-    body: Record<string, unknown>
-  ): Promise<Record<string, unknown>> => {
-    const response = await fetch(new URL(`/_r/s/internal/${route}`, hubUrl), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${hubControlToken}`,
-      },
-      body: JSON.stringify(body),
-    });
-    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!response.ok) {
-      throw new Error(
-        typeof payload["error"] === "string"
-          ? payload["error"]
-          : `Hub internal request failed with HTTP ${response.status}`
-      );
-    }
-    return payload;
-  };
+  const workspaceChildHub = createWorkspaceChildHubPort({
+    hubUrl,
+    runtimeToken: workspaceChildToken,
+  });
   // Resolves each authenticated caller to its account subject at auth time
   // (WP0 §5.2/§5.5): device shells → owning user, agents → spawner, panel/DO/
   // worker lineage → owner, and the local console → root. Passed to RpcServer.
@@ -691,16 +625,14 @@ async function main() {
   ): boolean => {
     if (isSystemOwnedRuntime(entityCache, callerId, callerKind)) return true;
     if (callerKind !== "do") return false;
-    const binding = resolveVcsStoreBinding(workspaceDecls);
     return (
-      binding !== null &&
       callerId ===
-        canonicalEntityId({
-          kind: "do",
-          source: binding.source,
-          className: binding.className,
-          key: binding.objectKey,
-        })
+      canonicalEntityId({
+        kind: "do",
+        source: SEMANTIC_CONTROL_PLANE.source,
+        className: SEMANTIC_CONTROL_PLANE.className,
+        key: SEMANTIC_CONTROL_PLANE.objectKey,
+      })
     );
   };
   const userSubjectSource = createUserSubjectSource({
@@ -777,7 +709,7 @@ async function main() {
   const approvalQueue = createApprovalQueue({
     eventService,
     recordProvenance: async (record) => {
-      await callHubInternal("governance/append-approval", { record });
+      await workspaceChildHub.appendApproval(record);
     },
     resolveTitle: (entityId) => resolveApprovalCallerTitle(approvalRequesterDeps, entityId),
     resolveRequester: (input) => resolveApprovalRequester(approvalRequesterDeps, input),
@@ -859,8 +791,8 @@ async function main() {
   const hasDevTemplate = fs.existsSync(path.join(templateDir, "meta", "vibestudio.yml"));
   const templateDiffersFromActive =
     templateDir !== workspacePath && !workspacePath.startsWith(templateDir + path.sep);
-  // pnpm dev mode: mirror committed workspace changes back to the template
-  // checkout so edits persist. Hooked onto vcs state advances (see below).
+  // pnpm dev mode: mirror protected workspace publications back to the
+  // template source checkout. Hooked onto publication effects below.
   const devTemplateMirrorDir =
     isPnpmDevMode &&
     process.env["VIBESTUDIO_DISABLE_DEV_TEMPLATE_MIRROR"] !== "1" &&
@@ -983,14 +915,12 @@ async function main() {
       finishStartupLaunchWindow(`${target} launch settled`);
     },
   });
-  // Protected server refs (repo → main): the single main-head authority.
-  // Constructed BEFORE WorkspaceVcs (which routes every main read/advance
+  // Protected repository content pointers: the single host publication store.
+  // Constructed BEFORE WorkspaceVcs (which routes every protected read/advance
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
   const { collectTreeReachableDigests } = await import("./services/blobstoreService.js");
-  const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
-  const vcsInvocationTable = new VcsInvocationTable();
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
     statePath: layout.refsDir,
@@ -1002,7 +932,7 @@ async function main() {
     },
     // Validity check BEFORE approval (§2.1): every candidate `main` state must
     // be a well-formed tree fully present in the content store — userland can
-    // never pin a hash the store cannot expand. Fails closed before any prompt.
+    // never publish a hash the store cannot expand. Fails closed before any prompt.
     assertTreeComplete: async (stateHash) => {
       const reachable = await collectTreeReachableDigests(layout.blobsDir, stateHash);
       if (!reachable) {
@@ -1012,29 +942,18 @@ async function main() {
       }
     },
   });
-  // Workspace VCS (GAD-native): starts local-first (no DO needed), attaches
-  // to the DO backing the manifest-declared userland `vcs` service (protocol
-  // vibestudio.vcs.v1) once workerd is up (see "vcsAttach" below).
+  // Workspace VCS is a host adapter for the product-sealed semantic control
+  // plane. It has no pre-attachment history or mutable workspace binding.
   const { WorkspaceVcs } = await import("./vcsHost/workspaceVcs.js");
   const workspaceVcs = new WorkspaceVcs({
     blobsDir: layout.blobsDir,
     workspaceRoot: workspacePath,
-    contextsRoot: layout.contextsDir,
+    contextProjectionsRoot: layout.contextProjections.current,
     buildSourcesRoot: layout.buildSourcesDir,
     refs: protectedRefStore,
-    // Per-context marker bookkeeping (§6.2): stamp the workspace id and the
-    // loopback HTTP(S) server base URL into `.vibestudio-context.json` at folder
-    // materialization. `getServerUrl` is a getter because the gateway port is
-    // only finalized post-listen (getResolvedGatewayPort throws until then);
-    // ensureContextFolder always runs well after startup, so it resolves.
+    // Public context bindings contain durable identities only. Reachability is
+    // resolved from the caller's current hub/session credential.
     workspaceId: workspace.config.id,
-    getServerUrl: () => {
-      try {
-        return `${gatewayProtocol()}://127.0.0.1:${getResolvedGatewayPort("context marker")}`;
-      } catch {
-        return undefined;
-      }
-    },
     // Dev extraction gate (Phase-2 revision §3): project a push-to-`main` OUT to
     // the source dir only when there is a persistent dev source to extract to.
     // `devTemplateMirrorDir` is the existing signal (pnpm dev + a real
@@ -1042,24 +961,15 @@ async function main() {
     // exported source dir to that checkout. Off in production ephemeral
     // workspaces, which have no source dir. Computed just above this block.
     extractMainToSource: devTemplateMirrorDir !== null,
-    // On-behalf-of attribution for the narrow host-authored metadata publish:
-    // the host mints an invocation record and threads it to the writer DO.
-    vcsInvocations: vcsInvocationTable,
-    getVcsWriterIdentity: () => {
-      const binding = resolveVcsStoreBinding(workspaceDecls);
-      return binding ? `do:${binding.source}:${binding.className}:${binding.objectKey}` : null;
-    },
   });
-  const readWorkspaceFileAtCommit = async (
-    commit: string,
+  const readWorkspaceFileAtState = async (
+    stateHash: string,
     filePath: string
   ): Promise<string | null> => {
-    const ref = commit.startsWith("state:")
-      ? commit
-      : /^[0-9a-f]{64}$/i.test(commit)
-        ? `state:${commit}`
-        : commit;
-    const file = await workspaceVcs.readFile(ref, filePath);
+    if (!/^state:[0-9a-f]{64}$/.test(stateHash)) {
+      throw new Error(`workspace content read requires a canonical state hash: ${stateHash}`);
+    }
+    const file = await workspaceVcs.readFile(stateHash, filePath);
     if (!file || file.content.kind !== "text") return null;
     return file.content.text;
   };
@@ -1068,13 +978,13 @@ async function main() {
     workspaceId: workspace.config.id,
     getCurrentRecurring: () => workspaceConfig.recurring ?? [],
     getCurrentHeartbeats: () => workspaceConfig.heartbeats ?? [],
-    readWorkspaceFileAtCommit,
+    readWorkspaceFileAtState,
   });
   // Create ContextFolderManager before core services. Context folders are
-  // GAD branch forks of the workspace main head, materialized from the CAS.
+  // disposable projections of GAD-owned semantic contexts.
   const { ContextFolderManager } = await import("@vibestudio/shared/contextFolderManager");
   const contextFolderManager = new ContextFolderManager({
-    contextsRoot: layout.contextsDir,
+    contextProjectionsRoot: layout.contextProjections.current,
     materialize: (contextId) => workspaceVcs.ensureContextFolder(contextId),
   });
 
@@ -1105,30 +1015,12 @@ async function main() {
     await import("@vibestudio/workspace/remotes");
   const { resolveDeclaredApps, resolveDeclaredExtensions } =
     await import("@vibestudio/workspace/loader");
-  const { readStartupWorkspaceConfig, readWorkspaceConfigFromState } =
-    await import("./workspaceConfigSource.js");
+  const { readWorkspaceConfigFromState } = await import("./workspaceConfigSource.js");
   const loadWorkspaceConfigFromState = async (
     stateHash: string
   ): Promise<typeof workspaceConfig> => {
     return readWorkspaceConfigFromState(workspaceVcs, workspacePath, stateHash);
   };
-  try {
-    const startupConfig = await readStartupWorkspaceConfig(
-      workspaceVcs,
-      protectedRefStore,
-      workspacePath
-    );
-    applyWorkspaceConfigReload(startupConfig.config, { warnRestartBoundChanges: false });
-    if (startupConfig.source === "protected-main") {
-      console.log(
-        `[WorkspaceConfig] Loaded startup manifest from protected main ${startupConfig.stateHash}`
-      );
-    }
-    warnMissingWorkspaceTrust();
-  } catch (err) {
-    console.warn("[WorkspaceConfig] Failed to load startup manifest from workspace state:", err);
-    throw err;
-  }
   const reconcileDeclaredWorkspaceUnits = async (
     nextConfig: typeof workspaceConfig,
     trigger: "startup" | "meta-change"
@@ -1223,8 +1115,8 @@ async function main() {
       })
     );
   };
-  // Workspace state advances drive source-side reactions:
-  //  - meta/ changes reload the workspace config from the advanced VCS state
+  // Protected workspace publications drive source-side reactions:
+  //  - meta/ changes reload workspace config from the exact published state
   //    and reconcile declared units
   //  - any change invalidates the tree scanner cache
   //  - pnpm dev mode mirrors the committed tree back to the template checkout
@@ -1232,27 +1124,18 @@ async function main() {
   let initialWorkspaceUnitReconcileComplete = false;
   let pendingStartupMetaConfigReload = false;
   let latestMetaConfigReloadSeq = 0;
-  // Bridge every head advance to the client event bus so subscribers (panels)
-  // can react incrementally: `vcs.subscribeHead(head)` listens on this topic.
-  workspaceVcs.onStateAdvanced((event) => {
-    eventService.emit(`vcs:head:${event.head}`, event);
+  // Bridge one atomic protected publication to the client event bus.
+  workspaceVcs.onProtectedPublication((event) => {
+    eventService.emit("vcs:publication", event);
   });
-  // Working (uncommitted) edits ride a distinct topic so reactive editors can
-  // reflect them — and apply a `vcs.revert` (now a working edit) into the view —
-  // without conflating them with committed head advances. `vcs.subscribeWorking`
-  // listens here. The build trigger deliberately does NOT.
-  workspaceVcs.onWorkingAdvanced((event) => {
-    eventService.emit(`vcs:working:${event.head}`, event);
-  });
-  workspaceVcs.onStateAdvanced((event) => {
-    if (event.head !== "main") return;
+  workspaceVcs.onProtectedPublication((event) => {
     treeScanner.invalidate();
     if (event.changedPaths.some((changed) => changed.startsWith("meta/"))) {
       const reloadSeq = ++latestMetaConfigReloadSeq;
       queueMicrotask(() => {
         void (async () => {
           try {
-            const nextConfig = await loadWorkspaceConfigFromState(event.stateHash);
+            const nextConfig = await loadWorkspaceConfigFromState(event.workspaceStateHash);
             if (reloadSeq !== latestMetaConfigReloadSeq) return;
             const reload = applyWorkspaceConfigReload(nextConfig);
             workerdManagerForGateway?.reconcileManifestRoutes(reload.routeSources);
@@ -1288,6 +1171,7 @@ async function main() {
             "--exclude=.git",
             "--exclude=node_modules",
             "--exclude=.contexts",
+            "--exclude=.context-projections",
             "--exclude=.gad",
             "--exclude=.cache",
             "--exclude=.databases",
@@ -1301,12 +1185,6 @@ async function main() {
       }, 500);
     }
   });
-  // Configure declared remotes for repos already present at startup — without
-  // this, remotes are only synced when a later state advance touches meta/.
-  syncDeclaredRemotesForSource().catch((err: unknown) =>
-    console.warn("[GitRemotes] Failed to sync declared remotes at startup:", err)
-  );
-
   // ===========================================================================
   // Unified ServiceContainer — lifecycle + RPC services in one container
   // ===========================================================================
@@ -1341,9 +1219,9 @@ async function main() {
   // Build system
   container.registerManaged({
     name: "buildSystem",
-    dependencies: ["workspaceVcs"],
+    dependencies: ["vcsAttach"],
     async start() {
-      return await initBuildSystemV2(
+      const buildSystem = await initBuildSystemV2(
         workspacePath,
         workspaceVcs,
         appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
@@ -1352,6 +1230,7 @@ async function main() {
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
         }
       );
+      return buildSystem;
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
       await instance?.shutdown();
@@ -1440,32 +1319,21 @@ async function main() {
   container.registerRpc(createPresenceService({ presence }));
 
   {
-    // Account profiles (WP6 §6): reads resolve live through the child's shared
-    // query-only DB. Every mutation crosses the authenticated hub capability.
+    // Account profile reads resolve live through the child's shared query-only
+    // DB. Writes go directly to hubControl over the client's stable hub session.
     const { createAccountService } = await import("./services/accountService.js");
     container.registerRpc(
       createAccountService({
         identityDb,
         isWorkspaceMember: (userId) => membershipStore.has(userId, entryWorkspaceId),
         listWorkspaceMemberUserIds,
-        writeProfile: async (actor, input) => {
-          const result = await hubControlClient.call("hubControl.updateProfile", [input], actor);
-          return accountProfileSchema.parse(result);
-        },
       })
     );
-    const { createHubControlService } = await import("./services/hubControlService.js");
-    container.registerRpc(createHubControlService(hubControlClient));
     const { createGovernanceService } = await import("./services/governanceService.js");
     container.registerRpc(
       createGovernanceService({
         query: async (query) => {
-          const payload = await callHubInternal("governance/query", { query });
-          return Array.isArray(payload["records"])
-            ? (payload[
-                "records"
-              ] as import("@vibestudio/shared/governance/types").GovernanceRecord[])
-            : [];
+          return workspaceChildHub.queryGovernance(query);
         },
       })
     );
@@ -1477,18 +1345,7 @@ async function main() {
   const { createWorkspaceConfigMainWriter } = await import("./workspaceConfigWriter.js");
   const workspaceConfigWriter = createWorkspaceConfigMainWriter({
     workspacePath,
-    blobsDir: layout.blobsDir,
-    refs: protectedRefStore,
     vcs: workspaceVcs,
-    publishMain: ({ ctx, expectedOld, files, summary, operation }) =>
-      workspaceVcs.publishHostMutation({
-        ctx,
-        repoPath: "meta",
-        expectedOld,
-        files,
-        summary,
-        operation,
-      }),
   });
   const replaceLiveWorkspaceConfig = (next: typeof workspaceConfig): void => {
     for (const key of Object.keys(workspaceConfig)) {
@@ -1498,7 +1355,6 @@ async function main() {
   };
   const invokeGitInteropProvider = createGitInteropProviderInvoker(() => extensionHostForGateway);
   const gitInteropDefinition = createGitInteropService({
-    treeScanner,
     workspacePath,
     workspaceConfig,
     invokeGitProvider: invokeGitInteropProvider,
@@ -1512,24 +1368,6 @@ async function main() {
       const result = await workspaceConfigWriter.applyMutation(input);
       replaceLiveWorkspaceConfig(result.nextConfig);
       return result;
-    },
-    onWorkspaceSourceChanged: async (ctx, _summary, importedRepoPath) => {
-      // The extension-owned clone path imports the checkout into GAD itself.
-      // The host only refreshes source-tree bookkeeping so a freshly cloned
-      // dependency is visible to existing workspace-unit queries.
-      await workspaceVcs.ensureRepoLogsFromDisk();
-      if (!importedRepoPath) return;
-      const effectiveCallerId =
-        ctx.caller.runtime.kind === "extension" && ctx.chainCaller
-          ? ctx.chainCaller.callerId
-          : ctx.caller.runtime.id;
-      const contextId =
-        ctx.caller.runtime.kind === "agent"
-          ? (ctx.caller.agentBinding?.contextId ?? null)
-          : await getEntityStore().resolveContext(effectiveCallerId);
-      if (contextId) {
-        await workspaceVcs.adoptMainRepoIntoContext(contextId, importedRepoPath);
-      }
     },
   });
   container.registerRpc(gitInteropDefinition);
@@ -1582,9 +1420,9 @@ async function main() {
       gitUpstreamFlushRunning = false;
     }
   };
-  protectedRefStore.onRefsChanged((changes) => {
-    const repos = changes
-      .filter((change) => change.stateHash !== null)
+  protectedRefStore.onRefsChanged((publication) => {
+    const repos = publication.changes
+      .filter((change) => change.nextContentRoot !== null)
       .map((change) => change.repoPath);
     if (repos.length === 0) return;
     for (const repo of repos) pendingGitUpstreamRepos.add(repo);
@@ -1628,12 +1466,6 @@ async function main() {
       hasAppCapability: (callerId, capability) =>
         appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
       getProviders: () => [...trustedUnitHosts(), recurringMetaChangeProvider],
-      // Host-sourced build-status line for the approval prompt (§5):
-      // `build.statusAt` is a PURE per-view cache read and MUST NEVER trigger
-      // a build. `buildSystemForVcs` (declared below in this block) is assigned
-      // lazily when the vcs service starts, so read it at call time; before it
-      // exists the prompt truthfully renders "not validated".
-      getBuildStatusAt: (viewHash: string) => buildSystemForVcs?.statusAt(viewHash) ?? null,
     });
     // The ONE approval path for protected main-ref advances: the server
     // computes the authoritative diff (content-store diffTrees over the CAS'd
@@ -1642,50 +1474,16 @@ async function main() {
     mainRefGate = createMainRefAdvanceGate({
       blobsDir: layout.blobsDir,
       approvalGate: mainAdvanceGate,
-      ensureStateMirrored: (stateHash) => workspaceVcs.worktrees.ensureStateMirrored(stateHash),
+      ensureStateMirrored: (stateHash) =>
+        workspaceVcs.contentProjection.ensureStateMirrored(stateHash),
       workspaceViewWithReposAt: (overrides) =>
         workspaceVcs.repositories.workspaceViewWithReposAt(overrides),
       computeDeleteDependents: (repoPath) => workspaceVcs.repositories.deletionDependents(repoPath),
     });
-    // Protected refs exposed to userland (P5b): reads plus a gated
-    // compare-and-swap advance. This is how a userland VCS implementation
-    // requests `main` advancement — the advance flows through the SAME
-    // mainRefGate wired above, with the verified caller as the gate context.
-    const { createRefsRpcService } = await import("./services/refsRpcService.js");
-    container.registerRpc(
-      createRefsRpcService({
-        refs: protectedRefStore,
-        invocations: vcsInvocationTable,
-        // Single-writer identity (§3): the DO backing the workspace `vcs`
-        // service declaration, matched by target identity — recomputed per call
-        // so a re-declared/fake `vcs` service never matches.
-        getVcsWriterIdentity: () => {
-          const binding = resolveVcsStoreBinding(workspaceDecls);
-          return binding ? `do:${binding.source}:${binding.className}:${binding.objectKey}` : null;
-        },
-      })
-    );
-    // Disk-scan primitive (narrow-host boundary refactor P1): the pure
-    // `worktree.scan` RPC the gad-store DO drives to read a working tree into
-    // the CAS. Semantics-free (no commit/ref-advance/log) — a sibling of the
-    // blobstore/refs primitives, additive infra with no consumer yet.
-    const { createWorktreeService } = await import("./services/worktreeService.js");
-    container.registerRpc(
-      createWorktreeService({
-        scan: (repoPath, head) => workspaceVcs.scanWorktree(repoPath, head),
-        project: (repoPath, head, stateHash) =>
-          workspaceVcs.projectWorktree(repoPath, head, stateHash),
-        dependentRepos: (repoPath) => workspaceVcs.repositories.deletionDependents(repoPath),
-        getVcsWriterIdentity: () => {
-          const binding = resolveVcsStoreBinding(workspaceDecls);
-          return binding ? `do:${binding.source}:${binding.className}:${binding.objectKey}` : null;
-        },
-      })
-    );
-    // Remote context mirrors (plan §6.5): read-side of the projector over the
-    // wire. `targets` reads a context's per-repo states; `objects` streams the
+    // Remote context mirrors (plan §6.5): read-side of exact context content
+    // over the wire. `targets` exposes its repository content states; `objects` streams the
     // CAS tree content in size-bounded pages. Backed by the same WorkspaceVcs +
-    // WorktreeStore + blobstore the projector uses — no new write semantics.
+    // ContentProjectionStore + blobstore the projector uses — no new write semantics.
     {
       const { createMirrorService } = await import("./services/mirrorService.js");
       const { getBytes: readMirrorBlob } = await import("./services/blobstoreService.js");
@@ -1694,7 +1492,7 @@ async function main() {
         createMirrorService({
           contextRepoTargets: (contextId) => workspaceVcs.contextRepoTargets(contextId),
           listStateFiles: async (stateHash) =>
-            (await workspaceVcs.worktrees.listStateFiles(stateHash)).map((file) => ({
+            (await workspaceVcs.contentProjection.listStateFiles(stateHash)).map((file) => ({
               path: file.path,
               contentHash: file.content_hash,
               mode: file.mode,
@@ -1703,22 +1501,12 @@ async function main() {
         })
       );
     }
-    let buildSystemForVcs: import("./buildV2/index.js").BuildSystemV2 | null = null;
     container.registerManaged({
       name: "vcsService",
-      dependencies: ["buildSystem"],
-      async start(resolve) {
-        buildSystemForVcs = assertPresent(
-          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-        );
-      },
       getServiceDefinition() {
         return createVcsService({
           workspaceVcs,
           entityCache,
-          getDefaultRepo: () => workspaceConfig.defaultRepo,
-          getBuildSystem: () => buildSystemForVcs,
-          mainAdvanceGate,
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           // Cross-context READ authz (throw-not-prompt): back it with WS-3's
@@ -1969,7 +1757,7 @@ async function main() {
       null;
     container.registerManaged({
       name: "eval",
-      dependencies: ["doDispatch"],
+      dependencies: ["workerdWorkspace", "doDispatch"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
@@ -2025,7 +1813,7 @@ async function main() {
       | null = null;
     container.registerManaged({
       name: "workspace-state",
-      dependencies: ["doDispatch"],
+      dependencies: ["workerdWorkspace", "doDispatch"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
@@ -2071,7 +1859,13 @@ async function main() {
       null;
     container.registerManaged({
       name: "runtime",
-      dependencies: ["doDispatch", "workerdManager", "buildSystem", "panelHttpServer"],
+      dependencies: [
+        "workerdWorkspace",
+        "doDispatch",
+        "workerdManager",
+        "buildSystem",
+        "panelHttpServer",
+      ],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
@@ -2092,12 +1886,15 @@ async function main() {
         runtimeDefinition = createRuntimeService({
           entityStore: ensureEntityStore(doDispatch),
           contextFolders: contextFolderManager,
-          // VCS branch lifecycle for full-workspace contexts.
-          vcsContexts: {
-            pinContext: (contextId) => workspaceVcs.pinContext(contextId),
+          // GAD-owned semantic context lifecycle for runtime entities.
+          semanticContexts: {
+            ensureContext: async (contextId) => {
+              await workspaceVcs.ensureContext(contextId);
+            },
             dropContext: (contextId) => workspaceVcs.dropContext(contextId),
-            forkContext: (sourceContextId, targetContextId) =>
-              workspaceVcs.forkContext(sourceContextId, targetContextId),
+            forkContext: async (sourceContextId, targetContextId) => {
+              await workspaceVcs.forkContext(sourceContextId, targetContextId);
+            },
           },
           hooks: {
             prepareDurableObject: (args) => workerdManager.ensureDurableObjectEntity(args),
@@ -2120,6 +1917,24 @@ async function main() {
               void ref;
               return buildSystem.getEffectiveVersion(source) ?? "";
             },
+            releaseEntity: async (record, input) => {
+              if (record.kind !== "do") return { status: "ready" };
+              if (!record.className) {
+                return {
+                  status: "failed",
+                  detail: { error: `Durable Object ${record.id} has no class name` },
+                };
+              }
+              return doDispatch.dispatchLifecycle(
+                {
+                  source: record.source.repoPath,
+                  className: record.className,
+                  objectKey: record.key,
+                },
+                "prepare",
+                input
+              );
+            },
             onRetire: async (record) => {
               await cleanupRuntimeEntityRecord(record);
             },
@@ -2132,7 +1947,7 @@ async function main() {
           // Agent credentials follow the entity (§3.2): on retire, revoke all
           // outstanding agent credentials and the live `agent:<entityId>` token.
           revokeAgentCredentials: async (entityId) => {
-            await callHubInternal("agent-credential/revoke-entity", { entityId });
+            await workspaceChildHub.revokeAgentCredentialsForEntity(entityId);
             // Matches auth/model.ts agentCallerId(entityId).
             tokenManager.revokeToken(`agent:${entityId}`);
           },
@@ -2159,7 +1974,7 @@ async function main() {
     let webhookIngress: ReturnType<typeof createWebhookIngressService> | null = null;
     container.registerManaged({
       name: "webhookIngress",
-      dependencies: ["rpcServer", "doDispatch"],
+      dependencies: ["workerdWorkspace", "rpcServer", "doDispatch"],
       async start(resolve) {
         const rpcServer = assertPresent(
           resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
@@ -2266,8 +2081,8 @@ async function main() {
   serverLogStore.addSecret(adminToken);
   let gatewayPortResolved: number | null = null;
   // Child ingress is armed exclusively by authenticated hub control requests.
-  // The exact route ownership set is persisted under this workspace's state so
-  // returning devices reconnect to the same room after a child/hub restart.
+  // Exact transport ownership is injected from the advertised workspace's
+  // hub-owned reach tree, outside resettable semantic/runtime state.
   let webrtcPairing: Omit<
     import("@vibestudio/shared/connect").ConnectPairing,
     "code" | "room"
@@ -2275,95 +2090,20 @@ async function main() {
   let webrtcIngress: import("./webrtcIngress.js").WebRtcIngress | null = null;
   const { RoutedRoomStore, replaceRoutedRoom, routedRoomKey } =
     await import("./hostCore/routedRoomStore.js");
-  const { PairingActivationStore } = await import("./services/pairingActivationStore.js");
-  const routedRoomStore = new RoutedRoomStore(
-    process.env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"] ?? layout.webrtc.routesFile
-  );
-  const pairingActivationStore = new PairingActivationStore(layout.webrtc.pairingActivationsFile);
-  pairingActivationStore.removeExpired(Date.now());
-  const routedRooms = new Map<string, string>();
-  const routedRoomExpiryTimers = new Map<string, NodeJS.Timeout>();
-  const pairingActivationExpiryTimers = new Map<string, NodeJS.Timeout>();
+  const routedRoomStatePath = process.env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"];
+  if (!routedRoomStatePath) {
+    throw new Error("Workspace runtime requires a hub-owned routed-room state path");
+  }
+  const routedRoomStore = new RoutedRoomStore(routedRoomStatePath);
   for (const route of routedRoomStore.list()) {
     const key = routedRoomKey(route);
-    const keep =
-      route.kind === "invite"
-        ? route.expiresAt > Date.now()
-        : route.kind === "device"
-          ? (() => {
-              const userId = deviceAuthStore.userFor(route.deviceId);
-              return !!userId && membershipStore.has(userId, entryWorkspaceId);
-            })()
-          : membershipStore.has(route.userId, entryWorkspaceId);
-    if (keep) routedRooms.set(key, route.room);
-    else routedRoomStore.remove(key);
+    const userId = deviceAuthStore.userFor(route.deviceId);
+    const keep = !!userId && membershipStore.has(userId, entryWorkspaceId);
+    if (!keep) routedRoomStore.remove(key);
   }
-  const clearRoutedRoomExpiry = (key: string): void => {
-    const timer = routedRoomExpiryTimers.get(key);
-    if (timer) clearTimeout(timer);
-    routedRoomExpiryTimers.delete(key);
-  };
   const disarmRoutedRoom = async (key: string): Promise<void> => {
-    clearRoutedRoomExpiry(key);
     const persisted = routedRoomStore.remove(key);
-    const room = persisted?.room ?? routedRooms.get(key);
-    routedRooms.delete(key);
-    if (room && webrtcIngress) await webrtcIngress.disarmRoom(room);
-  };
-  const scheduleRoutedRoomExpiry = (key: string, expiresAt: number): void => {
-    clearRoutedRoomExpiry(key);
-    const remainingMs = expiresAt - Date.now();
-    if (remainingMs <= 0) {
-      void disarmRoutedRoom(key);
-      return;
-    }
-    const timer = setTimeout(() => {
-      void disarmRoutedRoom(key);
-    }, remainingMs);
-    timer.unref();
-    routedRoomExpiryTimers.set(key, timer);
-  };
-  const schedulePairingActivationExpiry = (codeHash: string, expiresAt: number): void => {
-    const prior = pairingActivationExpiryTimers.get(codeHash);
-    if (prior) clearTimeout(prior);
-    const remainingMs = expiresAt - Date.now();
-    if (remainingMs <= 0) {
-      pairingActivationStore.remove(codeHash);
-      pairingActivationExpiryTimers.delete(codeHash);
-      return;
-    }
-    const timer = setTimeout(() => {
-      pairingActivationStore.remove(codeHash);
-      pairingActivationExpiryTimers.delete(codeHash);
-    }, remainingMs);
-    timer.unref();
-    pairingActivationExpiryTimers.set(codeHash, timer);
-  };
-  for (const activation of pairingActivationStore.list()) {
-    schedulePairingActivationExpiry(activation.codeHash, activation.expiresAt);
-  }
-  const promotePairingRoom = async (code: string, deviceId: string): Promise<void> => {
-    if (!webrtcIngress) throw new Error("Workspace WebRTC ingress is not ready");
-    const codeHash = createHash("sha256").update(code, "utf8").digest("hex");
-    const inviteKey = `invite:${codeHash}`;
-    const alreadyPromoted = routedRoomStore.get(`control:${deviceId}`);
-    if (!routedRoomStore.get(inviteKey)) {
-      if (!alreadyPromoted || alreadyPromoted.kind !== "device") {
-        throw new Error("The pairing route is neither pending nor durably promoted");
-      }
-      routedRooms.set(`control:${deviceId}`, alreadyPromoted.room);
-      await webrtcIngress.armRoom(alreadyPromoted.room, { deviceId });
-      return;
-    }
-    const { route, replacedDeviceRoute } = routedRoomStore.promoteInvite(codeHash, deviceId);
-    clearRoutedRoomExpiry(inviteKey);
-    routedRooms.delete(inviteKey);
-    const deviceKey = `control:${deviceId}`;
-    if (replacedDeviceRoute && replacedDeviceRoute.room !== route.room) {
-      await webrtcIngress.disarmRoom(replacedDeviceRoute.room);
-    }
-    routedRooms.set(deviceKey, route.room);
-    await webrtcIngress.armRoom(route.room, { deviceId });
+    if (persisted && webrtcIngress) await webrtcIngress.disarmRoom(persisted.room);
   };
   function getResolvedGatewayPort(context: string): number {
     if (!gatewayPortResolved) {
@@ -2402,7 +2142,7 @@ async function main() {
       const fsService = assertPresent(
         resolve<import("@vibestudio/shared/fsService").FsService>("fsService")
       );
-      const { createPairingRedeemer } = await import("./services/authService.js");
+      const { createWorkspaceCredentialRedeemer } = await import("./services/authService.js");
       const server = new RpcServer({
         tokenManager,
         dispatcher,
@@ -2417,91 +2157,34 @@ async function main() {
         // workspace at auth time. Undefined (no-op) in local/dev/hub mode.
         membershipGate: membershipEntryGate,
         liveCallerGate,
+        // RpcServer starts before workerd by design. Resolve the sealed semantic
+        // control plane lazily at the first provenance-bearing ingress, then
+        // prove the exact invocation node exists before any service or relay
+        // can persist the asserted causal edge.
+        verifyExactCausalInvocation: async (parent) => {
+          const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+          const { createSemanticControlPlaneCaller, hasExactCausalInvocation } =
+            await import("./internalDOs/controlPlane.js");
+          return hasExactCausalInvocation(createSemanticControlPlaneCaller(doDispatch), parent);
+        },
         runtimeCoordinator: panelRuntimeCoordinator,
-        // Pairing-code consumption is delegated to the hub. The child only
-        // validates returning device credentials against its read-only handle.
-        redeemPairingCredential: createPairingRedeemer({
+        // The child accepts only identities already issued by the hub: returning
+        // devices and workspace-scoped agents. Fresh pairing never enters a child.
+        redeemPairingCredential: createWorkspaceCredentialRedeemer({
           deviceAuthStore,
           tokenManager,
           resolveUser: (userId) => userStore.getUser(userId),
-          redeemPairingCode: async (code, input) => {
-            const codeHash = createHash("sha256").update(code, "utf8").digest("hex");
-            const inviteRoute = routedRoomStore.get(`invite:${codeHash}`);
-            const existingActivation = pairingActivationStore.get(codeHash);
-            const expiresAt =
-              existingActivation?.expiresAt ??
-              (inviteRoute?.kind === "invite" ? inviteRoute.expiresAt : null);
-            if (!expiresAt || expiresAt <= Date.now()) {
-              throw new Error("Pairing route is invalid or expired");
-            }
-            const proposed = pairingActivationStore.prepare(codeHash, expiresAt);
-            schedulePairingActivationExpiry(codeHash, expiresAt);
-            const response = await fetch(new URL("/_r/s/auth/complete-pairing", hubUrl), {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${hubControlToken}`,
-              },
-              body: JSON.stringify({
-                code,
-                label: input.label,
-                platform: input.platform,
-                deviceId: proposed.deviceId,
-                refreshToken: proposed.refreshToken,
-              }),
-            });
-            const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-            if (
-              !response.ok ||
-              typeof body["deviceId"] !== "string" ||
-              typeof body["refreshToken"] !== "string" ||
-              typeof body["userId"] !== "string"
-            ) {
-              throw new Error(
-                typeof body["error"] === "string" ? body["error"] : "Pairing redemption failed"
-              );
-            }
-            if (
-              body["deviceId"] !== proposed.deviceId ||
-              body["refreshToken"] !== proposed.refreshToken
-            ) {
-              throw new Error("Hub pairing receipt did not match the durable proposed credential");
-            }
-            // Promotion is a durable, acknowledged part of pairing. Never tell
-            // the client it is paired while its returning-device route is only
-            // an in-memory best effort.
-            await promotePairingRoom(code, body["deviceId"]);
-            return {
-              deviceId: body["deviceId"],
-              refreshToken: body["refreshToken"],
-              userId: body["userId"],
-              label: typeof body["label"] === "string" ? body["label"] : "Vibestudio client",
-              ...(typeof body["platform"] === "string" ? { platform: body["platform"] } : {}),
-            };
-          },
+          resolveRuntimeEntity: (entityId) => getEntityStore().resolveRecord(entityId),
           touchDevice: async (deviceId) => {
-            await callHubInternal("device/touch", { deviceId });
+            await workspaceChildHub.touchDevice(deviceId);
           },
         }),
-        resolveExtensionInvocation: (extensionName, invocationToken) =>
-          extensionHostForGateway?.resolveActiveInvocation(extensionName, invocationToken) ?? null,
+        resolveExtensionInvocation: (extensionName, requestId) =>
+          extensionHostForGateway?.resolveActiveInvocation(extensionName, requestId) ?? null,
         resolveExtensionCodeIdentity: (extensionName) =>
           extensionHostForGateway?.resolveCodeIdentity(extensionName) ?? null,
-        // On-behalf-of tokens for userland vcs-DO dispatches (§4): the relay
-        // mints one per dispatch to the single-writer DO; refs.updateMains
-        // resolves it against the SAME table.
-        vcsInvocations: vcsInvocationTable,
-        getVcsWriterIdentity: () => {
-          const binding = resolveVcsStoreBinding(workspaceDecls);
-          return binding ? `do:${binding.source}:${binding.className}:${binding.objectKey}` : null;
-        },
       });
       server.initHandlers();
-      // Wire server→DO event push so connectionless DOs receive real
-      // `events.subscribe` deliveries (e.g. vcs.subscribeHead on an EvalDO).
-      eventService.setDoPushDelivery((callerId, channel, payload) =>
-        server.pushEventToCaller(callerId, channel, payload)
-      );
       rpcServerForGateway = server;
       return { server };
     },
@@ -2521,12 +2204,26 @@ async function main() {
     );
   }
 
-  // Strict, idempotent child half of the durable hub revocation cascade.
-  const scheduleAfterControlAck = (work: () => Promise<void>): void => {
-    const timer = setTimeout(() => {
-      void work().catch((error) => console.error("[Sessions] Deferred teardown failed:", error));
-    }, 250);
-    timer.unref();
+  // Revocation invalidates identity immediately, while RpcServer keeps only an
+  // already-running request alive long enough to queue its response. Routed
+  // reach can then be removed at that exact transport retirement boundary.
+  const retireWorkspaceReach = (
+    callerIds: readonly string[],
+    routeKeys: readonly string[]
+  ): Promise<void> =>
+    retireRoutedReach(
+      {
+        tokenManager,
+        rpcServer: assertPresent(rpcServerForGateway),
+        disarmRoute: disarmRoutedRoom,
+      },
+      callerIds,
+      routeKeys
+    );
+  const observeReachRetirement = (retirement: Promise<void>): void => {
+    void retirement.catch((error) => {
+      console.error("[Sessions] Routed reach retirement failed:", error);
+    });
   };
   routeRegistry.registerHttpServiceRoutes([
     {
@@ -2585,7 +2282,7 @@ async function main() {
           [userId]
         )) as { archivedRootIds: string[]; closedIds: string[] };
 
-        const gad = resolveUserlandService(workspaceDecls, "vibestudio.gad.workspace.v1");
+        const gad = resolveWorkspaceService(workspaceDecls, "vibestudio.gad.workspace.v1");
         if (gad.kind !== "durable-object") {
           throw new Error("Workspace GAD service is not a durable object");
         }
@@ -2599,7 +2296,7 @@ async function main() {
           userId,
         })) as import("@vibestudio/shared/channelInvites").ChannelMembershipCleanupPlan;
         for (const channelId of channelPlan.channelIds) {
-          const channel = resolveUserlandService(
+          const channel = resolveWorkspaceService(
             workspaceDecls,
             "vibestudio.channel.v1",
             channelId
@@ -2621,11 +2318,10 @@ async function main() {
         if (!pushForRevocation) throw new Error("Push service is not started");
         const removedPushRegistrations = pushForRevocation.unregisterUser(userId);
 
-        const routeKeys = [...routedRooms.keys()].filter((key) => {
-          if (key === `user:${userId}`) return true;
-          if (!key.startsWith("control:") && !key.startsWith("workspace:")) return false;
-          return identityDb.getDevice(key.slice(key.indexOf(":") + 1))?.userId === userId;
-        });
+        const routeKeys = routedRoomStore
+          .list()
+          .filter((route) => identityDb.getDevice(route.deviceId)?.userId === userId)
+          .map(routedRoomKey);
         const { RevokedUserCleanupResultSchema } =
           await import("@vibestudio/identity/revocationCleanup");
         respond(
@@ -2640,12 +2336,12 @@ async function main() {
             removedPushRegistrations,
           })
         );
-        scheduleAfterControlAck(async () => {
-          for (const connection of connections) {
-            connection.ws.close(4001, "User revoked");
-          }
-          await Promise.all(routeKeys.map((key) => disarmRoutedRoom(key)));
-        });
+        observeReachRetirement(
+          retireWorkspaceReach(
+            connections.map((connection) => connection.caller.runtime.id),
+            routeKeys
+          )
+        );
       },
     },
   ]);
@@ -2673,130 +2369,42 @@ async function main() {
           }
           const body = decoded as Record<string, unknown>;
           const deviceId = typeof body["deviceId"] === "string" ? body["deviceId"] : undefined;
-          const userId = typeof body["userId"] === "string" ? body["userId"] : undefined;
-          const inviteCodeHash =
-            typeof body["inviteCodeHash"] === "string" ? body["inviteCodeHash"] : undefined;
-          const expiresAt = inviteCodeHash ? body["expiresAt"] : undefined;
-          const devicePurpose = deviceId ? body["purpose"] : undefined;
-          const canonicalDevicePurpose =
-            devicePurpose === "control" || devicePurpose === "workspace"
-              ? devicePurpose
-              : undefined;
-          const reuseExisting = body["reuseExisting"] === true;
-          const principalCount = Number(!!deviceId) + Number(!!userId) + Number(!!inviteCodeHash);
-          if (principalCount !== 1) {
-            respond(400, {
-              error: "Exactly one of deviceId, userId, or inviteCodeHash is required",
-            });
+          if (!deviceId) {
+            respond(400, { error: "deviceId is required" });
             return;
           }
           const actualKeys = Object.keys(body).sort().join(",");
-          const expectedKeys = deviceId
-            ? reuseExisting
-              ? "deviceId,purpose,reuseExisting"
-              : "deviceId,purpose"
-            : userId
-              ? "userId"
-              : "expiresAt,inviteCodeHash";
-          if (actualKeys !== expectedKeys) {
-            respond(400, { error: `Route request fields must be exactly: ${expectedKeys}` });
+          if (actualKeys !== "deviceId") {
+            respond(400, { error: "Route request fields must be exactly: deviceId" });
             return;
           }
-          if (
-            inviteCodeHash &&
-            (!/^[a-f0-9]{64}$/.test(inviteCodeHash) ||
-              typeof expiresAt !== "number" ||
-              !Number.isInteger(expiresAt) ||
-              expiresAt <= Date.now())
-          ) {
-            respond(400, { error: "A live absolute expiresAt is required for an invite route" });
-            return;
-          }
-          if (deviceId && !canonicalDevicePurpose) {
-            respond(400, { error: 'Device routes require purpose: "control" or "workspace"' });
-            return;
-          }
-          if (reuseExisting && canonicalDevicePurpose !== "control") {
-            respond(400, { error: 'Only purpose: "control" may reuse an existing route' });
-            return;
-          }
-          if (deviceId) {
-            const owner = deviceAuthStore.userFor(deviceId);
-            if (!owner || !membershipStore.has(owner, entryWorkspaceId)) {
-              respond(403, { error: "Device owner is not a workspace member", code: "EACCES" });
-              return;
-            }
-          }
-          if (userId && !membershipStore.has(userId, entryWorkspaceId)) {
-            respond(403, { error: "User is not a workspace member", code: "EACCES" });
+          const owner = deviceAuthStore.userFor(deviceId);
+          if (!owner || !membershipStore.has(owner, entryWorkspaceId)) {
+            respond(403, { error: "Device owner is not a workspace member", code: "EACCES" });
             return;
           }
           if (!webrtcIngress || !webrtcPairing) {
             respond(503, { error: "Workspace WebRTC ingress is not ready", code: "NOT_READY" });
             return;
           }
-          const key = deviceId
-            ? `${canonicalDevicePurpose}:${deviceId}`
-            : userId
-              ? `user:${userId}`
-              : `invite:${inviteCodeHash}`;
-          if (reuseExisting) {
-            const existing = routedRoomStore.get(key);
-            if (existing) {
-              if (existing.kind !== "device" || existing.purpose !== "control") {
-                throw new Error(`Persisted route ${key} is not a control-device route`);
-              }
-              routedRooms.set(key, existing.room);
-              await webrtcIngress.armRoom(existing.room, { deviceId });
-              respond(200, { room: existing.room, ...webrtcPairing });
-              return;
-            }
+          const key = `device:${deviceId}`;
+          const existing = routedRoomStore.get(key);
+          if (existing) {
+            await webrtcIngress.armRoom(existing.room, { deviceId: existing.deviceId });
+            respond(200, { room: existing.room, ...webrtcPairing });
+            return;
           }
           const room = randomUUID();
-          let route: import("./hostCore/routedRoomStore.js").RoutedRoomRecord;
-          if (deviceId) {
-            if (!canonicalDevicePurpose) throw new Error("Device route has no canonical purpose");
-            route = { kind: "device", purpose: canonicalDevicePurpose, deviceId, room };
-          } else if (userId) {
-            route = { kind: "user", userId, room };
-          } else {
-            if (!inviteCodeHash || typeof expiresAt !== "number") {
-              throw new Error("Invite route has no canonical expiry coordinates");
-            }
-            route = { kind: "invite", codeHash: inviteCodeHash, room, expiresAt };
-          }
-          await replaceRoutedRoom(routedRoomStore, routedRooms, route, webrtcIngress, {
-            ...(deviceId ? { deviceId } : {}),
-          });
-          if (inviteCodeHash) scheduleRoutedRoomExpiry(key, expiresAt as number);
+          const route: import("./hostCore/routedRoomStore.js").RoutedRoomRecord = {
+            kind: "device",
+            deviceId,
+            room,
+          };
+          await replaceRoutedRoom(routedRoomStore, route, webrtcIngress);
           respond(200, { room, ...webrtcPairing });
         } catch (error) {
           respond(400, { error: error instanceof Error ? error.message : String(error) });
         }
-      },
-    },
-    {
-      serviceName: "internal",
-      path: "/release-route",
-      methods: ["POST"],
-      auth: "admin-token",
-      handler: async (req, res) => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) chunks.push(chunk as Buffer);
-        const body = chunks.length
-          ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>)
-          : {};
-        const inviteCodeHash =
-          typeof body["inviteCodeHash"] === "string" ? body["inviteCodeHash"] : "";
-        if (!/^[a-f0-9]{64}$/.test(inviteCodeHash)) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "inviteCodeHash is required" }));
-          return;
-        }
-        const existed = routedRooms.has(`invite:${inviteCodeHash}`);
-        await disarmRoutedRoom(`invite:${inviteCodeHash}`);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ released: existed }));
       },
     },
     {
@@ -2820,16 +2428,10 @@ async function main() {
         }
         const callerId = `shell:${deviceId}`;
         const connections = rpcServerForGateway.getPrincipalConnections(callerId);
+        const retirement = retireWorkspaceReach([callerId], [`device:${deviceId}`]);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ closed: connections.length }));
-        scheduleAfterControlAck(async () => {
-          for (const connection of connections) connection.ws.close(4001, "Device revoked");
-          tokenManager.revokeToken(callerId);
-          await Promise.all([
-            disarmRoutedRoom(`control:${deviceId}`),
-            disarmRoutedRoom(`workspace:${deviceId}`),
-          ]);
-        });
+        observeReachRetirement(retirement);
       },
     },
     {
@@ -2857,20 +2459,15 @@ async function main() {
         const connections = rpcServerForGateway.getUserConnections(userId);
         const routeKeys = routedRoomStore
           .list()
-          .filter((route) => {
-            if (route.kind === "user") return route.userId === userId;
-            if (route.kind !== "device") return false;
-            return identityDb.getDevice(route.deviceId)?.userId === userId;
-          })
+          .filter((route) => identityDb.getDevice(route.deviceId)?.userId === userId)
           .map(routedRoomKey);
+        const retirement = retireWorkspaceReach(
+          connections.map((connection) => connection.caller.runtime.id),
+          routeKeys
+        );
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ closed: connections.length }));
-        scheduleAfterControlAck(async () => {
-          for (const connection of connections) {
-            connection.ws.close(4001, "Workspace membership removed");
-          }
-          await Promise.all(routeKeys.map((key) => disarmRoutedRoom(key)));
-        });
+        observeReachRetirement(retirement);
       },
     },
   ]);
@@ -2894,7 +2491,7 @@ async function main() {
       // the hub. The hub also rejects stale revisions defensively.
       presenceReportQueue = presenceReportQueue
         .then(async () => {
-          await callHubInternal("presence/report", { serverBootId, revision, users });
+          await workspaceChildHub.reportPresence({ serverBootId, revision, users });
         })
         .catch((error) => {
           console.warn(`[WorkspacePresence] Failed to report revision ${revision} to hub:`, error);
@@ -2975,7 +2572,7 @@ async function main() {
             fields: record.fields,
           });
         },
-        readWorkspaceFileAtCommit,
+        readWorkspaceFileAtState,
         getContextIdForCaller: (callerId) => entityCache.resolveContext(callerId),
         getGatewayUrl: () => getLocalGatewayUrl("extension startup"),
         resolveProviderExtensionName: (provider) =>
@@ -3038,7 +2635,7 @@ async function main() {
         notificationService: notificationResult.internal,
         entityCache,
         connectionGrants,
-        readWorkspaceFileAtCommit,
+        readWorkspaceFileAtState,
         getGatewayUrl: () => getLocalGatewayUrl("app startup"),
         getReactNativeAppArtifactBaseUrl: () => getConnectUrl("React Native app artifact"),
         getTerminalAppArtifactBaseUrl: () => getLocalGatewayUrl("Terminal app artifact"),
@@ -3061,7 +2658,7 @@ async function main() {
   // back into the server (runtime.*, console bridge) is attributed through the
   // entity cache — without a record its principal kind is unknown and every
   // call 403s. Service resolution activates on demand (workersRpc below);
-  // server-dispatched singletons (vcsAttach → gad-store) activate explicitly.
+  // Server-dispatched semantic control-plane objects activate explicitly.
   const activateDurableObjectEntity = async (
     doDispatch: import("./doDispatch.js").DODispatch,
     workerdManagerInst: import("./workerdManager.js").WorkerdManager,
@@ -3138,7 +2735,7 @@ async function main() {
     let workerServiceDef: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "workersRpc",
-      dependencies: ["buildSystem", "workerdManager", "doDispatch"],
+      dependencies: ["workerdWorkspace", "buildSystem", "workerdManager", "doDispatch"],
       async start(resolve) {
         const buildSystemInst = assertPresent(
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
@@ -3154,7 +2751,7 @@ async function main() {
           workspaceDecls,
           getCallerContextId: (callerId) => entityCache.resolveContext(callerId),
           loadContextDeclarations: async (contextId) => {
-            const stateHash = await workspaceVcs.resolveContextView(contextId);
+            const stateHash = await workspaceVcs.resolveContextState(contextId);
             const config = await readWorkspaceConfigFromState(
               workspaceVcs,
               workspacePath,
@@ -3195,53 +2792,33 @@ async function main() {
   // the main process has its OWN FsService for panel-facing FS RPC)
   {
     const { FsService } = await import("@vibestudio/shared/fsService");
-    const { isWritableVcsPath, vcsContextHead } = await import("./vcsHost/paths.js");
-    // Reroute: sandboxed context mutations to GAD-tracked paths commit through
-    // GAD (edit-first) instead of writing the worktree projection directly.
-    //
-    // Per-repo routing. fsService routes each workspace-relative edit to its
-    // owning repo by section taxonomy, strips the repo prefix, and records a
-    // working edit on that repo's `ctx:{contextId}` head.
+    const { isWritableVcsPath } = await import("./vcsHost/paths.js");
+    type FsCausalParent = import("@vibestudio/rpc").RpcCausalParent | null;
+    const callSemantic = <T>(method: string, input: unknown, causalParent?: FsCausalParent) =>
+      causalParent === undefined
+        ? workspaceVcs.semanticDirectCall<T>(method, input)
+        : workspaceVcs.semanticCausalCall<T>(method, input, causalParent);
     const vcsBridge: import("@vibestudio/shared/fsService").FsVcsBridge = {
-      isTracked: (relPath) => isWritableVcsPath(relPath),
-      // fs writes of tracked paths are WORKING edits (recordEdit): tracked
-      // durably with provenance, projected to disk, but NOT a commit — no head
-      // advance, no build. The user/agent commits deliberately via vcs.commit.
-      edit: async (contextId, repoPath, edits, actor) => {
-        const head = vcsContextHead(contextId);
-        await workspaceVcs.recordEdit({
-          head,
-          repoPath,
-          edits,
-          actor,
-        });
-      },
-      // Read from the context's composed view: each repo's `ctx` head if it has
-      // been edited, else that repo's pinned-`baseView` state. The composed view
-      // is a workspace-rooted state, so address it by the full workspace path.
-      readFile: async (contextId, repoPath, relPath) => {
-        const view = await workspaceVcs.resolveContextView(contextId);
-        const wsPath = `${repoPath}/${relPath}`;
-        const file = await workspaceVcs.readFile(view, wsPath);
-        return file ? file.content : null;
-      },
-      // Workspace-relative listing of the whole composed context view (all repos:
-      // edited ones at their ctx head, the rest at the pinned base).
-      listFiles: async (contextId) => {
-        const view = await workspaceVcs.resolveContextView(contextId);
-        return (await workspaceVcs.listFiles(view)).map((f) => f.path);
-      },
-      // Sparse demand-materialize: write only the requested repos' subtrees to
-      // the context folder (intelligent — a repo-scoped grep materializes one repo).
+      isTracked: async (relPath) => isWritableVcsPath(relPath),
+      edit: (input, causalParent) => callSemantic("vcsEdit", input, causalParent),
+      move: (input, causalParent) => callSemantic("vcsMove", input, causalParent),
+      copy: (input, causalParent) => callSemantic("vcsCopy", input, causalParent),
+      status: (input) => callSemantic("vcsStatus", input),
+      inspect: (input) => callSemantic("vcsInspect", input),
+      neighbors: (input) => callSemantic("vcsNeighbors", input),
+      readFile: (input) => callSemantic("vcsReadFile", input),
+      listFiles: (input) => callSemantic("vcsListFiles", input),
       ensureMaterialized: (contextId, repos) =>
         workspaceVcs.materializeContextRepos(contextId, repos),
-      isMaterialized: async (contextId, repoPath) =>
+      isMaterialized: (contextId, repoPath) =>
         workspaceVcs.isContextRepoMaterialized(contextId, repoPath),
     };
     container.registerManaged({
       name: "fsService",
       async start() {
-        return new FsService(contextFolderManager, entityCache, { vcsBridge });
+        return new FsService(contextFolderManager, entityCache, {
+          contextAuthority: { kind: "semantic", bridge: vcsBridge },
+        });
       },
     });
   }
@@ -3255,7 +2832,6 @@ async function main() {
     workspaceId: workspace.config.id,
     workspaceDeclarations: workspaceDecls,
     routeRegistry,
-    entityCache,
     egressProxy,
     gatewayToken: workerdGatewayToken,
     gateway: {
@@ -3275,17 +2851,39 @@ async function main() {
   const { wireVcsDurability } = await import("./bootstrap/vcsDurability.js");
   wireVcsDurability({
     container,
-    workspaceDeclarations: workspaceDecls,
     workspaceVcs,
-    startupBarrier: startupBackgroundWorkComplete,
-    systemOwnerUserId: SYSTEM_SUBJECT.userId,
-    activateDurableObject: activateDurableObjectEntity,
+    registerControlPlanePrincipal: ({
+      targetId,
+      source,
+      className,
+      objectKey,
+      effectiveVersion,
+    }) => {
+      entityCache.registerControlPlane({
+        id: targetId,
+        source: { repoPath: source, effectiveVersion },
+        contextId: `control-plane:${workspace.config.id}`,
+        className,
+        key: objectKey,
+      });
+    },
+    activateSemanticWorkspace: async (vcs) => {
+      const recovered = await vcs.recoverPendingSemanticEffects();
+      if (recovered > 0) console.log(`[Vcs] Recovered ${recovered} pending semantic host effects`);
+      const activated = await vcs.activateWorkspaceFromSource();
+      const config = await readWorkspaceConfigFromState(vcs, workspacePath, activated.stateHash);
+      applyWorkspaceConfigReload(config, { warnRestartBoundChanges: false });
+      warnMissingWorkspaceTrust();
+      console.log(
+        `[WorkspaceConfig] ${activated.initialized ? "Initialized" : "Loaded"} semantic main ${activated.stateHash}`
+      );
+    },
   });
 
   {
     container.registerManaged({
       name: "lifecycleDriver",
-      dependencies: ["workerdManager", "doDispatch"],
+      dependencies: ["workerdWorkspace", "workerdManager", "doDispatch"],
       async start(resolve) {
         const { LifecycleDriver } = await import("./services/lifecycleDriver.js");
         const driver = new LifecycleDriver({
@@ -3307,7 +2905,7 @@ async function main() {
   {
     container.registerManaged({
       name: "alarmDriver",
-      dependencies: ["doDispatch"],
+      dependencies: ["workerdWorkspace", "doDispatch"],
       async start(resolve) {
         const { AlarmDriver } = await import("./services/alarmDriver.js");
         const driver = new AlarmDriver({
@@ -3328,7 +2926,7 @@ async function main() {
   {
     container.registerManaged({
       name: "recurringRegistry",
-      dependencies: ["doDispatch"],
+      dependencies: ["workerdWorkspace", "doDispatch"],
       async start(resolve) {
         const { RecurringRegistry } = await import("./services/recurringRegistry.js");
         const registry = new RecurringRegistry({
@@ -3350,7 +2948,7 @@ async function main() {
   {
     container.registerManaged({
       name: "heartbeatDeclarationRegistry",
-      dependencies: ["doDispatch"],
+      dependencies: ["workerdWorkspace", "doDispatch"],
       async start(resolve) {
         const { HeartbeatDeclarationRegistry } = await import("./services/recurringRegistry.js");
         const registry = new HeartbeatDeclarationRegistry({
@@ -3400,23 +2998,17 @@ async function main() {
         ctx,
         mutate: (current) => ({ ...current, [key]: value }),
         summary: `update workspace config field ${key}`,
-        operation: "push",
       });
       replaceLiveWorkspaceConfig(result.nextConfig);
     },
     treeScanner,
     adminToken,
-    workspaceCatalog,
     args,
     hostConfig,
     tokenManager,
     grantStore: capabilityGrantStore,
     hasAppCapability: (callerId: string, capability: AppCapability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-    // Live role lookup from the shared identity DB — gates host-administrative
-    // workspace.* methods to root/admin (WP4 §4). Read at call time, never
-    // frozen onto the connection.
-    roleOf: (userId: string) => userStore.getUser(userId)?.role ?? null,
     contextExists: contextBoundaryDeps.contextExists,
     resolveContextOwnerLabel: contextBoundaryDeps.resolveContextOwnerLabel,
     panelRuntimeCoordinator,
@@ -3935,7 +3527,7 @@ async function main() {
     );
   }
 
-  // Static WebRTC reach material (fp/sig/ice/srv — no room) is populated after
+  // Static WebRTC reach material (fp/sig/ice — no room) is populated after
   // the ingress starts. The hub combines it with each ephemeral routed room;
   // identity rows and the child auth service never own transport coordinates.
 
@@ -3952,18 +3544,10 @@ async function main() {
           roleOf: (userId) => userStore.getUser(userId)?.role ?? null,
           agentCredentialWriter: {
             mint: async (input) => {
-              const payload = await callHubInternal("agent-credential/mint", input);
-              if (
-                typeof payload["agentId"] !== "string" ||
-                typeof payload["agentToken"] !== "string"
-              ) {
-                throw new Error("Hub returned an invalid agent credential");
-              }
-              return { agentId: payload["agentId"], agentToken: payload["agentToken"] };
+              return workspaceChildHub.mintAgentCredential(input);
             },
             revoke: async (agentId) => {
-              const payload = await callHubInternal("agent-credential/revoke", { agentId });
-              return payload["revoked"] === true;
+              return workspaceChildHub.revokeAgentCredential(agentId);
             },
           },
           getServerBootId: () => serverBootId,
@@ -4088,7 +3672,7 @@ async function main() {
       | null = null;
     container.registerManaged({
       name: "workerdInspector",
-      dependencies: ["workerdManager", "panelHttpServer"],
+      dependencies: ["workerdWorkspace", "workerdManager", "panelHttpServer"],
       async start(resolve) {
         const workerdManager = assertPresent(
           resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
@@ -4199,11 +3783,12 @@ async function main() {
       const { assertNodeDatachannelAvailable } =
         await import("../node/webrtc/nodeDatachannelPeer.js");
       assertNodeDatachannelAvailable();
-      const pathMod = await import("node:path");
-      const certDir = pathMod.join(appRoot, ".vibestudio", "webrtc");
+      const identityPemFile = process.env["VIBESTUDIO_WEBRTC_IDENTITY"];
+      if (!identityPemFile) {
+        throw new Error("Workspace runtime requires a hub-owned WebRTC identity path");
+      }
       const cert = ensurePersistentCert({
-        identityPemFile:
-          process.env["VIBESTUDIO_WEBRTC_IDENTITY"] ?? pathMod.join(certDir, "identity.pem"),
+        identityPemFile,
       });
       const iceTransportPolicy: import("@vibestudio/shared/connect").TurnPolicy =
         process.env["VIBESTUDIO_WEBRTC_ICE"] === "relay" ? "relay" : "all";
@@ -4218,26 +3803,20 @@ async function main() {
         signalUrl: webrtcSignalUrl,
         certificatePemFile: cert.certificatePemFile,
         keyPemFile: cert.keyPemFile,
-        fingerprint: cert.fingerprint,
         iceTransportPolicy: serverIceTransportPolicy,
       });
       webrtcIngress = ingress;
       for (const route of routedRoomStore.list()) {
-        await ingress.armRoom(route.room, {
-          ...(route.kind === "device" ? { deviceId: route.deviceId } : {}),
-        });
-        if (route.kind === "invite") {
-          scheduleRoutedRoomExpiry(routedRoomKey(route), route.expiresAt);
-        }
+        await ingress.armRoom(route.room, { deviceId: route.deviceId });
       }
       // Expose static reach material to the hub through the ready file and the
-      // authenticated internal routing endpoint. Rooms are always ephemeral.
+      // authenticated internal routing endpoint. Device ownership is durable;
+      // the ingress pipe is reconstructed from that route after restart.
       webrtcPairing = {
         fp: cert.fingerprint,
         sig: webrtcSignalUrl,
         v: (await import("@vibestudio/shared/connect")).PAIRING_PROTOCOL_VERSION,
         ice: iceTransportPolicy,
-        srv: process.env["VIBESTUDIO_WORKSPACE"] ?? undefined,
       };
     } catch (error) {
       throw new Error(
@@ -4265,14 +3844,6 @@ async function main() {
   rpcServerInstance.setWorkerInstanceResolver((targetId) =>
     workerdManager.resolveWorkerInstanceName(targetId)
   );
-  rpcServerInstance.setEnsureDO((source, className, objectKey) => {
-    const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
-    const record = entityCache.resolveActive(targetId);
-    return workerdManager.ensureDO(source, className, objectKey, {
-      contextId: record?.contextId,
-    });
-  });
-
   dispatcher.markInitialized();
 
   // ===========================================================================
@@ -4326,52 +3897,38 @@ async function main() {
   }
 
   // 4. Singleton reconciliation against vibestudio.yml.singletonObjects.
-  try {
-    const { createHash } = await import("node:crypto");
-    const { canonicalEntityId } = await import("@vibestudio/shared/runtime/entitySpec");
-    type EntityRecord = import("@vibestudio/shared/runtime/entitySpec").EntityRecord;
-    const declaredKeys = new Set<string>();
-    for (const decl of workspaceDecls.singletons.all()) {
-      const contextId =
-        decl.contextId ??
-        createHash("sha256")
-          .update(`${workspace.config.id}\x00${decl.source}\x00${decl.className}\x00${decl.key}`)
-          .digest("hex");
-      const targetId = canonicalEntityId({
-        kind: "do",
+  // Preparing an image may restart workerd, so all preparations complete
+  // before any activation request is admitted.
+  const { reconcileSingletons } = await import("./bootstrap/singletonReconciliation.js");
+  const singletonPlans = workspaceDecls.singletons.all().map((decl) => ({
+    decl,
+    contextId:
+      decl.contextId ??
+      createHash("sha256")
+        .update(`${workspace.config.id}\x00${decl.source}\x00${decl.className}\x00${decl.key}`)
+        .digest("hex"),
+  }));
+  await reconcileSingletons({
+    items: singletonPlans,
+    prepare: ({ decl, contextId }) =>
+      workerdManager.ensureDurableObjectEntity({
         source: decl.source,
         className: decl.className,
         key: decl.key,
-      });
-      declaredKeys.add(targetId);
-      try {
-        const prepared = await workerdManager.ensureDurableObjectEntity({
-          source: decl.source,
-          className: decl.className,
-          key: decl.key,
-          contextId,
-          ref: decl.contextId ? undefined : "main",
-        });
-        const record = await dispatchWorkspaceDO<EntityRecord>("entityActivate", {
-          kind: "do",
-          source: { repoPath: decl.source, effectiveVersion: prepared.effectiveVersion },
-          contextId,
-          className: decl.className,
-          key: decl.key,
-          ownerUserId: SYSTEM_SUBJECT.userId,
-        });
-        entityCache._onActivate(record);
-      } catch (err) {
-        console.warn(
-          `[Bootstrap] Singleton activate failed for ${decl.source}:${decl.className}:${decl.key}:`,
-          err
-        );
-      }
-    }
-    void declaredKeys;
-  } catch (err) {
-    console.warn("[Bootstrap] Singleton reconciliation failed:", err);
-  }
+        contextId,
+        ref: decl.contextId ? undefined : "main",
+      }),
+    activate: ({ decl, contextId }, prepared) =>
+      dispatchWorkspaceDO<EntityRecord>("entityActivate", {
+        kind: "do",
+        source: { repoPath: decl.source, effectiveVersion: prepared.effectiveVersion },
+        contextId,
+        className: decl.className,
+        key: decl.key,
+        ownerUserId: SYSTEM_SUBJECT.userId,
+      }),
+    onActivated: (record) => entityCache._onActivate(record),
+  });
 
   // 5. Start cleanup reaper to retry partial-failed hooks.
   const { createCleanupReaper } = await import("./services/cleanupReaper.js");
@@ -4579,8 +4136,6 @@ async function main() {
       .stopAll()
       .then(() => console.log("[Server] All services stopped"))
       .catch((e) => console.error("[Server] Service shutdown error:", e));
-    for (const timer of routedRoomExpiryTimers.values()) clearTimeout(timer);
-    routedRoomExpiryTimers.clear();
     try {
       identityDb.close();
     } catch (error) {

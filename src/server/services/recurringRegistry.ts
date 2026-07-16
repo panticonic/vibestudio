@@ -535,15 +535,15 @@ export interface RecurringMetaChangeProviderDeps {
   workspaceId: string;
   getCurrentRecurring(): WorkspaceRecurringDecl[];
   getCurrentHeartbeats?: () => WorkspaceHeartbeatDecl[];
-  readWorkspaceFileAtCommit(commit: string, filePath: string): Promise<string | null>;
+  readWorkspaceFileAtState(stateHash: string, filePath: string): Promise<string | null>;
 }
 
-async function readRecurringAtCommit(
+async function readRecurringAtState(
   deps: RecurringMetaChangeProviderDeps,
-  commit: string
+  stateHash: string
 ): Promise<WorkspaceRecurringDecl[]> {
   try {
-    const out = await deps.readWorkspaceFileAtCommit(commit, "meta/vibestudio.yml");
+    const out = await deps.readWorkspaceFileAtState(stateHash, "meta/vibestudio.yml");
     if (!out) return [];
     return parseWorkspaceConfigContentWithId(out, deps.workspaceId).recurring ?? [];
   } catch {
@@ -551,12 +551,12 @@ async function readRecurringAtCommit(
   }
 }
 
-async function readHeartbeatsAtCommit(
+async function readHeartbeatsAtState(
   deps: RecurringMetaChangeProviderDeps,
-  commit: string
+  stateHash: string
 ): Promise<WorkspaceHeartbeatDecl[]> {
   try {
-    const out = await deps.readWorkspaceFileAtCommit(commit, "meta/vibestudio.yml");
+    const out = await deps.readWorkspaceFileAtState(stateHash, "meta/vibestudio.yml");
     if (!out) return [];
     return parseWorkspaceConfigContentWithId(out, deps.workspaceId).heartbeats ?? [];
   } catch {
@@ -583,8 +583,8 @@ export function createRecurringMetaChangeProvider(
     async metaChangeApprovalForCommit(
       commit: string
     ): Promise<{ units: UnitBatchEntry[]; identityKeys: string[] }> {
-      const proposed = await readRecurringAtCommit(deps, commit);
-      const proposedHeartbeats = await readHeartbeatsAtCommit(deps, commit);
+      const proposed = await readRecurringAtState(deps, commit);
+      const proposedHeartbeats = await readHeartbeatsAtState(deps, commit);
       const current = new Map(
         deps.getCurrentRecurring().map((decl) => [decl.name, recurringSpecHash(decl)])
       );

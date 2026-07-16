@@ -19,6 +19,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@vibestudio/durable/test-utils";
+import type { RpcCallOptions } from "@vibestudio/rpc";
 import { EvalDO } from "./evalDO.js";
 
 type RunResult = { success: boolean; console: string; returnValue?: unknown; error?: string };
@@ -60,13 +61,14 @@ function blockUntilAborted(): {
 /** Insert a pending run row directly (bypasses the schema-validated service so the DO is exercised). */
 function seedPendingRun(
   sql: { exec: (q: string, ...b: unknown[]) => unknown },
-  runId: string
+  runId: string,
+  args: Record<string, unknown> = { code: "return 1;", contextId: "ctx" }
 ): void {
   sql.exec(
     `INSERT INTO runs (run_id, args, agent_ref, channel_id, status, started_at, deadline_at)
      VALUES (?, ?, NULL, NULL, 'pending', ?, NULL)`,
     runId,
-    JSON.stringify({ code: "return 1;", contextId: "ctx" }),
+    JSON.stringify(args),
     Date.now()
   );
 }
@@ -128,106 +130,35 @@ describe("EvalDO cancellation + forced recovery", () => {
       )
     ).toThrow(/256 KiB/);
   });
-  it("startRun counts as activity and re-arms idle eviction", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    const setAlarmAt = vi
-      .spyOn(
-        instance as unknown as { setAlarmAt: (timeMs: number, opts?: unknown) => void },
-        "setAlarmAt"
-      )
-      .mockImplementation(() => undefined);
 
-    const ret = await priv<
-      (args: { runId: string; code: string; contextId: string }) => Promise<{
-        runId: string;
-        status: string;
-      }>
-    >(instance, "startRun").call(instance, {
-      runId: "queued",
-      code: "return 1;",
-      contextId: "ctx",
+  it("serves getRun through a concurrent fetch while executeRun is held", async () => {
+    const { instance, sql, call } = await createTestDO(EvalDO);
+    let releaseRun!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
     });
+    const released = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    setPriv(instance, "runLocked", async () => {
+      markStarted();
+      await released;
+      return { success: true, console: "", returnValue: "done" };
+    });
+    vi.spyOn(
+      instance as unknown as { setAlarmAt: (timeMs: number, opts?: unknown) => void },
+      "setAlarmAt"
+    ).mockImplementation(() => undefined);
+    seedPendingRun(sql, "held-run");
 
-    expect(ret).toEqual({ runId: "queued", status: "pending" });
-    expect(setAlarmAt).toHaveBeenCalledTimes(1);
-    expect(setAlarmAt).toHaveBeenCalledWith(expect.any(Number), { bestEffort: true });
-  });
+    const held = call<RunResult>("executeRun", "held-run");
+    await started;
 
-  it.each(["pending", "running"] as const)(
-    "alarm re-arms instead of aborting when a durable %s run exists",
-    async (status) => {
-      const { instance, sql } = await createTestDO(EvalDO);
-      seedPendingRun(sql, "active-run");
-      if (status === "running") {
-        sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'active-run'`);
-      }
-      const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
-      const setAlarmAt = vi
-        .spyOn(
-          instance as unknown as { setAlarmAt: (timeMs: number, opts?: unknown) => void },
-          "setAlarmAt"
-        )
-        .mockImplementation(() => undefined);
+    await expect(call("getRun", "held-run")).resolves.toMatchObject({ status: "running" });
 
-      await instance.alarm();
-
-      expect(setAlarmAt).toHaveBeenCalledTimes(1);
-      expect(setAlarmAt).toHaveBeenCalledWith(expect.any(Number), { bestEffort: true });
-      expect(consoleInfo).toHaveBeenCalledWith(
-        "[EvalDO] idle eviction alarm",
-        expect.objectContaining({
-          objectKey: "test-key",
-          inFlightRuns: 0,
-          durableRuns: 1,
-          oldestDurableRunStartedAt: expect.any(Number),
-        })
-      );
-      consoleInfo.mockRestore();
-    }
-  );
-
-  it("alarm re-arms instead of aborting when an in-memory claimed run exists", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    priv<Set<string>>(instance, "activeRunIds").add("claimed-run");
-    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const setAlarmAt = vi
-      .spyOn(
-        instance as unknown as { setAlarmAt: (timeMs: number, opts?: unknown) => void },
-        "setAlarmAt"
-      )
-      .mockImplementation(() => undefined);
-
-    await instance.alarm();
-
-    expect(setAlarmAt).toHaveBeenCalledTimes(1);
-    expect(setAlarmAt).toHaveBeenCalledWith(expect.any(Number), { bestEffort: true });
-    expect(consoleInfo).toHaveBeenCalledWith(
-      "[EvalDO] idle eviction alarm",
-      expect.objectContaining({
-        objectKey: "test-key",
-        inFlightRuns: 0,
-        activeRunIds: 1,
-        inMemoryRunIds: ["claimed-run"],
-        durableRuns: 0,
-      })
-    );
-    consoleInfo.mockRestore();
-  });
-
-  it("alarm does not log the detailed state dump for confirmed-idle eviction", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const unsubscribeAll = vi.fn(() => Promise.resolve());
-    setPriv(instance, "mainEvents", () => ({ unsubscribeAll }));
-    const abort = vi.fn();
-    priv<{ abort?: (reason?: string) => void }>(instance, "ctx").abort = abort;
-
-    await instance.alarm();
-
-    expect(consoleInfo).not.toHaveBeenCalled();
-    expect(unsubscribeAll).toHaveBeenCalledTimes(1);
-    expect(abort).toHaveBeenCalledWith("EvalDO: idle eviction (reclaim memory; SQLite preserved)");
-    consoleInfo.mockRestore();
+    releaseRun();
+    await expect(held).resolves.toMatchObject({ success: true, returnValue: "done" });
   });
 
   it("executeRun persists a bounded terminal result for huge console and return payloads", async () => {
@@ -374,7 +305,6 @@ describe("EvalDO cancellation + forced recovery", () => {
       }
     );
     expect(priv<Map<string, unknown>>(instance, "runAborts").has("expired")).toBe(false);
-    expect(priv<Set<string>>(instance, "activeRunIds").has("expired")).toBe(false);
   });
 
   it("forceReset(): a wedged run on runChain does not block a later run, and tables/scope are cleared", async () => {
@@ -468,6 +398,281 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
   });
 
+  it("keeps orphaned and replacement runs in distinct immutable execution contexts", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const calls: Array<{
+      method: string;
+      options: RpcCallOptions | undefined;
+    }> = [];
+    const fakeRpc = {
+      selfId: "do:test:EvalDO:test-key",
+      call: vi.fn((_target: string, method: string, _args: unknown[], options?: RpcCallOptions) => {
+        calls.push({ method, options });
+        return Promise.resolve("ok");
+      }),
+      stream: vi.fn(),
+      streamReadable: vi.fn(),
+      emit: vi.fn((_target: string, event: string, _payload: unknown, options?: RpcCallOptions) => {
+        calls.push({ method: event, options });
+        return Promise.resolve();
+      }),
+      on: vi.fn(() => vi.fn()),
+      expose: vi.fn(),
+      exposeAll: vi.fn(),
+      exposeStreaming: vi.fn(),
+      peer: vi.fn((targetId: string) => ({
+        id: targetId,
+        call: {},
+        on: vi.fn(() => vi.fn()),
+        emit: vi.fn(),
+        withContract: vi.fn(),
+      })),
+      status: vi.fn(() => "connected"),
+      ready: vi.fn(() => Promise.resolve()),
+      onStatusChange: vi.fn(() => vi.fn()),
+    };
+    Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
+    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
+      "@workspace/runtime";
+    setPriv(instance, "ensureRuntimeSupport", () =>
+      Promise.resolve({
+        createHostedRuntime: (host: Record<string, unknown>) => ({
+          rpc: host["rpc"],
+          fs: host["fs"],
+        }),
+        createPanelRuntime: () => ({ getPanelHandle: () => null }),
+        createRuntimeSelfHandle: () => ({}),
+        createGatewayFetch: () => () => {},
+        createRpcFs: () => ({}),
+        createRuntimeParentHandle: () => null,
+        createServicesProxy: () => ({}),
+        createWorkerdClient: () => ({}),
+      })
+    );
+    const fakeScope = {
+      current: {},
+      api: {},
+      enterEval: () => {},
+      exitEval: () => Promise.resolve(),
+    };
+    setPriv(instance, "ensureScopeManager", () => Promise.resolve(fakeScope));
+
+    let startA!: () => void;
+    let resumeA!: () => void;
+    let calledA!: () => void;
+    let startB!: () => void;
+    let resumeB!: () => void;
+    const aStarted = new Promise<void>((resolve) => (startA = resolve));
+    const aResumed = new Promise<void>((resolve) => (resumeA = resolve));
+    const aCalled = new Promise<void>((resolve) => (calledA = resolve));
+    const bStarted = new Promise<void>((resolve) => (startB = resolve));
+    const bResumed = new Promise<void>((resolve) => (resumeB = resolve));
+    const runSignals = new Map<string, AbortSignal | undefined>();
+    setPriv(instance, "ensureEngine", () =>
+      Promise.resolve({
+        executeSandbox: async (
+          code: string,
+          options: { bindings: Record<string, unknown>; signal?: AbortSignal }
+        ) => {
+          const rpc = options.bindings["rpc"] as {
+            call(target: string, method: string, args: unknown[]): Promise<unknown>;
+            peer(target: string): {
+              call: Record<string, (...args: unknown[]) => Promise<unknown>>;
+              emit(event: string, payload: unknown): Promise<void>;
+            };
+          };
+          runSignals.set(code, options.signal);
+          if (code === "A") {
+            startA();
+            await aResumed;
+            await rpc.peer("main").call["run-a-after-b-started"]!();
+            calledA();
+          } else {
+            await rpc.call("main", "run-b-before-a-resumes", []);
+            startB();
+            await bResumed;
+            await rpc.peer("main").emit("run-b-after-a-finished", {});
+          }
+          return { success: true, consoleOutput: "", returnValue: code };
+        },
+      })
+    );
+
+    const causeA = {
+      kind: "trajectory-invocation" as const,
+      logId: "trajectory:a",
+      head: "main",
+      invocationId: "invocation:a",
+    };
+    const causeB = {
+      kind: "trajectory-invocation" as const,
+      logId: "trajectory:b",
+      head: "main",
+      invocationId: "invocation:b",
+    };
+    seedPendingRun(sql, "run-a", {
+      code: "A",
+      contextId: "ctx",
+      causalParent: causeA,
+      readOnly: true,
+    });
+    const runA = instance.executeRun("run-a");
+    await aStarted;
+
+    // A ignores its abort and remains suspended. forceReset therefore orphans
+    // its chain, allowing B to begin with a different immutable context.
+    await priv<() => Promise<{ ok: boolean }>>(instance, "forceReset").call(instance);
+    await instance.startRun({
+      runId: "run-b",
+      code: "B",
+      contextId: "ctx",
+      causalParent: causeB,
+      readOnly: false,
+    });
+    const runB = instance.executeRun("run-b");
+    await bStarted;
+
+    resumeA();
+    await aCalled;
+    await runA;
+    resumeB();
+    await expect(runB).resolves.toMatchObject({ success: true, returnValue: "B" });
+
+    const aSignal = runSignals.get("A");
+    const bSignal = runSignals.get("B");
+    expect(aSignal).toBeInstanceOf(AbortSignal);
+    expect(bSignal).toBeInstanceOf(AbortSignal);
+    expect(aSignal).not.toBe(bSignal);
+    expect(aSignal?.aborted).toBe(true);
+    expect(bSignal?.aborted).toBe(false);
+
+    const byMethod = new Map(calls.map((call) => [call.method, call.options]));
+    expect(byMethod.get("run-a-after-b-started")).toMatchObject({
+      causalParent: causeA,
+      readOnly: true,
+      signal: aSignal,
+    });
+    for (const method of ["run-b-before-a-resumes", "run-b-after-a-finished"]) {
+      const options = byMethod.get(method);
+      expect(options).toMatchObject({ causalParent: causeB, signal: bSignal });
+      expect(options?.readOnly).toBeUndefined();
+    }
+  });
+
+  it("keeps cached scope persistence outside every run execution context", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const scopeWrites: Array<RpcCallOptions | undefined> = [];
+    const fakeRpc = {
+      selfId: "do:test:EvalDO:test-key",
+      call: vi.fn((_target: string, method: string, _args: unknown[], options?: RpcCallOptions) => {
+        if (method === "blobstore.putText") {
+          scopeWrites.push(options);
+          return Promise.resolve({ digest: "a".repeat(64), size: 2 });
+        }
+        return Promise.resolve(null);
+      }),
+      stream: vi.fn(),
+      streamReadable: vi.fn(),
+      emit: vi.fn(() => Promise.resolve()),
+      on: vi.fn(() => vi.fn()),
+      expose: vi.fn(),
+      exposeAll: vi.fn(),
+      exposeStreaming: vi.fn(),
+      peer: vi.fn((targetId: string) => ({
+        id: targetId,
+        call: {},
+        on: vi.fn(() => vi.fn()),
+        emit: vi.fn(),
+        withContract: vi.fn(),
+      })),
+      status: vi.fn(() => "connected"),
+      ready: vi.fn(() => Promise.resolve()),
+      onStatusChange: vi.fn(() => vi.fn()),
+    };
+    Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
+    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
+      "@workspace/runtime";
+    setPriv(instance, "ensureRuntimeSupport", () =>
+      Promise.resolve({
+        createHostedRuntime: (host: Record<string, unknown>) => ({
+          rpc: host["rpc"],
+          fs: host["fs"],
+        }),
+        createPanelRuntime: () => ({ getPanelHandle: () => null }),
+        createRuntimeSelfHandle: () => ({}),
+        createGatewayFetch: () => () => {},
+        createRpcFs: () => ({}),
+        createRuntimeParentHandle: () => null,
+        createServicesProxy: () => ({}),
+        createWorkerdClient: () => ({}),
+      })
+    );
+
+    let persistenceBackend:
+      | { putText(value: string): Promise<unknown>; getText(digest: string): Promise<unknown> }
+      | undefined;
+    let managerConstructions = 0;
+    const engine = {
+      SqlScopePersistence: class {
+        constructor(
+          _sql: unknown,
+          backend: {
+            putText(value: string): Promise<unknown>;
+            getText(digest: string): Promise<unknown>;
+          }
+        ) {
+          persistenceBackend = backend;
+        }
+      },
+      ScopeManager: class {
+        readonly current: Record<string, unknown> = {};
+        readonly api = {};
+        constructor() {
+          managerConstructions += 1;
+        }
+        hydrate(): Promise<void> {
+          return Promise.resolve();
+        }
+        enterEval(): void {}
+        async exitEval(): Promise<void> {
+          await persistenceBackend!.putText("{}");
+        }
+      },
+      executeSandbox: () =>
+        Promise.resolve({ success: true, consoleOutput: "", returnValue: undefined }),
+    };
+    setPriv(instance, "ensureEngine", () => Promise.resolve(engine));
+    const runLocked = priv<RunLockedFn>(instance, "runLocked").bind(instance);
+    const controllerA = new AbortController();
+    await runLocked(
+      {
+        code: "A",
+        contextId: "ctx",
+        causalParent: {
+          kind: "trajectory-invocation",
+          logId: "trajectory:a",
+          head: "main",
+          invocationId: "invocation:a",
+        },
+        readOnly: true,
+      },
+      controllerA.signal,
+      "run-a"
+    );
+    controllerA.abort();
+
+    const controllerB = new AbortController();
+    await runLocked({ code: "B", contextId: "ctx" }, controllerB.signal, "run-b");
+
+    expect(managerConstructions).toBe(1);
+    expect(scopeWrites).toHaveLength(2);
+    for (const options of scopeWrites) {
+      expect(options?.causalParent).toBeUndefined();
+      expect(options?.readOnly).toBeUndefined();
+      expect(options?.signal).toBeUndefined();
+    }
+  });
+
   it("forceReset reports cleanup failures after completing the reset", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "cleanup-failure");
@@ -547,6 +752,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         return Promise.resolve("ok");
       }),
       stream: vi.fn(),
+      streamReadable: vi.fn(),
       emit: vi.fn(),
       on: vi.fn(() => vi.fn()),
       expose: vi.fn(),
@@ -594,10 +800,22 @@ describe("EvalDO cancellation + forced recovery", () => {
       Promise.resolve({
         executeSandbox: async (_code: string, opts: { bindings: Record<string, unknown> }) => {
           const rpcBinding = opts.bindings["rpc"] as {
-            call: (t: string, m: string, a: unknown[]) => Promise<unknown>;
+            call: (
+              t: string,
+              m: string,
+              a: unknown[],
+              options?: Record<string, unknown>
+            ) => Promise<unknown>;
           };
           // Eval uses the same portable RpcClient call shape as panels/workers.
-          await rpcBinding.call("main", "svc.method", []);
+          await rpcBinding.call("main", "svc.method", [], {
+            causalParent: {
+              kind: "trajectory-invocation",
+              logId: "trajectory:forged",
+              head: "main",
+              invocationId: "invocation:forged",
+            },
+          });
           await rpcBinding.call("do:peer", "ping", []);
           return { success: true, consoleOutput: "", returnValue: undefined };
         },
@@ -607,12 +825,31 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     const controller = new AbortController();
     const runLocked = priv<RunLockedFn>(instance, "runLocked").bind(instance);
-    await runLocked({ code: "x", contextId: "ctx" }, controller.signal, "run-sig");
+    await runLocked(
+      {
+        code: "x",
+        contextId: "ctx",
+        causalParent: {
+          kind: "trajectory-invocation",
+          logId: "trajectory:bound",
+          head: "main",
+          invocationId: "invocation:parent",
+        },
+      },
+      controller.signal,
+      "run-sig"
+    );
 
     // Both outbound calls carried the SAME run signal in their options.
     expect(seenOptions).toHaveLength(2);
     for (const { options } of seenOptions) {
       expect((options as { signal?: AbortSignal }).signal).toBe(controller.signal);
+      expect((options as RpcCallOptions).causalParent).toEqual({
+        kind: "trajectory-invocation",
+        logId: "trajectory:bound",
+        head: "main",
+        invocationId: "invocation:parent",
+      });
     }
     // And aborting the run's controller would unwind those calls (rpc client honors options.signal).
     expect(controller.signal.aborted).toBe(false);

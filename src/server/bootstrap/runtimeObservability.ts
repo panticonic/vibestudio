@@ -56,7 +56,10 @@ export function wireRuntimeObservability(
             buildEvent: event.type,
             ...(event.buildKey ? { buildKey: event.buildKey } : {}),
             ...(event.trigger
-              ? { head: event.trigger.head, stateHash: event.trigger.stateHash }
+              ? {
+                  publicationId: event.trigger.publicationId,
+                  workspaceStateHash: event.trigger.workspaceStateHash,
+                }
               : {}),
           },
         });

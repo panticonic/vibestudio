@@ -56,6 +56,17 @@ function recordingHost() {
       if (method === "blobstore.putBase64") {
         return { digest: "a".repeat(64), size: 1 };
       }
+      if (method === "vcs.status") {
+        return {
+          contextId: "context:test",
+          committed: { kind: "event", eventId: "event:committed" },
+          workingHead: { kind: "event", eventId: "event:committed" },
+          clean: true,
+          mainEventId: "event:committed",
+          mainRelation: "at",
+          workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+        };
+      }
       return undefined;
     },
     stream: async () => new Response(),
@@ -181,25 +192,16 @@ describe("createHostedRuntime", () => {
     expect(calls).not.toContainEqual(expect.objectContaining({ method: "blobstore.putBase64" }));
   });
 
-  it("vcs.subscribeHead wires through host.rpc (rpc.on + events.subscribe)", () => {
-    const { host, onEvents, calls } = recordingHost();
+  it("vcs.status dispatches the canonical semantic request through host.rpc", async () => {
+    const { host, calls } = recordingHost();
     const core = createHostedRuntime(host);
 
-    const off = core.vcs.subscribeHead("main", () => {});
+    await core.vcs.status({ contextId: host.contextId });
 
-    expect(onEvents).toContain("event:vcs:head:main");
     expect(calls).toContainEqual({
       target: "main",
-      method: "events.subscribe",
-      args: ["vcs:head:main"],
-    });
-
-    // Teardown pairs the unsubscribe (no leaked server-side subscription).
-    off();
-    expect(calls).toContainEqual({
-      target: "main",
-      method: "events.unsubscribe",
-      args: ["vcs:head:main"],
+      method: "vcs.status",
+      args: [{ contextId: host.contextId }],
     });
   });
 });

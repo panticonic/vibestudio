@@ -99,6 +99,9 @@ describe("LifecycleDriver", () => {
     expect(
       harness.calls.some((call) => call.kind === "lifecycle" && call.method === "resume")
     ).toBe(false);
+    expect(
+      harness.calls.find((call) => call.kind === "lifecycle" && call.method === "prepare")?.arg
+    ).toMatchObject({ mode: "suspend" });
 
     await harness.fireReady({
       correlationId: "r1",
@@ -117,7 +120,9 @@ describe("LifecycleDriver", () => {
 
   it("records timed_out when a DO does not complete prepare before the deadline", async () => {
     const harness = makeHarness({ hangPrepare: true });
-    await harness.fireBegin({ correlationId: "r1", generation: 8, reason: "planned" });
+    await expect(
+      harness.fireBegin({ correlationId: "r1", generation: 8, reason: "planned" })
+    ).rejects.toThrow(/Lifecycle release failed/u);
 
     expect(harness.calls).toEqual(
       expect.arrayContaining([
@@ -144,7 +149,9 @@ describe("LifecycleDriver", () => {
     });
 
     const startedAt = Date.now();
-    await harness.fireBegin({ correlationId: "r1", generation: 8, reason: "planned" });
+    await expect(
+      harness.fireBegin({ correlationId: "r1", generation: 8, reason: "planned" })
+    ).rejects.toThrow(/Lifecycle release failed/u);
     const elapsedMs = Date.now() - startedAt;
 
     const prepareCalls = harness.calls.filter(

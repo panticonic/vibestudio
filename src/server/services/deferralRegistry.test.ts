@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { isDeferredResult } from "@vibestudio/shared/serviceDispatcher";
 import { DeferralRegistry } from "./deferralRegistry.js";
 
@@ -154,46 +154,22 @@ describe("DeferralRegistry", () => {
     expect(deliveries).toHaveLength(1); // no second delivery
   });
 
-  it("retries a failing delivery with backoff and eventually succeeds", async () => {
-    const calls: Array<{ requestId: string; result: unknown }> = [];
-    let attempts = 0;
-    const registry = new DeferralRegistry({
-      deliver: async (_callerId, requestId, result) => {
-        attempts++;
-        if (attempts < 3) throw new Error("transient delivery failure");
-        calls.push({ requestId, result });
-      },
-      sleep: async () => {}, // collapse backoff in tests
-      setTimer: () => ({ cancel: () => {} }),
-    });
-
-    registry.createApi(info()).run(async () => "ok");
-    // Let the settle + retry loop drain.
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-
-    expect(attempts).toBe(3);
-    expect(calls).toEqual([{ requestId: "req-1", result: "ok" }]);
-  });
-
-  it("logs at error level when delivery is exhausted (no silent drop)", async () => {
-    const errors: unknown[][] = [];
+  it("does not retry a failed best-effort delivery", async () => {
+    const warnings: unknown[][] = [];
+    let deliveries = 0;
     const registry = new DeferralRegistry({
       deliver: async () => {
-        throw new Error("permanent delivery failure");
+        deliveries++;
+        throw new Error("caller disappeared");
       },
-      deliveryRetries: 2,
-      sleep: async () => {},
       setTimer: () => ({ cancel: () => {} }),
-      logger: {
-        warn: () => {},
-        error: (...args: unknown[]) => errors.push(args),
-      },
+      logger: { warn: (...args: unknown[]) => warnings.push(args) },
     });
 
     registry.createApi(info()).run(async () => "ok");
-    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await vi.waitFor(() => expect(warnings).toHaveLength(1));
 
-    expect(errors).toHaveLength(1);
-    expect(String(errors[0]![0])).toContain("delivery FAILED after 2 attempts");
+    expect(deliveries).toBe(1);
+    expect(String(warnings[0]![0])).toContain("caller will recover from durable state");
   });
 });

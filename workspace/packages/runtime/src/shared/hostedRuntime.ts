@@ -6,8 +6,9 @@
  * rpc-mediated feature (`gad`/`workspace`/`credentials`/`vcs`/`git`/`webhooks`/
  * `extensions`/`approvals`/`notifications`) is written once and is real on every
  * target — because `host.rpc` is the same unified `createRpcClient` core
- * everywhere (event push, `vcs.subscribeHead`, `workspace.units.watch` all
- * work on a connectionless DO too).
+ * everywhere (`vcs.status`, `vcs.inspect`, `workspace.units.watch`,
+ * and the rest of the generated service surface all work on a connectionless
+ * DO too).
  *
  * This is pure and DO-safe: it creates NO transport and runs no I/O — it only
  * composes clients over `host.rpc`. The cross-target parity gate executes this
@@ -214,13 +215,7 @@ export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
   const workspace = helpfulNamespace("workspace", createWorkspaceClient(rpc));
   const vcs = helpfulNamespace(
     "vcs",
-    createVcsClient(
-      <T>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, args),
-      rpc,
-      // Userland dispatch has no host caller-context resolution — default both
-      // the history log AND the push source to THIS runtime's own context head.
-      { logHead: `ctx:${host.contextId}`, pushSourceHead: `ctx:${host.contextId}` }
-    )
+    createVcsClient(<T>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, args))
   );
   const webhooks = helpfulNamespace("webhooks", createWebhookIngressClient(rpc));
   const extensions = helpfulNamespace("extensions", createExtensionsClient(rpc));

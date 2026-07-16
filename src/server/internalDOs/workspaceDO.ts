@@ -6,8 +6,8 @@
  * lifecycle columns (status, retired_at, cleanup_complete). Slot rows hold
  * the panel-tree position; slot_history holds the navigation history.
  *
- * Schema v7 ships clean-cut: the upgrade path drops every v6 table and
- * creates the new schema empty. No data migration.
+ * This pre-release store has one exact current schema. DurableObjectBase
+ * replaces any older schema epoch wholesale before activating it.
  */
 
 import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
@@ -33,7 +33,9 @@ interface DbEntityRow {
   class_name: string | null;
   key: string;
   state_args: string | null;
-  agent_binding: string | null;
+  /** NULL means a self binding when agent_channel_id is present. */
+  agent_entity_id: string | null;
+  agent_channel_id: string | null;
   parent_id: string | null;
   owner_user_id: string | null;
   created_at: number;
@@ -334,7 +336,8 @@ export class WorkspaceDO extends DurableObjectBase {
         class_name TEXT,
         key TEXT NOT NULL,
         state_args TEXT,
-        agent_binding TEXT,
+        agent_entity_id TEXT REFERENCES entities(id),
+        agent_channel_id TEXT,
         parent_id TEXT,
         owner_user_id TEXT,
         created_at INTEGER NOT NULL,
@@ -342,7 +345,8 @@ export class WorkspaceDO extends DurableObjectBase {
         retired_at INTEGER,
         cleanup_complete INTEGER NOT NULL DEFAULT 1,
         error TEXT,
-        display_title TEXT
+        display_title TEXT,
+        CHECK (agent_entity_id IS NULL OR agent_channel_id IS NOT NULL)
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status, retired_at)`);
@@ -352,6 +356,10 @@ export class WorkspaceDO extends DurableObjectBase {
     this.sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_entities_cleanup
         ON entities(cleanup_complete, retired_at) WHERE cleanup_complete = 0`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_entities_agent_entity
+        ON entities(agent_entity_id) WHERE agent_entity_id IS NOT NULL`
     );
 
     this.sql.exec(`
@@ -489,29 +497,6 @@ export class WorkspaceDO extends DurableObjectBase {
     return WORKSPACE_REQUIRED_TABLES;
   }
 
-  protected override migrate(fromVersion: number, _toVersion: number): void {
-    if (fromVersion === 0) return;
-    // Pre-release. Schema changes are destructive — there is no user data to
-    // preserve, and we'd rather keep migration code small than carry layered
-    // ALTERs forever. Anything older than the current schema gets wiped and
-    // recreated by createTables().
-    this.sql.exec(`DROP TABLE IF EXISTS panel_fts`);
-    this.sql.exec(`DROP TABLE IF EXISTS panel_search_metadata`);
-    this.sql.exec(`DROP TABLE IF EXISTS panel_ops`);
-    this.sql.exec(`DROP TABLE IF EXISTS panels`);
-    this.sql.exec(`DROP TABLE IF EXISTS workspace_meta`);
-    this.sql.exec(`DROP TABLE IF EXISTS slot_history`);
-    this.sql.exec(`DROP TABLE IF EXISTS slots`);
-    this.sql.exec(`DROP TABLE IF EXISTS entities`);
-    this.sql.exec(`DROP TABLE IF EXISTS lifecycle_ops`);
-    this.sql.exec(`DROP TABLE IF EXISTS lifecycle_leases`);
-    this.sql.exec(`DROP TABLE IF EXISTS lifecycle_epochs`);
-    this.sql.exec(`DROP TABLE IF EXISTS do_alarms`);
-    this.sql.exec(`DROP TABLE IF EXISTS recurring_jobs`);
-    this.sql.exec(`DROP TABLE IF EXISTS heartbeat_registry`);
-    this.sql.exec(`DROP TABLE IF EXISTS context_edges`);
-  }
-
   getWorkspaceId(): string {
     return this.objectKey;
   }
@@ -540,37 +525,39 @@ export class WorkspaceDO extends DurableObjectBase {
       const existing = this.readEntityRow(id);
       if (existing) {
         this.assertIdentityMatches(id, existing, input);
-        const nextAgentBinding =
-          input.agentBinding === undefined ? null : JSON.stringify(input.agentBinding);
-        if (existing.agent_binding !== null && existing.agent_binding !== nextAgentBinding) {
+        const nextAgentEntityId =
+          input.agentBinding === undefined || input.agentBinding.entityId === id
+            ? null
+            : input.agentBinding.entityId;
+        const nextAgentChannelId = input.agentBinding?.channelId ?? null;
+        if (input.agentBinding !== undefined && input.agentBinding.contextId !== input.contextId) {
           throw new IdentityCollisionError(id, {
-            field: "agentBinding",
-            existing: existing.agent_binding,
-            attempted: nextAgentBinding,
+            field: "agentBinding.contextId",
+            existing: input.contextId,
+            attempted: input.agentBinding.contextId,
           });
         }
-        if (existing.agent_binding === null && nextAgentBinding !== null) {
-          this.sql.exec(`UPDATE entities SET agent_binding = ? WHERE id = ?`, nextAgentBinding, id);
-          existing.agent_binding = nextAgentBinding;
+        if (
+          existing.agent_entity_id !== nextAgentEntityId ||
+          existing.agent_channel_id !== nextAgentChannelId
+        ) {
+          throw new IdentityCollisionError(id, {
+            field: "agentBinding",
+            existing: {
+              entityId: existing.agent_entity_id ?? id,
+              contextId: existing.context_id,
+              channelId: existing.agent_channel_id,
+            },
+            attempted: input.agentBinding ?? null,
+          });
         }
         const nextOwnerUserId = input.ownerUserId ?? null;
-        if (
-          existing.owner_user_id !== null &&
-          nextOwnerUserId !== null &&
-          existing.owner_user_id !== nextOwnerUserId
-        ) {
+        if (existing.owner_user_id !== nextOwnerUserId) {
           throw new IdentityCollisionError(id, {
             field: "ownerUserId",
             existing: existing.owner_user_id,
             attempted: nextOwnerUserId,
           });
-        }
-        // Clean-cut recovery for entities activated by the broken multi-user
-        // bootstrap/resolve path: ownership is write-once, but a legacy NULL
-        // can be filled by the first host-verified owner.
-        if (existing.owner_user_id === null && nextOwnerUserId !== null) {
-          this.sql.exec(`UPDATE entities SET owner_user_id = ? WHERE id = ?`, nextOwnerUserId, id);
-          existing.owner_user_id = nextOwnerUserId;
         }
         if (existing.status === "active") {
           return this.rowToEntity(existing);
@@ -582,7 +569,8 @@ export class WorkspaceDO extends DurableObjectBase {
         );
         return this.rowToEntity({
           ...existing,
-          agent_binding: existing.agent_binding,
+          agent_entity_id: existing.agent_entity_id,
+          agent_channel_id: existing.agent_channel_id,
           status: "active",
           retired_at: null,
           cleanup_complete: 1,
@@ -594,9 +582,10 @@ export class WorkspaceDO extends DurableObjectBase {
       this.sql.exec(
         `INSERT INTO entities (
           id, kind, source_repo_path, source_effective_version,
-          context_id, class_name, key, state_args, agent_binding, parent_id, owner_user_id, created_at,
+          context_id, class_name, key, state_args, agent_entity_id, agent_channel_id,
+          parent_id, owner_user_id, created_at,
           status, retired_at, cleanup_complete, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
         id,
         input.kind,
         input.source.repoPath,
@@ -605,7 +594,10 @@ export class WorkspaceDO extends DurableObjectBase {
         input.className ?? null,
         input.key,
         input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
-        input.agentBinding === undefined ? null : JSON.stringify(input.agentBinding),
+        input.agentBinding === undefined || input.agentBinding.entityId === id
+          ? null
+          : input.agentBinding.entityId,
+        input.agentBinding?.channelId ?? null,
         input.parentId ?? null,
         input.ownerUserId ?? null,
         now
@@ -623,6 +615,7 @@ export class WorkspaceDO extends DurableObjectBase {
       const row = this.readEntityRow(id);
       if (!row) return null;
       if (row.status === "retired") {
+        this.clearEntityDoLifecycle(row);
         return this.rowToEntity(row);
       }
       const now = Date.now();
@@ -631,16 +624,23 @@ export class WorkspaceDO extends DurableObjectBase {
         now,
         id
       );
-      if (row.kind === "do" && row.class_name) {
-        this.lifecycleLeaseClear({
-          source: row.source_repo_path,
-          className: row.class_name,
-          objectKey: row.key,
-        });
-      }
+      this.clearEntityDoLifecycle(row);
       const updated = this.readEntityRow(id);
       return updated ? this.rowToEntity(updated) : null;
     });
+  }
+
+  /** A retired DO cannot retain runnable lifecycle work: its principal is no
+   * longer active, so either row would only create an authorization retry loop. */
+  private clearEntityDoLifecycle(row: DbEntityRow): void {
+    if (row.kind !== "do" || !row.class_name) return;
+    const key = {
+      source: row.source_repo_path,
+      className: row.class_name,
+      objectKey: row.key,
+    };
+    this.lifecycleLeaseClear(key);
+    this.alarmClear(key);
   }
 
   /** Mark cleanup_complete=1 after server-side hooks succeed. */
@@ -782,19 +782,32 @@ export class WorkspaceDO extends DurableObjectBase {
 
   /** Register/replace a DO's wake time (absolute epoch ms). */
   @rpc
-  alarmSet(input: LifecycleKey & { wakeAt: number; bestEffort?: boolean }): void {
+  alarmSet(input: LifecycleKey & { wakeAt: number }): void {
     this.assertLifecycleKey(input);
-    this.sql.exec(
-      `INSERT INTO do_alarms (source, class_name, object_key, wake_at, best_effort)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(source, class_name, object_key)
-         DO UPDATE SET wake_at = excluded.wake_at, best_effort = excluded.best_effort`,
-      input.source,
-      input.className,
-      input.objectKey,
-      Math.round(input.wakeAt),
-      input.bestEffort ? 1 : 0
-    );
+    this.ctx.storage.transactionSync(() => {
+      const entityId = canonicalEntityId({
+        kind: "do",
+        source: input.source,
+        className: input.className,
+        key: input.objectKey,
+      });
+      const entity = this.readEntityRow(entityId);
+      if (!entity || entity.status !== "active") {
+        throw new Error(
+          `alarmSet: Durable Object ${input.source}:${input.className}:${input.objectKey} is not active`
+        );
+      }
+      this.sql.exec(
+        `INSERT INTO do_alarms (source, class_name, object_key, wake_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(source, class_name, object_key)
+           DO UPDATE SET wake_at = excluded.wake_at`,
+        input.source,
+        input.className,
+        input.objectKey,
+        Math.round(input.wakeAt)
+      );
+    });
   }
 
   /** Clear a DO's pending alarm (no-op if none). */
@@ -818,34 +831,30 @@ export class WorkspaceDO extends DurableObjectBase {
     return row && row.next !== null ? row.next : null;
   }
 
-  /** Atomically return and delete all alarms due at/before `now`. Each fires once;
-   *  recurring DOs re-arm from inside their own `alarm()` handler. */
+  /** Return alarms due at/before `now` without acknowledging them. The driver
+   *  clears or replaces each row only after the handler outcome is durable, so
+   *  a server crash or failed acknowledgement cannot lose the sole wake. */
   @rpc
-  alarmTakeDue(now: number): Array<LifecycleKey & { wakeAt: number; bestEffort: boolean }> {
-    return this.ctx.storage.transactionSync(() => {
-      const rows = this.sql
-        .exec(
-          `SELECT source, class_name, object_key, wake_at, best_effort FROM do_alarms WHERE wake_at <= ?`,
-          now
-        )
-        .toArray() as Array<{
-        source: string;
-        class_name: string;
-        object_key: string;
-        wake_at: number;
-        best_effort: number;
-      }>;
-      if (rows.length > 0) {
-        this.sql.exec(`DELETE FROM do_alarms WHERE wake_at <= ?`, now);
-      }
-      return rows.map((r) => ({
-        source: r.source,
-        className: r.class_name,
-        objectKey: r.object_key,
-        wakeAt: r.wake_at,
-        bestEffort: r.best_effort === 1,
-      }));
-    });
+  alarmListDue(now: number): Array<LifecycleKey & { wakeAt: number }> {
+    const rows = this.sql
+      .exec(
+        `SELECT source, class_name, object_key, wake_at
+           FROM do_alarms WHERE wake_at <= ?
+          ORDER BY wake_at, source, class_name, object_key`,
+        now
+      )
+      .toArray() as Array<{
+      source: string;
+      class_name: string;
+      object_key: string;
+      wake_at: number;
+    }>;
+    return rows.map((r) => ({
+      source: r.source,
+      className: r.class_name,
+      objectKey: r.object_key,
+      wakeAt: r.wake_at,
+    }));
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -1948,11 +1957,23 @@ export class WorkspaceDO extends DurableObjectBase {
         class_name TEXT NOT NULL,
         object_key TEXT NOT NULL,
         wake_at INTEGER NOT NULL,
-        best_effort INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (source, class_name, object_key)
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_do_alarms_wake ON do_alarms(wake_at)`);
+    // Enforce the entity/alarm lifecycle invariant for rows left by a process
+    // crash between an older retirement write and cleanup.
+    this.sql.exec(`
+      DELETE FROM do_alarms
+       WHERE EXISTS (
+         SELECT 1 FROM entities
+          WHERE entities.kind = 'do'
+            AND entities.status = 'retired'
+            AND entities.source_repo_path = do_alarms.source
+            AND entities.class_name = do_alarms.class_name
+            AND entities.key = do_alarms.object_key
+       )
+    `);
     // Declarative recurring jobs from meta/vibestudio.yml `recurring:`. The
     // RecurringRegistry syncs declarations here and dispatches due jobs;
     // durable next_run_at survives restarts without re-running missed bursts.
@@ -2120,7 +2141,13 @@ export class WorkspaceDO extends DurableObjectBase {
     };
     if (row.class_name) record.className = row.class_name;
     if (row.state_args !== null) record.stateArgs = JSON.parse(row.state_args);
-    if (row.agent_binding !== null) record.agentBinding = JSON.parse(row.agent_binding);
+    if (row.agent_channel_id !== null) {
+      record.agentBinding = {
+        entityId: row.agent_entity_id ?? row.id,
+        contextId: row.context_id,
+        channelId: row.agent_channel_id,
+      };
+    }
     if (row.parent_id !== null) record.parentId = row.parent_id;
     // Mirror the owning-user stamp onto the cache record so lineage-inheriting
     // callers resolve it synchronously (WP0 §6, principalIdentity.resolveUserSubject).

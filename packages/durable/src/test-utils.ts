@@ -210,5 +210,12 @@ export async function createTestDO<T>(
     return (text ? JSON.parse(text) : undefined) as R;
   };
 
-  return { instance, sql: sqlProxy, db, alarms, acceptedWebSockets, call };
+  return {
+    instance,
+    sql: sqlProxy,
+    db,
+    alarms,
+    acceptedWebSockets,
+    call,
+  };
 }

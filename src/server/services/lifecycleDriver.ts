@@ -117,12 +117,15 @@ export class LifecycleDriver {
   ): Promise<void> {
     const deadlineAt = Date.now() + deadlineMs;
     let deadlineExhausted = false;
+    const failures: string[] = [];
     await this.runPool(targets, async (target) => {
+      const label = `${target.source}:${target.className}/${target.objectKey}`;
       try {
         if (deadlineExhausted) {
           await this.recordOp(epoch, target, "prepare", "timed_out", {
             error: "lifecycle timeout",
           });
+          failures.push(`${label}: lifecycle timeout`);
           return;
         }
         const remainingMs = Math.max(0, deadlineAt - Date.now());
@@ -131,11 +134,13 @@ export class LifecycleDriver {
           await this.recordOp(epoch, target, "prepare", "timed_out", {
             error: "lifecycle timeout",
           });
+          failures.push(`${label}: lifecycle timeout`);
           return;
         }
         const result = await this.withTimeout(
           this.deps.doDispatch.dispatchLifecycle(this.toRef(target), "prepare", {
             epoch,
+            mode: "suspend",
             reason,
             deadlineMs: remainingMs,
           }),
@@ -148,14 +153,23 @@ export class LifecycleDriver {
             ? "failed"
             : "ready";
         await this.recordOp(epoch, target, "prepare", status, result);
+        if (status === "failed") failures.push(`${label}: release refused`);
       } catch (err) {
         const timedOut = err instanceof Error && err.message === "lifecycle timeout";
         if (timedOut) deadlineExhausted = true;
+        const message = err instanceof Error ? err.message : String(err);
         await this.recordOp(epoch, target, "prepare", timedOut ? "timed_out" : "failed", {
-          error: err instanceof Error ? err.message : String(err),
+          error: message,
         });
+        failures.push(`${label}: ${message}`);
       }
     });
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((failure) => new Error(failure)),
+        `Lifecycle release failed for ${failures.length} target(s)`
+      );
+    }
   }
 
   private async resumeTargets(

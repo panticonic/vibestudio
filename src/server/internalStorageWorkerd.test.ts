@@ -1,15 +1,23 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import * as esbuild from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
+import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import { DODispatch } from "./doDispatch.js";
-import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
-import { postToDurableObject, type DORef } from "./workerdRpcRelay.js";
-import { WorkerdManager, type WorkerdManagerDeps } from "./workerdManager.js";
+import { SEMANTIC_CONTROL_PLANE } from "./internalDOs/controlPlane.js";
+import { INTERNAL_DO_SOURCE, type InternalDOBundle } from "./internalDOs/internalDoLoader.js";
+import { postToDurableObject, streamFromDurableObject, type DORef } from "./workerdRpcRelay.js";
+import { readChannelSubscriptionRecords } from "@vibestudio/service-schemas/channel";
+import {
+  WorkerdManager,
+  type WorkerdManagerDeps,
+  type WorkerdWorkspaceProvider,
+} from "./workerdManager.js";
 import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
 import type { BuildResult } from "./buildV2/buildStore.js";
@@ -18,66 +26,31 @@ import {
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
 
-// Resolve @workspace/* and @vibestudio/* imports to source via the
-// workspace/tsconfig.json path map (same source of truth vitest.config.ts
-// uses), so this test doesn't depend on built package dists.
-const tsconfigPaths: Record<string, string[]> = JSON.parse(
-  readFileSync(resolve("workspace/tsconfig.json"), "utf-8")
-).compilerOptions.paths;
-
-function probeSourceFile(base: string): string | undefined {
-  const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`];
-  for (const candidate of candidates) {
-    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
-  }
-  return undefined;
-}
-
-function resolveFromTsconfigPaths(specifier: string): string | undefined {
-  const exact = tsconfigPaths[specifier]?.[0];
-  if (exact) return probeSourceFile(resolve(exact));
-  for (const [pattern, [target]] of Object.entries(tsconfigPaths)) {
-    const star = pattern.indexOf("*");
-    if (star === -1 || !target) continue;
-    const prefix = pattern.slice(0, star);
-    const suffix = pattern.slice(star + 1);
-    if (specifier.startsWith(prefix) && specifier.endsWith(suffix)) {
-      const wildcard = specifier.slice(prefix.length, specifier.length - suffix.length);
-      const found = probeSourceFile(resolve(target.replace("*", wildcard)));
-      if (found) return found;
-    }
-  }
-  return undefined;
-}
-
-const workspaceAliasPlugin: esbuild.Plugin = {
-  name: "workspace-alias",
-  setup(build) {
-    build.onResolve({ filter: /^(@workspace|@vibestudio)[/-]/ }, (args) => {
-      const path = resolveFromTsconfigPaths(args.path);
-      return path ? { path } : undefined;
-    });
-  },
-};
-
 let compiledWorkerdPrograms: WorkerdProgramSources;
+let compiledInternalDOBundle: InternalDOBundle;
 
 beforeAll(async () => {
-  mkdirSync("dist", { recursive: true });
-  const [, programs] = await Promise.all([
+  const [internalDoBuild, programs] = await Promise.all([
     esbuild.build({
       entryPoints: ["src/server/internalDOs/index.ts"],
       bundle: true,
       platform: "browser",
       target: "es2022",
       format: "esm",
-      outfile: "dist/internal-do.bundle.mjs",
+      outfile: "internal-do.bundle.mjs",
       conditions: ["worker", "browser"],
       external: ["node:*", "electron"],
       logLevel: "silent",
+      write: false,
     }),
     buildWorkerdPrograms({ write: false }),
   ]);
+  const bundle = internalDoBuild.outputFiles?.[0]?.text;
+  if (!bundle) throw new Error("Internal DO test bundle did not produce an in-memory output");
+  compiledInternalDOBundle = {
+    bundle,
+    buildKey: createHash("sha256").update(bundle).digest("hex"),
+  };
   compiledWorkerdPrograms = programs;
 });
 
@@ -89,10 +62,11 @@ const activeLoaderServers: Server[] = [];
 async function createWorkerdHarness(
   overrides: Partial<WorkerdManagerDeps> & {
     getBuild?: (source: string, ref?: string) => Promise<BuildResult>;
+    mainRpc?: (method: string, args: unknown[], target: string) => Promise<unknown>;
   } = {}
 ) {
   const tokenManager = new TokenManager();
-  const { getBuild, ...managerOverrides } = overrides;
+  const { getBuild, mainRpc, ...managerOverrides } = overrides;
   const builds = new Map<string, BuildResult>();
   // Construct the manager first (getServerUrl reads the port lazily via the
   // holder) so the loader-server closure can reference a `const` manager.
@@ -103,6 +77,23 @@ async function createWorkerdHarness(
       closeHandlesForCaller: () => {},
     } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
+    workspaceId: "workspace:internal-workerd-test",
+    workerdPrograms: compiledWorkerdPrograms,
+    internalDOBundle: compiledInternalDOBundle,
+    workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-workspace-")),
+    statePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-")),
+    // Internal DO outbound RPCs route through the same loopback harness. The
+    // port is resolved only when a DO class is registered, after the server
+    // below has bound and populated the holder.
+    getProxyPort: () => (mainRpc ? portHolder.value : 9),
+    getSharedEgressPort: () => Promise.resolve(mainRpc ? portHolder.value : 10),
+    registerEgressCaller: () => {},
+    unregisterEgressCaller: () => {},
+    egressSecret: "internal-storage-egress-secret",
+    getWorkerdGatewayToken: () => "internal-test-workerd-gateway-token",
+    ...managerOverrides,
+  } satisfies WorkerdManagerDeps);
+  const provider: WorkerdWorkspaceProvider = {
     bindRuntimeImage: async (source: string, ref?: string) => {
       if (!getBuild) throw new Error("workspace builds are not used by internal DO tests");
       const build = await getBuild(source, ref);
@@ -117,20 +108,46 @@ async function createWorkerdHarness(
       };
     },
     getBuildByKey: (key: string) => builds.get(key) ?? null,
-    workerdPrograms: compiledWorkerdPrograms,
-    workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-workspace-")),
-    statePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-")),
-    getProxyPort: () => 9,
-    getSharedEgressPort: () => Promise.resolve(10),
-    registerEgressCaller: () => {},
-    unregisterEgressCaller: () => {},
-    egressSecret: "internal-storage-egress-secret",
-    getWorkerdGatewayToken: () => "internal-test-workerd-gateway-token",
-    ...managerOverrides,
-  } satisfies WorkerdManagerDeps);
+    getManifestRoutes: () => [],
+    getManifestDoClasses: () => [],
+    singletonRegistry: new SingletonRegistry([]),
+    getInternalDoEnv: () => ({}),
+  };
+  manager.bindWorkspaceProvider(provider);
 
-  const loaderServer = createServer((req, res) => {
+  const loaderServer = createServer(async (req, res) => {
     const u = req.url ?? "";
+    if (u === "/rpc" && req.method === "POST" && mainRpc) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        from: string;
+        target: string;
+        message: { requestId: string; method: string; args: unknown[] };
+      };
+      let result: unknown;
+      let error: string | undefined;
+      try {
+        result = await mainRpc(envelope.message.method, envelope.message.args, envelope.target);
+      } catch (cause) {
+        error = cause instanceof Error ? cause.message : String(cause);
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          from: envelope.target,
+          target: envelope.from,
+          delivery: { caller: { callerId: "main", callerKind: "server" } },
+          provenance: [],
+          message: {
+            type: "response",
+            requestId: envelope.message.requestId,
+            ...(error === undefined ? { result } : { error, errorKind: "internal" }),
+          },
+        })
+      );
+      return;
+    }
     if (u.startsWith("/_doversion/") || u.startsWith("/_docode/")) {
       if (req.headers["x-vibestudio-loader-secret"] !== manager.getLoaderSecret()) {
         res.writeHead(403);
@@ -204,9 +221,6 @@ function createDODispatch(manager: WorkerdManager, tokenManager: TokenManager): 
     if (!port) throw new Error("workerd port is not available");
     return `http://127.0.0.1:${port}`;
   });
-  dispatch.setEnsureDO((source, className, objectKey) =>
-    manager.ensureDO(source, className, objectKey)
-  );
   return dispatch;
 }
 
@@ -410,11 +424,15 @@ describe("internal storage DOs under workerd", () => {
       status: "pending",
     });
 
-    // Idempotent on runId: a re-dispatch (crash-replay / deferRedrive) returns the EXISTING row —
-    // never inserts a second run, even with different args.
+    // Idempotent on runId and exact input: a crash replay returns the existing
+    // row, while reuse for different work is rejected instead of aliasing two
+    // executions behind one durable identity.
     expect(
-      await harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "DIFFERENT" })
+      await harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "1+1" })
     ).toEqual({ runId: "run-1", status: "pending" });
+    await expect(
+      harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "DIFFERENT" })
+    ).rejects.toThrow("runId run-1 was reused with different input");
 
     // getRun reflects the durable status; an unknown runId reports 'unknown'.
     expect(await harness.callDurableObject(ref, "getRun", "run-1")).toMatchObject({
@@ -536,6 +554,7 @@ describe("internal storage DOs under workerd", () => {
       await expect(
         harness.callDurableObject(probeRef, "__lifecycle/prepare", {
           epoch: "raw",
+          mode: "suspend",
           reason: "raw",
           deadlineMs: 1_000,
         })
@@ -617,6 +636,13 @@ describe("internal storage DOs under workerd", () => {
     ]);
 
     try {
+      await doDispatch.dispatch(workspaceRef, "entityActivate", {
+        kind: "do",
+        source: { repoPath: probeRef.source, effectiveVersion: probeBuild.metadata.ev },
+        contextId: "ctx-alarm-probe",
+        className: probeRef.className,
+        key: probeRef.objectKey,
+      });
       // Register an already-due alarm directly in WorkspaceDO, then start the
       // driver: it should drain the due alarm and fire `__alarm` → probe.alarm().
       await doDispatch.dispatch(workspaceRef, "alarmSet", {
@@ -642,6 +668,168 @@ describe("internal storage DOs under workerd", () => {
       await expect(doDispatch.dispatch(workspaceRef, "alarmNextWakeAt")).resolves.toBeNull();
     } finally {
       alarmDriver.stop();
+    }
+  }, 30_000);
+
+  it("lets a real PubSubChannel alarm read the semantic log through the nested DO relay", async () => {
+    const pubsubBuild = await bundleWorker(
+      "workers/pubsub-channel",
+      "workspace/workers/pubsub-channel/index.ts",
+      "pubsub-alarm-relay-test"
+    );
+    const gadRef = {
+      source: INTERNAL_DO_SOURCE,
+      className: "GadWorkspaceDO",
+      objectKey: SEMANTIC_CONTROL_PLANE.objectKey,
+    };
+    const gadTarget = `do:${gadRef.source}:${gadRef.className}:${gadRef.objectKey}`;
+    let doDispatch: DODispatch | null = null;
+    const harness = await createWorkerdHarness({
+      getBuild: async (source: string) => {
+        if (source === "workers/pubsub-channel") return pubsubBuild;
+        throw new Error(`unexpected build source ${source}`);
+      },
+      mainRpc: async (method, args, target) => {
+        if (target === "main" && method === "workers.resolveService") {
+          return {
+            kind: "durable-object",
+            source: gadRef.source,
+            className: gadRef.className,
+            objectKey: gadRef.objectKey,
+            targetId: gadTarget,
+          };
+        }
+        if (target === gadTarget) {
+          if (!doDispatch) throw new Error("DO dispatcher is not ready");
+          return doDispatch.dispatch(gadRef, method, ...args);
+        }
+        throw new Error(`unexpected nested RPC ${target}.${method}`);
+      },
+    });
+    manager = harness.manager;
+    doDispatch = createDODispatch(manager, harness.tokenManager);
+    const channelRef = {
+      source: "workers/pubsub-channel",
+      className: "PubSubChannel",
+      objectKey: "alarm-relay-channel",
+    };
+
+    await manager.registerAllDOClasses([
+      { source: INTERNAL_DO_SOURCE, className: "GadWorkspaceDO" },
+      { source: channelRef.source, className: channelRef.className },
+    ]);
+
+    await expect(doDispatch.dispatchAlarm(channelRef)).resolves.toEqual({ nextAlarm: null });
+  }, 30_000);
+
+  it("streams a real PubSubChannel subscription ACK through the DO relay", async () => {
+    const pubsubBuild = await bundleWorker(
+      "workers/pubsub-channel",
+      "workspace/workers/pubsub-channel/index.ts",
+      "pubsub-subscription-relay-test"
+    );
+    const gadRef = {
+      source: INTERNAL_DO_SOURCE,
+      className: "GadWorkspaceDO",
+      objectKey: SEMANTIC_CONTROL_PLANE.objectKey,
+    };
+    const gadTarget = `do:${gadRef.source}:${gadRef.className}:${gadRef.objectKey}`;
+    let doDispatch: DODispatch | null = null;
+    const harness = await createWorkerdHarness({
+      getBuild: async (source: string) => {
+        if (source === "workers/pubsub-channel") return pubsubBuild;
+        throw new Error(`unexpected build source ${source}`);
+      },
+      mainRpc: async (method, args, target) => {
+        if (target === "main" && method === "workers.resolveService") {
+          return {
+            kind: "durable-object",
+            source: gadRef.source,
+            className: gadRef.className,
+            objectKey: gadRef.objectKey,
+            targetId: gadTarget,
+          };
+        }
+        if (
+          target === "main" &&
+          (method === "runtime.setTitle" ||
+            method === "workspace-state.alarmSet" ||
+            method === "workspace-state.alarmClear")
+        ) {
+          return undefined;
+        }
+        if (target === gadTarget) {
+          if (!doDispatch) throw new Error("DO dispatcher is not ready");
+          return doDispatch.dispatch(gadRef, method, ...args);
+        }
+        throw new Error(`unexpected nested RPC ${target}.${method}`);
+      },
+    });
+    manager = harness.manager;
+    doDispatch = createDODispatch(manager, harness.tokenManager);
+    const channelRef = {
+      source: "workers/pubsub-channel",
+      className: "PubSubChannel",
+      objectKey: "subscription-relay-channel",
+    };
+
+    await manager.registerAllDOClasses([
+      { source: INTERNAL_DO_SOURCE, className: "GadWorkspaceDO" },
+      { source: channelRef.source, className: channelRef.className },
+    ]);
+
+    const controller = new AbortController();
+    let response: Response | null = null;
+    let records: AsyncIterator<unknown> | null = null;
+    try {
+      const port = manager.getPort();
+      if (!port) throw new Error("workerd port is not available");
+      response = await streamFromDurableObject(
+        channelRef,
+        "subscribe",
+        ["panel-delivery", { contextId: "context:test", replay: false }],
+        {
+          workerdUrl: `http://127.0.0.1:${port}`,
+          workerdGatewayToken: manager.getWorkerdGatewayToken(),
+          workerdDispatchSecret: manager.getDispatchSecret(),
+          callerId: "panel-delivery",
+          callerKind: "panel",
+          callerPanelId: "panel-delivery",
+          userId: "user-1",
+        },
+        controller.signal
+      );
+      if (!response.ok) {
+        throw new Error(`subscription relay failed (${response.status}): ${await response.text()}`);
+      }
+      records = readChannelSubscriptionRecords(response)[Symbol.asyncIterator]();
+      const first = await records.next();
+      expect(first.done).toBe(false);
+      expect(first.value).toMatchObject({
+        kind: "subscribed",
+        result: { ok: true, participantId: "user:user-1" },
+      });
+      // The test owns this live subscription response. End the subscription,
+      // observe its response EOF, and dispose the raw body before the harness
+      // asks workerd to exit; an ACK alone is not a terminal stream state.
+      await doDispatch.dispatch(channelRef, "adminUnsubscribeParticipant", "user:user-1");
+      await expect(records.next()).resolves.toMatchObject({ done: true });
+      await records.return?.();
+      records = null;
+      if (response.body && !response.body.locked) {
+        await response.body.cancel();
+      }
+      response = null;
+      const participants = (await doDispatch.dispatch(channelRef, "getParticipants")) as Array<{
+        id: string;
+      }>;
+      expect(participants).not.toContainEqual(expect.objectContaining({ id: "user:user-1" }));
+    } finally {
+      await records?.return?.();
+      if (response?.body && !response.body.locked) {
+        await response.body.cancel();
+      }
+      controller.abort();
     }
   }, 30_000);
 
@@ -779,57 +967,17 @@ describe("internal storage DOs under workerd", () => {
     );
   }, 30_000);
 
-  it("persists gad provenance through real workerd DO dispatch", async () => {
-    const harness = await createWorkerdHarness({
-      getBuild: async (source: string) => {
-        expect(source).toBe("workers/gad-store");
-        const result = await esbuild.build({
-          entryPoints: ["workspace/workers/gad-store/index.ts"],
-          bundle: true,
-          platform: "browser",
-          target: "es2022",
-          format: "esm",
-          write: false,
-          conditions: ["worker", "browser"],
-          external: ["node:*", "electron"],
-          plugins: [workspaceAliasPlugin],
-          logLevel: "silent",
-        });
-        const bundle = result.outputFiles[0]!.text;
-        return {
-          dir: "/tmp/vibestudio-gad-store-test-build",
-          sourceStateHash: "state:test",
-          metadata: {
-            kind: "worker",
-            name: "workers/gad-store",
-            ev: "gad-store-test",
-            sourceStateHash: "state:test",
-            sourcemap: false,
-            details: { kind: "generic" },
-            builtAt: "2026-01-01T00:00:00.000Z",
-          },
-          artifacts: [
-            {
-              path: "worker.js",
-              role: "primary",
-              contentType: "text/javascript; charset=utf-8",
-              encoding: "utf8",
-              content: bundle,
-            },
-          ],
-        } as never;
-      },
-    });
+  it("persists the GAD trajectory ledger through real workerd DO dispatch", async () => {
+    const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: "workers/gad-store", className: "GadWorkspaceDO" },
+      {
+        source: SEMANTIC_CONTROL_PLANE.source,
+        className: SEMANTIC_CONTROL_PLANE.className,
+      },
     ]);
 
-    const ref = {
-      source: "workers/gad-store",
-      className: "GadWorkspaceDO",
-      objectKey: "workspace-gad",
-    };
+    const ref = { ...SEMANTIC_CONTROL_PLANE };
     const userMessageId = "01900000-0000-7000-8000-000000000001";
     await harness.callDurableObject(ref, "appendLogEvent", {
       logId: "trajectory-live",
@@ -854,23 +1002,31 @@ describe("internal storage DOs under workerd", () => {
         },
       ],
     });
-    await harness.callDurableObject(ref, "ensureBlob", "d".repeat(64), 12, "text/plain");
-    await harness.callDurableObject(ref, "ingestWorktreeState", {
-      files: [{ path: "src/live.ts", contentHash: "d".repeat(64) }],
-      logId: "trajectory-live",
-      head: "branch-live",
-      actor: { kind: "agent", id: "pi" },
-      eventId: "01900000-0000-7000-8000-000000000002",
-    });
     const status = (await harness.callDurableObject(ref, "getStatus")) as Array<{
       metric: string;
       value: number;
     }>;
     expect(status.find((row) => row.metric === "Log heads")?.value).toBe(1);
-    expect(status.find((row) => row.metric === "Log events")?.value).toBe(2);
-    // Two worktree states: the always-present empty base (seeded by ensureEmptyState
-    // at schema init) plus the single state ingested above.
-    expect(status.find((row) => row.metric === "Worktree states")?.value).toBe(2);
+    expect(status.find((row) => row.metric === "Log events")?.value).toBe(1);
+    const events = (await harness.callDurableObject(ref, "readLog", {
+      logId: "trajectory-live",
+      head: "branch-live",
+    })) as Array<{
+      envelopeId: string;
+      actor: { kind: string; id: string };
+      payloadKind: string;
+    }>;
+    expect(events).toEqual([
+      expect.objectContaining({
+        envelopeId: userMessageId,
+        actor: { kind: "user", id: "user" },
+        payloadKind: "message.completed",
+      }),
+    ]);
+    // Semantic workspace/file provenance traversal is exercised through the
+    // canonical VCS inspect/neighbors/history tests. This storage integration
+    // test only proves that the normalized trajectory ledger survives real
+    // workerd dispatch; it must not recreate a parallel provenance API.
   }, 30_000);
 
   it("records BrowserDataDO history visits and title updates without double-counting", async () => {

@@ -1,7 +1,7 @@
 /**
  * Typed client for the workerd RPC service.
  *
- * Worker instance lifecycle and manifest-declared userland service resolution.
+ * Worker instance lifecycle and workspace service resolution.
  * The ergonomic methods here delegate to the canonical runtime entity service,
  * so panels, workers, Durable Objects, and eval all use the same lifecycle.
  *
@@ -21,7 +21,7 @@ import {
   createDurableObjectServiceClient,
   type DurableObjectServiceClient,
   type ResolvedDurableObjectTarget,
-} from "@vibestudio/shared/userlandServiceRpc";
+} from "@vibestudio/shared/workspaceServiceRpc";
 
 export {
   GAD_WORKSPACE_SERVICE_PROTOCOL,
@@ -30,12 +30,12 @@ export {
   doTargetId,
   parseDoTargetId,
   resolveDurableObjectService,
-} from "@vibestudio/shared/userlandServiceRpc";
+} from "@vibestudio/shared/workspaceServiceRpc";
 export type {
   DORefParam,
   DurableObjectServiceClient,
   ResolvedDurableObjectTarget,
-} from "@vibestudio/shared/userlandServiceRpc";
+} from "@vibestudio/shared/workspaceServiceRpc";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,7 +72,7 @@ export interface WorkerEntityInfo {
   createdAt: number;
 }
 
-export type UserlandServiceInfo = {
+export type WorkspaceServiceInfo = {
   name: string;
   title?: string;
   description?: string;
@@ -89,7 +89,7 @@ export type UserlandServiceInfo = {
       routePath: string;
     }
 );
-export type ResolvedUserlandService = {
+export type ResolvedWorkspaceService = {
   name: string;
   title?: string;
   description?: string;
@@ -121,10 +121,10 @@ export interface WorkerdClient {
   list(): Promise<WorkerEntityInfo[]>;
   /** Retire a regular worker by handle or canonical entity id. */
   destroy(worker: string | Pick<WorkerEntityHandle, "id">): Promise<void>;
-  /** List manifest-declared userland services offered by worker packages. */
-  listServices(): Promise<UserlandServiceInfo[]>;
-  /** Resolve a manifest-declared userland service by name or protocol. */
-  resolveService(query: string, objectKey?: string | null): Promise<ResolvedUserlandService>;
+  /** List workspace-authored services declared in the manifest. */
+  listServices(): Promise<WorkspaceServiceInfo[]>;
+  /** Resolve a workspace service by name or protocol. */
+  resolveService(query: string, objectKey?: string | null): Promise<ResolvedWorkspaceService>;
   /** Resolve a concrete Durable Object target and grant this caller relay access. */
   resolveDurableObject(
     source: string,
@@ -144,15 +144,14 @@ export function createWorkerdClient(rpc: RpcCaller): WorkerdClient {
       rpc.call<WorkerEntityHandle>("main", "runtime.createEntity", [
         { kind: "worker", source, ...options },
       ]),
-    list: () =>
-      rpc.call<WorkerEntityInfo[]>("main", "runtime.listEntities", [{ kind: "worker" }]),
+    list: () => rpc.call<WorkerEntityInfo[]>("main", "runtime.listEntities", [{ kind: "worker" }]),
     destroy: (worker) =>
       rpc.call<void>("main", "runtime.retireEntity", [
         { id: typeof worker === "string" ? worker : worker.id },
       ]),
-    listServices: () => callWorkers<UserlandServiceInfo[]>("listServices"),
+    listServices: () => callWorkers<WorkspaceServiceInfo[]>("listServices"),
     resolveService: (query, objectKey) =>
-      callWorkers<ResolvedUserlandService>("resolveService", query, objectKey ?? null),
+      callWorkers<ResolvedWorkspaceService>("resolveService", query, objectKey ?? null),
     resolveDurableObject: (source, className, objectKey) =>
       callWorkers<ResolvedDurableObjectTarget>(
         "resolveDurableObject",

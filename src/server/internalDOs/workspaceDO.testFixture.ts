@@ -25,7 +25,8 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         class_name TEXT,
         key TEXT NOT NULL,
         state_args TEXT,
-        agent_binding TEXT,
+        agent_entity_id TEXT REFERENCES entities(id),
+        agent_channel_id TEXT,
         parent_id TEXT,
         owner_user_id TEXT,
         created_at INTEGER NOT NULL,
@@ -33,7 +34,8 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         retired_at INTEGER,
         cleanup_complete INTEGER NOT NULL DEFAULT 1,
         error TEXT,
-        display_title TEXT
+        display_title TEXT,
+        CHECK (agent_entity_id IS NULL OR agent_channel_id IS NOT NULL)
       )
     `);
     sql.exec(`CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status, retired_at)`);
@@ -43,6 +45,10 @@ export class WorkspaceDOTestable extends WorkspaceDO {
     sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_entities_cleanup
         ON entities(cleanup_complete, retired_at) WHERE cleanup_complete = 0`
+    );
+    sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_entities_agent_entity
+        ON entities(agent_entity_id) WHERE agent_entity_id IS NOT NULL`
     );
     sql.exec(`
       CREATE TABLE IF NOT EXISTS slots (
@@ -136,9 +142,19 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         class_name TEXT NOT NULL,
         object_key TEXT NOT NULL,
         wake_at INTEGER NOT NULL,
-        best_effort INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (source, class_name, object_key)
       )
+    `);
+    sql.exec(`
+      DELETE FROM do_alarms
+       WHERE EXISTS (
+         SELECT 1 FROM entities
+          WHERE entities.kind = 'do'
+            AND entities.status = 'retired'
+            AND entities.source_repo_path = do_alarms.source
+            AND entities.class_name = do_alarms.class_name
+            AND entities.key = do_alarms.object_key
+       )
     `);
     sql.exec(`
       CREATE TABLE IF NOT EXISTS recurring_jobs (

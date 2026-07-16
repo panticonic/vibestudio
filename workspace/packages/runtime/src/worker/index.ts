@@ -48,10 +48,7 @@ import { createNonPanelRuntimeHandle, createRuntimeParentHandle } from "../share
 import { helpfulNamespace } from "../shared/helpfulNamespace.js";
 import { createGatewayFetch, type GatewayFetch } from "../shared/gatewayFetch.js";
 import { createMainCaller } from "../shared/mainRpc.js";
-import {
-  createPanelRuntime,
-  type PanelRuntimeApi,
-} from "../shared/panelRuntime.js";
+import { createPanelRuntime, type PanelRuntimeApi } from "../shared/panelRuntime.js";
 import {
   createHostedRuntime,
   type RuntimeHost,
@@ -96,8 +93,8 @@ export type { NotificationClient } from "../shared/notifications.js";
 export { doTargetId, createDurableObjectServiceClient } from "../shared/workerd.js";
 export type {
   DurableObjectServiceClient,
-  ResolvedUserlandService,
-  UserlandServiceInfo,
+  ResolvedWorkspaceService,
+  WorkspaceServiceInfo,
   WorkerSourceInfo,
 } from "../shared/workerd.js";
 export type {
@@ -139,6 +136,7 @@ export type {
   UserlandApprovalSubject,
 } from "../approvals.js";
 export type * from "../shared/git.js";
+export type * from "../shared/vcsClient.js";
 export type { WorkspaceRuntime } from "../shared/hostedRuntime.js";
 // Note: createTestDO is intentionally NOT exported here because it depends on
 // sql.js test-only helpers that should not be bundled into production workers.

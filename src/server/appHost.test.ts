@@ -8,6 +8,8 @@ import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import { writeProductSeedSourceRecord } from "@vibestudio/shared/productSeedTrust";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
+import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { AppHost } from "./appHost.js";
 import { ServerUnitApprovalCoordinator } from "./unitApprovalCoordinator.js";
 
@@ -19,6 +21,24 @@ const REACT_NATIVE_PROVIDER = {
   activeBuildKey: "provider-build",
   contractVersion: "vibestudio-build-provider-v1",
 };
+
+function publicationEvent(): ProtectedPublicationEvent {
+  return {
+    publicationId: "publication:test",
+    resultHostRefsBasisDigest: "host-refs:test",
+    appliedAt: 42,
+    workspaceStateHash: "state:published",
+    changedPaths: ["apps/shell/index.tsx"],
+    repositories: [
+      {
+        repoPath: "apps/shell",
+        previousStateHash: "state:previous",
+        nextStateHash: "state:next",
+        fileChanges: [],
+      },
+    ],
+  };
+}
 
 // App trust is manifest-declared (meta/vibestudio.yml trust.*) and seeded per
 // process by the workspace loader / server startup. Seed the shipped default
@@ -49,7 +69,7 @@ function makeHarness(
     invalidManifest?: boolean;
     approvalDecision?: "once" | "session" | "version" | "deny";
     useApprovalCoordinator?: boolean;
-    readWorkspaceFileAtCommit?: (commit: string, filePath: string) => Promise<string | null>;
+    readWorkspaceFileAtState?: (stateHash: string, filePath: string) => Promise<string | null>;
     reactNativeAppArtifactBaseUrl?: string;
     terminalAppArtifactBaseUrl?: string;
   } = {}
@@ -196,7 +216,7 @@ function makeHarness(
     approvalCoordinator,
     notificationService,
     entityCache,
-    readWorkspaceFileAtCommit: opts.readWorkspaceFileAtCommit ?? (async () => null),
+    readWorkspaceFileAtState: opts.readWorkspaceFileAtState ?? (async () => null),
     getGatewayUrl: () => "http://127.0.0.1:1234",
     getReactNativeAppArtifactBaseUrl: () =>
       opts.reactNativeAppArtifactBaseUrl ?? "http://127.0.0.1:1234",
@@ -416,12 +436,14 @@ function createMockResponse() {
 
 describe("AppHost", () => {
   it("computes meta-change approvals from committed workspace config", async () => {
-    const readWorkspaceFileAtCommit = vi.fn(async () => "apps:\n  - source: apps/shell\n");
-    const { host } = makeHarness({ readWorkspaceFileAtCommit });
+    const readWorkspaceFileAtState = vi.fn(
+      async () => `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+    );
+    const { host } = makeHarness({ readWorkspaceFileAtState });
 
     const approval = await host.metaChangeApprovalForCommit("state:next");
 
-    expect(readWorkspaceFileAtCommit).toHaveBeenCalledWith("state:next", "meta/vibestudio.yml");
+    expect(readWorkspaceFileAtState).toHaveBeenCalledWith("state:next", "meta/vibestudio.yml");
     expect(approval.units).toEqual([
       expect.objectContaining({
         unitKind: "app",
@@ -554,7 +576,7 @@ describe("AppHost", () => {
           name: string;
           relativePath: string;
           kind: string;
-          trigger: { head: string };
+          trigger: ProtectedPublicationEvent;
         }) => void)
       | undefined;
     expect(onUnitChange).toBeDefined();
@@ -563,16 +585,7 @@ describe("AppHost", () => {
       name: "@workspace-apps/shell",
       relativePath: "apps/shell",
       kind: "app",
-      trigger: { head: "ctx:other" },
-    });
-    await flushAsyncWork();
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
-
-    onUnitChange?.({
-      name: "@workspace-apps/shell",
-      relativePath: "apps/shell",
-      kind: "app",
-      trigger: { head: "main" },
+      trigger: publicationEvent(),
     });
     await flushAsyncWork();
 
@@ -1683,7 +1696,8 @@ describe("AppHost", () => {
 
   it("previews and applies React Native provider changes from trusted main", async () => {
     const { host, buildSystem, eventService, approvalQueue, graphNode } = makeHarness({
-      readWorkspaceFileAtCommit: async () => "apps:\n  - source: apps/shell\n",
+      readWorkspaceFileAtState: async () =>
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`,
       reactNativeAppArtifactBaseUrl: "https://mobile.gateway.test",
     });
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
@@ -1843,7 +1857,8 @@ describe("AppHost", () => {
 
   it("defers trusted React Native provider changes until mobile readiness is requested", async () => {
     const { host, buildSystem, approvalQueue, graphNode, providerChangeCallbacks } = makeHarness({
-      readWorkspaceFileAtCommit: async () => "apps:\n  - source: apps/shell\n",
+      readWorkspaceFileAtState: async () =>
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`,
     });
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
     installApp(host, graphNode);
