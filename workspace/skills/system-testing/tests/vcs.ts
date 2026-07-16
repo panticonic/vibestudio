@@ -1,257 +1,191 @@
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
-import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "../types.js";
-import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+import {
+  CONTENT_WORKSPACE_REPO_FIXTURE,
+  type TestCase,
+  type TestExecutionResult,
+  type TestOrchestrationContext,
+} from "../types.js";
+import {
+  finalMessageHasAll,
+  noIncompleteInvocations,
+  requireIncrementalIntegrationEvidence,
+  requirePublishedCommitEvidence,
+  requireVcsEvidence,
+  requireWholeChainCommitEvidence,
+} from "./_helpers.js";
 
-function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
-  const msg = finalMessageHasAll(result, tokens);
-  if (!msg.passed) return msg;
-  return noIncompleteInvocations(result);
+function checked(result: TestExecutionResult, tokens: string[], evidence: string[]) {
+  const message = finalMessageHasAll(result, tokens);
+  if (!message.passed) return message;
+  const invocations = noIncompleteInvocations(result);
+  if (!invocations.passed) return invocations;
+  return requireVcsEvidence(result, evidence);
 }
 
-async function orchestrateVcsMergeThenPush(
+/** Two real contexts advance independently; integration happens as local steps in A. */
+async function orchestrateIncrementalIntegration(
   context: TestOrchestrationContext
 ): Promise<TestExecutionResult> {
   const startedAt = Date.now();
   const fixtureName = context.runner.workspaceRepoName;
-  if (!fixtureName) {
-    throw new Error("vcs-merge-then-push requires a workspace repo fixture namespace");
-  }
+  if (!fixtureName) throw new Error("incremental integration requires a repository fixture");
   const repoPath = `projects/${fixtureName}`;
   const sessions: Array<{ role: "agent-a" | "agent-b"; session: HeadlessSession }> = [];
   const cleanupErrors: string[] = [];
-  let agentAPhase1Messages: ChatMessage[] = [];
+  let firstPhase: ChatMessage[] = [];
   let error: string | undefined;
 
   try {
-    const agentA = await context.runner.spawn();
+    const agentA = await context.runner.spawn({ context: "task" });
     sessions.push({ role: "agent-a", session: agentA });
     await context.sendAndWait(
       agentA,
-      agentAPreparePrompt(repoPath),
-      "agent A prepare unpushed commit"
+      `Work in ${repoPath}. Publish a small shared baseline, then make and commit one additional compatible change but leave that second milestone local. Use the workspace guidance and retain the exact event identities you will need. Finish with VCS_A_LOCAL_READY repo:${repoPath}`,
+      "agent A publishes the base and keeps one local commit"
     );
-    agentAPhase1Messages = [...agentA.messages] as ChatMessage[];
+    firstPhase = [...agentA.messages] as ChatMessage[];
 
-    const agentB = await context.runner.spawn();
+    const agentB = await context.runner.spawn({ context: "isolated" });
     sessions.push({ role: "agent-b", session: agentB });
     await context.sendAndWait(
       agentB,
-      agentBPushPrompt(repoPath),
-      "agent B push competing main commit"
+      `A collaborator has published ${repoPath}. Make a distinct compatible change there, commit it, and publish it. Follow the workspace guidance and finish with VCS_B_PUBLISHED repo:${repoPath}`,
+      "agent B advances main independently"
     );
 
     await context.sendAndWait(
       agentA,
-      agentAFinalPrompt(repoPath),
-      "agent A merge and push after divergence"
+      `Main advanced while your compatible local commit remained unpublished. Bring the incoming semantic changes into your context one local decision at a time, commit the combined history, and publish it. Prove both collaborators' intent remains and finish with VCS_INTEGRATE_OK incoming:accounted local:preserved pushed:true event:`,
+      "agent A incrementally integrates and publishes"
     );
-  } catch (err) {
-    error = err instanceof Error ? err.message : String(err);
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : String(cause);
   }
 
-  const execution = buildOrchestratedExecution({
-    sessions,
-    agentAPhase1Messages,
-    repoPath,
-    startedAt,
-    error,
-  });
+  const agentA = sessions.find(({ role }) => role === "agent-a")?.session;
+  const agentB = sessions.find(({ role }) => role === "agent-b")?.session;
+  const messages = [
+    ...firstPhase,
+    ...(agentB ? ([...agentB.messages] as ChatMessage[]) : []),
+    ...(agentA ? ([...agentA.messages] as ChatMessage[]).slice(firstPhase.length) : []),
+  ];
+  const snapshots = sessions.map(({ role, session }) => safeSnapshot(role, session));
+  const execution: TestExecutionResult = {
+    messages,
+    duration: Date.now() - startedAt,
+    ...(error ? { error } : {}),
+    ...(snapshots.find(({ role }) => role === "agent-a")?.snapshot
+      ? { snapshot: snapshots.find(({ role }) => role === "agent-a")!.snapshot }
+      : {}),
+    diagnostics: {
+      orchestrated: true,
+      repoPath,
+      sessions: snapshots.map(({ role, snapshot, error: snapshotError }) => ({
+        role,
+        messageCount: snapshot?.messages.length ?? 0,
+        invocationCount: snapshot?.invocations.length ?? 0,
+        ...(snapshotError ? { snapshotError } : {}),
+      })),
+    },
+  };
 
   for (const { role, session } of [...sessions].reverse()) {
     try {
       await session.close();
-    } catch (err) {
-      cleanupErrors.push(`${role} close: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    try {
-      const snapshot = session.snapshot();
       cleanupErrors.push(
-        ...snapshot.cleanupErrors.map((entry) => `${role} ${entry.phase}: ${entry.message}`)
+        ...session
+          .snapshot()
+          .cleanupErrors.map((entry) => `${role} ${entry.phase}: ${entry.message}`)
       );
-    } catch (err) {
-      cleanupErrors.push(
-        `${role} cleanup snapshot: ${err instanceof Error ? err.message : String(err)}`
-      );
+    } catch (cause) {
+      cleanupErrors.push(`${role}: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
   }
-
   if (cleanupErrors.length > 0) {
-    execution.cleanupErrors = [...(execution.cleanupErrors ?? []), ...cleanupErrors];
+    execution.cleanupErrors = cleanupErrors;
     execution.error ??= `Headless cleanup failed: ${cleanupErrors.join("; ")}`;
   }
   return execution;
 }
 
-function buildOrchestratedExecution(args: {
-  sessions: Array<{ role: "agent-a" | "agent-b"; session: HeadlessSession }>;
-  agentAPhase1Messages: ChatMessage[];
-  repoPath: string;
-  startedAt: number;
-  error?: string;
-}): TestExecutionResult {
-  const agentA = args.sessions.find((entry) => entry.role === "agent-a")?.session;
-  const agentB = args.sessions.find((entry) => entry.role === "agent-b")?.session;
-  const agentAPhase2Messages = agentA
-    ? ([...agentA.messages] as ChatMessage[]).slice(args.agentAPhase1Messages.length)
-    : [];
-  const messages = [
-    ...args.agentAPhase1Messages,
-    ...(agentB ? ([...agentB.messages] as ChatMessage[]) : []),
-    ...agentAPhase2Messages,
-  ];
-  const snapshots = args.sessions.map(({ role, session }) => safeSnapshot(role, session));
-  const primarySnapshot = snapshots.find((entry) => entry.role === "agent-a")?.snapshot;
-  return {
-    messages,
-    duration: Date.now() - args.startedAt,
-    ...(args.error ? { error: args.error } : {}),
-    ...(primarySnapshot ? { snapshot: primarySnapshot } : {}),
-    diagnostics: {
-      orchestrated: true,
-      repoPath: args.repoPath,
-      sessions: snapshots.map(({ role, snapshot, error }) => ({
-        role,
-        channelId: sessionChannelId(args.sessions.find((entry) => entry.role === role)?.session),
-        title: snapshot?.title ?? null,
-        messageCount: snapshot?.messages.length ?? 0,
-        invocationCount: snapshot?.invocations.length ?? 0,
-        debugEventCount: snapshot?.debugEvents.length ?? 0,
-        cleanupErrorCount: snapshot?.cleanupErrors.length ?? 0,
-        ...(error ? { snapshotError: error } : {}),
-      })),
-    },
-  };
-}
-
 function safeSnapshot(
   role: "agent-a" | "agent-b",
   session: HeadlessSession
-): { role: "agent-a" | "agent-b"; snapshot?: SessionSnapshot; error?: string } {
+): {
+  role: "agent-a" | "agent-b";
+  snapshot?: SessionSnapshot;
+  error?: string;
+} {
   try {
     return { role, snapshot: session.snapshot() };
-  } catch (err) {
-    return { role, error: err instanceof Error ? err.message : String(err) };
+  } catch (cause) {
+    return { role, error: cause instanceof Error ? cause.message : String(cause) };
   }
-}
-
-function sessionChannelId(session: HeadlessSession | undefined): string | null {
-  return (session as { channelId?: string | null } | undefined)?.channelId ?? null;
-}
-
-function agentAPreparePrompt(repoPath: string): string {
-  return `You are Agent A in a two-agent VCS divergence system test.
-
-Use the documented runtime VCS API only. Use your own context head only; do not pass, invent, or spoof any custom ctx:* head.
-
-Fixed repoPath: ${repoPath}
-
-Phase A1:
-1. Seed the repo on main: write a small base file in ${repoPath}, commit it, then push it with vcs.push.
-2. After that seed push succeeds, make a second Agent A change in the same repo and commit it, but do not push that second commit.
-3. Report the seed push status and the unpushed Agent A commit evidence.
-
-Finish this phase with exactly:
-VCS_DIVERGENCE_A_READY repo:${repoPath}`;
-}
-
-function agentBPushPrompt(repoPath: string): string {
-  return `You are Agent B in the two-agent VCS divergence system test.
-
-The harness created you after Agent A seeded ${repoPath} on main. Use the documented runtime VCS API only. Use your own context head only; do not pass, invent, or spoof any custom ctx:* head.
-
-Make a normal Agent B change in repoPath ${repoPath}, commit it, and push it to main with vcs.push. This is the legitimate concurrent main advance for Agent A's pending commit.
-
-Report the push status and finish with exactly:
-VCS_DIVERGENCE_B_PUSHED repo:${repoPath} status:`;
-}
-
-function agentAFinalPrompt(repoPath: string): string {
-  return `Continue as Agent A in the same original context.
-
-Agent B has now pushed a separate commit to main for repoPath ${repoPath}. Exercise the documented divergence recovery path:
-1. Call vcs.push for ${repoPath} before merging and record whether it returns a structured diverged result. Do not treat a returned diverged status as a tool failure.
-2. Reconcile by calling vcs.merge({ source: "main", repoPaths: [${JSON.stringify(repoPath)}] }). If the merge leaves a pending resolution or uncommitted merge edits, resolve or seal them with vcs.commit(message). If vcs.merge already produced a clean merge commit, do not invent an extra commit.
-3. Call vcs.push for ${repoPath} again and report the final structured status.
-
-Finish with exactly:
-VCS_MERGE_PUSH_OK status:<final-status> diverged:yes pushed:yes`;
 }
 
 export const vcsTests: TestCase[] = [
   {
-    name: "vcs-status",
-    description: "Inspect a repo's per-repo GAD VCS status",
+    name: "vcs-status-orientation",
+    description: "Orient on committed, working, and protected-main state without mutation",
     category: "vcs",
     prompt:
-      "Use the runtime vcs API to inspect a repo's status with vcs.status(repoPath) for this context. Finish with VCS_STATUS_OK, dirty:<true-or-false>, and uncommitted:<count>.",
-    validate: (result) => checked(result, ["VCS_STATUS_OK", "dirty:", "uncommitted:"]),
-  },
-  {
-    name: "vcs-edit-uncommitted",
-    description: "Record a working edit and confirm it stays uncommitted (no head advance)",
-    category: "vcs",
-    prompt:
-      "Record a small temporary file edit with vcs.edit and confirm it is tracked as an UNCOMMITTED working change: it must not advance the commit head or appear in vcs.log. Verify via vcs.status (or vcs.contextStatus) that the repo reports uncommitted changes while vcs.log shows no new commit. Finish with VCS_EDIT_OK and uncommitted:<count>.",
-    validate: (result) => checked(result, ["VCS_EDIT_OK", "uncommitted:"]),
-  },
-  {
-    name: "vcs-commit-state",
-    description: "Commit working edits and report the advanced state hash",
-    category: "vcs",
-    prompt:
-      "Record a small temporary file edit with vcs.edit, then seal it into a deliberate snapshot with vcs.commit(message) and report the resulting state hash from the commit. Finish with VCS_COMMIT_OK and state:.",
-    validate: (result) => checked(result, ["VCS_COMMIT_OK", "state:"]),
-  },
-  {
-    name: "vcs-log-history",
-    description: "Make multiple commits and inspect the VCS log",
-    category: "vcs",
-    prompt:
-      "Make two deliberate commits — each is a vcs.edit followed by vcs.commit(message) — then inspect vcs.log and report the observed entries. Finish with VCS_LOG_OK and commits:2.",
-    validate: (result) => checked(result, ["VCS_LOG_OK", "commits:2"]),
-  },
-  {
-    name: "vcs-state-diff",
-    description: "Diff two committed GAD states",
-    category: "vcs",
-    prompt:
-      "Produce two committed VCS states that differ by one temporary file edit — commit the first, edit again, commit the second — then compare the two commit state hashes with vcs.diff. Finish with VCS_DIFF_OK and changed-path.",
-    validate: (result) => checked(result, ["VCS_DIFF_OK", "changed-path"]),
-  },
-  {
-    name: "vcs-discard-edits",
-    description: "Discard uncommitted working edits and confirm they are gone",
-    category: "vcs",
-    prompt:
-      "Record a temporary file edit with vcs.edit, confirm the repo has uncommitted changes, then drop them with vcs.discardEdits(repoPath) and confirm the repo reports zero uncommitted changes afterward. Finish with VCS_DISCARD_OK and discarded:.",
-    validate: (result) => checked(result, ["VCS_DISCARD_OK", "discarded:"]),
-  },
-  {
-    name: "vcs-push-status",
-    description: "Inspect a repo's unpushed changes without pushing (pre-push)",
-    category: "vcs",
-    prompt:
-      "Inspect a repo's pre-push status with vcs.pushStatus([repoPath]) without calling vcs.push, and report whether it has uncommitted edits and how far it is ahead. Finish with VCS_PUSH_STATUS_OK, ahead:, and uncommitted:.",
-    validate: (result) => checked(result, ["VCS_PUSH_STATUS_OK", "ahead:", "uncommitted:"]),
-  },
-  {
-    name: "vcs-push-fast-forward",
-    description: "Commit then fast-forward push a repo's changes into its main",
-    category: "vcs",
-    prompt:
-      "Record a temporary file edit with vcs.edit, seal it with vcs.commit(message), then ship it with vcs.push — a fast-forward push of your committed changes into the repo's main. Push is ff-only: it rejects while edits are uncommitted, so commit first. Report the push status. Finish with VCS_PUSH_OK and status:.",
-    validate: (result) => checked(result, ["VCS_PUSH_OK", "status:"]),
-  },
-  {
-    name: "vcs-merge-then-push",
-    description: "Reconcile divergence with vcs.merge, then fast-forward push",
-    category: "vcs",
-    workspaceRepoFixture: true,
-    prompt:
-      "Harness-orchestrated two-agent divergence path: Agent A commits locally, Agent B advances main from an independent context, then Agent A observes diverged, merges, and pushes. Finish with VCS_MERGE_PUSH_OK, status:, diverged:yes, and pushed:yes.",
-    orchestrate: orchestrateVcsMergeThenPush,
+      "Use the workspace guidance to orient me in this editing context without changing it. Report whether it is clean, its exact committed and working identities, and how it relates to protected main. Finish with VCS_STATUS_OK clean:, committed:, working:, relation:.",
     validate: (result) =>
-      checked(result, ["VCS_MERGE_PUSH_OK", "status:", "diverged:yes", "pushed:yes"]),
+      checked(
+        result,
+        ["VCS_STATUS_OK", "clean:", "committed:", "working:", "relation:"],
+        ["vcs.status"]
+      ),
+  },
+  {
+    name: "vcs-edit-whole-chain-commit",
+    description: "Author several local edits and commit the complete incremental chain",
+    category: "vcs",
+    workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+    prompt:
+      "In the disposable project, make two small related edits as separate local steps. Confirm both are visible before committing, then commit the complete local chain as one milestone. Use the workspace guidance and finish with VCS_COMMIT_OK changes:2 event: clean:true.",
+    validate: (result) => {
+      const base = checked(
+        result,
+        ["VCS_COMMIT_OK", "changes:2", "event:", "clean:true"],
+        ["vcs.edit", "vcs.commit", "vcs.status"]
+      );
+      return base.passed ? requireWholeChainCommitEvidence(result) : base;
+    },
+  },
+  {
+    name: "vcs-push",
+    description: "Publish one exact committed event to protected main",
+    category: "vcs",
+    resources: ["vcs:protected-main"],
+    workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+    prompt:
+      "Make a distinctive small change in the disposable project, commit it, and publish that exact milestone to protected main. Verify main moved to the event you intended. Follow the workspace guidance and finish with VCS_PUSH_OK event: main: match:true.",
+    validate: (result) => {
+      const base = checked(
+        result,
+        ["VCS_PUSH_OK", "event:", "main:", "match:true"],
+        ["vcs.edit", "vcs.commit", "vcs.push"]
+      );
+      return base.passed ? requirePublishedCommitEvidence(result) : base;
+    },
+  },
+  {
+    name: "vcs-incremental-integration",
+    description: "Incorporate concurrent semantic changes through local incremental decisions",
+    category: "vcs",
+    resources: ["vcs:protected-main"],
+    workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+    prompt: "Harness-orchestrated two-context semantic integration.",
+    orchestrate: orchestrateIncrementalIntegration,
+    validate: (result) => {
+      const base = checked(
+        result,
+        ["VCS_INTEGRATE_OK", "incoming:accounted", "local:preserved", "pushed:true", "event:"],
+        ["vcs.compare", "vcs.integrate", "vcs.commit", "vcs.push"]
+      );
+      return base.passed ? requireIncrementalIntegrationEvidence(result) : base;
+    },
   },
 ];

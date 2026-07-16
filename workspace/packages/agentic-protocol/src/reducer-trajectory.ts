@@ -1,4 +1,4 @@
-import type { EventId, StateHash, TurnId } from "./ids.js";
+import type { EventId, TurnId } from "./ids.js";
 import type { TrajectoryEvent } from "./events.js";
 import { assertNoStoredValueRefs } from "./stored-values.js";
 import {
@@ -16,7 +16,6 @@ export interface BranchProjection {
   branchId: string;
   headEventId?: EventId;
   headEventHash?: string;
-  headStateHash?: StateHash;
   seq: number;
   parentBranchId?: string;
   forkEventId?: EventId;
@@ -31,8 +30,6 @@ export interface TrajectoryState {
   invocations: InvocationMap;
   approvals: ApprovalMap;
   systemEvents: TrajectoryEvent[];
-  stateEvents: TrajectoryEvent[];
-  knowledgeEvents: TrajectoryEvent[];
   eventIds: string[];
 }
 
@@ -45,16 +42,11 @@ export function createInitialTrajectoryState(): TrajectoryState {
     invocations: {},
     approvals: {},
     systemEvents: [],
-    stateEvents: [],
-    knowledgeEvents: [],
     eventIds: [],
   };
 }
 
-export function reduceTrajectory(
-  state: TrajectoryState,
-  event: TrajectoryEvent,
-): TrajectoryState {
+export function reduceTrajectory(state: TrajectoryState, event: TrajectoryEvent): TrajectoryState {
   assertNoStoredValueRefs(event, "trajectory reducer input");
   const branchId = event.branchId;
   const branch: BranchProjection = {
@@ -143,16 +135,12 @@ export function reduceTrajectory(
         ...next.branches,
         [branchId]: {
           ...branch,
-          parentBranchId: "parentBranchId" in payload ? payload.parentBranchId : branch.parentBranchId,
+          parentBranchId:
+            "parentBranchId" in payload ? payload.parentBranchId : branch.parentBranchId,
           forkEventId: "forkEventId" in payload ? payload.forkEventId : branch.forkEventId,
-          headStateHash: "headStateHash" in payload ? payload.headStateHash : branch.headStateHash,
         },
       },
     };
-  } else if (event.kind.startsWith("state.")) {
-    next = { ...next, stateEvents: [...next.stateEvents, event] };
-  } else if (event.kind.startsWith("knowledge.")) {
-    next = { ...next, knowledgeEvents: [...next.knowledgeEvents, event] };
   } else if (event.kind.startsWith("system.")) {
     next = { ...next, systemEvents: [...next.systemEvents, event] };
   }

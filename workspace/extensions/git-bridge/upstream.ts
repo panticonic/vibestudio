@@ -1,12 +1,7 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
-import {
-  GitAuthError,
-  GitClient,
-  GitPushRejectedError,
-  SYSTEM_GIT_AUTHOR,
-} from "@vibestudio/git";
+import { stableSha256Hex } from "@vibestudio/content-addressing";
+import { GitAuthError, GitClient, GitPushRejectedError } from "@vibestudio/git";
 import {
   getDeclaredRemoteForRepo,
   getDeclaredRemotesForRepo,
@@ -19,9 +14,7 @@ import {
 } from "@vibestudio/workspace/remotes";
 import {
   WORKSPACE_IMPORT_PARENT_DIRS,
-  assertWorkspaceCreateTargetSafe,
   isSupportedImportRepoPath,
-  resolveWorkspaceRepoPath,
 } from "@vibestudio/workspace/pathPolicy";
 import type {
   GitCommitMappingRow,
@@ -29,7 +22,6 @@ import type {
   GitPublishRepoInput,
   GitPublishRepoResult,
   GitPullUpstreamResult,
-  GitResetExportMarkerResult,
   GitUpstreamState,
   GitUpstreamStatusOptions,
   GitUpstreamStatusRow,
@@ -42,9 +34,9 @@ import type {
 import { getRemoteProvider } from "@workspace/integrations/remoteProviders";
 import {
   GitBridge,
+  PendingImportCandidateError,
   type ExportResult,
   type ImportResult,
-  type UpstreamAuthorship,
 } from "./bridge.js";
 import type { ExtensionContextLike } from "./context.js";
 import { withRepoLock } from "./repoLocks.js";
@@ -53,9 +45,6 @@ const STATE_FILE = "state/upstream-state.json";
 const DEFAULT_BRANCH = "main";
 const TRANSIENT_BACKOFF_MIN_MS = 30_000;
 const TRANSIENT_BACKOFF_MAX_MS = 15 * 60_000;
-/** Upstream-authorship gathering walks at most this many commits per import;
- *  a longer imported range falls back to head-commit-only attribution. */
-const AUTHORSHIP_COMMIT_CAP = 100;
 
 interface StoredRepoState {
   configFingerprint: string;
@@ -68,7 +57,13 @@ interface StoredRepoState {
 }
 type StoredUpstreamState = Exclude<
   GitUpstreamState,
-  "exporting" | "pushing" | "local-only" | "not-materialized" | "fetch-failed" | "empty"
+  | "exporting"
+  | "pushing"
+  | "local-only"
+  | "not-materialized"
+  | "fetch-failed"
+  | "empty"
+  | "integration-required"
 >;
 type StoredRepoStatePatch = Partial<Omit<StoredRepoState, "configFingerprint">>;
 
@@ -160,7 +155,7 @@ export class UpstreamEngine {
           ...(result.overwrites ? { overwrites: result.overwrites } : {}),
         };
       } catch (err) {
-        if (scope) {
+        if (scope && !(err instanceof PendingImportCandidateError)) {
           await this.handlePushFailure(repo, scope, err, opts.force === true);
         }
         throw err;
@@ -302,16 +297,36 @@ export class UpstreamEngine {
             ...clobbered,
           };
         }
-        const preHead = await git.getCurrentCommit(dir);
+        if (tracking.behind === 0) {
+          await this.updateRepoState(repo, fingerprint, {
+            status: statusFromCounts(tracking.ahead, tracking.behind, tracking.diverged),
+            lastError: undefined,
+            lastFailureAt: undefined,
+          });
+          this.clearBackoff(repo, fingerprint);
+          return {
+            behindBy: 0,
+            aheadBy: tracking.ahead,
+            remoteBranchExists: true,
+            incoming,
+            ...clobbered,
+          };
+        }
         const localRef = (await git.getCurrentBranch(dir)) ?? DEFAULT_BRANCH;
         if (tracking.diverged) {
-          await git.pull({
+          // Git is an interchange projection, not Vibestudio's integration
+          // authority. Materialize the exact remote snapshot on the local
+          // projection branch; importSnapshot records the observed Git state
+          // as a candidate and the semantic VCS decides how it relates to
+          // workspace history.
+          // Never create a git-side merge commit.
+          await git.checkout(dir, remoteHead, { force: true });
+          await git.deleteBranch(dir, localRef);
+          await git.createBranch({
             dir,
-            url: remote.url,
-            remote: transportRemote,
-            ref: localRef,
-            remoteRef: upstream.branch,
-            author: this.gitAuthor(upstream),
+            name: localRef,
+            startPoint: remoteHead,
+            checkout: true,
           });
         } else {
           await git.fastForward({
@@ -323,10 +338,9 @@ export class UpstreamEngine {
           });
         }
         const head = await git.getCurrentCommit(dir);
-        const upstreamAuthorship = await this.gatherUpstreamAuthorship(git, dir, preHead);
         const imported = await this.bridge.importLockedInner(repo, {
           summary: `Pull ${upstream.remote}/${upstream.branch}${head ? ` @ ${head.slice(0, 7)}` : ""}`,
-          ...(upstreamAuthorship ? { upstreamAuthorship } : {}),
+          sourceUri: remote.url,
         });
         const postPull = await this.aheadBehind(repo, scope, { fetch: false }).catch(() => null);
         await this.updateRepoState(repo, fingerprint, {
@@ -346,59 +360,14 @@ export class UpstreamEngine {
           ...clobbered,
         };
       } catch (err) {
-        if (scope) await this.handlePullFailure(repo, scope, err);
+        if (scope && !(err instanceof PendingImportCandidateError)) {
+          await this.handlePullFailure(repo, scope, err);
+        }
         throw err;
       } finally {
         await this.reportHealth();
       }
     });
-  }
-
-  /**
-   * Best-effort authorship of the just-imported upstream range (`sinceSha`
-   * exclusive → HEAD). Bounded to {@link AUTHORSHIP_COMMIT_CAP} commits; a
-   * longer range attributes only the head commit's paths. Never throws — a
-   * failed gather must not fail the import.
-   */
-  private async gatherUpstreamAuthorship(
-    git: GitClient,
-    dir: string,
-    sinceSha: string | null
-  ): Promise<UpstreamAuthorship | undefined> {
-    try {
-      const log = await git.log(dir, { depth: AUTHORSHIP_COMMIT_CAP + 1 });
-      const boundary = sinceSha ? log.findIndex((c) => c.oid === sinceSha) : -1;
-      const range = boundary >= 0 ? log.slice(0, boundary) : log.slice(0, AUTHORSHIP_COMMIT_CAP);
-      if (range.length === 0) return undefined;
-      const commits = range.map((c) => ({
-        sha: c.oid,
-        authorName: c.author.name,
-        authorEmail: c.author.email,
-        summary: firstLine(c.message),
-        committedAt: c.author.timestamp * 1000,
-      }));
-      const byPath: Record<string, string> = {};
-      const boundaryFound = boundary >= 0 || sinceSha === null;
-      if (!boundaryFound) {
-        // Range longer than the cap: head-commit-only fallback.
-        const head = range[0];
-        if (head) {
-          const parent = log[1]?.oid ?? null;
-          for (const p of await git.diffCommits(dir, parent, head.oid)) byPath[p] = head.oid;
-        }
-      } else {
-        // Oldest → newest so the NEWEST commit touching a path wins.
-        for (let i = range.length - 1; i >= 0; i--) {
-          const commit = range[i];
-          if (!commit) continue;
-          const parent = range[i + 1]?.oid ?? sinceSha;
-          for (const p of await git.diffCommits(dir, parent, commit.oid)) byPath[p] = commit.oid;
-        }
-      }
-      return { commits, byPath };
-    } catch {
-      return undefined;
-    }
   }
 
   async upstreamStatus(
@@ -477,6 +446,19 @@ export class UpstreamEngine {
               lastError:
                 `Declared upstream has no local checkout yet — re-run ` +
                 `\`vibestudio vcs git import ${operationalRemote.url} --path ${repo}\` to finish the import`,
+            };
+          }
+          const candidate = await this.bridge.pendingImportCandidate(repo);
+          if (candidate) {
+            return {
+              repoPath: repo,
+              remote: resolved.remote,
+              branch: resolved.branch,
+              autoPush: resolved.autoPush,
+              state: "integration-required" as const,
+              aheadBy: 0,
+              behindBy: 0,
+              candidate,
             };
           }
           let counts: { aheadBy: number; behindBy: number; diverged: boolean };
@@ -573,7 +555,7 @@ export class UpstreamEngine {
               statusError?.message ?? (observesDeclaredTarget ? stored.lastError : undefined),
             // Auto-push visibility: an agent must see queued work, the last
             // background failure, and the retry schedule without log access.
-            pendingAutoPush: resolved.autoPush && computed === "ahead",
+            autoPushRequired: resolved.autoPush && computed === "ahead",
             lastFailureAt: observesDeclaredTarget ? stored.lastFailureAt : undefined,
             nextRetryAt: declaredRuntime?.retryAt,
           };
@@ -691,8 +673,7 @@ export class UpstreamEngine {
       if (!upstream) throw new Error(`No approved upstream is declared for ${repo}`);
       const remote = getDeclaredRemoteForRepo(config, repo, upstream.remote);
       if (!remote) throw new Error(`No approved remote ${upstream.remote} is declared for ${repo}`);
-      const root = await this.workspaceRoot();
-      const { absolutePath } = resolveWorkspaceRepoPath(root, repo);
+      const absolutePath = await this.bridge.repoGitDir(repo);
       if (!isSupportedImportRepoPath(repo)) {
         throw new Error(`Imports must target one of: ${WORKSPACE_IMPORT_PARENT_DIRS.join(", ")}`);
       }
@@ -702,7 +683,6 @@ export class UpstreamEngine {
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }
-      assertWorkspaceCreateTargetSafe(root, absolutePath, "cloneRepo");
       await fsp.mkdir(path.dirname(absolutePath), { recursive: true });
       const git = this.gitClient(upstream.credentialId);
       const cloneRef = upstream.branch ?? remote.branch;
@@ -711,15 +691,13 @@ export class UpstreamEngine {
           url: remote.url,
           dir: absolutePath,
           ref: cloneRef,
-          fullHistory: true,
         });
         if (remote.name !== "origin") {
           await git.addRemote(absolutePath, remote.name, remote.url).catch(() => undefined);
         }
-        const upstreamAuthorship = await this.gatherUpstreamAuthorship(git, absolutePath, null);
         return await this.bridge.importLockedInner(repo, {
           summary: `Import ${repo} from ${displayRemote(remote.url)}`,
-          ...(upstreamAuthorship ? { upstreamAuthorship } : {}),
+          sourceUri: remote.url,
         });
       } catch (err) {
         await fsp.rm(absolutePath, { recursive: true, force: true }).catch(() => undefined);
@@ -739,10 +717,6 @@ export class UpstreamEngine {
         throw err;
       }
     });
-  }
-
-  async resetExportMarker(repoPath: string): Promise<GitResetExportMarkerResult> {
-    return this.bridge.resetExportMarker(normalizeWorkspaceRepoPath(repoPath));
   }
 
   async commitMapping(
@@ -845,6 +819,7 @@ export class UpstreamEngine {
         await this.clearRepoState(repo);
         return;
       }
+      if (await this.bridge.pendingImportCandidate(repo)) return;
       let scope: RepoOperationScope | null = null;
       try {
         scope = await this.resolveRepoScope(repo);
@@ -901,18 +876,6 @@ export class UpstreamEngine {
       }
       return { status: "error", lastError: message, lastFailureAt };
     }
-    // A pull that could not merge automatically: confirm against the local
-    // tracking ref (no policy from prose alone).
-    if (/merge|conflict|non-fast-forward|not fast-forward|diverg/i.test(message)) {
-      const counts = await this.aheadBehind(repo, scope, { fetch: false }).catch(() => null);
-      if (counts?.diverged) {
-        const guidance =
-          `Pull could not merge upstream changes automatically: ${message}. ` +
-          `Resolve the conflict in the workspace/<repo> checkout with git tooling and re-run pull, ` +
-          `or push --force to overwrite upstream.`;
-        return { status: "diverged", lastError: guidance, lastFailureAt };
-      }
-    }
     return { status: "error", lastError: message, lastFailureAt };
   }
 
@@ -936,7 +899,11 @@ export class UpstreamEngine {
     scope: RepoOperationScope,
     err: unknown
   ): Promise<void> {
-    await this.updateRepoState(repo, scope.fingerprint, await this.classifyFailure(repo, scope, err));
+    await this.updateRepoState(
+      repo,
+      scope.fingerprint,
+      await this.classifyFailure(repo, scope, err)
+    );
   }
 
   private async handleAutoFailure(
@@ -1171,10 +1138,6 @@ export class UpstreamEngine {
     return config;
   }
 
-  private async workspaceRoot(): Promise<string> {
-    return (await this.ctx.workspace.getInfo()).path;
-  }
-
   private gitClient(
     credentialId?: string,
     gitIntent?: { force: boolean; overwrites?: GitOverwritePreview }
@@ -1192,14 +1155,6 @@ export class UpstreamEngine {
       ...(credentialId ? { credentialId } : {}),
       ...(gitIntent ? { gitIntent } : {}),
     });
-  }
-
-  private gitAuthor(upstream: ResolvedWorkspaceGitUpstream): { name: string; email: string } {
-    if (!upstream.authorName && !upstream.authorEmail) return SYSTEM_GIT_AUTHOR;
-    return {
-      name: upstream.authorName ?? "Vibestudio Git Bridge",
-      email: upstream.authorEmail ?? "git-bridge@vibestudio.local",
-    };
   }
 
   private async readState(): Promise<StoredState> {
@@ -1352,7 +1307,7 @@ function upstreamConfigFingerprint(
       branch: remote.branch ?? null,
     },
   };
-  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+  return stableSha256Hex(identity);
 }
 
 function transportRemoteForFingerprint(fingerprint: string): string {

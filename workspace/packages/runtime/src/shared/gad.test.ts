@@ -8,10 +8,10 @@ describe("createGadClient", () => {
         if (target === "main" && method === "workers.resolveService") {
           return {
             kind: "durable-object",
-            source: "workers/gad-store",
+            source: "vibestudio/internal",
             className: "GadWorkspaceDO",
-            objectKey: "workspace-gad",
-            targetId: "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
+            objectKey: "workspace-semantic-control-plane",
+            targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
           };
         }
         return { rows: [] };
@@ -35,13 +35,13 @@ describe("createGadClient", () => {
     ]);
     expect(rpc.call).toHaveBeenNthCalledWith(
       2,
-      "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
+      "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
       "rawSql",
       ["SELECT name FROM sqlite_master WHERE type = ?", ["table"]]
     );
     expect(rpc.call).toHaveBeenNthCalledWith(
       3,
-      "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
+      "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
       "query",
       ["SELECT * FROM trajectory_events WHERE branch_id = ?", ["branch-1"]]
     );
@@ -61,10 +61,10 @@ describe("createGadClient", () => {
         if (target === "main" && method === "workers.resolveService") {
           return {
             kind: "durable-object",
-            source: "workers/gad-store",
+            source: "vibestudio/internal",
             className: "GadWorkspaceDO",
-            objectKey: "workspace-gad",
-            targetId: "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
+            objectKey: "workspace-semantic-control-plane",
+            targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
           };
         }
         if (target === "main" && method === "blobstore.getText") {
@@ -141,15 +141,15 @@ describe("createGadClient", () => {
   });
 
   it("exposes typed durable user-notification consumer and producer calls", async () => {
-    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    const targetId = "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane";
     const rpc = {
       call: vi.fn(async (target: string, method: string, args: unknown[]) => {
         if (target === "main" && method === "workers.resolveService") {
           return {
             kind: "durable-object",
-            source: "workers/gad-store",
+            source: "vibestudio/internal",
             className: "GadWorkspaceDO",
-            objectKey: "workspace-gad",
+            objectKey: "workspace-semantic-control-plane",
             targetId,
           };
         }

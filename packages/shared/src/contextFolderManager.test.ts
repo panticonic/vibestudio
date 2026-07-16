@@ -7,11 +7,11 @@ import { ContextFolderManager } from "./contextFolderManager.js";
 
 describe("ContextFolderManager", () => {
   let root: string;
-  let contextsRoot: string;
+  let contextProjectionsRoot: string;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "cfm-"));
-    contextsRoot = path.join(root, ".contexts");
+    contextProjectionsRoot = path.join(root, ".context-projections", "v5");
   });
 
   afterEach(async () => {
@@ -20,11 +20,11 @@ describe("ContextFolderManager", () => {
 
   function manager(materialize?: (contextId: string) => Promise<{ dir: string }>) {
     return new ContextFolderManager({
-      contextsRoot,
+      contextProjectionsRoot,
       materialize:
         materialize ??
         (async (contextId) => {
-          const dir = path.join(contextsRoot, contextId);
+          const dir = path.join(contextProjectionsRoot, contextId);
           await fs.mkdir(dir, { recursive: true });
           await fs.writeFile(path.join(dir, "README.md"), "materialized");
           return { dir };
@@ -35,14 +35,14 @@ describe("ContextFolderManager", () => {
   it("materializes a missing context folder and returns its path", async () => {
     const cfm = manager();
     const dir = await cfm.ensureContextFolder("ctx-1");
-    expect(dir).toBe(path.join(contextsRoot, "ctx-1"));
+    expect(dir).toBe(path.join(contextProjectionsRoot, "ctx-1"));
     await expect(fs.readFile(path.join(dir, "README.md"), "utf8")).resolves.toBe("materialized");
     expect(cfm.getContextFolderState("ctx-1")).toEqual({ status: "ready", path: dir });
   });
 
   it("does not re-materialize an existing folder", async () => {
     const materialize = vi.fn(async (contextId: string) => {
-      const dir = path.join(contextsRoot, contextId);
+      const dir = path.join(contextProjectionsRoot, contextId);
       await fs.mkdir(dir, { recursive: true });
       return { dir };
     });
@@ -57,7 +57,7 @@ describe("ContextFolderManager", () => {
     const gate = new Promise<void>((res) => (resolveGate = res));
     const materialize = vi.fn(async (contextId: string) => {
       await gate;
-      const dir = path.join(contextsRoot, contextId);
+      const dir = path.join(contextProjectionsRoot, contextId);
       await fs.mkdir(dir, { recursive: true });
       return { dir };
     });

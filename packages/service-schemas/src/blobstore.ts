@@ -8,6 +8,10 @@ import { z } from "zod";
 import type { ServicePolicy, MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { STATE_HASH_RE, TREE_HASH_RE } from "@vibestudio/shared/contentTree/treeObjects";
+import {
+  isValidTreeEntryName,
+  splitTreePath,
+} from "@vibestudio/content-addressing";
 
 export const DIGEST_RE = /^[0-9a-f]{64}$/;
 export const PREFIX_RE = /^[0-9a-f]{0,64}$/;
@@ -63,19 +67,34 @@ export const TreeHashSchema = z.string().regex(TREE_HASH_RE);
 export const StateHashSchema = z.string().regex(STATE_HASH_RE);
 /** A tree reference: `manifest:<hex>` node hash or `state:<hex>` root pointer. */
 export const TreeRefSchema = z.string().regex(TREE_REF_RE);
+export const TreeEntryNameSchema = z
+  .string()
+  .refine(isValidTreeEntryName, "Invalid or overlong tree entry name");
+export const TreeRelativePathSchema = z.string().refine((value) => {
+  try {
+    splitTreePath(value);
+    return true;
+  } catch {
+    return false;
+  }
+}, "Invalid or overlong tree-relative path");
+export const NonEmptyTreeRelativePathSchema = TreeRelativePathSchema.refine(
+  (value) => value.length > 0,
+  "Tree path must not be empty"
+);
 
 /** One directory-node entry — the exact gad manifest-hash entry shape, so tree
  *  hashes stay byte-compatible with existing gad manifest/state hashes. */
 export const TreeEntrySchema = z.discriminatedUnion("kind", [
   z.object({
-    name: z.string().min(1),
+    name: TreeEntryNameSchema,
     kind: z.literal("file"),
     contentHash: DigestSchema,
     /** Git-style mode: 33188 regular, 33261 executable. */
     mode: z.union([z.literal(33188), z.literal(33261)]),
   }),
   z.object({
-    name: z.string().min(1),
+    name: TreeEntryNameSchema,
     kind: z.literal("dir"),
     childHash: TreeHashSchema,
   }),
@@ -84,13 +103,52 @@ export const TreeEntrySchema = z.discriminatedUnion("kind", [
 /** Recursive listing entry: a tree-relative path plus its content address. */
 export const TreeListEntrySchema = z.discriminatedUnion("kind", [
   z.object({
-    path: z.string(),
+    path: NonEmptyTreeRelativePathSchema,
     kind: z.literal("file"),
     contentHash: DigestSchema,
     mode: z.number().int(),
   }),
-  z.object({ path: z.string(), kind: z.literal("dir"), treeHash: TreeHashSchema }),
+  z.object({
+    path: NonEmptyTreeRelativePathSchema,
+    kind: z.literal("dir"),
+    treeHash: TreeHashSchema,
+  }),
 ]);
+
+/** Deterministic order of the recursive Merkle walk. Directory entries precede
+ * their children and every directory node is visited in canonical codepoint
+ * name order. The order is named and returned as part of the page basis so a
+ * cursor can never silently cross into a differently ordered projection. */
+export const TREE_LIST_ORDER = "tree-preorder-v1" as const;
+export const TreeListOrderSchema = z.literal(TREE_LIST_ORDER);
+/** A cursor carries one canonical <=4095-byte projected path plus fixed-size
+ * hashes; base64url expansion stays below this wire bound. */
+export const TREE_LIST_CURSOR_MAX_CHARS = 6_144;
+export const TreeListCursorSchema = z.string().min(1).max(TREE_LIST_CURSOR_MAX_CHARS);
+
+export const TreeListBasisSchema = z.object({
+  /** Exact immutable reference requested by the caller. */
+  ref: TreeRefSchema,
+  /** Resolved root manifest. This additionally binds `state:` pointers. */
+  rootTreeHash: TreeHashSchema,
+  /** Normalized tree-relative prefix (empty means the complete tree). */
+  prefix: TreeRelativePathSchema,
+  order: TreeListOrderSchema,
+});
+
+export const TreeListPageSchema = z.intersection(
+  z.object({
+    basis: TreeListBasisSchema,
+    entries: z.array(TreeListEntrySchema),
+  }),
+  z.discriminatedUnion("completeness", [
+    z.object({ completeness: z.literal("complete") }),
+    z.object({
+      completeness: z.literal("continuation"),
+      nextCursor: TreeListCursorSchema,
+    }),
+  ])
+);
 
 export const TreeFileStatSchema = z.object({
   contentHash: DigestSchema,
@@ -105,28 +163,49 @@ export const PutTreeOptsSchema = z
   })
   .optional();
 
-export const ListTreeOptsSchema = z
-  .object({
-    /** Tree-relative path to list under ("" or omitted = whole tree). */
-    prefix: z.string().optional(),
-    limit: z.number().int().positive().max(100_000).optional(),
-  })
-  .optional();
+export const ListTreeRequestSchema = z.object({
+  /** Tree-relative path to list under ("" or omitted = whole tree). */
+  prefix: TreeRelativePathSchema.optional(),
+  /** Page size only. Reaching it produces an explicit continuation, never a
+   * partial result presented as a complete tree. */
+  limit: z.number().int().positive().max(10_000).optional(),
+  /** Opaque, content-addressed last-key continuation returned by this method. */
+  cursor: TreeListCursorSchema.optional(),
+});
 
 export const DiffTreesResultSchema = z.object({
-  added: z.array(z.object({ path: z.string(), contentHash: DigestSchema, mode: z.number().int() })),
+  added: z
+    .array(
+      z.object({
+        path: NonEmptyTreeRelativePathSchema,
+        contentHash: DigestSchema,
+        mode: z.number().int(),
+      })
+    )
+    .max(100_000),
   removed: z.array(
-    z.object({ path: z.string(), contentHash: DigestSchema, mode: z.number().int() })
-  ),
+    z.object({
+      path: NonEmptyTreeRelativePathSchema,
+      contentHash: DigestSchema,
+      mode: z.number().int(),
+    })
+  ).max(100_000),
   changed: z.array(
     z.object({
-      path: z.string(),
+      path: NonEmptyTreeRelativePathSchema,
       fromContentHash: DigestSchema,
       toContentHash: DigestSchema,
       fromMode: z.number().int(),
       toMode: z.number().int(),
     })
-  ),
+  ).max(100_000),
+}).superRefine((diff, ctx) => {
+  if (diff.added.length + diff.removed.length + diff.changed.length > 100_000) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Tree diff exceeds the explicit 100000-entry admission bound",
+    });
+  }
 });
 
 export const blobstoreMethods = defineServiceMethods({
@@ -227,7 +306,7 @@ export const blobstoreMethods = defineServiceMethods({
   },
   putTree: {
     description:
-      "Store one immutable directory node (tree object) in the CAS from its entries; returns its `manifest:` tree hash (gad-manifest compatible). Every referenced child must already exist in the store — file contentHash blobs and dir childHash tree nodes are verified, so a tree hash can never be claimed while its objects are missing. Pass {root:true} to also store a `state:` root pointer and get the gad-compatible stateHash back. Idempotent by content. Build deep trees bottom-up (children before parents).",
+      "Store one immutable directory node in the content-addressed store and return its tree hash. Every referenced file blob and child tree must already exist, so a tree hash cannot name missing objects. Pass {root:true} to also store a content-state root pointer. Content states are build/projection inputs, never semantic revision or ancestry identities. Idempotent by content; build deep trees bottom-up.",
     args: z.tuple([z.array(TreeEntrySchema).max(100_000), PutTreeOptsSchema]),
     returns: z.object({ treeHash: TreeHashSchema, stateHash: StateHashSchema.optional() }),
     policy: BLOBSTORE_READ_POLICY,
@@ -244,23 +323,23 @@ export const blobstoreMethods = defineServiceMethods({
   },
   listTree: {
     description:
-      "Recursive listing of a tree: every file (contentHash+mode) and directory (treeHash) under an optional prefix path, sorted by path. Returns null if the root tree object is absent.",
-    args: z.union([z.tuple([TreeRefSchema]), z.tuple([TreeRefSchema, ListTreeOptsSchema])]),
-    returns: z.array(TreeListEntrySchema).nullable(),
+      "Exact keyset-paged recursive listing of an immutable tree. Each page is bound to the requested ref, resolved root manifest, normalized prefix, and canonical tree-preorder. A continuation names the last emitted path; cursor/basis mismatches and missing interior objects fail loudly. Returns null only when the requested root object is absent.",
+    args: z.tuple([TreeRefSchema, ListTreeRequestSchema]),
+    returns: TreeListPageSchema.nullable(),
     policy: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   readFileAtTree: {
     description:
       "Resolve a tree-relative file path to its content digest and mode, or null if the path is absent or not a file. Read the bytes via the ordinary blob APIs.",
-    args: z.tuple([TreeRefSchema, z.string().min(1)]),
+    args: z.tuple([TreeRefSchema, NonEmptyTreeRelativePathSchema]),
     returns: TreeFileStatSchema.nullable(),
     policy: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   diffTrees: {
     description:
-      "Authoritative diff between two trees: added/removed/changed file paths, computed by Merkle walk (identical subtree hashes are skipped wholesale). Throws if either tree's objects are missing from the store.",
+      "Bounded authoritative diff for host admission checks: added/removed/changed file paths, computed by Merkle walk (identical subtree hashes are skipped wholesale). Throws if either tree's objects are missing or the change set exceeds 100000 entries; semantic/user-facing comparison uses its exact paged projection.",
     args: z.tuple([TreeRefSchema, TreeRefSchema]),
     returns: DiffTreesResultSchema,
     policy: BLOBSTORE_READ_POLICY,

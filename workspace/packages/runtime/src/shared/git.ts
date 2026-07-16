@@ -8,10 +8,7 @@
  */
 
 import type { RpcCaller } from "@vibestudio/rpc";
-import {
-  gitInteropMethods,
-  type GitInteropClient,
-} from "@vibestudio/service-schemas/gitInterop";
+import { gitInteropMethods, type GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export type GitClient = GitInteropClient;
@@ -24,6 +21,7 @@ export type {
   GitPublishToDisposableRemoteResult,
   GitPushDisposableRemoteResult,
   GitImportedWorkspaceRepo,
+  GitImportResult,
   GitImportProjectRequest,
   GitOverwritePreview,
   GitPublishRepoInput,
@@ -34,6 +32,7 @@ export type {
   GitPushUpstreamResult,
   GitRemote,
   GitSharedRemotes,
+  GitSemanticCandidate,
   GitUpstreamConfig,
   GitUpstreams,
   GitUpstreamState,

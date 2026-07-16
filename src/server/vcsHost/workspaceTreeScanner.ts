@@ -7,6 +7,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { WorkspaceNode, WorkspaceTree } from "@vibestudio/shared/types";
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import { isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
@@ -72,7 +73,7 @@ export class WorkspaceTreeScanner {
           name: scope,
           path: scope,
           isUnit: false,
-          children: scopeChildren.sort((a, b) => a.name.localeCompare(b.name)),
+          children: scopeChildren.sort((a, b) => compareUtf16CodeUnits(a.name, b.name)),
         });
       }
     }

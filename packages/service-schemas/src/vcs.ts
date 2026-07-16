@@ -1,1266 +1,2012 @@
 import { z } from "zod";
-import type { SchemaCoversType } from "@vibestudio/shared/schemaTypeGuard";
-import type { VcsHeadAdvance, VcsWorkingAdvance } from "@vibestudio/shared/vcsEvents";
+
 import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
+import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import {
-  buildDiagnosticSchema,
-  repoBuildReportSchema,
-  type BuildDiagnosticWire,
-  type RepoBuildReportWire,
-} from "./build.js";
+  SEMANTIC_VCS_MAX_PATH_UTF8_BYTES,
+  semanticVcsPathAdmission,
+} from "@vibestudio/shared/vcs/pathAdmission";
+import { DigestSchema } from "./blobstore.js";
 
-const nullableString = z.string().nullable();
+/**
+ * Public semantic VCS contract.
+ *
+ * This is intentionally a small, destructive pre-release epoch. Semantic
+ * state is named only by committed events and local work applications. One
+ * context working head, one integration flow, and causal command edges form
+ * the complete public model.
+ */
 
-// Access descriptors shared across the read/write method groups carry
-// documentation and safety metadata. The service policy is the enforced
-// caller-kind gate.
-//
-// Reads are pure projections of GAD state (status/log/diff/readFile/
-// resolveHead/recall). Writes are tracked WORKING edits (edit/revert) or head
-// advances (commit/merge/push) through GAD — edit ≠ commit ≠ push.
-const READ_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "read",
-};
-const WRITE_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "write",
-};
+const READ_ACCESS: MethodAccessDescriptor = { sensitivity: "read" };
+const WRITE_ACCESS: MethodAccessDescriptor = { sensitivity: "write" };
+const DESTRUCTIVE_ACCESS: MethodAccessDescriptor = { sensitivity: "destructive" };
 
-export const vcsFileStatusSchema = z.object({
-  path: z.string(),
-  status: z.enum(["added", "modified", "deleted"]),
+const id = (description: string) => z.string().min(1).describe(description);
+const nonEmptyText = z.string().trim().min(1);
+const externalSourceUri = nonEmptyText.max(2_048).superRefine((value, context) => {
+  if (/^[\\/]|^[A-Za-z]:[\\/]/u.test(value) || value.includes("\0")) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "External source identity must not expose a machine-local path",
+    });
+    return;
+  }
+  try {
+    const parsed = new URL(value);
+    if (
+      parsed.protocol === "file:" ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.search !== "" ||
+      parsed.hash !== "" ||
+      parsed.toString() !== value
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "External source URI must be durable and credential-free (no file URI, userinfo, query, or fragment)",
+      });
+    }
+  } catch {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "External source identity must be a canonical URI",
+    });
+  }
 });
+const commandId = id("Stable idempotency identity. Reuse it for an uncertain retry.");
+const contextId = id("Workspace context identity.");
+const snapshotDigest = z
+  .string()
+  .regex(/^snapshot:[0-9a-f]{64}$/u)
+  .describe("Semantic-workspace-derived commitment to the normalized imported descriptors.");
+const cursor = z.string().min(1);
+const pageLimit = z.number().int().positive().max(500).default(100);
+/** One import is admitted and persisted atomically by one bounded descriptor. */
+export const VCS_IMPORT_MAX_DESCRIPTOR_BYTES = 512 * 1024;
+
+export const vcsImportDescriptorByteLength = (input: unknown): number =>
+  new TextEncoder().encode(JSON.stringify(input)).byteLength;
+
+const canonicalRepoPath = z
+  .string()
+  .min(1)
+  .refine(
+    (value) => {
+      try {
+        return normalizeWorkspaceRepoPath(value) === value;
+      } catch {
+        return false;
+      }
+    },
+    { message: "Expected a canonical workspace repository path" }
+  )
+  .refine((value) => semanticVcsPathAdmission(value).admissible, {
+    message:
+      `Expected an admissible canonical workspace repository path of at most ` +
+      `${SEMANTIC_VCS_MAX_PATH_UTF8_BYTES} UTF-8 bytes`,
+  });
+
+const canonicalFilePath = z
+  .string()
+  .min(1)
+  .refine((value) => semanticVcsPathAdmission(value).admissible, {
+    message:
+      `Expected an admissible canonical repository-relative file path of at most ` +
+      `${SEMANTIC_VCS_MAX_PATH_UTF8_BYTES} UTF-8 bytes`,
+  });
+
+const timestamp = z.string().datetime({ offset: true });
+const boundedIds = (description: string) => z.array(id(description)).min(1).max(200);
+const contentDescriptorFields = {
+  contentKind: z.enum(["text", "bytes"]),
+  byteLength: z.number().int().nonnegative(),
+  coordinateExtent: z.number().int().nonnegative(),
+};
+const validateContentDescriptor = (
+  value: { contentKind: "text" | "bytes"; byteLength: number; coordinateExtent: number },
+  context: z.RefinementCtx
+): void => {
+  if (value.contentKind === "bytes" && value.coordinateExtent !== value.byteLength) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["coordinateExtent"],
+      message: "Byte content coordinates must span exactly its byte length",
+    });
+  }
+  if (value.contentKind === "text" && value.coordinateExtent > value.byteLength) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["coordinateExtent"],
+      message: "UTF-16 coordinate extent cannot exceed the UTF-8 byte length",
+    });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Stable typed references
+// ---------------------------------------------------------------------------
+
+export const vcsStateNodeRefSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("event"), eventId: id("Committed workspace event.") }).strict(),
+  z
+    .object({
+      kind: z.literal("application"),
+      applicationId: id("Local work application."),
+    })
+    .strict(),
+]);
+export type VcsStateNodeRef = z.infer<typeof vcsStateNodeRefSchema>;
+
+export const vcsFileRefSchema = z
+  .object({
+    repositoryId: id("Stable repository identity."),
+    fileId: id("Stable workspace-wide file identity."),
+  })
+  .strict();
+export type VcsFileRef = z.infer<typeof vcsFileRefSchema>;
+
+export const vcsTrajectoryRefSchema = z
+  .object({
+    kind: z.literal("trajectory"),
+    logId: id("Trajectory log identity."),
+    head: id("Exact trajectory head."),
+  })
+  .strict();
+
+export const vcsTrajectoryInvocationRefSchema = z
+  .object({
+    kind: z.literal("trajectory-invocation"),
+    logId: id("Trajectory log identity."),
+    head: id("Exact trajectory head."),
+    invocationId: id("Exact tool invocation that caused a semantic command."),
+  })
+  .strict();
+
+export const vcsTrajectoryTurnRefSchema = z
+  .object({
+    kind: z.literal("trajectory-turn"),
+    logId: id("Trajectory log identity."),
+    head: id("Exact trajectory head."),
+    turnId: id("Exact agent turn."),
+  })
+  .strict();
+
+export const vcsTrajectoryMessageRefSchema = z
+  .object({
+    kind: z.literal("trajectory-message"),
+    logId: id("Trajectory log identity."),
+    head: id("Exact trajectory head."),
+    messageId: id("Exact trajectory message."),
+  })
+  .strict();
+
+const vcsEventNodeRefSchema = z
+  .object({ kind: z.literal("event"), eventId: id("Workspace event.") })
+  .strict();
+
+const vcsFileNodeRefSchema = z
+  .object({
+    kind: z.literal("file"),
+    state: vcsStateNodeRefSchema,
+    repositoryId: id("Repository containing the file at this state."),
+    fileId: id("Stable file identity."),
+  })
+  .strict();
+
+const vcsSemanticNodeSchemas = [
+  vcsEventNodeRefSchema,
+  z.object({ kind: z.literal("application"), applicationId: id("Work application.") }).strict(),
+  z
+    .object({
+      kind: z.literal("applied-change"),
+      appliedChangeId: id("Basis-specific applied change."),
+    })
+    .strict(),
+  z.object({ kind: z.literal("work-unit"), workUnitId: id("Authored work unit.") }).strict(),
+  z.object({ kind: z.literal("change"), changeId: id("Semantic change.") }).strict(),
+  z.object({ kind: z.literal("decision"), decisionId: id("Integration decision.") }).strict(),
+  z.object({ kind: z.literal("command"), commandId: id("Semantic command.") }).strict(),
+  vcsFileNodeRefSchema,
+  z
+    .object({
+      kind: z.literal("repository"),
+      state: vcsStateNodeRefSchema,
+      repositoryId: id("Stable repository identity."),
+    })
+    .strict(),
+  vcsTrajectoryRefSchema,
+  vcsTrajectoryInvocationRefSchema,
+  vcsTrajectoryTurnRefSchema,
+  vcsTrajectoryMessageRefSchema,
+] as const;
+
+export const vcsSemanticNodeRefSchema = z.discriminatedUnion("kind", vcsSemanticNodeSchemas);
+export type VcsSemanticNodeRef = z.infer<typeof vcsSemanticNodeRefSchema>;
+
+/** Public provenance roots use the same node vocabulary as inspect/neighbors. */
+export const vcsProvenanceRootSchema = vcsSemanticNodeRefSchema;
+export type VcsProvenanceRoot = VcsSemanticNodeRef;
+
+// ---------------------------------------------------------------------------
+// Files, effects, changes, applications, and decisions
+// ---------------------------------------------------------------------------
 
 export const vcsFileWriteContentSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("text"), text: z.string() }),
-  z.object({ kind: z.literal("bytes"), base64: z.string() }),
+  z.object({ kind: z.literal("text"), text: z.string() }).strict(),
+  z.object({ kind: z.literal("bytes"), base64: z.string() }).strict(),
 ]);
 export type VcsFileWriteContent = z.infer<typeof vcsFileWriteContentSchema>;
 
-export const vcsFileReadContentSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("text"), text: z.string() }),
-  z.object({ kind: z.literal("bytes"), base64: z.string() }),
-]);
-export type VcsFileReadContent = z.infer<typeof vcsFileReadContentSchema>;
+export const vcsFileReadContentSchema = vcsFileWriteContentSchema;
+export type VcsFileReadContent = VcsFileWriteContent;
 
-const vcsEditOpStrictSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("replace"),
-    path: z.string(),
-    hunks: z.array(
-      z.object({
-        start: z.number().int().nonnegative(),
-        end: z.number().int().nonnegative(),
-        oldText: z.string().optional(),
-        newText: z.string(),
-      })
+export const vcsTextEditSchema = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+    text: z.string(),
+  })
+  .strict()
+  .refine((edit) => edit.end >= edit.start, { message: "end must be >= start" });
+export type VcsTextEdit = z.infer<typeof vcsTextEditSchema>;
+
+export const vcsStatePredicateSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("file-content"),
+      fileId: id("Stable file identity."),
+      contentHash: id("Expected content blob hash."),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("file-placement"),
+      fileId: id("Stable file identity."),
+      repositoryId: id("Expected repository."),
+      path: canonicalFilePath,
+    })
+    .strict(),
+  z.object({ kind: z.literal("file-absent"), fileId: id("Stable file identity.") }).strict(),
+  z
+    .object({
+      kind: z.literal("repository-present"),
+      repositoryId: id("Stable repository identity."),
+      repoPath: canonicalRepoPath,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("repository-absent"),
+      repositoryId: id("Stable repository identity."),
+    })
+    .strict(),
+]);
+export type VcsStatePredicate = z.infer<typeof vcsStatePredicateSchema>;
+
+export const vcsChangeEffectSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("content"),
+      fileId: id("Affected file."),
+      beforeContentHash: id("Prior content hash.").nullable(),
+      afterContentHash: id("Result content hash.").nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("placement"),
+      fileId: id("Affected file."),
+      before: z
+        .object({ repositoryId: id("Repository."), path: canonicalFilePath })
+        .strict()
+        .nullable(),
+      after: z
+        .object({ repositoryId: id("Repository."), path: canonicalFilePath })
+        .strict()
+        .nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("mode"),
+      fileId: id("Affected file."),
+      beforeMode: z.number().int().nonnegative().max(0o777).nullable(),
+      afterMode: z.number().int().nonnegative().max(0o777).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("repository-placement"),
+      repositoryId: id("Affected repository."),
+      beforePath: canonicalRepoPath.nullable(),
+      afterPath: canonicalRepoPath.nullable(),
+    })
+    .strict(),
+]);
+export type VcsChangeEffect = z.infer<typeof vcsChangeEffectSchema>;
+
+export const vcsChangeKindSchema = z.enum([
+  "text-edit",
+  "file-create",
+  "file-delete",
+  "file-restore",
+  "file-move",
+  "file-copy",
+  "file-mode",
+  "content-replace",
+  "repository-create",
+  "repository-delete",
+  "repository-restore",
+  "repository-move",
+]);
+export type VcsChangeKind = z.infer<typeof vcsChangeKindSchema>;
+
+export const vcsChangeSchema = z
+  .object({
+    changeId: id("Stable semantic change identity."),
+    authoredByWorkUnitId: id("Work unit that authored this change."),
+    operation: z.number().int().nonnegative(),
+    kind: vcsChangeKindSchema,
+    effects: z.array(vcsChangeEffectSchema).min(1).max(32),
+    counteractsChangeIds: z.array(id("Counteracted change.")).max(200),
+    effectDigest: id("Canonical mechanical effect digest."),
+    normalizationProtocol: id("Normalization protocol."),
+  })
+  .strict();
+export type VcsChange = z.infer<typeof vcsChangeSchema>;
+
+export const vcsAppliedChangeSchema = z
+  .object({
+    appliedChangeId: id("Basis-specific applied change."),
+    applicationId: id("Owning work application."),
+    changeId: id("Applied semantic change."),
+    ordinal: z.number().int().nonnegative(),
+    appliedEffects: z.array(vcsChangeEffectSchema).min(1).max(32),
+    resultPredicate: vcsStatePredicateSchema.nullable(),
+  })
+  .strict();
+export type VcsAppliedChange = z.infer<typeof vcsAppliedChangeSchema>;
+
+export const vcsExternalSnapshotSchema = z
+  .object({
+    sourceKind: z.enum(["git", "archive", "filesystem", "upload", "generated"]),
+    sourceUri: externalSourceUri.describe(
+      "Canonical credential-free identity of the observed external source."
     ),
-  }),
-  z.object({
-    kind: z.literal("replaceText"),
-    path: z.string(),
-    oldText: z.string().min(1),
-    newText: z.string(),
-    all: z.boolean().optional(),
-  }),
-  z.object({
-    kind: z.literal("write"),
-    path: z.string(),
-    content: vcsFileWriteContentSchema,
-    mode: z.number().int().optional(),
-  }),
-  z.object({
-    kind: z.literal("create"),
-    path: z.string(),
-    content: vcsFileWriteContentSchema,
-    mode: z.number().int().optional(),
-  }),
-  z.object({ kind: z.literal("delete"), path: z.string() }),
-  z.object({ kind: z.literal("chmod"), path: z.string(), mode: z.number().int() }),
-]);
-
-/**
- * Normalize ergonomic edit shorthands → the strict discriminated union, so agents can write the
- * natural `{ path, content: "text" }` form rather than the verbose
- * `{ kind: "write", path, content: { kind: "text", text } }`:
- *  - a string `content` → `{ kind: "text", text }`
- *  - an omitted `kind` (when a `content` is present) → defaults to `"write"`
- *  - the conventional `"upsert"` spelling → `"write"` (create or overwrite)
- *  - `{ oldText, newText }` (with omitted or `replace` kind) → `replaceText`;
- *    the service resolves exact character spans against the current state
- * Genuinely-malformed edits (no `kind`, no `content`) pass through untouched so the discriminated
- * union still reports its precise discriminator error. The strict union is what serializes into
- * `help('vcs')` (zod-to-json-schema renders the inner schema of a preprocess), so discovery is
- * unchanged — the shorthand is an accepted superset, not a replacement.
- */
-function normalizeVcsEditOp(raw: unknown): unknown {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const e = raw as Record<string, unknown>;
-  // Fail LOUD on a mis-keyed discriminator: an edit op has no `type` field, so `type` present
-  // without `kind` is almost always a wrong-key mistake. Silently defaulting it to "write" (below)
-  // would discard the intended op — e.g. `{ type: "replace", content }` would quietly become a
-  // write. Surface the fix instead of guessing.
-  if (e["kind"] === undefined && typeof e["type"] === "string") {
-    throw new Error(
-      `vcs edit op is missing "kind" but has type:"${e["type"]}" — edit ops are discriminated by ` +
-        `"kind", not "type" (use { kind: "write" | "replace" | "create" | "delete" | "chmod", path, … }).`
-    );
-  }
-  const asContent = (c: unknown) => (typeof c === "string" ? { kind: "text", text: c } : c);
-  if (e["kind"] === undefined && typeof e["op"] === "string") {
-    const opAliases: Record<string, "create" | "write" | "delete"> = {
-      add: "create",
-      create: "create",
-      update: "write",
-      write: "write",
-      modify: "write",
-      upsert: "write",
-      remove: "delete",
-      delete: "delete",
-    };
-    const kind = opAliases[e["op"].toLowerCase()];
-    if (kind) {
-      const { op: _op, ...rest } = e;
-      return {
-        ...rest,
-        kind,
-        ...(rest["content"] !== undefined ? { content: asContent(rest["content"]) } : {}),
-      };
+    snapshotRevision: nonEmptyText,
+    snapshotDigest,
+    targetRepositoryIds: z
+      .array(id("Exact native repositories admitted from this snapshot."))
+      .min(1),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      JSON.stringify(value.targetRepositoryIds) !==
+      JSON.stringify([...new Set(value.targetRepositoryIds)].sort())
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["targetRepositoryIds"],
+        message: "Target repository IDs must be unique and sorted",
+      });
     }
-  }
-  if (e["kind"] === "upsert") {
-    return { ...e, kind: "write", content: asContent(e["content"]) };
-  }
-  if (
-    (e["kind"] === undefined || e["kind"] === "replace") &&
-    e["hunks"] === undefined &&
-    typeof e["oldText"] === "string" &&
-    typeof e["newText"] === "string"
-  ) {
-    return { ...e, kind: "replaceText" };
-  }
-  if (e["kind"] === "write" || e["kind"] === "create") {
-    return typeof e["content"] === "string" ? { ...e, content: asContent(e["content"]) } : raw;
-  }
-  if (e["kind"] === undefined && e["content"] !== undefined) {
-    return { ...e, kind: "write", content: asContent(e["content"]) };
-  }
-  return raw;
-}
+  });
+export type VcsExternalSnapshot = z.infer<typeof vcsExternalSnapshotSchema>;
 
-export const vcsEditOpSchema = z.preprocess(normalizeVcsEditOp, vcsEditOpStrictSchema);
-export type VcsEditOp = z.infer<typeof vcsEditOpStrictSchema>;
+export const vcsWorkUnitSchema = z
+  .object({
+    workUnitId: id("Authored work unit."),
+    commandId: id("Originating semantic command."),
+    kind: z.enum(["edit", "file-transfer", "lifecycle", "integrate", "revert", "import"]),
+    authoredChangeCount: z.number().int().nonnegative(),
+    authoredChangeIds: z.array(id("Bounded preview of changes authored here.")).max(200),
+    incorporatedChangeCount: z.number().int().nonnegative(),
+    incorporatedChangeIds: z
+      .array(id("Bounded preview of existing changes incorporated here."))
+      .max(200),
+    decisionCount: z.number().int().nonnegative(),
+    decisionIds: z.array(id("Bounded preview of integration decisions made here.")).max(200),
+    intentSummary: nonEmptyText.nullable(),
+    externalSnapshot: vcsExternalSnapshotSchema.nullable(),
+    normalizationProtocol: id("Normalization protocol."),
+    createdAt: timestamp,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.kind === "import" && value.externalSnapshot == null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["externalSnapshot"],
+        message: "Import work units require an exact external snapshot",
+      });
+    } else if (value.kind !== "import" && value.externalSnapshot != null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["externalSnapshot"],
+        message: "Only import work units may carry an external snapshot",
+      });
+    }
+  });
+export type VcsWorkUnit = z.infer<typeof vcsWorkUnitSchema>;
 
-const vcsApplyEditsInputStrictSchema = z.object({
-  baseStateHash: z
-    .string()
-    .optional()
-    .describe(
-      "Optimistic-concurrency base: the composed working state the edits were computed against (a `state:…` hash). Omit to apply against the head's current working state."
-    ),
-  edits: z
-    .array(vcsEditOpSchema)
-    .describe(
-      'Ordered edit ops recorded as one working-set edit. Each op is discriminated by `kind` (replace/replaceText/write/create/delete/chmod). `upsert` is accepted as a write alias (create or overwrite); `{ path, content: "…" }` is shorthand for a write; `{ path, oldText, newText }` is shorthand for an exact, unique text replacement.'
-    ),
-  head: z
-    .string()
-    .optional()
-    .describe(
-      "Context head to edit. Omit for the caller's own context head; entity callers may only write their own `ctx:…` head."
-    ),
-  repoPath: z
-    .string()
-    .optional()
-    .describe(
-      "Repo the edits target (workspace-relative). When set, edit paths are repo-relative and route to that repo's log. Omit to route each edit by path → owning repo."
-    ),
-  invocationId: z
-    .string()
-    .optional()
-    .describe(
-      "Authoring agent tool-call id (the model tool-call / invocation that produced these edits). Recorded on each edit-op row as the edge into the agentic trajectory: file → edit → invocation → turn → session is then traversable (and survives commit). Self-asserted by the calling agent runtime, consistent with how trajectory events carry causality."
-    ),
-});
+export const vcsWorkApplicationSchema = z
+  .object({
+    applicationId: id("Local work application."),
+    workUnitId: id("Applied work unit."),
+    basis: vcsStateNodeRefSchema,
+    appliedChangeCount: z.number().int().nonnegative(),
+    appliedChanges: z.array(vcsAppliedChangeSchema).max(200),
+    resultWorkspaceFactRootId: id("Authenticated result workspace-fact root."),
+    semanticProtocol: id("Semantic protocol."),
+  })
+  .strict();
+export type VcsWorkApplication = z.infer<typeof vcsWorkApplicationSchema>;
 
-function normalizeVcsApplyEditsInput(raw: unknown): unknown {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const input = raw as Record<string, unknown>;
-  if (input["edits"] === undefined && Array.isArray(input["fileEdits"])) {
-    const { fileEdits, ...rest } = input;
-    return { ...rest, edits: fileEdits };
-  }
-  return raw;
-}
+const decisionBase = {
+  decisionId: id("Integration decision."),
+  sourceState: vcsStateNodeRefSchema,
+  targetBasis: vcsStateNodeRefSchema,
+  sourceChangeIds: boundedIds("Source change accounted for by this decision."),
+};
 
-/** Accept the conventional/legacy `fileEdits:[{op:"add"|"update"|"remove"}]`
- * spelling at the boundary and normalize it to the canonical edits/kind form. */
-export const vcsApplyEditsInputSchema = z.preprocess(
-  normalizeVcsApplyEditsInput,
-  vcsApplyEditsInputStrictSchema
-);
-export type VcsApplyEditsInput = z.infer<typeof vcsApplyEditsInputSchema>;
+export const vcsIntegrationDecisionSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("adopted"),
+      ...decisionBase,
+      resultAppliedChangeIds: boundedIds("Applied target result."),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("reconciled"),
+      ...decisionBase,
+      evidence: z.array(vcsStatePredicateSchema).min(1).max(200),
+      rationale: nonEmptyText,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("declined"),
+      ...decisionBase,
+      rationale: nonEmptyText,
+    })
+    .strict(),
+]);
+export type VcsIntegrationDecision = z.infer<typeof vcsIntegrationDecisionSchema>;
 
-export const vcsMergeConflictSchema = z.object({
-  path: z.string(),
-  kind: z.enum(["content", "binary", "delete-vs-change", "mode"]),
-});
+export const vcsWorkspaceEventSchema = z
+  .object({
+    eventId: id("Committed workspace event."),
+    workspaceId: id("Owning workspace."),
+    commandId: id("Originating semantic command."),
+    kind: z.enum(["genesis", "commit", "integration-commit"]),
+    workspaceFactRootId: id("Authenticated workspace-fact root."),
+    parentEventIds: z.array(id("Parent event.")).max(2),
+    applicationIds: z.array(id("Complete local application chain committed here.")).max(10_000),
+    decisionIds: z.array(id("Reachable integration decision.")).max(10_000),
+    message: nonEmptyText.nullable(),
+    semanticProtocol: id("Semantic protocol."),
+    createdAt: timestamp,
+  })
+  .strict();
+export type VcsWorkspaceEvent = z.infer<typeof vcsWorkspaceEventSchema>;
 
-/** One repo's slice of a multi-repo `vcs.edit` (see {@link vcsEditResultSchema}). */
-export const vcsEditRepoResultSchema = z.object({
-  repoPath: z.string(),
-  /** The REPO-ROOTED working state hash — the CAS base for a follow-up edit. */
-  stateHash: z.string(),
-  editSeq: z.number().int().nonnegative(),
-  changedPaths: z.array(z.string()),
-});
-export type VcsEditRepoResult = z.infer<typeof vcsEditRepoResultSchema>;
+// ---------------------------------------------------------------------------
+// Mutation requests and results
+// ---------------------------------------------------------------------------
 
-/** Result of `vcs.edit` — a tracked WORKING edit (no commit, no build). */
-export const vcsEditResultSchema = z.object({
-  head: z.string(),
-  /**
-   * The REPO-ROOTED working state hash (committed base + uncommitted ops)
-   * projected to disk — the CAS base for a follow-up single-repo edit. ABSENT
-   * on a multi-repo edit, which has no single repo-rooted state: use
-   * `repos[].stateHash` per repo (and `contextStateHash` for the composed view).
-   */
-  stateHash: z.string().optional(),
-  /**
-   * The COMPOSED CONTEXT VIEW hash (multi-repo edits only) — a different
-   * identity space from `stateHash`; never valid as a `baseStateHash` CAS base.
-   */
-  contextStateHash: z.string().optional(),
-  /** Per-repo results (multi-repo edits only). */
-  repos: z.array(vcsEditRepoResultSchema).optional(),
-  committed: z.literal(false),
-  status: z.literal("uncommitted"),
-  /** The shared per-call edit sequence assigned to this edit's ops. */
-  editSeq: z.number().int().nonnegative(),
-  changedPaths: z.array(z.string()),
-});
-export type VcsEditResult = z.infer<typeof vcsEditResultSchema>;
+const mutationEnvelope = {
+  commandId,
+  contextId,
+  expectedWorkingHead: vcsStateNodeRefSchema,
+  intentSummary: nonEmptyText.optional(),
+};
 
-/** Input to `vcs.commit` — fold a context's uncommitted edits into a snapshot. */
-export const vcsCommitInputSchema = z.object({
-  message: z.string().describe("Commit message (mandatory) recorded on the snapshot."),
-  repoPaths: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Repos to commit (workspace-relative). Omit to commit every repo the caller's context has uncommitted edits (or a pending merge) in. Multi-repo commit is a non-atomic per-repo loop (atomicity is push's job); each repo reports its own status."
-    ),
-  paths: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Workspace-relative paths to commit (the `git add <paths>` selector): ONLY working edits at these paths are sealed; everything else stays uncommitted. A path with no working edit is an error. Mutually exclusive with `exclude`."
-    ),
-  exclude: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Workspace-relative paths to leave UNCOMMITTED (the inverse of `git add`): commit everything tracked except these. Mutually exclusive with `paths`."
-    ),
-  head: z
-    .string()
-    .optional()
-    .describe("Head to commit (default: the caller's own context head). `main` is rejected."),
-  invocationId: z
-    .string()
-    .optional()
-    .describe(
-      "Authoring agent tool-call id (the model tool-call / invocation that sealed this commit). Recorded on the commit event so the commit itself — not only its edit ops — is attributable into the agentic trajectory. Self-asserted by the calling agent runtime, consistent with `vcs.edit`."
-    ),
-});
+export const vcsEditChangeSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("repository-create"),
+      repoPath: canonicalRepoPath,
+      files: z
+        .array(
+          z
+            .object({
+              path: canonicalFilePath,
+              content: vcsFileWriteContentSchema,
+              mode: z.number().int().nonnegative().max(0o777).default(0o644),
+            })
+            .strict()
+        )
+        .min(1)
+        .max(199),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("text-edit"),
+      repositoryId: id("Repository containing the file."),
+      fileId: id("Stable file identity."),
+      edits: z.array(vcsTextEditSchema).min(1).max(1_000),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("binary-replace"),
+      repositoryId: id("Repository containing the file."),
+      fileId: id("Stable file identity."),
+      base64: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("file-create"),
+      repositoryId: id("Destination repository."),
+      path: canonicalFilePath,
+      content: vcsFileWriteContentSchema,
+      mode: z.number().int().nonnegative().max(0o777).default(0o644),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("file-delete"),
+      repositoryId: id("Repository containing the file."),
+      fileId: id("Stable file identity."),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("file-mode"),
+      repositoryId: id("Repository containing the file."),
+      fileId: id("Stable file identity."),
+      mode: z.number().int().nonnegative().max(0o777),
+    })
+    .strict(),
+]);
+export type VcsEditChange = z.infer<typeof vcsEditChangeSchema>;
+
+export const vcsEditInputSchema = z
+  .object({
+    ...mutationEnvelope,
+    changes: z.array(vcsEditChangeSchema).min(1).max(200),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const repoPaths = new Set<string>();
+    let authoredChangeCount = 0;
+    for (const [index, change] of input.changes.entries()) {
+      authoredChangeCount += change.kind === "repository-create" ? change.files.length + 1 : 1;
+      if (change.kind !== "repository-create") continue;
+      if (repoPaths.has(change.repoPath)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["changes", index, "repoPath"],
+          message: "Repository creation paths must be unique",
+        });
+      }
+      repoPaths.add(change.repoPath);
+      const filePaths = new Set<string>();
+      for (const [fileIndex, file] of change.files.entries()) {
+        if (filePaths.has(file.path)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["changes", index, "files", fileIndex, "path"],
+            message: "Initial repository file paths must be unique",
+          });
+        }
+        filePaths.add(file.path);
+      }
+    }
+    if (authoredChangeCount > 200) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["changes"],
+        message: "One edit may author at most 200 semantic changes including initial files",
+      });
+    }
+  });
+export type VcsEditInput = z.infer<typeof vcsEditInputSchema>;
+
+export const vcsMoveSpecSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("file"),
+      repositoryId: id("Current repository."),
+      fileId: id("Stable file identity."),
+      destinationRepositoryId: id("Destination repository."),
+      destinationPath: canonicalFilePath,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("repository"),
+      repositoryId: id("Stable repository identity."),
+      destinationPath: canonicalRepoPath,
+    })
+    .strict(),
+]);
+export type VcsMoveSpec = z.infer<typeof vcsMoveSpecSchema>;
+
+export const vcsMoveInputSchema = z
+  .object({ ...mutationEnvelope, moves: z.array(vcsMoveSpecSchema).min(1).max(200) })
+  .strict();
+export type VcsMoveInput = z.infer<typeof vcsMoveInputSchema>;
+
+export const vcsCopySpecSchema = z
+  .object({
+    source: z
+      .object({
+        state: vcsStateNodeRefSchema,
+        repositoryId: id("Source repository at the exact source state."),
+        fileId: id("Source file identity."),
+      })
+      .strict(),
+    destination: z
+      .object({
+        repositoryId: id("Destination repository."),
+        path: canonicalFilePath,
+      })
+      .strict(),
+  })
+  .strict();
+export type VcsCopySpec = z.infer<typeof vcsCopySpecSchema>;
+
+export const vcsCopyInputSchema = z
+  .object({ ...mutationEnvelope, copies: z.array(vcsCopySpecSchema).min(1).max(200) })
+  .strict();
+export type VcsCopyInput = z.infer<typeof vcsCopyInputSchema>;
+
+export const vcsIntegrationChoiceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("adopted"), sourceChangeIds: boundedIds("Source change.") }).strict(),
+  z
+    .object({
+      kind: z.literal("reconciled"),
+      sourceChangeIds: boundedIds("Source change."),
+      evidence: z.array(vcsStatePredicateSchema).min(1).max(200),
+      rationale: nonEmptyText,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("declined"),
+      sourceChangeIds: boundedIds("Source change."),
+      rationale: nonEmptyText,
+    })
+    .strict(),
+]);
+export type VcsIntegrationChoice = z.infer<typeof vcsIntegrationChoiceSchema>;
+
+export const vcsIntegrateInputSchema = z
+  .object({
+    ...mutationEnvelope,
+    sourceEventId: id("Exact committed source event."),
+    decision: vcsIntegrationChoiceSchema,
+  })
+  .strict();
+export type VcsIntegrateInput = z.infer<typeof vcsIntegrateInputSchema>;
+
+export const vcsRevertInputSchema = z
+  .object({ ...mutationEnvelope, changeIds: boundedIds("Change to counteract.") })
+  .strict();
+export type VcsRevertInput = z.infer<typeof vcsRevertInputSchema>;
+
+export const vcsCommitInputSchema = z
+  .object({
+    ...mutationEnvelope,
+    message: nonEmptyText.optional(),
+    integratesEventId: id(
+      "Optional source for a zero-change integration; when decisions exist, the parent is derived and this value may only confirm it."
+    ).optional(),
+  })
+  .strict();
 export type VcsCommitInput = z.infer<typeof vcsCommitInputSchema>;
 
-/** An actor whose working edits were folded into a commit sealed by a
- *  DIFFERENT actor (shared context heads) — surfaced so the seal can print
- *  "includes edits by X" and provenance keeps both parties. */
-export const vcsCommitCoAuthorSchema = z.object({
-  id: z.string(),
-  kind: z.string(),
-  subject: z.object({ userId: z.string() }).partial().optional(),
-});
-export type VcsCommitCoAuthor = z.infer<typeof vcsCommitCoAuthorSchema>;
+export const vcsDiscardInputSchema = z.object(mutationEnvelope).strict();
+export type VcsDiscardInput = z.infer<typeof vcsDiscardInputSchema>;
 
-/**
- * Per-repo result of `vcs.commit`. Multi-repo commits NEVER throw mid-loop:
- * every targeted repo reports its own terminal status — `committed`,
- * `unchanged` (nothing to seal; not an error at this layer), or `refused`
- * (that repo's seal failed; see `refusedReason`) — so a partial outcome is
- * always fully visible.
- */
-export const vcsCommitResultSchema = z.object({
-  repoPath: z.string(),
-  head: z.string(),
-  stateHash: nullableString,
-  eventId: nullableString,
-  headHash: nullableString,
-  editCount: z.number().int().nonnegative(),
-  status: z.enum(["committed", "unchanged", "refused"]),
-  /** Why the repo refused to commit (status "refused" only). */
-  refusedReason: z.string().optional(),
-  changedPaths: z.array(z.string()),
-  /** Actors other than the committer whose working edits this commit sealed. */
-  coAuthors: z.array(vcsCommitCoAuthorSchema).optional(),
-});
-export type VcsCommitResult = z.infer<typeof vcsCommitResultSchema>;
-
-/** A persisted edit-op row (provenance) returned by the traversal reads. */
-export const vcsEditOpRowSchema = z.object({
-  id: z.number().int(),
-  eventId: z.string(),
-  committedEventId: nullableString,
-  committedSeq: z.number().int().nullable(),
-  editSeq: z.number().int().nullable(),
-  outputStateHash: nullableString,
-  ordinal: z.number().int(),
-  kind: z.string(),
-  path: z.string(),
-  oldContentHash: nullableString,
-  newContentHash: nullableString,
-  mode: z.number().int().nullable(),
-  actorId: nullableString,
-  invocationId: nullableString,
-  turnId: nullableString,
-  createdAt: nullableString,
-  // Wave 1 / U1 blame provenance: raw hunks_json (parsed by blame consumers),
-  // snapshot-take + binary flags (both drive blame chain-restart semantics).
-  hunksJson: nullableString,
-  synthetic: z.boolean(),
-  binary: z.boolean(),
-});
-export type VcsEditOpRow = z.infer<typeof vcsEditOpRowSchema>;
-
-/** One contiguous line range attributed by `vcs.blameLines` (design §5.2). */
-export const vcsBlameLineSchema = z.object({
-  startLine: z.number().int(),
-  endLine: z.number().int(),
-  opId: z.number().int().nullable(),
-  kind: nullableString,
-  commitEventId: nullableString,
-  commitMessage: nullableString,
-  invocationId: nullableString,
-  turnId: nullableString,
-  actorId: nullableString,
-  degraded: z.enum(["create", "binary", "synthetic", "older-than-log"]).nullable(),
-  /** For `synthetic` import stops: the upstream git author of the last commit
-   *  that touched the path, when the import recorded it. */
-  importedAuthor: z
-    .object({
-      sha: z.string(),
-      authorName: z.string().optional(),
-      authorEmail: z.string().optional(),
-    })
-    .nullable(),
-});
-export type VcsBlameLine = z.infer<typeof vcsBlameLineSchema>;
-
-/**
- * One rendered read-attachment / drill-down line (design §7.5): a bounded
- * `insight + handle`. `exception` sorts it first, above density (contradictions,
- * cross-session concurrency, main movements); `score` is the §6.1 rank (0 for
- * exceptions — they render regardless). USERLAND-dispatched result shape (the
- * gad-store DO's `provenanceForFile`/`provenanceForSession`/`provenanceForClaim`).
- */
-export const vcsProvItemSchema = z.object({
-  line: z.string(),
-  handle: z.string(),
-  kind: z.string(),
-  exception: z.boolean(),
-  score: z.number(),
-});
-export type VcsProvItem = z.infer<typeof vcsProvItemSchema>;
-
-/** The §7.1 read-attachment / drill-down page. `total` is the full ranked list
- *  (exceptions + floored density); `suppressed` = the block signature was
- *  unchanged; `degraded` = the compute overran its budget and returned the hint. */
-export const vcsProvenanceForFileResultSchema = z.object({
-  items: z.array(vcsProvItemSchema),
-  shown: z.number().int(),
-  total: z.number().int(),
-  nextCursor: z.string().optional(),
-  suppressed: z.boolean(),
-  degraded: z.boolean().optional(),
-});
-export type VcsProvenanceForFileResult = z.infer<typeof vcsProvenanceForFileResultSchema>;
-
-/** The §7.6 session-orientation page (exceptions-first, then density-ranked). */
-export const vcsProvenanceForSessionResultSchema = z.object({
-  items: z.array(vcsProvItemSchema),
-  shown: z.number().int(),
-  total: z.number().int(),
-  nextCursor: z.string().optional(),
-});
-export type VcsProvenanceForSessionResult = z.infer<typeof vcsProvenanceForSessionResultSchema>;
-
-/** A commit on the source head not yet on the target (upstream-commit shape). */
-export const vcsUpstreamCommitSchema = z.object({
-  eventId: z.string(),
-  message: z.string(),
-  stateHash: z.string(),
-  createdAt: nullableString,
-});
-export type VcsUpstreamCommit = z.infer<typeof vcsUpstreamCommitSchema>;
-
-/** A commit DAG node (event-keyed) returned by `vcs.commitAncestors`. */
-export const vcsCommitAncestorSchema = z.object({
-  eventId: z.string(),
-  stateHash: nullableString,
-  parentEventIds: z.array(z.string()),
-});
-export type VcsCommitAncestor = z.infer<typeof vcsCommitAncestorSchema>;
-
-/** A path-level delta (added/removed/changed path lists). */
-export const vcsPathDeltaSchema = z.object({
-  added: z.array(z.string()),
-  removed: z.array(z.string()),
-  changed: z.array(z.string()),
-});
-export type VcsPathDelta = z.infer<typeof vcsPathDeltaSchema>;
-
-/** An in-progress merge parked on a head (conflicted, awaiting resolution). */
-export const vcsPendingMergeInfoSchema = z.object({
-  /** The head the merge is pulling in (e.g. `main`). */
-  source: z.string(),
-  /** Paths still carrying conflicts (in-file markers, or binary/mode/delete
-   *  conflicts summarized in MERGE_CONFLICTS.md at the worktree root). */
-  conflictPaths: z.array(z.string()),
-  /** When the merge was parked (ISO), or null for merges parked before
-   *  timestamps were recorded. */
-  startedAt: nullableString,
-});
-export type VcsPendingMergeInfo = z.infer<typeof vcsPendingMergeInfoSchema>;
-
-/**
- * Status is a GAD state-diff of a head against BOTH its baselines:
- * `committed` — the committed-but-unpushed delta (ctx committed head vs its
- * repo's `main`), and `working` — the uncommitted delta (working content vs
- * the committed head). Both enumerate paths; nothing is count-only. The
- * on-disk worktree is a disposable projection. `dirty` is true iff either
- * delta is non-empty. Status on `main` is always clean (it is the baseline).
- */
-export const vcsStatusResultSchema = z.object({
-  /** The committed ctx-head state (null: never forked / no commits). */
-  committedStateHash: nullableString,
-  /** The working state (committed head + uncommitted ops); equals
-   *  `committedStateHash` when there are no working edits. */
-  workingStateHash: nullableString,
-  dirty: z.boolean(),
-  /** Committed-but-unpushed delta: committed head vs the repo's `main`. */
-  committed: vcsPathDeltaSchema,
-  /** Uncommitted delta: working content vs the committed head. */
-  working: vcsPathDeltaSchema,
-  /** Count of UNCOMMITTED working edit ops (push rejects while > 0). */
-  uncommitted: z.number().int().nonnegative(),
-  /** `main` advanced past this head's merge-base — reconcile with vcs.merge
-   *  (or vcs.rebaseContext) before push. */
-  diverged: z.boolean(),
-  /** `main` advanced but this head is a pure ancestor of it (nothing to push;
-   *  merge/rebase only if you want the newer base). */
-  behind: z.boolean(),
-  /** The repo was deleted from the workspace (`main` archived/gone) — a push
-   *  will be refused; restore it or drop the context. */
-  deleted: z.boolean(),
-  /** In-progress merge parked on this head, if any. Seal with vcs.commit
-   *  after resolving, or vcs.abortMerge to drop it. */
-  pendingMerge: vcsPendingMergeInfoSchema.nullable(),
-});
-export type VcsStatusResult = z.infer<typeof vcsStatusResultSchema>;
-
-export const vcsLogEntrySchema = z.object({
-  seq: z.number().int().nonnegative(),
-  envelopeId: z.string(),
-  actor: z.unknown(),
-  summary: nullableString,
-  outputStateHash: nullableString,
-  appendedAt: z.string(),
-});
-export type VcsLogEntry = z.infer<typeof vcsLogEntrySchema>;
-
-// ---------------------------------------------------------------------------
-// Content diff (`vcs.diffContent`) — real hunks, not just name-status
-// ---------------------------------------------------------------------------
-
-export const vcsDiffHunkSchema = z.object({
-  /** 1-based start line in the left (old) file; 0 for pure insertions. */
-  oldStart: z.number().int().nonnegative(),
-  oldLines: z.number().int().nonnegative(),
-  /** 1-based start line in the right (new) file; 0 for pure deletions. */
-  newStart: z.number().int().nonnegative(),
-  newLines: z.number().int().nonnegative(),
-  /** Unified-diff body lines: ` context`, `-removed`, `+added` (no headers). */
-  lines: z.array(z.string()),
-});
-export type VcsDiffHunk = z.infer<typeof vcsDiffHunkSchema>;
-
-export const vcsDiffFileSchema = z.object({
-  path: z.string(),
-  status: z.enum(["added", "removed", "changed"]),
-  /** Binary on either side — no hunks; sizes reported instead. */
-  binary: z.boolean(),
-  oldMode: z.number().int().nullable(),
-  newMode: z.number().int().nullable(),
-  oldSize: z.number().int().nullable(),
-  newSize: z.number().int().nullable(),
-  hunks: z.array(vcsDiffHunkSchema),
-});
-export type VcsDiffFile = z.infer<typeof vcsDiffFileSchema>;
-
-export const vcsDiffContentInputSchema = z.object({
-  repoPath: z
-    .string()
-    .optional()
-    .describe(
-      "Repo to diff (workspace-relative). Required unless explicit `left`/`right` states are given."
-    ),
-  head: z.string().optional().describe("Head to diff (default: the caller's own context head)."),
-  scope: z
-    .enum(["committed", "working", "all"])
-    .optional()
-    .describe(
-      "`committed`: merge-base(main, head) → committed head (what a push would carry). " +
-        "`working`: committed head → working content (what a commit would seal). " +
-        "`all` (default): merge-base → working content (everything unpushed)."
-    ),
-  left: z
-    .string()
-    .optional()
-    .describe("Explicit left `state:…` hash — overrides `scope` (pass with `right`)."),
-  right: z.string().optional().describe("Explicit right `state:…` hash (pass with `left`)."),
-  paths: z.array(z.string()).optional().describe("Limit the diff to these repo-relative paths."),
-  contextLines: z
-    .number()
-    .int()
-    .nonnegative()
-    .optional()
-    .describe("Context lines per hunk (default 3)."),
-});
-export type VcsDiffContentInput = z.infer<typeof vcsDiffContentInputSchema>;
-
-export const vcsDiffContentResultSchema = z.object({
-  /** The resolved left/right state hashes actually diffed. */
-  left: z.string(),
-  right: z.string(),
-  files: z.array(vcsDiffFileSchema),
-  /** The whole diff as one unified-diff document (`--- a/… +++ b/…` per file). */
-  unified: z.string(),
-});
-export type VcsDiffContentResult = z.infer<typeof vcsDiffContentResultSchema>;
-
-export const vcsDiffResultSchema = z.object({
-  added: z.array(z.unknown()),
-  removed: z.array(z.unknown()),
-  changed: z.array(z.unknown()),
-});
-export type VcsDiffResult = z.infer<typeof vcsDiffResultSchema>;
-
-export const vcsResolveHeadResultSchema = z.object({
-  head: z.string(),
-  stateHash: nullableString,
-});
-export type VcsResolveHeadResult = z.infer<typeof vcsResolveHeadResultSchema>;
-
-export const vcsWorkspaceViewResultSchema = z.object({
-  stateHash: z
-    .string()
-    .describe(
-      "Workspace-rooted composed state hash, suitable for build.getBuild's immutable ref argument."
-    ),
-});
-
-export const vcsMergeResultSchema = z.object({
-  status: z.enum(["up-to-date", "merged", "conflicted"]),
-  stateHash: nullableString,
-  conflicts: z.array(vcsMergeConflictSchema),
-  /** Whether the reconcile was clean (a merge commit, no file resolution) or in
-   *  conflict (markers in the context FS — resolve via vcs.edit then vcs.commit). */
-  mergeable: z.enum(["clean", "conflict"]),
-  /** The upstream (main) commits this reconcile pulled in. */
-  upstreamCommits: z.array(vcsUpstreamCommitSchema),
-  conflictPaths: z.array(z.string()).optional(),
-});
-export type VcsMergeResult = z.infer<typeof vcsMergeResultSchema>;
-
-/**
- * Merge / pick SOURCE selector: the protected workspace `main`, or another
- * context's committed head (`{ contextId }` → `ctx:{contextId}`, which requires
- * cross-context read authorization). The merge/pick TARGET is always the
- * caller's own context head — a source is pulled INTO it, never the reverse.
- */
-export const vcsMergeSourceSchema = z.union([
-  z.literal("main"),
-  z.object({ contextId: z.string(), ownerContextId: z.string().optional() }),
-]);
-export type VcsMergeSource = z.infer<typeof vcsMergeSourceSchema>;
-
-/**
- * One repo's reconcile in the `vcs.merge` result array. Multi-repo merges
- * NEVER throw mid-loop: a repo whose merge cannot run (uncommitted edits,
- * deleted repo, source has no state there, …) reports status `refused` with
- * `refusedReason`, while the other repos' outcomes are still returned.
- */
-export const vcsMergeRepoResultSchema = z.object({
-  repoPath: z.string(),
-  status: z.enum(["up-to-date", "merged", "conflicted", "refused"]),
-  stateHash: nullableString,
-  conflicts: z.array(vcsMergeConflictSchema),
-  /** Whether the reconcile was clean (a merge commit, no file resolution) or in
-   *  conflict (markers in the context FS — resolve via vcs.edit then vcs.commit). */
-  mergeable: z.enum(["clean", "conflict"]),
-  /** The upstream (source) commits this reconcile pulled in. */
-  upstreamCommits: z.array(vcsUpstreamCommitSchema),
-  conflictPaths: z.array(z.string()).optional(),
-  /** Why the repo refused to merge (status "refused" only). */
-  refusedReason: z.string().optional(),
-});
-export type VcsMergeRepoResult = z.infer<typeof vcsMergeRepoResultSchema>;
-
-/** A single cherry-pick entry for `vcs.pick`: a whole COMMIT's patch (3-way
- *  applied on the target repo's head) or a source context's working content at
- *  specific PATHS (routed to their owning repos, injected as write ops). */
-export const vcsPickSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("commit"),
-    repoPath: z.string().describe("Repo whose log the commit lives on (workspace-relative)."),
-    eventId: z.string().describe("The commit's log event id (its patch is 3-way applied)."),
-  }),
-  z.object({
-    kind: z.literal("paths"),
-    paths: z
-      .array(z.string())
-      .min(1)
-      .describe(
-        "Workspace-relative paths whose content is copied from the source context (routed to their owning repos). Requires source:{contextId}."
-      ),
-  }),
-]);
-export type VcsPick = z.infer<typeof vcsPickSchema>;
-
-export const vcsPendingMergeSchema = z
+export const vcsSnapshotFileSchema = z
   .object({
-    theirsHead: z.string(),
-    conflicts: z.array(vcsMergeConflictSchema),
-    /** When the merge was parked (ISO), or null for pre-timestamp merges. */
-    startedAt: nullableString,
+    path: canonicalFilePath,
+    contentHash: DigestSchema.describe("Exact imported content digest."),
+    mode: z.number().int().nonnegative().max(0o777),
   })
-  .nullable();
-export type VcsPendingMerge = z.infer<typeof vcsPendingMergeSchema>;
+  .strict();
 
-export const vcsFileContentSchema = z.object({
-  content: vcsFileReadContentSchema,
-  stateHash: z.string(),
-  contentHash: z.string(),
-  mode: z.number().int(),
-  size: z.number().int().nonnegative(),
-});
-export type VcsFileContent = z.infer<typeof vcsFileContentSchema>;
+export const vcsSnapshotRepositorySchema = z
+  .object({
+    repositoryId: id("Existing repository identity, when replacing its snapshot.").optional(),
+    repoPath: canonicalRepoPath,
+    files: z.array(vcsSnapshotFileSchema),
+  })
+  .strict();
 
-export const vcsFileListEntrySchema = z.object({
-  path: z.string(),
-  contentHash: z.string(),
-  mode: z.number().int(),
-});
-export type VcsFileListEntry = z.infer<typeof vcsFileListEntrySchema>;
+export const vcsImportSnapshotInputSchema = z
+  .object({
+    ...mutationEnvelope,
+    source: z
+      .object({
+        kind: z.enum(["git", "archive", "filesystem", "upload", "generated"]),
+        uri: externalSourceUri.describe(
+          "Canonical credential-free external source identity; never a host checkout path."
+        ),
+        snapshotRevision: nonEmptyText.max(4_096),
+      })
+      .strict(),
+    repositories: z.array(vcsSnapshotRepositorySchema).min(1),
+    message: nonEmptyText.optional(),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    if (input.source.kind === "git" && input.repositories.length !== 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["repositories"],
+        message: "One Git import must describe exactly one external repository",
+      });
+    }
+    const repositoryPaths = new Set<string>();
+    const repositoryIds = new Set<string>();
+    for (const [repositoryIndex, repository] of input.repositories.entries()) {
+      if (repositoryPaths.has(repository.repoPath)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["repositories", repositoryIndex, "repoPath"],
+          message: "Snapshot repository paths must be unique",
+        });
+      }
+      repositoryPaths.add(repository.repoPath);
+      if (repository.repositoryId) {
+        if (repositoryIds.has(repository.repositoryId)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["repositories", repositoryIndex, "repositoryId"],
+            message: "Snapshot repository identities must be unique",
+          });
+        }
+        repositoryIds.add(repository.repositoryId);
+      }
+      const paths = new Set<string>();
+      for (const [fileIndex, file] of repository.files.entries()) {
+        if (paths.has(file.path)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["repositories", repositoryIndex, "files", fileIndex, "path"],
+            message: "Snapshot file paths must be unique within a repository",
+          });
+        }
+        paths.add(file.path);
+      }
+      if (
+        repository.files.some(
+          (file, index) => index > 0 && repository.files[index - 1]!.path >= file.path
+        )
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["repositories", repositoryIndex, "files"],
+          message: "Snapshot files must be strictly ordered by canonical path",
+        });
+      }
+    }
+    if (
+      input.repositories.some(
+        (repository, index) =>
+          index > 0 && input.repositories[index - 1]!.repoPath >= repository.repoPath
+      )
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["repositories"],
+        message: "Snapshot repositories must be strictly ordered by canonical path",
+      });
+    }
+    const descriptorBytes = vcsImportDescriptorByteLength(input);
+    if (descriptorBytes > VCS_IMPORT_MAX_DESCRIPTOR_BYTES) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          `A snapshot import descriptor is ${descriptorBytes} UTF-8 bytes; maximum is ` +
+          VCS_IMPORT_MAX_DESCRIPTOR_BYTES,
+      });
+    }
+  });
+export type VcsImportSnapshotInput = z.infer<typeof vcsImportSnapshotInputSchema>;
 
-const vcsHeadAdvanceActorSchema = z.object({ id: z.string(), kind: z.string() }).nullable();
-
-export const vcsHeadAdvanceSchema = z.object({
-  head: z.string(),
-  stateHash: z.string(),
-  /**
-   * The advanced log's own state hash — the identity space of
-   * `vcs.edit`/`vcs.commit`/`readFile`/`revert` return values. For a per-repo head this
-   * is the subtree-rooted repo state and differs from `stateHash` (the composed
-   * view); they are equal for whole-workspace heads. Clients correlating an RPC
-   * result with this advance (self-echo / undo guards) must match on this.
-   */
-  repoStateHash: z.string(),
-  sinceStateHash: nullableString,
-  eventId: nullableString,
-  headHash: nullableString,
-  actor: vcsHeadAdvanceActorSchema,
-  transitionKind: z.enum(["snapshot", "edit", "merge", "merge-resolution"]),
-  changedPaths: z.array(z.string()),
-  fileChanges: z.array(
-    z.object({
-      kind: z.enum(["added", "removed", "changed"]),
-      path: z.string(),
-      oldContentHash: nullableString,
-      newContentHash: nullableString,
-      oldMode: z.number().int().nullable(),
-      newMode: z.number().int().nullable(),
-    })
-  ),
-  editOps: z.array(
-    z.object({
-      kind: z.enum(["replace", "write", "create", "delete", "chmod"]),
-      path: z.string(),
-      oldContentHash: nullableString,
-      newContentHash: nullableString,
-      hunks: z.unknown().optional(),
-      mode: z.number().int().nullable().optional(),
-    })
-  ),
-});
-const _vcsHeadAdvanceSchemaCoversType: SchemaCoversType<
-  VcsHeadAdvance,
-  z.infer<typeof vcsHeadAdvanceSchema>
-> = true;
-const _vcsHeadAdvanceSchemaOutputIsType: z.infer<typeof vcsHeadAdvanceSchema> extends VcsHeadAdvance
-  ? true
-  : false = true;
-void _vcsHeadAdvanceSchemaCoversType;
-void _vcsHeadAdvanceSchemaOutputIsType;
-
-/**
- * A WORKING-content advance (`vcs.edit`) on a `ctx:*` head — broadcast on the
- * `vcs:working:{head}` topic, consumed via `subscribeWorking`. Deliberately
- * distinct from {@link vcsHeadAdvanceSchema}: an edit is NOT a state operation
- * (no commit, no build, not in vcs.log). Reactive views (and the editor undo
- * path, since `vcs.revert` is now a working edit) consume this to reflect
- * uncommitted edits; the build trigger ignores it.
- */
-export const vcsWorkingAdvanceSchema = z.object({
-  head: z.string(),
-  repoPath: z.string().optional(),
-  actor: vcsHeadAdvanceActorSchema,
-  /** The working state hash (committed base + uncommitted ops) on disk. The
-   *  self-echo / undo-correlation hash, analogous to head-advance repoStateHash. */
-  stateHash: z.string(),
-  /** The committed base the working content composes on. */
-  baseStateHash: z.string(),
-  /** The shared per-call edit sequence for this edit's ops. */
-  editSeq: z.number().int().nonnegative(),
-  /** Paths changed by this edit (workspace-relative). */
-  changedPaths: z.array(z.string()),
-});
-const _vcsWorkingAdvanceSchemaCoversType: SchemaCoversType<
-  VcsWorkingAdvance,
-  z.infer<typeof vcsWorkingAdvanceSchema>
-> = true;
-const _vcsWorkingAdvanceSchemaOutputIsType: z.infer<
-  typeof vcsWorkingAdvanceSchema
-> extends VcsWorkingAdvance
-  ? true
-  : false = true;
-void _vcsWorkingAdvanceSchemaCoversType;
-void _vcsWorkingAdvanceSchemaOutputIsType;
-
-export const vcsRecallInputSchema = z.object({
-  query: z
-    .string()
-    .describe("Free-text query matched against indexed VCS memory (log summaries, file snippets)."),
-  kinds: z
-    .array(z.string())
-    .optional()
-    .describe("Restrict results to these memory entry kinds; omit to search across all kinds."),
-  limit: z
-    .number()
-    .int()
-    .positive()
-    .max(50)
-    .optional()
-    .describe("Maximum number of results to return (1–50, default applied server-side)."),
-  repoPaths: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Restrict recall to these repos' indices (workspace-relative repo paths); omit to search across all repos."
-    ),
-  recallKeywords: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Optional steering keywords OR-appended to the query's FTS match to widen recall; never load-bearing (a bonus signal, not a filter)."
-    ),
-});
-export type VcsRecallInput = z.infer<typeof vcsRecallInputSchema>;
-
-// ---------------------------------------------------------------------------
-// Userland push contract (per-repo + group) — DO `vcsPush`
-// ---------------------------------------------------------------------------
-
-export const vcsPushInputSchema = z.object({
-  repoPaths: z
-    .array(z.string())
-    .min(1)
-    .describe(
-      "Repos to push (workspace-relative repo paths). Multiple repos push as one atomic, build-gated group — all heads advance or none do."
-    ),
-  sourceHead: z
-    .string()
-    .optional()
-    .describe(
-      "Head to push from into each repo's main (e.g. a `ctx:…` context head). Omit to push the caller's own context head."
-    ),
-  message: z
-    .string()
-    .optional()
-    .describe("Optional log summary recorded on the pushed repo commit(s)."),
-});
+export const vcsPushInputSchema = z
+  .object({
+    commandId,
+    contextId,
+    expectedCommittedEventId: id("Exact context commit to publish."),
+    expectedMainEventId: id("Observed protected main event."),
+  })
+  .strict();
 export type VcsPushInput = z.infer<typeof vcsPushInputSchema>;
 
-/** Per-repo divergence in a rejected fast-forward-only push: `main` advanced past
- *  the ctx head's merge-base. Reconcile with an explicit vcs.merge. */
-export const vcsRepoDivergenceSchema = z.object({
-  repoPath: z.string(),
-  base: nullableString,
-  mainTip: nullableString,
-  upstreamCommits: z.array(vcsUpstreamCommitSchema),
-  mergeable: z.enum(["clean", "conflict"]),
-  conflictPaths: z.array(z.string()).optional(),
+export const vcsWorkingMutationResultSchema = z
+  .object({
+    contextId,
+    workUnitId: id("Created work unit."),
+    applicationId: id("Created local application."),
+    changeCount: z.number().int().nonnegative(),
+    changeIds: z.array(id("Bounded preview of authored changes.")).max(200),
+    incorporatedChangeCount: z.number().int().nonnegative(),
+    incorporatedChangeIds: z
+      .array(id("Bounded preview of incorporated existing changes."))
+      .max(200),
+    workingHead: vcsStateNodeRefSchema,
+  })
+  .strict();
+export type VcsWorkingMutationResult = z.infer<typeof vcsWorkingMutationResultSchema>;
+
+export const vcsIntegrateResultSchema = vcsWorkingMutationResultSchema.extend({
+  decisionId: id("Created integration decision."),
 });
-export type VcsRepoDivergence = z.infer<typeof vcsRepoDivergenceSchema>;
+export type VcsIntegrateResult = z.infer<typeof vcsIntegrateResultSchema>;
 
-// The build-report contract (`buildDiagnosticSchema` + `repoBuildReportSchema`)
-// is the CANONICAL one from build.ts — `vcsPush`/`vcs.previewBuild` return
-// exactly what the build service produces and validates (the SAME producer:
-// buildV2's validateRepoPush). Re-exported here so `vcs.*` callers import it from
-// one place; defining a parallel copy is what drifted (artifact-integrity
-// optionality, diagnostic line/col nullability) and caused false return-
-// validation failures. Single source of truth → no future drift.
-export { buildDiagnosticSchema, repoBuildReportSchema };
-export type BuildDiagnostic = BuildDiagnosticWire;
-export type RepoBuildReport = RepoBuildReportWire;
+export const vcsCommitResultSchema = z
+  .object({
+    contextId,
+    event: vcsStateNodeRefSchema.refine((state) => state.kind === "event", {
+      message: "commit must return an event state",
+    }),
+    committedApplicationIds: z.array(id("Committed application.")).max(10_000),
+    integrationSourceEventId: id("Integration parent event.").nullable(),
+  })
+  .strict();
+export type VcsCommitResult = z.infer<typeof vcsCommitResultSchema>;
 
-export const vcsPushResultSchema = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("pushed"),
-    repoPaths: z.array(z.string()),
-    reports: z.array(repoBuildReportSchema),
-  }),
-  z.object({
-    status: z.literal("up-to-date"),
-    repoPaths: z.array(z.string()),
-    reports: z.array(repoBuildReportSchema),
-  }),
-  z.object({
-    status: z.literal("diverged"),
-    divergences: z.array(vcsRepoDivergenceSchema),
-  }),
-  z.object({
-    status: z.literal("build-failed"),
-    reports: z.array(repoBuildReportSchema),
-  }),
-]);
+export const vcsDiscardResultSchema = z
+  .object({
+    contextId,
+    workingHead: vcsStateNodeRefSchema,
+    discardedApplicationIds: z.array(id("Discarded local application.")).max(10_000),
+  })
+  .strict();
+export type VcsDiscardResult = z.infer<typeof vcsDiscardResultSchema>;
+
+export const vcsImportSnapshotResultSchema = z
+  .object({
+    contextId,
+    eventId: id("Committed import event."),
+    workUnitId: id("Import work unit."),
+    importedRepositoryIds: z.array(id("Imported repository identity.")).min(1),
+  })
+  .strict();
+export type VcsImportSnapshotResult = z.infer<typeof vcsImportSnapshotResultSchema>;
+
+export const vcsPushResultSchema = z
+  .object({
+    contextId,
+    eventId: id("Published event."),
+    mainEventId: id("New protected main event."),
+    effectId: id("Durable publication effect."),
+    appliedAt: timestamp,
+  })
+  .strict();
 export type VcsPushResult = z.infer<typeof vcsPushResultSchema>;
 
-export const vcsPushStatusSchema = z.object({
-  repoPath: z.string(),
-  head: z.string(),
-  headStateHash: nullableString,
-  mainStateHash: nullableString,
-  ahead: z.number().int().nonnegative(),
-  /** Count of UNCOMMITTED working edits (push rejects while > 0). */
-  uncommitted: z.number().int().nonnegative(),
-  /** Paths carrying uncommitted working edits (commit or discard before push). */
-  uncommittedPaths: z.array(z.string()),
-  /** `main` diverged past this head's base (a true fork) — a fast-forward push
-   *  is impossible without an explicit vcs.merge. NOT set when the head is
-   *  merely a pure ancestor of main (that is `behind`). */
-  diverged: z.boolean(),
-  /** `main` advanced but this head is a pure ancestor of it — nothing to push,
-   *  no merge needed. */
-  behind: z.boolean(),
-  /** The repo was deleted from the workspace (`main` archived/gone) — a push
-   *  will be refused; restore it or drop/rebase the context. */
-  deleted: z.boolean(),
-  files: z.array(
-    z.object({
-      path: z.string(),
-      kind: z.enum(["added", "removed", "changed"]),
+// ---------------------------------------------------------------------------
+// Read requests and projections
+// ---------------------------------------------------------------------------
+
+export const vcsStatusInputSchema = z.object({ contextId }).strict();
+export type VcsStatusInput = z.infer<typeof vcsStatusInputSchema>;
+
+export const vcsStatusResultSchema = z
+  .object({
+    contextId,
+    committed: vcsEventNodeRefSchema,
+    workingHead: vcsStateNodeRefSchema,
+    clean: z.boolean(),
+    mainEventId: id("Protected main event."),
+    mainRelation: z.enum(["at", "ahead", "behind", "diverged"]),
+    workingCounts: z
+      .object({
+        applications: z.number().int().nonnegative(),
+        workUnits: z.number().int().nonnegative(),
+        changes: z.number().int().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict();
+export type VcsStatusResult = z.infer<typeof vcsStatusResultSchema>;
+
+export const vcsChangeDispositionSchema = z.union([
+  z.object({ status: z.literal("shared") }).strict(),
+  z
+    .object({
+      status: z.literal("already-satisfied"),
+      evidence: z.array(vcsStatePredicateSchema).min(1).max(200),
     })
-  ),
-});
-export type VcsPushStatus = z.infer<typeof vcsPushStatusSchema>;
-
-export const vcsRecallResultSchema = z.object({
-  results: z.array(
-    z.object({
-      kind: z.string(),
-      snippet: z.string(),
-      score: z.number().nullable(),
-      logId: nullableString,
-      head: nullableString,
-      eventId: nullableString,
-      path: nullableString,
-      contentHash: nullableString,
-      anchor: z.record(z.unknown()).nullable(),
-      actor: z.unknown(),
-      appendedAt: nullableString,
+    .strict(),
+  z
+    .object({
+      status: z.literal("actionable"),
+      applicability: z.literal("applicable"),
     })
-  ),
-});
-export type VcsRecallResult = z.infer<typeof vcsRecallResultSchema>;
+    .strict(),
+  z
+    .object({
+      status: z.literal("actionable"),
+      applicability: z.literal("conflicting"),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("actionable"),
+      applicability: z.literal("blocked"),
+      prerequisiteChangeIds: boundedIds("Earlier effective source change required first."),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("accounted"),
+      decisionIds: boundedIds("Decision accounting for the source change."),
+    })
+    .strict(),
+  z.object({ status: z.literal("historical") }).strict(),
+]);
+export type VcsChangeDisposition = z.infer<typeof vcsChangeDispositionSchema>;
+
+export const vcsComparedChangeSchema = z
+  .object({
+    changeId: id("Source change."),
+    workUnitId: id("Original authored work unit."),
+    kind: vcsChangeKindSchema,
+    summary: nonEmptyText,
+    disposition: vcsChangeDispositionSchema,
+  })
+  .strict();
+
+export const vcsCompareInputSchema = z
+  .object({
+    target: vcsStateNodeRefSchema,
+    sourceEventId: id("Exact committed source event."),
+    view: z.enum(["overview", "changes"]).default("overview"),
+    disposition: z
+      .enum(["shared", "already-satisfied", "actionable", "accounted", "historical"])
+      .optional(),
+    cursor: cursor.optional(),
+    limit: pageLimit,
+  })
+  .strict();
+export type VcsCompareInput = z.infer<typeof vcsCompareInputSchema>;
+
+export const vcsCompareResultSchema = z
+  .object({
+    target: vcsStateNodeRefSchema,
+    sourceEventId: id("Compared source event."),
+    counts: z
+      .object({
+        shared: z.number().int().nonnegative(),
+        alreadySatisfied: z.number().int().nonnegative(),
+        actionable: z.number().int().nonnegative(),
+        conflicting: z.number().int().nonnegative(),
+        blocked: z.number().int().nonnegative(),
+        accounted: z.number().int().nonnegative(),
+        historical: z.number().int().nonnegative(),
+      })
+      .strict(),
+    changes: z.array(vcsComparedChangeSchema).max(500),
+    nextCursor: cursor.nullable(),
+  })
+  .strict();
+export type VcsCompareResult = z.infer<typeof vcsCompareResultSchema>;
+
+export const vcsSemanticCommandSchema = z
+  .object({
+    commandId: id("Semantic command."),
+    workspaceId: id("Owning workspace."),
+    contextId: contextId.nullable(),
+    method: nonEmptyText,
+    status: z.enum(["applying", "effect-pending", "complete"]),
+    result: vcsSemanticNodeRefSchema.nullable(),
+    createdAt: timestamp,
+    completedAt: timestamp.nullable(),
+  })
+  .strict();
+
+export const vcsRepositoryStateSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("present"),
+      repositoryId: id("Stable repository identity."),
+      repoPath: canonicalRepoPath,
+      manifestId: id("Immutable path-to-file identity manifest."),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("tombstone"),
+      repositoryId: id("Stable repository identity."),
+      priorPresentStateId: id("Exact prior present state."),
+      tombstoneChangeId: id("Change that deleted the repository."),
+    })
+    .strict(),
+]);
+
+export const vcsFileStateSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("placed"),
+        fileId: id("Stable file identity."),
+        repositoryId: id("Containing repository."),
+        path: canonicalFilePath,
+        contentHash: id("Exact content blob."),
+        mode: z.number().int().nonnegative().max(0o777),
+        ...contentDescriptorFields,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("tombstone"),
+        fileId: id("Stable file identity."),
+        priorPlacedStateId: id("Exact prior placed state."),
+        tombstoneChangeId: id("Change that deleted the file."),
+      })
+      .strict(),
+  ])
+  .superRefine((state, context) => {
+    if (state.kind === "placed") validateContentDescriptor(state, context);
+  });
+
+/** Small public identity projection from the canonical sanitized trajectory actor/sender. */
+export const vcsTrajectorySenderRefSchema = z
+  .object({
+    kind: nonEmptyText,
+    id: id("Canonical sender identity."),
+    participantId: id("Channel participant identity, when applicable.").nullable(),
+  })
+  .strict();
+export type VcsTrajectorySenderRef = z.infer<typeof vcsTrajectorySenderRefSchema>;
+
+/** Opaque request carrier retained by the canonical trajectory storage classes. */
+export const vcsTrajectoryRequestRefSchema = z
+  .object({
+    protocol: z.literal("vibestudio.blob-ref.v1"),
+    digest: DigestSchema.describe("Content address of the exact invocation request."),
+    size: z.number().int().nonnegative(),
+    encoding: z.enum(["json", "text"]),
+    originalBytes: z.number().int().nonnegative(),
+  })
+  .strict();
+export type VcsTrajectoryRequestRef = z.infer<typeof vcsTrajectoryRequestRefSchema>;
+
+export const vcsInspectedTrajectoryInvocationSchema = z
+  .object({
+    logId: id("Trajectory log identity."),
+    head: id("Exact trajectory head."),
+    invocationId: id("Exact tool invocation identity."),
+    turnId: id("Agent turn containing this invocation.").nullable(),
+    name: nonEmptyText.nullable(),
+    status: nonEmptyText,
+    terminalOutcome: nonEmptyText.nullable(),
+    requestRef: vcsTrajectoryRequestRefSchema.nullable(),
+    startedEventId: id("Trajectory event that started this invocation.").nullable(),
+    completedEventId: id("Trajectory event that completed this invocation.").nullable(),
+  })
+  .strict();
+export type VcsInspectedTrajectoryInvocation = z.infer<
+  typeof vcsInspectedTrajectoryInvocationSchema
+>;
+
+export const vcsInspectedTrajectoryTurnSchema = z
+  .object({
+    logId: id("Trajectory log identity."),
+    head: id("Exact trajectory head."),
+    turnId: id("Exact agent turn."),
+    triggerMessageId: id("Exact message that triggered this turn.").nullable(),
+    openedAt: timestamp.nullable(),
+    closedAt: timestamp.nullable(),
+    summary: nonEmptyText.nullable(),
+    ordinal: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+export type VcsInspectedTrajectoryTurn = z.infer<typeof vcsInspectedTrajectoryTurnSchema>;
+
+export const vcsInspectedTrajectoryMessageSchema = z
+  .object({
+    logId: id("Trajectory log identity."),
+    head: id("Exact trajectory head."),
+    messageId: id("Exact trajectory message."),
+    turnId: id("Turn containing the message, when applicable.").nullable(),
+    role: nonEmptyText,
+    status: nonEmptyText,
+    startedEventId: id("Trajectory event that started this message.").nullable(),
+    completedEventId: id("Trajectory event that completed this message.").nullable(),
+    sourceMessageId: id(
+      "Original channel message, when the trajectory message was received."
+    ).nullable(),
+    senderRef: vcsTrajectorySenderRefSchema.nullable(),
+    textBlocks: z
+      .array(
+        z
+          .object({
+            blockId: id("Stable message block identity."),
+            content: z.string(),
+          })
+          .strict()
+      )
+      .max(10_000),
+  })
+  .strict();
+export type VcsInspectedTrajectoryMessage = z.infer<typeof vcsInspectedTrajectoryMessageSchema>;
+
+export const vcsInspectedNodeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("event"), value: vcsWorkspaceEventSchema }).strict(),
+  z.object({ kind: z.literal("application"), value: vcsWorkApplicationSchema }).strict(),
+  z.object({ kind: z.literal("applied-change"), value: vcsAppliedChangeSchema }).strict(),
+  z.object({ kind: z.literal("work-unit"), value: vcsWorkUnitSchema }).strict(),
+  z.object({ kind: z.literal("change"), value: vcsChangeSchema }).strict(),
+  z.object({ kind: z.literal("decision"), value: vcsIntegrationDecisionSchema }).strict(),
+  z.object({ kind: z.literal("command"), value: vcsSemanticCommandSchema }).strict(),
+  z
+    .object({
+      kind: z.literal("file"),
+      state: vcsStateNodeRefSchema,
+      value: vcsFileStateSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("repository"),
+      state: vcsStateNodeRefSchema,
+      value: vcsRepositoryStateSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("trajectory"),
+      value: vcsTrajectoryRefSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("trajectory-invocation"),
+      value: vcsInspectedTrajectoryInvocationSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("trajectory-turn"),
+      value: vcsInspectedTrajectoryTurnSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("trajectory-message"),
+      value: vcsInspectedTrajectoryMessageSchema,
+    })
+    .strict(),
+]);
+export type VcsInspectedNode = z.infer<typeof vcsInspectedNodeSchema>;
 
 /**
- * Per-repo scoping argument. The per-repo VCS has NO whole-tree log, so every
- * head-keyed operation must name its repo — `repoPath` is REQUIRED on the
- * methods whose core resolves a head (status/log/revert/merge/abortMerge/
- * pendingMerge/resolveHead): omitting it throws `per-repo VCS: a repoPath is
- * required` at runtime, so the schema forbids it at compile time.
+ * The complete immediate provenance-relation vocabulary.
+ *
+ * Each variant names the normalized fact that owns it and the only endpoint
+ * combination that fact may expose. This is deliberately not a graph store:
+ * neighbors are derived from the owning facts in either direction. Keeping the
+ * endpoint contract here prevents a relation label from acquiring a second,
+ * incompatible meaning in a handwritten adjacency branch.
  */
-const repoPathArg = z
-  .string()
-  .describe(
-    "Workspace-relative repo path (e.g. `panels/chat`, `projects/vault`, `meta`) scoping this operation to one repo's log/head."
-  );
+export const vcsProvenanceRelationRegistry = {
+  "caused-by": [
+    { from: "event", to: "command", fact: "workspace-event.command" },
+    { from: "work-unit", to: "command", fact: "work-unit.command" },
+    { from: "command", to: "trajectory-invocation", fact: "command.causal-parent" },
+  ],
+  "basis-state": [
+    { from: "application", to: "event", fact: "application.basis" },
+    { from: "application", to: "application", fact: "application.basis" },
+  ],
+  "committed-by": [{ from: "event", to: "application", fact: "event.application" }],
+  "parent-event": [{ from: "event", to: "event", fact: "event.parent" }],
+  "applies-work": [{ from: "application", to: "work-unit", fact: "application.work-unit" }],
+  "applies-change": [
+    { from: "application", to: "applied-change", fact: "application.applied-change" },
+  ],
+  "realizes-change": [{ from: "applied-change", to: "change", fact: "applied-change.change" }],
+  "authored-change": [{ from: "work-unit", to: "change", fact: "change.work-unit" }],
+  "incorporates-change": [{ from: "work-unit", to: "change", fact: "decision.source-change" }],
+  "decides-change": [{ from: "decision", to: "change", fact: "decision.source-change" }],
+  "records-decision": [{ from: "work-unit", to: "decision", fact: "decision.work-unit" }],
+  "imports-repository": [
+    { from: "work-unit", to: "repository", fact: "work-unit.external-snapshot-target" },
+  ],
+  counteracts: [{ from: "change", to: "change", fact: "change.counteraction" }],
+  "authored-copy-source": [{ from: "change", to: "file", fact: "change.authored-source" }],
+  "preserves-content": [
+    { from: "applied-change", to: "applied-change", fact: "content-edge.mapping" },
+  ],
+  "copies-content": [
+    { from: "applied-change", to: "applied-change", fact: "content-edge.mapping" },
+  ],
+  "incorporates-content": [
+    { from: "applied-change", to: "applied-change", fact: "content-edge.mapping" },
+  ],
+  "places-file": [
+    { from: "event", to: "file", fact: "workspace-state.file" },
+    { from: "application", to: "file", fact: "workspace-state.file" },
+  ],
+  "contains-repository": [
+    { from: "event", to: "repository", fact: "workspace-state.repository" },
+    { from: "application", to: "repository", fact: "workspace-state.repository" },
+  ],
+  "part-of-trajectory": [
+    { from: "trajectory-invocation", to: "trajectory", fact: "trajectory.invocation" },
+    { from: "trajectory-turn", to: "trajectory", fact: "trajectory.turn" },
+    { from: "trajectory-message", to: "trajectory", fact: "trajectory.message" },
+  ],
+  "part-of-turn": [
+    { from: "trajectory-invocation", to: "trajectory-turn", fact: "invocation.turn" },
+    { from: "trajectory-message", to: "trajectory-turn", fact: "message.turn" },
+  ],
+  "triggered-by": [
+    { from: "trajectory-turn", to: "trajectory-message", fact: "turn.trigger-message" },
+  ],
+} as const;
 
-/**
- * Optional per-repo scoping for the path-routed / view-rooted reads
- * (readFile/listFiles): when omitted, the service routes by edit/file path to
- * the owning repo (readFile) or resolves the caller's composed workspace view
- * (listFiles), so a missing `repoPath` is a meaningful default, not a throw.
- */
-const repoPathArgOptional = z
-  .string()
-  .optional()
-  .describe(
-    "Workspace-relative repo path scoping this read to one repo's head. Omit to route by path (readFile) or read the whole composed context view (listFiles)."
-  );
+export type VcsProvenanceEdgeKind = keyof typeof vcsProvenanceRelationRegistry;
 
-/**
- * Optional cross-context read scope for the head-resolving reads
- * (status/readFile/listFiles/pendingMerge/contextStatus): when set, the read
- * resolves the NAMED context's `ctx:*` head instead of the caller's own. The
- * caller must OWN (lifecycle child) or have FORKED (lineage descendant) that
- * context per the runtime relationship registry — otherwise the read THROWS
- * (this is a deny gate, never a prompt). `ownerContextId` is a host-verified
- * owner-context hint for child tools such as subagent inspection; it is honored
- * only when the caller entity owns the recorded context edge. Omit to read the
- * caller's own head.
- */
-const contextScopeArg = z
-  .object({ contextId: z.string(), ownerContextId: z.string().optional() })
-  .optional()
-  .describe(
-    "Inspect another context you own or forked (resolves that context's ctx:* head). Unauthorized cross-context reads throw."
-  );
+const vcsProvenanceEdgeKinds = Object.keys(vcsProvenanceRelationRegistry) as [
+  VcsProvenanceEdgeKind,
+  ...VcsProvenanceEdgeKind[],
+];
+
+export const vcsProvenanceEdgeKindSchema = z.enum(vcsProvenanceEdgeKinds);
+
+export const vcsProvenanceRelationAllows = (
+  kind: VcsProvenanceEdgeKind,
+  from: VcsSemanticNodeRef["kind"],
+  to: VcsSemanticNodeRef["kind"]
+): boolean =>
+  vcsProvenanceRelationRegistry[kind].some((variant) => variant.from === from && variant.to === to);
+
+export const vcsProvenanceEdgeSchema = z
+  .object({
+    kind: vcsProvenanceEdgeKindSchema,
+    from: vcsSemanticNodeRefSchema,
+    to: vcsSemanticNodeRefSchema,
+    summary: nonEmptyText.optional(),
+  })
+  .strict()
+  .superRefine((edge, context) => {
+    if (!vcsProvenanceRelationAllows(edge.kind, edge.from.kind, edge.to.kind)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["kind"],
+        message: `${edge.kind} cannot connect ${edge.from.kind} to ${edge.to.kind}`,
+      });
+    }
+  });
+export type VcsProvenanceEdge = z.infer<typeof vcsProvenanceEdgeSchema>;
+
+export const vcsInspectInputSchema = z
+  .object({ node: vcsSemanticNodeRefSchema, edgeLimit: pageLimit })
+  .strict();
+export type VcsInspectInput = z.infer<typeof vcsInspectInputSchema>;
+
+export const vcsInspectResultSchema = z
+  .object({
+    root: vcsSemanticNodeRefSchema,
+    node: vcsInspectedNodeSchema,
+    edges: z.array(vcsProvenanceEdgeSchema).max(500),
+    hasMoreEdges: z.boolean(),
+  })
+  .strict();
+export type VcsInspectResult = z.infer<typeof vcsInspectResultSchema>;
+
+export const vcsNeighborsInputSchema = z
+  .object({ root: vcsSemanticNodeRefSchema, cursor: cursor.optional(), limit: pageLimit })
+  .strict();
+export type VcsNeighborsInput = z.infer<typeof vcsNeighborsInputSchema>;
+
+export const vcsNeighborsResultSchema = z
+  .object({
+    root: vcsSemanticNodeRefSchema,
+    edges: z.array(vcsProvenanceEdgeSchema).max(500),
+    nextCursor: cursor.nullable(),
+  })
+  .strict();
+export type VcsNeighborsResult = z.infer<typeof vcsNeighborsResultSchema>;
+
+export const vcsHistoryRootSchema = z.discriminatedUnion("kind", [
+  vcsEventNodeRefSchema,
+  vcsFileNodeRefSchema,
+]);
+export type VcsHistoryRoot = z.infer<typeof vcsHistoryRootSchema>;
+
+const historyPageFields = {
+  cursor: cursor.optional(),
+  limit: pageLimit,
+};
+
+export const vcsHistoryInputSchema = z.union([
+  z
+    .object({
+      root: vcsEventNodeRefSchema,
+      direction: z.enum(["past", "future"]).default("past"),
+      ...historyPageFields,
+    })
+    .strict(),
+  z
+    .object({
+      root: vcsFileNodeRefSchema,
+      direction: z.literal("past").default("past"),
+      ...historyPageFields,
+    })
+    .strict(),
+]);
+export type VcsHistoryInput = z.infer<typeof vcsHistoryInputSchema>;
+
+export const vcsHistoryEntrySchema = z
+  .object({
+    node: vcsSemanticNodeRefSchema,
+    createdAt: timestamp.nullable(),
+    summary: nonEmptyText,
+  })
+  .strict();
+
+export const vcsHistoryResultSchema = z
+  .object({
+    root: vcsHistoryRootSchema,
+    entries: z.array(vcsHistoryEntrySchema).max(500),
+    nextCursor: cursor.nullable(),
+  })
+  .strict();
+export type VcsHistoryResult = z.infer<typeof vcsHistoryResultSchema>;
+
+export const vcsBlameInputSchema = z
+  .object({
+    state: vcsStateNodeRefSchema,
+    repositoryId: id("Repository containing the file at this state."),
+    fileId: id("Stable file identity."),
+    range: z
+      .object({
+        start: z.number().int().nonnegative(),
+        end: z.number().int().nonnegative(),
+      })
+      .strict()
+      .refine((range) => range.end >= range.start, { message: "end must be >= start" }),
+    cursor: cursor.optional(),
+    limit: pageLimit,
+  })
+  .strict();
+export type VcsBlameInput = z.infer<typeof vcsBlameInputSchema>;
+
+export const vcsBlameSpanSchema = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+    changeId: id("Terminal authored change.").nullable(),
+    appliedChangeId: id("Terminal applied change.").nullable(),
+    workUnitId: id("Original authored work unit.").nullable(),
+    commandId: id("Originating semantic command.").nullable(),
+    path: z.array(vcsProvenanceEdgeSchema).max(200),
+    stop: z.enum(["authored", "import-boundary"]),
+  })
+  .strict();
+
+export const vcsBlameResultSchema = z
+  .object({
+    state: vcsStateNodeRefSchema,
+    fileId: id("Stable file identity."),
+    coordinateKind: z.enum(["utf16", "byte"]),
+    spans: z.array(vcsBlameSpanSchema).max(500),
+    nextCursor: cursor.nullable(),
+  })
+  .strict();
+export type VcsBlameResult = z.infer<typeof vcsBlameResultSchema>;
+
+export const vcsResolveRepositoryInputSchema = z
+  .object({
+    state: vcsStateNodeRefSchema,
+    repoPath: canonicalRepoPath,
+  })
+  .strict();
+export type VcsResolveRepositoryInput = z.infer<typeof vcsResolveRepositoryInputSchema>;
+
+export const vcsResolveRepositoryResultSchema = z
+  .object({
+    state: vcsStateNodeRefSchema,
+    repositoryId: id("Stable repository identity."),
+    repoPath: canonicalRepoPath,
+  })
+  .strict()
+  .nullable();
+export type VcsResolveRepositoryResult = z.infer<typeof vcsResolveRepositoryResultSchema>;
 
 export const vcsReadFileInputSchema = z
   .object({
-    path: z
-      .string()
-      .min(1)
-      .describe(
-        "Workspace-relative path, or a repo-relative path when repoPath is supplied. Bare paths use the workspace's declared defaultRepo."
-      ),
-    repoPath: repoPathArgOptional,
-    ref: z.string().optional().describe("VCS ref; omit for the caller's current context head."),
-    scope: contextScopeArg,
+    state: vcsStateNodeRefSchema,
+    repositoryId: id("Repository containing the file."),
+    file: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("id"), fileId: id("Stable file identity.") }).strict(),
+      z.object({ kind: z.literal("path"), path: canonicalFilePath }).strict(),
+    ]),
   })
   .strict();
 export type VcsReadFileInput = z.infer<typeof vcsReadFileInputSchema>;
 
+export const vcsReadFileResultSchema = z
+  .object({
+    repositoryId: id("Stable repository identity."),
+    fileId: id("Stable file identity."),
+    repoPath: canonicalRepoPath,
+    path: canonicalFilePath,
+    contentHash: id("Exact content blob."),
+    mode: z.number().int().nonnegative().max(0o777),
+    content: vcsFileReadContentSchema,
+  })
+  .strict()
+  .nullable();
+export type VcsReadFileResult = z.infer<typeof vcsReadFileResultSchema>;
+
 export const vcsListFilesInputSchema = z
   .object({
-    repoPath: repoPathArgOptional,
-    ref: z.string().optional().describe("VCS ref; omit for the caller's current context head."),
-    scope: contextScopeArg,
+    state: vcsStateNodeRefSchema,
+    repositoryId: id("Repository to list."),
+    prefix: z.string().optional(),
+    cursor: cursor.optional(),
+    limit: pageLimit,
   })
   .strict();
 export type VcsListFilesInput = z.infer<typeof vcsListFilesInputSchema>;
 
-// NOTE (P5c): the read/history traversals — commitEdits, fileHistory,
-// commitAncestors, editsByActor, editsByTurn, editsByInvocation,
-// blameLines — and the §6/§7 provenance surface — provenanceForFile,
-// provenanceForSession, provenanceForClaim — are USERLAND-dispatched: they run
-// in the gad-store DO behind the `vcs` manifest service (vibestudio.vcs.v1) and are
-// called through `createDurableObjectServiceClient`, not this host service
-// table. Their row/result schemas above (VcsEditOpRow, VcsBlameLine,
-// VcsCommitAncestor, VcsLogEntry, VcsProvItem/VcsProvenanceForFileResult) remain
-// the wire contract.
-export const vcsMethods = defineServiceMethods({
+export const vcsFileListEntrySchema = z
+  .object({
+    fileId: id("Stable file identity."),
+    path: canonicalFilePath,
+    contentHash: id("Exact content blob."),
+    mode: z.number().int().nonnegative().max(0o777),
+    ...contentDescriptorFields,
+  })
+  .strict()
+  .superRefine(validateContentDescriptor);
+
+export const vcsListFilesResultSchema = z
+  .object({
+    state: vcsStateNodeRefSchema,
+    repositoryId: id("Listed repository."),
+    files: z.array(vcsFileListEntrySchema).max(500),
+    nextCursor: cursor.nullable(),
+  })
+  .strict();
+export type VcsListFilesResult = z.infer<typeof vcsListFilesResultSchema>;
+
+// ---------------------------------------------------------------------------
+// Minimal typed failure vocabulary
+// ---------------------------------------------------------------------------
+
+const errorBase = { message: nonEmptyText };
+export const vcsErrorSchema = z.discriminatedUnion("code", [
+  z
+    .object({
+      code: z.literal("RevisionChanged"),
+      ...errorBase,
+      expected: vcsStateNodeRefSchema,
+      actual: vcsStateNodeRefSchema,
+    })
+    .strict(),
+  z.object({ code: z.literal("Unauthorized"), ...errorBase, operation: nonEmptyText }).strict(),
+  z
+    .object({
+      code: z.literal("InvalidReference"),
+      ...errorBase,
+      referenceKind: nonEmptyText,
+      reference: z.unknown(),
+    })
+    .strict(),
+  z.object({ code: z.literal("NoEffect"), ...errorBase, commandId }).strict(),
+  z
+    .object({
+      code: z.literal("DestinationOccupied"),
+      ...errorBase,
+      repositoryId: id("Occupied repository."),
+      path: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      code: z.literal("ConflictPresent"),
+      ...errorBase,
+      sourceChangeIds: boundedIds("Conflicting source change."),
+    })
+    .strict(),
+  z
+    .object({
+      code: z.literal("DependencyBlocked"),
+      ...errorBase,
+      blockingChangeIds: boundedIds("Change whose live result must be handled first."),
+    })
+    .strict(),
+  z
+    .object({
+      code: z.literal("IntegrationIncomplete"),
+      ...errorBase,
+      sourceEventId: id("Integration source event."),
+      unaccountedChangeIds: boundedIds("Unaccounted source change."),
+    })
+    .strict(),
+  z
+    .object({
+      code: z.literal("WorkingChangesPresent"),
+      ...errorBase,
+      contextId,
+      workingHead: vcsStateNodeRefSchema,
+    })
+    .strict(),
+  z.object({ code: z.literal("CommandIdReuse"), ...errorBase, commandId }).strict(),
+  z
+    .object({
+      code: z.literal("ScopeTooLarge"),
+      ...errorBase,
+      scope: nonEmptyText,
+      maximum: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      code: z.literal("ExternalEffectFailed"),
+      ...errorBase,
+      effectId: id("Failed host effect."),
+    })
+    .strict(),
+  z
+    .object({
+      code: z.literal("IntegrityFailure"),
+      ...errorBase,
+      handle: id("Opaque integrity diagnostic."),
+    })
+    .strict(),
+]);
+export type VcsError = z.infer<typeof vcsErrorSchema>;
+export type VcsErrorCode = VcsError["code"];
+export type VcsErrorForCode<C extends VcsErrorCode> = Extract<VcsError, { code: C }>;
+
+export function createVcsError<const E extends VcsError>(error: E): E {
+  return vcsErrorSchema.parse(error) as E;
+}
+
+const ERROR_DESCRIPTIONS: Record<VcsErrorCode, string> = {
+  RevisionChanged: "The exact working or committed basis advanced.",
+  Unauthorized: "The caller cannot reach or mutate the requested semantic root.",
+  InvalidReference: "A typed semantic reference is invalid.",
+  NoEffect: "The requested mutation has no semantic effect.",
+  DestinationOccupied: "A move, copy, create, or import destination is occupied.",
+  ConflictPresent: "The selected source changes conflict at the exact target basis.",
+  DependencyBlocked: "A selected change has an unsatisfied semantic prerequisite.",
+  IntegrationIncomplete: "An integration commit still has unaccounted source changes.",
+  WorkingChangesPresent: "The operation requires a clean context.",
+  CommandIdReuse: "The command identity was reused with a different request.",
+  ScopeTooLarge: "The bounded operation requires a narrower request or page.",
+  ExternalEffectFailed: "A requested host effect failed.",
+  IntegrityFailure: "The semantic graph failed an integrity invariant.",
+};
+
+const methodErrors = (...codes: VcsErrorCode[]) =>
+  codes.map((code) => ({ code, description: ERROR_DESCRIPTIONS[code] }));
+
+const READ_ERRORS = methodErrors(
+  "Unauthorized",
+  "InvalidReference",
+  "ScopeTooLarge",
+  "IntegrityFailure"
+);
+const MUTATION_ERRORS = methodErrors(
+  "RevisionChanged",
+  "Unauthorized",
+  "InvalidReference",
+  "NoEffect",
+  "CommandIdReuse",
+  "ScopeTooLarge",
+  "IntegrityFailure"
+);
+
+// ---------------------------------------------------------------------------
+// Explicit request-reference metadata (no Zod private reflection)
+// ---------------------------------------------------------------------------
+
+export const vcsSemanticReferenceKinds = [
+  "context",
+  "state-node",
+  "event",
+  "application",
+  "work-unit",
+  "change",
+  "decision",
+  "command",
+  "repository",
+  "file",
+  "node",
+] as const;
+export type VcsSemanticReferenceKind = (typeof vcsSemanticReferenceKinds)[number];
+export type VcsSemanticReferenceRole =
+  | "context"
+  | "basis"
+  | "source"
+  | "target"
+  | "resource"
+  | "provenance-root"
+  | "publication";
+
+export interface VcsReferenceDescriptor {
+  kind: VcsSemanticReferenceKind;
+  role: VcsSemanticReferenceRole;
+  /** Dot-free path segments from the sole request object; `*` walks an array. */
+  path: readonly string[];
+}
+
+export interface VcsSemanticReference extends VcsReferenceDescriptor {
+  value: unknown;
+  /** Concrete path after expanding `*` array segments. */
+  concretePath: readonly (string | number)[];
+}
+
+type VcsOperationClass = "read" | "context-write" | "workspace-write";
+interface VcsMethodSchema extends MethodSchema {
+  operationClass: VcsOperationClass;
+  references: readonly VcsReferenceDescriptor[];
+}
+
+const ref = (
+  kind: VcsSemanticReferenceKind,
+  role: VcsSemanticReferenceRole,
+  ...path: string[]
+): VcsReferenceDescriptor => ({ kind, role, path });
+
+const commonMutationRefs = [
+  ref("command", "resource", "commandId"),
+  ref("context", "context", "contextId"),
+  ref("state-node", "basis", "expectedWorkingHead"),
+] as const;
+
+const defineVcsMethods = <const M extends Record<string, VcsMethodSchema>>(methods: M): M =>
+  defineServiceMethods(methods) as M;
+
+// ---------------------------------------------------------------------------
+// Sole exhaustive public method registry
+// ---------------------------------------------------------------------------
+
+export const vcsMethods = defineVcsMethods({
   edit: {
     description:
-      "Record a batch of file edits as UNCOMMITTED WORKING changes on the caller's context head — tracked durably with full provenance, but NOT a commit: no commit-log entry, no head advance, no build, and they never appear in vcs.log. Edits route to their owning repo by path; bare paths use the workspace's declared defaultRepo. Make deliberate milestones with vcs.commit. Edits target a `ctx:*` head; `main` advances only via push.",
-    args: z.tuple([vcsApplyEditsInputSchema]),
-    returns: vcsEditResultSchema,
+      "Atomically create repositories with their initial files or author exact text, binary, file-create, delete, and mode changes on the working head.",
+    args: z.tuple([vcsEditInputSchema]),
+    returns: vcsWorkingMutationResultSchema,
     access: WRITE_ACCESS,
-    examples: [
-      {
-        args: [
-          {
-            edits: [
-              {
-                kind: "write",
-                path: "panels/chat/notes.md",
-                content: { kind: "text", text: "# Notes\n" },
-              },
-            ],
-          },
-        ],
-      },
+    operationClass: "context-write",
+    references: [
+      ...commonMutationRefs,
+      ref("repository", "resource", "changes", "*", "repositoryId"),
+      ref("file", "resource", "changes", "*", "fileId"),
     ],
+    errors: [...MUTATION_ERRORS, ...methodErrors("DestinationOccupied")],
+    seeAlso: ["vcs.move", "vcs.copy", "vcs.revert"],
+  },
+  move: {
+    description:
+      "Move stable file or repository identities without reconstructing intent from bytes.",
+    args: z.tuple([vcsMoveInputSchema]),
+    returns: vcsWorkingMutationResultSchema,
+    access: WRITE_ACCESS,
+    operationClass: "context-write",
+    references: [
+      ...commonMutationRefs,
+      ref("repository", "resource", "moves", "*", "repositoryId"),
+      ref("repository", "target", "moves", "*", "destinationRepositoryId"),
+      ref("file", "resource", "moves", "*", "fileId"),
+    ],
+    errors: [...MUTATION_ERRORS, ...methodErrors("DestinationOccupied")],
+    seeAlso: ["vcs.copy", "vcs.neighbors"],
+  },
+  copy: {
+    description:
+      "Copy exact source files into new identities with immediate coordinate provenance.",
+    args: z.tuple([vcsCopyInputSchema]),
+    returns: vcsWorkingMutationResultSchema,
+    access: WRITE_ACCESS,
+    operationClass: "context-write",
+    references: [
+      ...commonMutationRefs,
+      ref("state-node", "source", "copies", "*", "source", "state"),
+      ref("repository", "source", "copies", "*", "source", "repositoryId"),
+      ref("file", "source", "copies", "*", "source", "fileId"),
+      ref("repository", "target", "copies", "*", "destination", "repositoryId"),
+    ],
+    errors: [...MUTATION_ERRORS, ...methodErrors("DestinationOccupied")],
+    seeAlso: ["vcs.move", "vcs.blame"],
+  },
+  integrate: {
+    description: "Take one local adopt, reconcile, or decline step against an exact source event.",
+    args: z.tuple([vcsIntegrateInputSchema]),
+    returns: vcsIntegrateResultSchema,
+    access: WRITE_ACCESS,
+    operationClass: "context-write",
+    references: [
+      ...commonMutationRefs,
+      ref("event", "source", "sourceEventId"),
+      ref("change", "source", "decision", "sourceChangeIds", "*"),
+    ],
+    errors: [...MUTATION_ERRORS, ...methodErrors("ConflictPresent", "DependencyBlocked")],
+    seeAlso: ["vcs.compare", "vcs.commit"],
+  },
+  revert: {
+    description: "Author explicit counteractions of exact semantic changes.",
+    args: z.tuple([vcsRevertInputSchema]),
+    returns: vcsWorkingMutationResultSchema,
+    access: DESTRUCTIVE_ACCESS,
+    operationClass: "context-write",
+    references: [...commonMutationRefs, ref("change", "source", "changeIds", "*")],
+    errors: [...MUTATION_ERRORS, ...methodErrors("ConflictPresent", "DependencyBlocked")],
+    seeAlso: ["vcs.history", "vcs.discard"],
   },
   commit: {
     description:
-      "Fold the caller context's uncommitted working edits into ONE deliberate, messaged snapshot per repo, advancing each repo's context head and owning exactly those edits (queryable via commitEdits). `message` is mandatory. `paths` seals only the listed paths (`git add <paths>`); `exclude` seals everything except the listed paths. A repo with a pending merge commits the resolution — even with zero working edits (sealing a merge that needed no manual resolution). Multi-repo commits report a per-repo status (`committed`/`unchanged`/`refused`) and never throw away partial results. `main` is rejected (push only).",
+      "Commit the complete local application chain; derive its unique integration parent from recorded decisions, or accept an explicit zero-change source.",
     args: z.tuple([vcsCommitInputSchema]),
-    returns: z.array(vcsCommitResultSchema),
+    returns: vcsCommitResultSchema,
     access: WRITE_ACCESS,
-    examples: [{ args: [{ message: "Add notes panel" }] }],
+    operationClass: "context-write",
+    references: [...commonMutationRefs, ref("event", "source", "integratesEventId")],
+    errors: [...MUTATION_ERRORS, ...methodErrors("IntegrationIncomplete")],
+    seeAlso: ["vcs.status", "vcs.push"],
   },
-  discardEdits: {
-    description:
-      "Drop a repo's uncommitted working edits on the caller's context head AND clear any in-progress merge, restoring the committed head on disk (abort / stash-drop). To abort ONLY a pending merge while keeping other working edits, use vcs.abortMerge instead.",
-    args: z.tuple([repoPathArg, z.string().optional()]),
-    returns: z.object({ discarded: z.number().int().nonnegative(), stateHash: z.string() }),
-    access: { ...WRITE_ACCESS, sensitivity: "destructive" },
-    examples: [{ args: ["panels/chat"] }],
+  discard: {
+    description: "Discard the complete uncommitted chain and return to the committed event.",
+    args: z.tuple([vcsDiscardInputSchema]),
+    returns: vcsDiscardResultSchema,
+    access: DESTRUCTIVE_ACCESS,
+    operationClass: "context-write",
+    references: commonMutationRefs,
+    errors: MUTATION_ERRORS,
+    seeAlso: ["vcs.revert", "vcs.status"],
   },
-  previewBuild: {
+  importSnapshot: {
     description:
-      "On-demand build of the caller context's WORKING content (committed head + uncommitted edits), scoped to specific repos or units. Does NOT touch the published EV baseline — builds happen authoritatively only at push. Use for a dev preview without committing.",
-    args: z.tuple([
-      z.object({
-        repoPaths: z.array(z.string()).optional(),
-        units: z.array(z.string()).optional(),
-        head: z.string().optional(),
-      }),
-    ]),
-    returns: z.array(repoBuildReportSchema),
-    access: READ_ACCESS,
-    examples: [{ args: [{ repoPaths: ["panels/chat"] }] }],
+      "Import one exact complete external snapshot as ordinary changes on an import work unit.",
+    args: z.tuple([vcsImportSnapshotInputSchema]),
+    returns: vcsImportSnapshotResultSchema,
+    access: WRITE_ACCESS,
+    operationClass: "context-write",
+    references: [
+      ...commonMutationRefs,
+      ref("repository", "resource", "repositories", "*", "repositoryId"),
+    ],
+    errors: [
+      ...MUTATION_ERRORS,
+      ...methodErrors("DestinationOccupied", "WorkingChangesPresent", "ExternalEffectFailed"),
+    ],
+    seeAlso: ["vcs.blame", "vcs.inspect"],
   },
-  readFile: {
-    description:
-      "Read one file's content (text or base64 bytes), state/content hashes, and mode. The object address has one meaning on every transport: path is workspace-relative unless repoPath explicitly makes it repo-relative; ref defaults to the caller's current head; scope selects an owned/forked context. Bare paths use meta/vibestudio.yml defaultRepo and fail clearly when none is declared.",
-    args: z.tuple([vcsReadFileInputSchema]),
-    returns: vcsFileContentSchema.nullable(),
-    access: READ_ACCESS,
-    examples: [{ args: [{ path: "notes.md", repoPath: "panels/chat" }] }],
-  },
-  listFiles: {
-    description:
-      "List every file (path, content hash, mode) at a VCS ref. Omit the input/ref for the caller's composed current head; pass repoPath for a repo-relative listing; scope selects an owned/forked context.",
-    args: z.tuple([vcsListFilesInputSchema.optional()]),
-    returns: z.array(vcsFileListEntrySchema),
-    access: READ_ACCESS,
-  },
-  revert: {
-    description:
-      "Undo a prior change by forward-applying its inverse patch onto the caller's head as an UNCOMMITTED WORKING edit — the head does NOT advance until you seal it with vcs.commit (and push it like any other change). Target the change by state hash or event id; when both are omitted, the latest commit on the repo head is reverted. Pass repoPath to revert on a specific repo's log.",
-    args: z.tuple([
-      z.object({
-        stateHash: z
-          .string()
-          .optional()
-          .describe("Target the change that produced this `state:…` hash."),
-        eventId: z
-          .string()
-          .optional()
-          .describe("Target the change by its log event id instead of a state hash."),
-        head: z
-          .string()
-          .optional()
-          .describe(
-            "Head to revert on. Omit for the caller's own context head; entity callers may only write their own `ctx:…` head."
-          ),
-        repoPath: z
-          .string()
-          .describe("Repo to revert on (workspace-relative repo path). Required (per-repo VCS)."),
-      }),
-    ]),
-    returns: vcsEditResultSchema,
-    access: { ...WRITE_ACCESS, sensitivity: "destructive" },
-    examples: [{ args: [{ eventId: "evt-123", repoPath: "panels/chat" }] }],
-  },
-  log: {
-    description:
-      "Recent commits for a repo head, newest first. Omit head for the caller's current context head. This host compatibility route matches the runtime vcs.log(repoPath, limit?, head?) surface.",
-    args: z.tuple([repoPathArg, z.number().int().positive().optional(), z.string().optional()]),
-    returns: z.array(vcsLogEntrySchema),
-    access: READ_ACCESS,
-    examples: [{ args: ["projects/default", 20] }],
+  push: {
+    description: "Publish one exact already-committed event to protected main.",
+    args: z.tuple([vcsPushInputSchema]),
+    returns: vcsPushResultSchema,
+    access: WRITE_ACCESS,
+    operationClass: "workspace-write",
+    references: [
+      ref("command", "resource", "commandId"),
+      ref("context", "context", "contextId"),
+      ref("event", "publication", "expectedCommittedEventId"),
+      ref("event", "basis", "expectedMainEventId"),
+    ],
+    errors: [
+      ...methodErrors(
+        "RevisionChanged",
+        "Unauthorized",
+        "InvalidReference",
+        "WorkingChangesPresent",
+        "CommandIdReuse",
+        "ExternalEffectFailed",
+        "IntegrityFailure"
+      ),
+    ],
+    seeAlso: ["vcs.commit", "vcs.status"],
   },
   status: {
-    description:
-      "Status of a repo's head against both baselines: committed changes relative to main and uncommitted working changes relative to the committed head, with path lists, divergence/behind state, deletion, and any pending merge. Not a filesystem scan. repoPath is required (per-repo VCS).",
-    args: z.tuple([repoPathArg, z.string().optional(), contextScopeArg]),
+    description: "Return context pointers, clean state, main relation, and compact working counts.",
+    args: z.tuple([vcsStatusInputSchema]),
     returns: vcsStatusResultSchema,
     access: READ_ACCESS,
-    examples: [{ args: ["panels/chat"] }],
+    operationClass: "read",
+    references: [ref("context", "context", "contextId")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.compare", "vcs.history"],
   },
-  diff: {
-    description:
-      "Diff two GAD states by their `state:…` hashes, returning the added/removed/changed files between them (name-status only — use vcs.diffContent for hunks).",
-    args: z.tuple([z.string(), z.string()]),
-    returns: vcsDiffResultSchema,
+  compare: {
+    description: "Compare an exact target state with a committed source event by semantic change.",
+    args: z.tuple([vcsCompareInputSchema]),
+    returns: vcsCompareResultSchema,
     access: READ_ACCESS,
+    operationClass: "read",
+    references: [ref("state-node", "target", "target"), ref("event", "source", "sourceEventId")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.integrate", "vcs.inspect"],
   },
-  diffContent: {
-    description:
-      "CONTENT diff with real hunks and a unified-diff rendering — review what actually changed before committing or pushing. Scope `working` diffs the uncommitted edits (what a commit would seal), `committed` the unpushed commits (what a push would carry), `all` (default) everything unpushed; or pass explicit left/right `state:…` hashes. Binary files are flagged, never hunked.",
-    args: z.tuple([vcsDiffContentInputSchema]),
-    returns: vcsDiffContentResultSchema,
+  inspect: {
+    description: "Inspect one typed semantic node and a bounded preview of its direct adjacency.",
+    args: z.tuple([vcsInspectInputSchema]),
+    returns: vcsInspectResultSchema,
     access: READ_ACCESS,
-    examples: [{ args: [{ repoPath: "panels/chat", scope: "working" }] }],
+    operationClass: "read",
+    references: [ref("node", "provenance-root", "node")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.neighbors", "vcs.history"],
   },
-  resolveHead: {
-    description:
-      'Resolve a ref to its head name and current `state:…` hash on a repo\'s log. Omit the ref for the caller\'s current context head; pass "main"/"ctx:…" for an explicit ref, and repoPath to scope to a repo.',
-    args: z.tuple([z.string().optional(), repoPathArg]),
-    returns: vcsResolveHeadResultSchema,
+  neighbors: {
+    description: "Page immediate typed provenance edges without persisting traversal state.",
+    args: z.tuple([vcsNeighborsInputSchema]),
+    returns: vcsNeighborsResultSchema,
     access: READ_ACCESS,
-    examples: [{ args: ["main", "packages/core"] }],
+    operationClass: "read",
+    references: [ref("node", "provenance-root", "root")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.inspect", "vcs.blame"],
   },
-  workspaceViewWithRepoAt: {
+  history: {
     description:
-      "Compose a workspace-rooted state view with one repo replaced by a repo-rooted state hash (or removed when null). Use this to convert a repo state from vcs.log/vcs.commit/vcs.resolveHead into the immutable state ref that build.getBuild expects.",
-    args: z.tuple([repoPathArg, nullableString]),
-    returns: vcsWorkspaceViewResultSchema,
+      "Page event history in either direction or past file history from one exact state.",
+    args: z.tuple([vcsHistoryInputSchema]),
+    returns: vcsHistoryResultSchema,
     access: READ_ACCESS,
-    examples: [{ args: ["panels/chat", "state:abc123"] }],
+    operationClass: "read",
+    references: [ref("node", "provenance-root", "root")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.inspect", "vcs.neighbors"],
   },
-  merge: {
-    description:
-      "Reconcile divergence: pull a SOURCE (`main`, or a context you own/forked) INTO the caller's context head, producing a MERGE COMMIT per repo. Clean (no overlaps) commits with no file resolution; in-file conflicts materialize markers into the context filesystem — resolve via vcs.edit, then vcs.commit seals the merge. Commit-gated on BOTH sides: a repo with uncommitted edits on the source (or target) reports status `refused` (with the reason) while the other repos still merge — no mid-loop throw, no lost partial results. Omit repoPaths to reconcile every repo your context branch touches. Returns one result per repo. After merging main, the context head descends from main so push fast-forwards.",
-    args: z.tuple([
-      z.object({
-        source: vcsMergeSourceSchema
-          .optional()
-          .describe(
-            'Merge source: `"main"` (the protected workspace baseline) or `{ contextId }` for another context you own/forked. Omit for `"main"`.'
-          ),
-        repoPaths: z
-          .array(z.string())
-          .optional()
-          .describe(
-            "Repos to reconcile (workspace-relative). Omit to reconcile every repo the target context branch touches."
-          ),
-        head: z
-          .string()
-          .optional()
-          .describe(
-            "Target context head to merge into. Omit for the caller's own context head; entity callers may only merge their own `ctx:…` head."
-          ),
-      }),
-    ]),
-    returns: z.array(vcsMergeRepoResultSchema),
-    access: { ...WRITE_ACCESS },
-    examples: [{ args: [{ source: "main", repoPaths: ["panels/chat"] }] }],
-  },
-  pick: {
-    description:
-      "Cherry-pick selected changes from a SOURCE (`main`, or a context you own/forked) onto the caller's context head as UNCOMMITTED working edits (never a head advance): a `commit` pick 3-way-applies a whole commit's patch; a `paths` pick injects the source context's working content at specific paths (source must be `{ contextId }`). Review the result, then vcs.commit to seal it. Returns one working-edit result per repo touched.",
-    args: z.tuple([
-      z.object({
-        source: vcsMergeSourceSchema.describe(
-          'Pick source: `"main"` (commit picks only) or `{ contextId }` for a context you own/forked.'
-        ),
-        picks: z
-          .array(vcsPickSchema)
-          .min(1)
-          .describe("The changes to pick: whole commits and/or path-level content injections."),
-        head: z
-          .string()
-          .optional()
-          .describe(
-            "Target context head to pick onto. Omit for the caller's own context head; entity callers may only write their own `ctx:…` head."
-          ),
-      }),
-    ]),
-    returns: z.array(vcsEditResultSchema),
-    access: { ...WRITE_ACCESS },
-    examples: [
-      {
-        args: [
-          {
-            source: { contextId: "ctx_42" },
-            picks: [{ kind: "paths", paths: ["panels/chat/x.ts"] }],
-          },
-        ],
-      },
+  blame: {
+    description: "Trace an exact bounded file range through immediate content-coordinate mappings.",
+    args: z.tuple([vcsBlameInputSchema]),
+    returns: vcsBlameResultSchema,
+    access: READ_ACCESS,
+    operationClass: "read",
+    references: [
+      ref("state-node", "basis", "state"),
+      ref("repository", "resource", "repositoryId"),
+      ref("file", "resource", "fileId"),
     ],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.neighbors", "vcs.history"],
   },
-  contextDiff: {
-    description:
-      "Diff a context you own or forked against a baseline — its `fork-base` (the state it inherited when forked; the default) or the current workspace `main` — returning the added/removed/changed files its branch introduced. The read is authorized against the runtime ownership/lineage registry; an unowned context throws.",
-    args: z.tuple([
-      z.object({
-        contextId: z.string().describe("The context to diff (must be one you own or forked)."),
-        ownerContextId: z
-          .string()
-          .optional()
-          .describe(
-            "Optional owner context for host-verified child-context reads such as subagent inspection."
-          ),
-        against: z
-          .enum(["fork-base", "main"])
-          .optional()
-          .describe("Baseline to diff against — `fork-base` (default) or `main`."),
-      }),
-    ]),
-    returns: vcsDiffResultSchema,
+  resolveRepository: {
+    description: "Resolve one canonical repository path at one exact semantic state.",
+    args: z.tuple([vcsResolveRepositoryInputSchema]),
+    returns: vcsResolveRepositoryResultSchema,
     access: READ_ACCESS,
-    examples: [{ args: [{ contextId: "ctx_42", against: "fork-base" }] }],
+    operationClass: "read",
+    references: [ref("state-node", "basis", "state")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.listFiles", "vcs.inspect"],
   },
-  abortMerge: {
-    description:
-      "Abort ONLY the pending (conflicted) merge on a repo's head, restoring its pre-merge tree; other uncommitted working edits are untouched (vcs.discardEdits drops everything, merge included). repoPath is required; omit head for the caller's own context head.",
-    args: z.tuple([repoPathArg, z.string().optional()]),
-    returns: z.object({ aborted: z.boolean() }),
-    access: { ...WRITE_ACCESS },
-    examples: [{ args: ["panels/chat"] }],
-  },
-  pendingMerge: {
-    description:
-      "Inspect a repo head's in-progress merge, if any: the source head being merged and its unresolved conflicts; null when no merge is pending. repoPath is required; omit head for the caller's own context head.",
-    args: z.tuple([repoPathArg, z.string().optional(), contextScopeArg]),
-    returns: vcsPendingMergeSchema,
+  readFile: {
+    description: "Read one file from an exact semantic state.",
+    args: z.tuple([vcsReadFileInputSchema]),
+    returns: vcsReadFileResultSchema,
     access: READ_ACCESS,
-    examples: [{ args: ["panels/chat"] }],
+    operationClass: "read",
+    references: [
+      ref("state-node", "basis", "state"),
+      ref("repository", "resource", "repositoryId"),
+      ref("file", "resource", "file", "fileId"),
+    ],
+    errors: [...READ_ERRORS, ...methodErrors("ExternalEffectFailed")],
+    seeAlso: ["vcs.listFiles", "vcs.blame"],
   },
-  pushStatus: {
-    description:
-      "How far each repo's head is ahead of that repo's main: the unpushed change count and per-file changes a push would carry.",
-    args: z.tuple([z.array(z.string())]),
-    returns: z.array(vcsPushStatusSchema),
+  listFiles: {
+    description: "Page the exact path-to-file manifest of one repository at one semantic state.",
+    args: z.tuple([vcsListFilesInputSchema]),
+    returns: vcsListFilesResultSchema,
     access: READ_ACCESS,
-    examples: [{ args: [["panels/chat"]] }],
-  },
-  contextStatus: {
-    description:
-      "Summarize the repos where your full workspace context branch differs from main or needs attention. `forked` = your branch has a committed ctx head for this repo; `uncommitted` = it carries uncommitted WORKING edits (vcs.commit them, or vcs.discardEdits); `ahead` = the committed head has commits not yet in main (push them); `behind` = main advanced past your pinned base (rebase/merge to pick it up); `deleted` = the repo was removed from the workspace while your branch still references it — a push will be refused, so drop/rebase your context; `pendingMerge` = an in-progress merge is parked on this repo (resolve + vcs.commit to seal it, or vcs.abortMerge). Only repos with changes or drift are returned. Pass a context you own/forked to summarize ITS branch instead of your own.",
-    args: z.tuple([contextScopeArg]),
-    returns: z.array(
-      z.object({
-        repoPath: z.string(),
-        forked: z.boolean(),
-        uncommitted: z.boolean(),
-        ahead: z.boolean(),
-        behind: z.boolean(),
-        deleted: z.boolean(),
-        pendingMerge: vcsPendingMergeInfoSchema.nullable(),
-      })
-    ),
-    access: READ_ACCESS,
-  },
-  rebaseContext: {
-    description:
-      "Pull the latest main into your context: 3-way merges main into each repo you've edited, then re-pins your context's base to the current workspace so unedited repos also advance to latest. Use when contextStatus shows repos `behind`. Returns each edited repo's merge status.",
-    args: z.tuple([]),
-    returns: z.object({
-      repos: z.array(
-        z.object({
-          repoPath: z.string(),
-          status: z.enum(["up-to-date", "merged", "conflicted"]),
-        })
-      ),
-      baseView: z.string(),
-    }),
-    access: WRITE_ACCESS,
-  },
-  recall: {
-    description:
-      "Semantic recall over the workspace's VCS memory (log summaries, file snippets) matching a query; pass repoPaths to scope to selected repos. Returns ranked snippets with their head/event/path anchors.",
-    args: z.tuple([vcsRecallInputSchema]),
-    returns: vcsRecallResultSchema,
-    access: READ_ACCESS,
-    examples: [{ args: [{ query: "auth flow refactor", limit: 5 }] }],
+    operationClass: "read",
+    references: [
+      ref("state-node", "basis", "state"),
+      ref("repository", "resource", "repositoryId"),
+    ],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.readFile", "vcs.inspect"],
   },
 });
+
+export type VcsMethodName = keyof typeof vcsMethods;
+
+export type VcsOperationMetadata = Readonly<{
+  accessClass: VcsOperationClass;
+  references: readonly VcsReferenceDescriptor[];
+}>;
+
+export const vcsOperationRegistry = Object.freeze(
+  Object.fromEntries(
+    Object.entries(vcsMethods).map(([method, definition]) => [
+      method,
+      Object.freeze({
+        accessClass: definition.operationClass,
+        references: definition.references,
+      }),
+    ])
+  ) as unknown as Record<VcsMethodName, VcsOperationMetadata>
+);
+
+export const vcsSemanticReferenceInventory = Object.freeze(
+  Object.fromEntries(
+    Object.entries(vcsMethods).map(([method, definition]) => [method, definition.references])
+  ) as unknown as Record<VcsMethodName, readonly VcsReferenceDescriptor[]>
+);
+
+function collectPathValues(
+  value: unknown,
+  path: readonly string[],
+  concretePath: readonly (string | number)[] = []
+): Array<{ value: unknown; concretePath: readonly (string | number)[] }> {
+  if (path.length === 0) {
+    return value === undefined ? [] : [{ value, concretePath }];
+  }
+  const [head, ...tail] = path;
+  if (head === undefined) return [];
+  if (head === "*") {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((item, index) => collectPathValues(item, tail, [...concretePath, index]));
+  }
+  if (!value || typeof value !== "object") return [];
+  return collectPathValues((value as Record<string, unknown>)[head], tail, [...concretePath, head]);
+}
+
+/** Reference extraction is driven only by stable public descriptors. */
+export function extractVcsSemanticReferences(
+  method: VcsMethodName,
+  canonicalArgs: readonly unknown[]
+): VcsSemanticReference[] {
+  const input = canonicalArgs[0];
+  return vcsSemanticReferenceInventory[method].flatMap((descriptor) =>
+    collectPathValues(input, descriptor.path).map(({ value, concretePath }) => ({
+      ...descriptor,
+      value,
+      concretePath: [0, ...concretePath],
+    }))
+  );
+}
+
+export function parseVcsSemanticRequest(
+  method: VcsMethodName,
+  input: unknown
+): { input: unknown; references: VcsSemanticReference[] } {
+  const canonicalArgs = vcsMethods[method].args.parse([input]) as unknown[];
+  return {
+    input: canonicalArgs[0],
+    references: extractVcsSemanticReferences(method, canonicalArgs),
+  };
+}
+
+/** Metadata is already explicit; this asserts registry completeness only. */
+export function assertVcsSemanticReferenceContract(): void {
+  for (const method of Object.keys(vcsMethods) as VcsMethodName[]) {
+    if (!Object.hasOwn(vcsSemanticReferenceInventory, method)) {
+      throw new Error(`VCS ${method} lacks explicit semantic reference metadata`);
+    }
+  }
+}
+
+export function vcsOperationContextId(method: VcsMethodName, parsedInput: unknown): string | null {
+  const descriptor = vcsSemanticReferenceInventory[method].find(
+    (candidate) => candidate.kind === "context" && candidate.role === "context"
+  );
+  if (!descriptor) return null;
+  const matches = collectPathValues(parsedInput, descriptor.path);
+  if (matches.length !== 1 || typeof matches[0]?.value !== "string") {
+    throw new Error(`VCS ${method} lacks its declared context reference`);
+  }
+  return matches[0].value;
+}
+
+export function createVcsMethodError(method: VcsMethodName, error: VcsError): VcsError {
+  const parsed = createVcsError(error);
+  if (!vcsMethods[method].errors?.some(({ code }) => code === parsed.code)) {
+    throw new Error(`VCS ${method} does not declare error ${parsed.code}`);
+  }
+  return parsed;
+}

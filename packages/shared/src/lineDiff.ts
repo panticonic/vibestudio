@@ -1,6 +1,6 @@
 /**
  * Line-level diff counting — a small, pure, dependency-free helper used by the
- * host approval gate (narrow-host-vcs-plan §5.1) to compute REAL insertion /
+ * protected-publication approval gate (provenance-aware-diff-merge-plan §9) to compute real insertion /
  * deletion counts for a changed text file from its two content-addressed blobs.
  *
  * It is a standard Longest-Common-Subsequence (Myers-family) line diff: the LCS

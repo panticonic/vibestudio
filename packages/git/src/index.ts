@@ -36,6 +36,8 @@ export {
   SYSTEM_GIT_AUTHOR,
   type FsPromisesLike,
   type GitAuthorIdentity,
+  type GitCommitTreeEntry,
+  type GitLogEntry,
 } from "./client.js";
 export { initAndPush, type InitAndPushOptions } from "./convenience.js";
 
@@ -63,7 +65,4 @@ export type {
   FileHistoryEntry,
   BinaryDiffInfo,
   ImageDiff,
-  ConflictInfo,
-  ConflictMarker,
-  ConflictResolution,
 } from "./types.js";

@@ -4,7 +4,6 @@ import {
   describeDiffTarget,
   focusedFileKind,
   parseDiffTarget,
-  resolveStateLocation,
   rowMatchesDiffTarget,
   shortHash,
   type DiffTarget,
@@ -139,35 +138,6 @@ describe("buildCompareEntry", () => {
   });
 });
 
-describe("resolveStateLocation", () => {
-  const heads = [
-    { log_id: "l1", head: "main", state_hash: "state:new", commit_event_id: "ev-1" },
-    { log_id: "l1", head: "feature", state_hash: "state:new", commit_event_id: "ev-2" },
-    { log_id: "l2", head: "main", state_hash: "state:other", commit_event_id: "ev-3" },
-  ];
-
-  it("returns the distinct heads pointing at the state, with a commit event id", () => {
-    expect(resolveStateLocation(heads, "state:new")).toEqual({
-      stateHash: "state:new",
-      branchIds: ["main", "feature"],
-      commitEventId: "ev-1",
-    });
-  });
-
-  it("returns an empty head set for a superseded (non-head) state", () => {
-    expect(resolveStateLocation(heads, "state:gone")).toEqual({
-      stateHash: "state:gone",
-      branchIds: [],
-      commitEventId: null,
-    });
-  });
-
-  it("resolves to null for a missing state (removed side)", () => {
-    expect(resolveStateLocation(heads, null)).toBeNull();
-    expect(resolveStateLocation(heads, undefined)).toBeNull();
-  });
-});
-
 describe("rowMatchesDiffTarget", () => {
   const target: DiffTarget = {
     repoPath: "packages/demo",
@@ -176,17 +146,15 @@ describe("rowMatchesDiffTarget", () => {
   };
 
   it("matches on exact path", () => {
-    expect(rowMatchesDiffTarget({ path: "src/util.ts", content_hash: "other" }, target)).toBe(true);
+    expect(rowMatchesDiffTarget({ path: "src/util.ts", contentHash: "other" }, target)).toBe(true);
   });
 
   it("matches on the new-state content hash", () => {
-    expect(rowMatchesDiffTarget({ path: "elsewhere.ts", content_hash: "h-new" }, target)).toBe(
-      true
-    );
+    expect(rowMatchesDiffTarget({ path: "elsewhere.ts", contentHash: "h-new" }, target)).toBe(true);
   });
 
   it("does not match an unrelated row", () => {
-    expect(rowMatchesDiffTarget({ path: "elsewhere.ts", content_hash: "other" }, target)).toBe(
+    expect(rowMatchesDiffTarget({ path: "elsewhere.ts", contentHash: "other" }, target)).toBe(
       false
     );
   });

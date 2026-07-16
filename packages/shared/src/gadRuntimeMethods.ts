@@ -37,17 +37,10 @@ export const GAD_RUNTIME_METHOD_NAMES = [
   "inspectInvocationState",
   "inspectChannelRoster",
   "inspectAgentHealth",
-  "listGadBranchFiles",
-  "diffGadStates",
-  "readGadFileAtState",
-  "getGadStateProducer",
   "validateGadHashes",
   "clearDirtyAfterValidation",
   "checkGadIntegrity",
   "rebuildTrajectoryProjections",
-  "provenanceForFile",
-  "provenanceForSession",
-  "provenanceForClaim",
 ] as const;
 
 export type GadRuntimeMethodName = (typeof GAD_RUNTIME_METHOD_NAMES)[number];

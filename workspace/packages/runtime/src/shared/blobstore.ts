@@ -90,42 +90,72 @@ export function createBlobstoreClient(rpc: RpcCaller, fs?: RuntimeFs): Blobstore
       );
     }
 
-    const entries = await serviceClient.listTree(treeRef);
-    if (entries === null) throw new Error(`Tree object missing: ${treeRef}`);
-
     const cleanRoot = outDir.replace(/\/+$/u, "") || "/";
     await fs.mkdir(cleanRoot, { recursive: true });
     let written = 0;
     let unchanged = 0;
 
-    for (const entry of entries) {
-      const path = safeMaterializedPath(cleanRoot, entry.path);
-      if (entry.kind === "dir") {
-        await fs.mkdir(path, { recursive: true });
-        continue;
+    let cursor: string | undefined;
+    let expectedBasis:
+      | { ref: string; rootTreeHash: string; prefix: string; order: string }
+      | undefined;
+    const seenCursors = new Set<string>();
+    for (;;) {
+      const page = await serviceClient.listTree(treeRef, {
+        limit: 1_000,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (page === null) throw new Error(`Tree object missing: ${treeRef}`);
+      if (!expectedBasis) {
+        expectedBasis = page.basis;
+        if (page.basis.ref !== treeRef || page.basis.prefix !== "") {
+          throw new Error("blobstore.listTree returned a basis different from materializeTree's request");
+        }
+      } else if (
+        page.basis.ref !== expectedBasis.ref ||
+        page.basis.rootTreeHash !== expectedBasis.rootTreeHash ||
+        page.basis.prefix !== expectedBasis.prefix ||
+        page.basis.order !== expectedBasis.order
+      ) {
+        throw new Error("blobstore.listTree changed basis while materializing a tree");
       }
 
-      const bytesBase64 = await serviceClient.getBase64(entry.contentHash);
-      if (bytesBase64 === null) {
-        throw new Error(`Tree blob missing: ${entry.contentHash} (${entry.path})`);
-      }
-      const bytes = Buffer.from(bytesBase64, "base64");
-      await fs.mkdir(parentPath(path), { recursive: true });
-
-      if (await fs.exists(path)) {
-        const current = await fs.readFile(path);
-        if (Buffer.from(current as Uint8Array).equals(bytes)) {
-          // Content equality does not imply metadata equality. Re-apply the
-          // tree's Git mode so repeated materialization repairs executable bits.
-          await fs.chmod(path, entry.mode);
-          unchanged += 1;
+      for (const entry of page.entries) {
+        const path = safeMaterializedPath(cleanRoot, entry.path);
+        if (entry.kind === "dir") {
+          await fs.mkdir(path, { recursive: true });
           continue;
         }
+
+        const bytesBase64 = await serviceClient.getBase64(entry.contentHash);
+        if (bytesBase64 === null) {
+          throw new Error(`Tree blob missing: ${entry.contentHash} (${entry.path})`);
+        }
+        const bytes = Buffer.from(bytesBase64, "base64");
+        await fs.mkdir(parentPath(path), { recursive: true });
+
+        if (await fs.exists(path)) {
+          const current = await fs.readFile(path);
+          if (Buffer.from(current as Uint8Array).equals(bytes)) {
+            // Content equality does not imply metadata equality. Re-apply the
+            // tree's Git mode so repeated materialization repairs executable bits.
+            await fs.chmod(path, entry.mode);
+            unchanged += 1;
+            continue;
+          }
+        }
+
+        await fs.writeFile(path, bytes);
+        await fs.chmod(path, entry.mode);
+        written += 1;
       }
 
-      await fs.writeFile(path, bytes);
-      await fs.chmod(path, entry.mode);
-      written += 1;
+      if (page.completeness === "complete") break;
+      if (seenCursors.has(page.nextCursor)) {
+        throw new Error("blobstore.listTree repeated a continuation cursor");
+      }
+      seenCursors.add(page.nextCursor);
+      cursor = page.nextCursor;
     }
 
     return { written, unchanged };

@@ -91,4 +91,10 @@ describe("GAD runtime schema", () => {
       }).success
     ).toBe(true);
   });
+
+  it("does not duplicate semantic VCS graph methods on the trajectory service", () => {
+    expect(gadMethods).not.toHaveProperty("provenanceForFile");
+    expect(gadMethods).not.toHaveProperty("provenanceForSession");
+    expect(gadMethods).not.toHaveProperty("walkProvenance");
+  });
 });

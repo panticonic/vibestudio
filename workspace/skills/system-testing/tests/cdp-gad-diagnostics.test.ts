@@ -337,7 +337,6 @@ describe("cdp-gad diagnostics prompts", () => {
       "Do not use a data: URL",
       "page.evaluate",
       "gad.inspectAgentHealth",
-      "gad.listGadBranchFiles",
       "gad.query",
       "{ rows }",
       "result.rows",

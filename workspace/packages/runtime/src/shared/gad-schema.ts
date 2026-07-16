@@ -15,10 +15,6 @@ import {
 import type { GadRuntimeMethodName } from "@vibestudio/shared/gadRuntimeMethods";
 import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import { channelEnvelopeSchema, trajectoryEventSchema } from "@workspace/agentic-protocol";
-import {
-  vcsProvenanceForFileResultSchema,
-  vcsProvenanceForSessionResultSchema,
-} from "@vibestudio/service-schemas/vcs";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
@@ -563,36 +559,6 @@ export const gadMethods = defineServiceMethods({
     returns: AgentHealthInspectionSchema,
     access: readAccess,
   },
-  listGadBranchFiles: {
-    description: "List files represented by one GAD state branch.",
-    args: z.tuple([z.object({ branchId: z.string() }).strict()]),
-    returns: z.array(GadJsonRecordSchema),
-    access: readAccess,
-  },
-  diffGadStates: {
-    description: "Compare two GAD state hashes and list added, removed, and changed files.",
-    args: z.tuple([z.object({ leftStateHash: z.string(), rightStateHash: z.string() }).strict()]),
-    returns: z
-      .object({
-        added: z.array(GadJsonRecordSchema),
-        removed: z.array(GadJsonRecordSchema),
-        changed: z.array(GadJsonRecordSchema),
-      })
-      .strict(),
-    access: readAccess,
-  },
-  readGadFileAtState: {
-    description: "Read one file record from an immutable GAD state.",
-    args: z.tuple([z.object({ stateHash: z.string(), path: z.string() }).strict()]),
-    returns: GadJsonRecordSchema.nullable(),
-    access: readAccess,
-  },
-  getGadStateProducer: {
-    description: "Resolve the trajectory event that produced a GAD state hash.",
-    args: z.tuple([z.object({ stateHash: z.string() }).strict()]),
-    returns: GadJsonRecordSchema.nullable(),
-    access: readAccess,
-  },
   validateGadHashes: {
     description: "Validate content, manifest, and state hashes without mutating durable state.",
     args: z.tuple([z.object({}).strict().optional()]),
@@ -616,53 +582,6 @@ export const gadMethods = defineServiceMethods({
     args: z.tuple([z.object({}).strict().optional()]),
     returns: z.object({ replayed: z.number().int().nonnegative() }).strict(),
     access: adminAccess,
-  },
-  provenanceForFile: {
-    description: "Return density-ranked provenance and recall context for one file.",
-    args: z.tuple([
-      z
-        .object({
-          repoPath: z.string(),
-          path: z.string(),
-          head: z.string(),
-          tier: z.enum(["none", "moderate", "deep"]),
-          sessionLogId: z.string(),
-          sessionHead: z.string(),
-          invocationId: optionalString,
-          recallKeywords: z.array(z.string()).nullable().optional(),
-          after: optionalString,
-          skipSuppression: z.boolean().nullable().optional(),
-        })
-        .strict(),
-    ]),
-    returns: vcsProvenanceForFileResultSchema,
-    access: writeAccess,
-  },
-  provenanceForSession: {
-    description: "Return provenance orientation across a session touch set.",
-    args: z.tuple([
-      z
-        .object({ sessionLogId: z.string(), sessionHead: z.string(), after: optionalString })
-        .strict(),
-    ]),
-    returns: vcsProvenanceForSessionResultSchema,
-    access: readAccess,
-  },
-  provenanceForClaim: {
-    description: "Drill into one provenance claim and record that it was cited.",
-    args: z.tuple([
-      z
-        .object({
-          claimId: z.string(),
-          sessionLogId: z.string(),
-          sessionHead: z.string(),
-          invocationId: optionalString,
-          after: optionalString,
-        })
-        .strict(),
-    ]),
-    returns: vcsProvenanceForFileResultSchema,
-    access: writeAccess,
   },
 } satisfies Record<GadRuntimeMethodName, MethodSchema>);
 

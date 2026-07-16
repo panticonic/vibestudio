@@ -53,6 +53,11 @@ describe("runtime Git client", () => {
       importProject: {
         path: "projects/demo",
         remote: { name: "origin", url: "https://github.com/octo/demo.git" },
+        candidate: {
+          contextId: "context:git-import",
+          eventId: "event:git-import",
+          changed: true,
+        },
       },
       completeWorkspaceDependencies: { imported: [], skipped: [], failed: [] },
     };

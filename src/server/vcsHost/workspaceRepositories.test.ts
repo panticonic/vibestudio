@@ -1,32 +1,40 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectTreeFiles } from "./worktreeStore.js";
-import { ensureLayout, mirrorWorktreeTree, putBytes } from "../services/blobstoreService.js";
+import { promises as fsp } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { treeHashDigest } from "@vibestudio/shared/contentTree/treeObjects";
+import {
+  blobPath,
+  ensureLayout,
+  hasTreeObject,
+  mirrorWorktreeTree,
+  putBytes,
+  resolveTreePath,
+} from "../services/blobstoreService.js";
+import { collectTreeFiles } from "./contentProjectionStore.js";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
 
-const FILE_MODE = 0o100644;
-
-describe("WorkspaceRepositories", () => {
+describe("WorkspaceRepositories Merkle composition", () => {
+  let root: string;
   let blobsDir: string;
-  let mains: Array<{ repoPath: string; stateHash: string }>;
+  let mains: Array<{ repoPath: string; contentRoot: string }>;
 
   beforeEach(async () => {
-    blobsDir = await mkdtemp(join(tmpdir(), "workspace-repositories-"));
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "workspace-repositories-"));
+    blobsDir = path.join(root, "blobs");
     ensureLayout(blobsDir);
     mains = [];
   });
 
   afterEach(async () => {
-    await rm(blobsDir, { recursive: true, force: true });
+    await fsp.rm(root, { recursive: true, force: true });
   });
 
   async function stateWithFile(filePath: string, text: string): Promise<string> {
     const blob = await putBytes(blobsDir, Buffer.from(text));
     return (
       await mirrorWorktreeTree(blobsDir, [
-        { path: filePath, contentHash: blob.digest, mode: FILE_MODE },
+        { path: filePath, contentHash: blob.digest, mode: 33188 },
       ])
     ).stateHash;
   }
@@ -41,19 +49,19 @@ describe("WorkspaceRepositories", () => {
       getReverseDeps: () => [],
       tryGet: () => undefined,
     }
-  ) {
+  ): WorkspaceRepositories {
     return new WorkspaceRepositories({
       blobsDir,
       refs: { listMains: () => mains as never },
-      worktrees: { ensureStateMirrored: async () => {} },
+      contentProjection: { ensureStateMirrored: async () => undefined },
       discoverGraph: async () => graph as never,
     });
   }
 
-  it("composes repo-rooted mains into one workspace view and derives the catalog", async () => {
+  it("composes protected roots into one walkable view and derives the repository catalog", async () => {
     mains = [
-      { repoPath: "packages/core", stateHash: await stateWithFile("index.ts", "core") },
-      { repoPath: "meta", stateHash: await stateWithFile("vibestudio.yml", "name: test") },
+      { repoPath: "packages/core", contentRoot: await stateWithFile("index.ts", "core") },
+      { repoPath: "meta", contentRoot: await stateWithFile("vibestudio.yml", "id: test") },
     ];
     const repositories = createRepositories();
 
@@ -70,21 +78,24 @@ describe("WorkspaceRepositories", () => {
     ]);
   });
 
-  it("builds candidate views without mutating refs", async () => {
+  it("builds exact candidate sets without mutating protected refs", async () => {
     const original = await stateWithFile("old.ts", "old");
     const replacement = await stateWithFile("new.ts", "new");
-    mains = [{ repoPath: "packages/core", stateHash: original }];
+    mains = [{ repoPath: "packages/core", contentRoot: original }];
     const repositories = createRepositories();
 
-    const candidate = await repositories.workspaceViewWithRepoAt("packages/core", replacement);
+    const candidate = await repositories.workspaceViewWithReposAt([
+      { repoPath: "packages/core", stateHash: replacement },
+    ]);
+
     expect((await collectTreeFiles(blobsDir, candidate))?.map((file) => file.path)).toEqual([
       "packages/core/new.ts",
     ]);
-    expect(mains).toEqual([{ repoPath: "packages/core", stateHash: original }]);
+    expect(mains).toEqual([{ repoPath: "packages/core", contentRoot: original }]);
   });
 
   it("reports direct reverse-dependency repositories for deletion approval", async () => {
-    mains = [{ repoPath: "packages/core", stateHash: await stateWithFile("index.ts", "core") }];
+    mains = [{ repoPath: "packages/core", contentRoot: await stateWithFile("index.ts", "core") }];
     const nodes = new Map([
       ["core", { name: "core", relativePath: "packages/core" }],
       ["app", { name: "app", relativePath: "apps/app" }],
@@ -100,5 +111,55 @@ describe("WorkspaceRepositories", () => {
       "apps/app",
       "panels/panel",
     ]);
+  });
+
+  it("makes semantic-only working-state changes an exact state-pointer lookup", async () => {
+    const digest = (await putBytes(blobsDir, Buffer.from("export const value = 1;\n"))).digest;
+    const repository = await mirrorWorktreeTree(blobsDir, [
+      { path: "src/index.ts", contentHash: digest, mode: 33188 },
+    ]);
+    const ensureStateMirrored = vi.fn(async (stateHash: string) => {
+      if (!(await hasTreeObject(blobsDir, stateHash))) throw new Error("missing state");
+    });
+    const repositories = new WorkspaceRepositories({
+      blobsDir,
+      refs: { listMains: () => [] },
+      contentProjection: { ensureStateMirrored },
+      discoverGraph: vi.fn(),
+    });
+    const exactSet = [{ repoPath: "packages/app", stateHash: repository.stateHash }];
+
+    const first = await repositories.contentView(exactSet);
+    const second = await repositories.contentView(exactSet);
+
+    expect(second).toEqual(first);
+    expect(ensureStateMirrored).toHaveBeenCalledTimes(1);
+    await expect(resolveTreePath(blobsDir, first.stateHash, "packages/app")).resolves.toEqual({
+      kind: "dir",
+      treeHash: repository.treeHash,
+    });
+  });
+
+  it("rebuilds only the Merkle scaffold when a cached composed pointer disappears", async () => {
+    const digest = (await putBytes(blobsDir, Buffer.from("content\n"))).digest;
+    const repository = await mirrorWorktreeTree(blobsDir, [
+      { path: "file.txt", contentHash: digest, mode: 33188 },
+    ]);
+    const ensureStateMirrored = vi.fn(async () => undefined);
+    const repositories = new WorkspaceRepositories({
+      blobsDir,
+      refs: { listMains: () => [] },
+      contentProjection: { ensureStateMirrored },
+      discoverGraph: vi.fn(),
+    });
+    const exactSet = [{ repoPath: "projects/example", stateHash: repository.stateHash }];
+    const first = await repositories.contentView(exactSet);
+    await fsp.rm(blobPath(blobsDir, treeHashDigest(first.stateHash)), { force: true });
+
+    const rebuilt = await repositories.contentView(exactSet);
+
+    expect(rebuilt).toEqual(first);
+    expect(await hasTreeObject(blobsDir, rebuilt.stateHash)).toBe(true);
+    expect(ensureStateMirrored).toHaveBeenCalledTimes(2);
   });
 });
