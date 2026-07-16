@@ -1,18 +1,12 @@
 # vibestudio
 
-## A personal vibe computer
+## An integrated personal software environment
 
-Vibestudio is a browser and light-weight sandbox for agents and personalized AI-built apps that blurs the line between using and building software.
-It's an environment in which you can combine agentic workflows similar to OpenClaw or Hermes Agent with an app build system for creating and modifying personal software, where the AI is always available to refine your personal software to meet your needs.
+Vibestudio is a browser and light-weight sandbox for agents and custom, personalized apps. The goal is to blur the line between using and building software, using AI.
+
+Vibestudio takes a batteries-included approach: Build system, agentic harness, sandboxed file system, version control, credentials management and more are all included (mostly in a way so you can tweak them to your needs) and standardized to make one unified happy-path of composable components.
+
 Unlike many other agentic systems, vibestudio is sandboxed by default and has a privileged, out-of-band system for credentials management and access approval -- so instead of handing over your keys and nervously prompting agents to keep them from taking bad actions with the access you're giving them, you can maintain complete control over every privileged access.
-
-Vibestudio is **multi-user and multi-workspace**: one server (the hub) hosts
-several workspaces and a small, mutually-trusting team — a family, a household,
-a close team. A root/admin invites users; each user pairs their own devices;
-workspace members share the workspace fully (one panel forest, one approval
-queue, mutual inspectability), with every action attributed to the acting user.
-Roles gate only host administration (inviting/revoking users, membership,
-workspace create/delete) — inside a workspace, members are peers.
 
 The vibestudio sandbox:
 
@@ -22,13 +16,13 @@ The vibestudio sandbox:
 - is particularly light-weight because it is based on browser/JS isolates, the lightest, most wide-spread and battle-tested sandbox out there, instead of OS containers.
 - supports background processes and DB persistence via the included workerd service (the tech that drives CloudFlare workers).
 - has an extension system for native access node.js code.
-- has customizable mobile, cli and desktop apps.
+- has mobile, cli and desktop apps based on one sanbox runtime that you can customize yourself.
 
 ## Installation
 
 Requires **Node.js 22.19.0+**. Both packages update via npm (re-run with `@latest`).
 
-### Desktop app (macOS, Linux; Windows soon)
+### Desktop app (macOS, Linux)
 
 Installs the GUI and the bundled server:
 
@@ -38,24 +32,9 @@ vibestudio             # launch the desktop app
 vibestudio --help      # grouped CLI overview: remote, mobile, fs, vcs, agent, eval, …
 ```
 
-On macOS this runs cert-free for now (npm-delivered, non-quarantined); signed
-DMG/AppImage/deb installers are published to GitHub Releases as they become available.
-
-Locally the desktop shell is one globally paired **device of the server hub**,
-not a workspace-owned process. The bundled hub runs as a detached OS process
-(spawned with `ELECTRON_RUN_AS_NODE`) that outlives the app; on launch the app
-attaches to the healthy recorded hub or starts a fresh one, then the hub routes
-the device into a membership-authorized workspace child. Local and remote use
-the same device/refresh-credential model; only the transport differs — loopback
-locally, WebRTC remotely. Quitting the app leaves the hub and active workspace
-children running when background work is active (you are prompted, and the
-choice can be remembered); idle children stop on their own. See
-[STATE_DIRECTORY.md](STATE_DIRECTORY.md) for the on-disk files.
-
 On the first launch, choose or create a workspace. Its configured onboarding
 prompt is added to the new chat's history and starts the onboarding agent
-automatically. Local models remain an explicit offline option in the model picker
-and Local Models panel; onboarding never begins a hidden model download.
+automatically.
 
 ### Headless server (remote/home server; clients connect to it)
 
@@ -66,8 +45,7 @@ vibestudio remote serve --port 3030
 npx -p @panticonic/vibestudio-server vibestudio remote serve --port 3030
 ```
 
-The server installs with no compiler (workerd/esbuild ship prebuilt binaries) and
-builds panels/workers on demand. Remote clients pair over WebRTC; the signaling
+Remote clients pair over WebRTC; the signaling
 endpoint is only used to rendezvous, not to carry workspace data. See
 [docs/webrtc-deployment.md](docs/webrtc-deployment.md) and [docs/cli.md](docs/cli.md).
 The hosted signaling service (`wss://signal.vibestudio.app`) is used by default;
@@ -130,62 +108,6 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 - `pnpm format:check` - Check formatting
 - `pnpm type-check` - Type check without emitting
 
-### Publishing npm packages
-
-This repo's npm release flow is token-only. Use a granular npm access token with
-package read/write access and bypass 2FA enabled. Save it once on the release
-machine:
-
-```bash
-pnpm setup:npm-token
-```
-
-The token is written to `~/.config/vibestudio/npm-publish-token` with file mode
-`0600`. It can also be supplied per shell with `NPM_TOKEN` or `NODE_AUTH_TOKEN`.
-Use `pnpm setup:npm-token --path` to print the token path, `--remove` to delete
-the saved token, and `--stdin` to read a token from stdin.
-
-Run the full npm release:
-
-```bash
-pnpm publish:npm
-```
-
-That one command builds, stages, runs npm publish dry-runs, publishes
-`@panticonic/vibestudio-server` first, publishes `@panticonic/vibestudio`
-second, verifies both package versions on npm, then installs from npm into `/tmp`
-and runs the packaged CLI smoke checks.
-
-If the build/stage/dry-run already passed and only token or network access
-blocked publish, retry without rebuilding:
-
-```bash
-pnpm publish:npm:staged
-pnpm publish:npm:staged -- --package app   # if the server package already published
-```
-
-The staged retry uses the same publish, verification, and install-smoke checks;
-it only skips rebuilding the local artifacts.
-
-## How It Works
-
-Each panel in Vibestudio occupies a node in the workspace's panel tree. You can:
-
-1. **Open or nest panels**: Use New Panel (`Cmd+T` on macOS, `Ctrl+Shift+T` elsewhere) or panel actions to create content
-2. **Navigate up**: Use ancestor breadcrumbs to go back to parent panels
-3. **Navigate sideways**: Click sibling tabs to switch between panels at the same level
-4. **Navigate down through descendants**: Click descendant breadcrumbs to jump to child panels
-
-## Development
-
-Start the development server:
-
-```bash
-pnpm dev
-```
-
-The app will open with DevTools enabled for debugging.
-
 To exercise the remote WebRTC transport without a second machine:
 
 ```bash
@@ -219,15 +141,6 @@ To temporarily increase the renderer V8 heap limit in dev:
 ```bash
 VIBESTUDIO_RENDERER_MAX_OLD_SPACE_MB=4096 pnpm dev
 ```
-
-## Building for Production
-
-```bash
-pnpm build
-pnpm start
-```
-
----
 
 ## Headless Server
 
@@ -302,16 +215,3 @@ Scan the printed `vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2&ice=
 local setup. Use the desktop app's bootstrap screen to pair a laptop without
 copying an admin token. After one desktop client is connected, use **Remote
 server** → **Paired devices** → **Connect a device** for additional links.
-
-Each panel gets:
-
-- **Injected globals** replacing Electron's preload/contextBridge
-- **A WebSocket transport** connecting to the RPC server (same protocol as
-  the Electron preload)
-- **RPC-backed filesystem** via server-side context folders
-- **Full service access** — AI, git, database, build, channels
-
-### In-Process Agents
-
-Agents run as in-process services managed by AgentManager. They have direct
-access to the server service registry and AIHandler, and communicate via channels.

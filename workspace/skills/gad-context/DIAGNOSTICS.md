@@ -1,9 +1,10 @@
 # GAD Diagnostics And Runtime State
 
-Use this guide when an agent, channel, turn, invocation, eval, or worktree state
-looks inconsistent. Prefer bounded inspector APIs first. Hydrated history APIs
-are for targeted follow-up after you know the exact event, envelope, digest, or
-state hash you need.
+Use this guide when an agent, channel, turn, invocation, or eval state looks
+inconsistent. Prefer bounded inspector APIs first. Hydrated history APIs are
+for targeted follow-up after you know the exact event, envelope, or digest.
+Semantic workspace-state diagnosis belongs to
+[vibestudio-vcs](../vibestudio-vcs/SKILL.md).
 
 If the suspected failure is in host orchestration rather than GAD state itself
 — server startup/shutdown, projection scheduling, RPC dispatch, workerd
@@ -86,10 +87,10 @@ trajectory events. This tells you whether you are looking at:
 - a real nonterminal invocation
 - a terminal event that never reached the projection
 
-Agent DO method suspensions are stored in the agent worker, not GAD. Standard
-agent workers expose `inspectMethodSuspensions` as a participant method; it
-returns local suspension rows joined with `gad.inspectInvocationState(...)` for
-the matching branch, invocation id, and transport call id.
+Agent effect suspensions are stored in the agent worker, not GAD. Standard
+agent workers expose `inspectMethodSuspensions`; it returns the local outbox.
+Join those coordinates with `gad.inspectInvocationState(...)` yourself when
+durable terminality or provenance matters.
 
 ```ts
 const joined = await chat.callMethod(
@@ -124,6 +125,10 @@ different channel.
 
 `inspectAgent` is intentionally limited to standard read-only debug methods:
 `getDebugState`, `getAgentSettings`, and `inspectMethodSuspensions`.
+It uses a dedicated activation-local agent RPC rather than ordinary
+`onMethodCall`, performs no GAD hydration, and has a five-second bound. A
+`getDebugState` loop with `loaded: false` means only that no fold is resident in
+the current activation; it is not evidence that durable work is absent.
 
 ### Channel Envelope Inspection
 
@@ -223,14 +228,14 @@ in-flight.” Do not poll it: the invocation cannot become terminal until the ev
 returns, and each poll appends another diagnostic invocation. Do not use raw SQL
 or hydrate blobs to re-prove the same fact.
 
-### Branch And State Lookups
+### Semantic workspace state
 
-The bounded lookup APIs use ordinary not-found sentinels: an unknown branch in
-`gad.listGadBranchFiles(...)` returns `[]`; an unknown state/file in
-`gad.readGadFileAtState(...)` and an unknown producer in
-`gad.getGadStateProducer(...)` return `null`. These are successful lookups with
-no match. If a test deliberately probes them, label the result as expected data
-instead of throwing or inventing an API error.
+GAD trajectory branches do not own file trees. Resolve files, immutable events
+and applications, workspace history, and provenance through the canonical `vcs`
+namespace described by [the VCS skill](../vibestudio-vcs/SKILL.md). A missing
+`vcs.readFile` result is an ordinary absent file; invalid or unauthorized graph
+handles use the typed VCS error vocabulary. Never join trajectory branch rows
+to a private worktree table or infer semantic ancestry from content hashes.
 
 ### Build Provenance
 
@@ -265,23 +270,27 @@ summary.
   is no `payload_json` column.
 - Presence envelopes project into `channel_roster`.
 - Read-only CTEs are allowed through `gad.query`; write CTEs are rejected.
-- Manifest/state hashes are synchronous SHA-256 over stable JSON. They are
-  content-addressed identifiers, not compatibility placeholders.
+- Stored-value digests are synchronous SHA-256 over canonical bytes. Semantic
+  identities use the canonical VCS identity constructors and protocols.
 
-## Contexts And Worktrees
+## Contexts And Source Projection
 
-Agent contexts behave like isolated workspace checkouts. Each context can have a
-different HEAD, index, branch, and pushed state.
+Agent contexts have independent committed events and working heads. Their
+folders are disposable projections, with no branch/index authority of their own.
 
 When a source edit appears ignored:
 
-1. Inspect the context's git status and branch.
-2. Confirm the workspace repo was published from that context.
-3. Confirm the runtime build/reload consumed the published artifact.
-4. Only then assume the running code path is still broken.
+1. Resolve the context working head and inspect the authored application.
+2. Confirm the complete intended application chain was included in the
+   committed workspace event.
+3. Inspect semantic publication and build-projection evidence separately for
+   the exact committed event.
+4. Confirm the runtime activated the intended derived artifact. On build or
+   activation failure, confirm it retained the previous runnable artifact.
+5. Only then assume the running code path is still broken.
 
-The build system builds workspace units from git, not from uncommitted working
-tree files.
+The build system consumes explicit semantic or content build sources, never
+incidental projected disk state.
 
 ## System Testing Self-Diagnostics
 

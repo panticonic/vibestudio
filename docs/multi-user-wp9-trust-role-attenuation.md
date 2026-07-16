@@ -175,10 +175,13 @@ Revocation is thus a first-class operation with a defined blast radius; each ste
 - Replace the hardcoded `Vibestudio Panel <panel@vibestudio.local>`
   (`packages/git/src/client.ts:778-781`) with an author derived from `caller.subject`:
   `displayName <handle@vibestudio.local>` (or a real email if the account carries one).
-- The acting user reaches the VCS layer via the caller subject; for agent/worker commits the
-  owning user (WP0 §6 inheritance) is the author, with the agent noted in the commit
-  metadata / GAD provenance (the on-behalf-of principal already modeled in the VCS invocation
-  table). This makes workspace-source history attributable to humans.
+- The acting user reaches the semantic workspace through authenticated
+  causal ingress. Work units, changes, applications, and events do not copy an
+  actor or on-behalf-of bundle; they walk through the originating command to
+  the exact tool invocation or authenticated request. Git export derives the
+  chosen external commit identity from that provenance projection rather than
+  replacing it with a hardcoded identity. This preserves the distinction
+  between executor, initiator, and authorizing user.
 
 ---
 

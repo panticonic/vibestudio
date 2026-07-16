@@ -12,33 +12,33 @@ Grant scopes (shared vocabulary across capability and credential decisions):
 
 - `once` — this operation only, nothing stored
 - `session` — same concrete caller until the server process exits
-- `version` — same source repo *and* effective version (a code change
+- `version` — same source repo _and_ effective version (a code change
   invalidates the grant)
-- `repo` — legacy persistent scope; accepted, no longer offered
 
-`version` scope is the interesting one: trust attaches to *reviewed code*, so
+`version` scope is the interesting one: trust attaches to _reviewed code_, so
 an agent editing a unit's source automatically re-triggers consent.
 
 ## Three permission surfaces
 
 1. **Capability grants** (`requestCapabilityPermission()`) — host capabilities
    that are not credentials: `external-browser-open`,
-   `workspace-repo-write`, etc. Caller identity is resolved via code
+   `workspace-main-advance`, etc. Caller identity is resolved via code
    identity; grants are keyed to `(capability, resource.key)`. Never
    hand-rolled per service.
 2. **Userland approvals** (`requestApproval()` via the `userlandApproval`
-   service) — for policy questions *owned by workspace code* that the host
+   service) — for policy questions _owned by workspace code_ that the host
    cannot interpret (e.g. a worker deciding whether a subject may use its
    service). Issuer identity is host-verified, subjects are
    provider-supplied; stored decisions are keyed `(issuer callerId,
-   subject.id)`. Not a substitute for host capabilities — anything touching
+subject.id)`. Not a substitute for host capabilities — anything touching
    credentials, egress, repo writes, or browser opens must use the built-in
    flow.
-3. **Workspace repo writes** — ref-aware authorizers on push. The
-   `workspace-repo-write` capability is keyed to the target repo path, so
-   approvals are specific to destination repo/ref/change. Unit repos
-   (`apps/*`, `extensions/*`) and `meta` get richer elevated flows because
-   they cross the trust line (see SYSTEM.md unit kinds).
+3. **Workspace main advances** — the ref-aware authorizer on push. The
+   `workspace-main-advance` capability is keyed to protected workspace main;
+   the host supplies the exact affected repositories and content diff, or the
+   exact semantic event edge when bytes are unchanged. Unit repos (`apps/*`,
+   `extensions/*`) and `meta` get richer elevated flows because they cross the
+   trust line (see SYSTEM.md unit kinds).
 
 ## The credential system
 
@@ -49,7 +49,8 @@ and receives responses but **never sees secret bytes**.
 
 Key patterns:
 
-- `credentials.store` / `credentials.connect` for direct and OAuth flows
+- `credentials.store` / `credentials.connect` for direct and OAuth userland flows;
+  the exact direct service/RPC method is `credentials.storeCredential`
   (including device-code RFC 8628); OAuth refresh is host-owned.
 - **Broad upstream, staged local bindings** — one broad upstream grant (e.g.
   a full Google Workspace consent) with narrow local bindings staged per
@@ -84,7 +85,7 @@ Host services declare per-method caller allow-lists (`panel`, `worker`, `do`,
 
 - **Eval is the reachability guarantee.** An agent's eval executes in its own
   `EvalDO` as an ordinary `do` principal with a real code identity, so
-  everything `do`-callable is agent-reachable — *including*
+  everything `do`-callable is agent-reachable — _including_
   capability-gated paths, because the grant/approval pipeline understands
   the EvalDO's identity and can prompt for consent. Adding `agent` to an
   allow-list is purely a UX shortcut for high-frequency calls, never a
@@ -100,10 +101,13 @@ policy matrix.
 
 Putting it together: an agent is a userland caller with (a) a filesystem
 scoped to its context folder, (b) no credential material, ever, (c) no write
-path to `main` except the build-and-approval-gated push, (d) network egress
-only through host-mediated, audience-approved routes, and (e) every sensitive
-capability behind a server-side prompt whose grants die with the session or
-the code version. The design goal is that you never need to constrain *what
-an agent writes* — only what its identity can *do* — so treat the gates as
-load-bearing: route actions through the runtime APIs and let the permission
-system decide, rather than looking for paths around a denial.
+path to `main` except push's semantic ancestry/integration validation,
+approval, and atomic protected-ref update, (d) network egress only through
+host-mediated, audience-approved routes, and (e) every sensitive capability
+behind a server-side prompt whose grants die with the session or the code
+version. Explicit builds are advisory checks and post-publication builds are
+derived projections, not authorization gates. The design goal is that you
+never need to constrain _what an agent writes_ — only what its identity can
+_do_ — so treat the gates as load-bearing: route actions through the runtime
+APIs and let the permission system decide, rather than looking for paths around
+a denial.

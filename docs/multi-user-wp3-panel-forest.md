@@ -144,7 +144,7 @@ DOs.
   clobber each other. Durable app data stays in the shared DO. This is the one concrete change:
   route ephemeral view state to per-runtime scratch, leaving shared durable state shared.
 - **Readable across users:** all context folders live under the one workspace state dir
-  (`.contexts/`); nothing here restricts cross-user reads — the workspace is a shared space by
+  (the current-epoch projection root); nothing here restricts cross-user reads — the workspace is a shared space by
   construction.
 - **Build store unchanged.** `buildV2/buildStore.ts` keys on `(unit, effectiveVersion,
   sourcemap)` (`effectiveVersion.ts:399-407`) with no user/context/panel dimension — two

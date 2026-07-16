@@ -13,7 +13,9 @@ connectivity.
 - `vibestudio remote deploy <user@host> [--artifact <tgz>] [--signal-url <url>] [--port 3030]`
 - `vibestudio remote deploy status|logs|update|remove <user@host>`
 - `vibestudio remote doctor [--signal-url <url>] [--workspace <name> | --identity <identity.pem>]`
-- `vibestudio remote repair-identity --yes [--workspace <name> | --identity <identity.pem>]`
+- `vibestudio remote repair-identity --workspace <name> --yes` rotates only
+  that child's reach. Hub control identity rotation is intentionally
+  unsupported.
 - `vibestudio remote serve [--signal-url <url>] [--dev --auto-approve]`
 - `vibestudio remote pair "https://vibestudio.app/pair#..."`
 - `vibestudio remote invite-user --handle <handle> --workspace <name> [--workspace <name>...]`
@@ -40,9 +42,17 @@ connectivity.
   `removeWorkspaceMember`/`listWorkspaceMembers`. A non-member is refused at the workspace boundary (`EACCES`),
   omitted from `hubControl.listWorkspaces`, and never spawns a child. Inside a workspace,
   members are mutually trusted peers.
-- **Each workspace child keeps its own WebRTC ingress + DTLS identity** — the
-  hub directs devices (identity/pairing/routing-signaling) but never relays
-  media. Internal control tokens are never human credentials.
+- **Keep one stable hub control ingress per device.** Pairing invite rooms and
+  durable device control rooms terminate at the hub. A fresh pairing returns
+  the device credential plus its exact one-time `PairingContext.workspaceId`.
+- **Route a workspace by exact ID.** Call
+  `hubControl.routeWorkspace({ workspaceId })`; retain the existing control
+  reach and replace only the returned `workspaceReach`.
+- **Keep children workspace-only.** Each workspace child owns its own WebRTC
+  ingress, persistent DTLS identity, and device/user rooms for workspace RPC.
+  It never redeems invites, activates proposed credentials, or relays hub
+  control. The hub routes but never relays workspace media. Internal control
+  tokens are never human credentials.
 
 ## Current Contract
 
@@ -50,9 +60,15 @@ connectivity.
   (`wss://signal.vibestudio.app`).
 - Pairing links are complete: scheme link plus HTTPS pair URL. Do not mint or
   accept hub-level bare-code invites.
-- The server identity is one combined `identity.pem`; no split-file identity
-  layout is recognized.
+- Keep each hub or child endpoint identity in one combined `identity.pem`; no
+  split-file identity layout is recognized.
 - Desktop credentials live in one encrypted `device-credentials.json` store.
+  One record keeps the global device credential, the stable hub
+  `controlPairing`, and the current child `workspacePairing`. Never derive one
+  reach from the other or infer a workspace from its display name.
+- Treat the invite room's atomic hub-side promotion as the only pairing commit.
+  Do not add child activation journals, proposed device credentials,
+  `controlReach` route fields, or legacy transport readers.
 - Mobile bundle delivery uses `rn-host-2`: JS fetches over the active WebRTC
   pipe and native only appends chunks, finalizes integrity, and activates.
 
@@ -62,7 +78,9 @@ connectivity.
   the exact CLI/server version, writes config, installs the systemd user unit,
   starts it, mints an HTTPS pair URL/QR, and doctors the selected workspace
   child identity at
-  `$HOME/.config/vibestudio/workspaces/<workspace>/state/webrtc/identity.pem`.
+  `$HOME/.config/vibestudio/workspaces/<workspace>/reach/webrtc/identity.pem`.
+  The hub control identity lives separately at
+  `$HOME/.config/vibestudio/server-auth/webrtc/identity.pem`.
 - Existing host invite: pair one root device from the service's startup link,
   then mint every later user/device invite from that authenticated device.
 - Desktop to phone: open the shell Devices surface, choose Connect a device, and
@@ -72,11 +90,15 @@ connectivity.
 ## Doctor Ladder
 
 - node-datachannel missing: rebuild native deps with `pnpm rebuild
-  node-datachannel` or reinstall the published package on the remote box.
+node-datachannel` or reinstall the published package on the remote box.
 - signaling unreachable: check `remote doctor --signal-url <url>`, the hosted
   endpoint, or self-hosted Worker deployment.
-- identity anomaly: run `vibestudio remote repair-identity --identity
-  <identity.pem>`; regenerating forces all devices to re-pair.
+- identity anomaly: identify whether the failing endpoint is the hub control
+  ingress or a workspace child before replacing anything. Restore a damaged hub
+  control identity from its exact backup; do not mint a replacement. A child
+  identity may be rotated explicitly with `repair-identity --workspace`; that
+  invalidates only the saved workspace reach, so re-route the exact workspace
+  through the still-valid hub control connection.
 - linger denied: run the exact `sudo loginctl enable-linger <user>` command the
   deploy output prints, then rerun deploy.
 - unit down: use `vibestudio remote deploy logs <user@host>` or

@@ -8,6 +8,21 @@ audience.
 Mobile OAuth and public webhook ingress on `vibestudio.app` are tracked in
 `docs/credential-system-human-tasks.md`.
 
+This provider-credential system is separate from remote device pairing. A
+device refresh credential authenticates one paired client to the hub and its
+workspace children; a provider credential authorizes URL-bound host egress.
+Neither is converted into the other, and neither represents authorship or
+agent intent. Remote pairing topology and storage are documented in
+`docs/webrtc-deployment.md`.
+
+Linked-agent authentication is a third, deliberately minimal mechanism. An
+agent credential proves one exact live session entity and stores no copied
+context, channel, user, scope, intent, or authorship fields. The workspace
+derives semantic binding and owner from the current entity graph at
+authentication and live-call time. Authorization remains a service decision;
+intent and blame remain provenance traversals. Retiring the entity invalidates
+both its credential and live bearer.
+
 ## Store Directly
 
 ```ts
@@ -22,6 +37,9 @@ const stored = await credentials.store({
   material: { type: "bearer-token", token },
 });
 ```
+
+`credentials.store()` is the userland runtime wrapper. Direct service/RPC
+callers must use the exact wire method `credentials.storeCredential`.
 
 ## Host-Owned OAuth Connection
 
@@ -56,6 +74,14 @@ Supported OAuth flows include PKCE/auth-code, compatibility auth-code,
 device-code, client-credentials, JWT bearer, and token exchange. Stored client
 configs support `client_secret_post`, `client_secret_basic`, and
 `private_key_jwt`; private keys and client secrets stay in the host config.
+
+For renewable OAuth connections, set `persistRefreshToken: true`. The encrypted
+credential then owns both the refresh token and the exact refresh recipe that
+issued it (token URL, client id, token authentication, and an exact client-config
+version when secret client material is required). A token without that recipe is
+intentionally nonrenewable and must reconnect. Secret-free summaries expose this
+as `lifecycle.canRefresh`; their `scopes` are the provider-returned grant when the
+token response includes one, otherwise the originally requested scopes.
 
 ## Broad Upstream, Staged Local Bindings
 

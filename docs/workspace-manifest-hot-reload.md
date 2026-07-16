@@ -1,9 +1,15 @@
 # Workspace Manifest Hot Reload
 
 `workspace/meta/vibestudio.yml` is the runtime manifest for workspace-owned
-units and policies. It is versioned as the `meta` repo in workspace VCS, so a
-push to `meta/main` must update the active runtime from the committed VCS state,
-not from a possibly stale source checkout.
+units and policies. It lives in the durable `meta` repository identity in the
+semantic workspace graph. A successful protected-main push must update the
+active runtime from the newly published main event, not from a possibly
+stale source checkout or a raw content hash.
+
+The semantic VCS terminology and invariants in this document come from
+[provenance-aware-diff-merge-plan.md](provenance-aware-diff-merge-plan.md).
+There are no repository-local ancestry models, content-derived revision rules,
+or direct protected-publication mutation APIs at this layer.
 
 This document defines the hot-reload contract for manifest-derived runtime
 state. The goal is to keep newly approved workspace capabilities usable without
@@ -12,27 +18,31 @@ when a setting cannot safely be changed in a running process.
 
 ## Startup Source Of Truth
 
-On server startup, the protected workspace `main` refs are the manifest
-authority when they exist. The projected source checkout may lag committed VCS
-state, so startup must:
+On server startup, the exact committed workspace event selected by `main`
+is the manifest authority once the semantic workspace has been initialized.
+The projected source checkout may lag that event, so startup must:
 
-1. create the VCS/ref services from the projected manifest only far enough to
-   bootstrap the VCS machinery;
-2. compose the protected `main` workspace view from refs and the content store;
-3. read `meta/vibestudio.yml` from that composed state;
+1. bootstrap the semantic authority and content store without treating the
+   projected manifest as revision authority;
+2. resolve the exact main event and its persistent workspace-fact root;
+3. resolve the durable `meta` repository identity and read
+   `vibestudio.yml` from its content state and file-identity manifest;
 4. replace the live `workspaceConfig` and derived declarations before RPC
    services, workerd, singleton reconciliation, extensions, apps, recurring
    jobs, or trust-dependent UI use them.
 
-Only a brand-new workspace with no protected `main` refs may fall back to a
-fresh disk snapshot. Once protected refs exist, falling back to disk would hide
-approved-but-unprojected manifest changes and recreate stale visibility bugs.
+Only a brand-new workspace with no semantic genesis may create its initial
+repository through the explicit external snapshot-import path. Once genesis
+exists, falling back to disk would hide published-but-unprojected manifest
+changes and fabricate local authorship. A checkout scan is drift observation,
+not startup ancestry reconstruction.
 
 ## Apply Pipeline
 
-On a `main` head advance whose changed paths include `meta/`:
+On a successful protected-main push whose old/new event comparison changes
+the `meta` repository:
 
-1. Read `meta/vibestudio.yml` from the advanced VCS workspace state.
+1. Read `meta/vibestudio.yml` from the exact new published event.
 2. Parse and validate it as a complete workspace config.
 3. Build all derived declarations before mutating live state.
 4. If validation succeeds, replace the live `workspaceConfig` object in place.
@@ -45,43 +55,46 @@ If parsing or validation fails, the live runtime keeps the previous manifest.
 Do not partially apply individual sections.
 
 The source checkout is not an authority for hot reload. It is a projection used
-for development and may lag a VCS main advance. Runtime reloads must read from
-the state hash carried by the `state-advanced` event. State refs may already be
-formatted as `state:<hash>`; reload helpers must normalize them without adding a
-second `state:` prefix.
+for development and may lag a main-event advance. Runtime reload events must
+carry the exact old/new event IDs and publication identity. Content hashes
+are resolved beneath that event for reads and builds; they never substitute
+for the semantic revision or acquire history by reverse lookup.
 
 ## Config Writes
 
-Host services that mutate `meta/vibestudio.yml` must write the protected
-`meta/main` ref, not `source/meta/vibestudio.yml`. The source checkout may be
-stale, and merging config changes into that file can drop fields that are
-present in protected `main`.
+Host services that request a mutation of `meta/vibestudio.yml` must use the
+ordinary semantic context workflow, not write a protected content ref or
+`source/meta/vibestudio.yml`. The source checkout may be stale, and editing it
+as an authority can drop fields present in the published event.
 
 The write path is:
 
-1. read `vibestudio.yml` from the current protected `meta/main` state;
-2. merge the typed config update into that parsed YAML so unknown top-level
+1. read `vibestudio.yml` from the exact current main event;
+2. author the typed config update in an authorized context while preserving
+   unknown top-level fields from that exact basis;
    fields from protected `main` are preserved;
 3. validate the rendered YAML with the normal workspace config parser;
-4. mirror the new `meta` repo tree into the content store;
-5. advance only `meta/main` through the protected ref CAS;
-6. let the normal main-advance reaction reload the manifest and reconcile
+4. record the edit as a work unit and apply it to the context working head;
+5. integrate current `main` locally if it advanced, then use `vcs.commit` to
+   commit the complete local application chain;
+6. use `vcs.push` so the semantic authority journals the publication and the
+   host approval-gates the atomic protected-ref CAS; explicit builds and
+   post-publication projections remain separate;
+7. let the normal main-event reaction reload the manifest and reconcile
    services, routes, apps, extensions, jobs, trust, and remotes.
 
-Service-specific authorization may happen before the CAS. For example,
-`gitInterop` keeps its existing shared-remote/import approvals, then performs
-the already-approved config mutation through the protected ref writer. It does
-not prompt a second time just because the implementation now uses the same
-state-backed main-advance machinery.
+Service-specific authorization may happen before authoring. `vcs.push` still
+performs the canonical protected-main approval and audit flow; no service gets a
+parallel protected-ref writer or an approval-bypass flag.
 
 ## Hot-Reloaded Sections
 
 These sections are expected to update without a host restart after a successful
-`meta/main` push:
+push whose exact published event changes the `meta` repository:
 
 - `singletonObjects`: refreshes the in-memory `SingletonRegistry` in place so
   existing consumers observe updated object keys.
-- `services`: refreshes the userland service resolver used by
+- `services`: refreshes the workspace service resolver used by
   `workers.listServices` and `workers.resolveService`.
 - `routes`: reconciles the compiled `/_r/w/...` route table for both old and
   new route sources. DO routes remain lazy: a route may be registered before the
@@ -101,12 +114,12 @@ should work directly; callers should not need to fall back to
 
 ## Context-Scoped Visibility
 
-The committed `main` manifest is the global service registry. A caller running
-inside a workspace context may also resolve services and direct DO targets
-declared only in that same context, but only as a fallback when `main` has no
-matching service name/protocol or DO class. This lets agents test newly authored
-workers/DO services before merge without making those declarations globally
-visible.
+The manifest at the exact committed main event is the global service
+registry. A caller running inside a workspace context may also resolve services
+and direct DO targets declared only in that context's exact working head,
+but only as a fallback when `main` has no matching service name/protocol or DO
+class. This lets agents test newly authored workers/DO services before semantic
+integration and push without making those declarations globally visible.
 
 Context fallback must preserve policy and build isolation:
 
@@ -117,9 +130,11 @@ Context fallback must preserve policy and build isolation:
   backing that DO denies the caller, resolution fails; a context duplicate must
   not bypass the global policy.
 - Context-only DO services and direct DO targets are activated in the caller
-  context and built from `ctx:<contextId>`.
+  context and built from the exact content state resolved from its working
+  head. A context selector is authorization and pointer resolution, not a
+  build revision.
 - Callers without a registered context only see the `main` registry.
-- Once the context is pushed to `main`, the normal hot-reload path promotes the
+- Once the context event is pushed to `main`, the normal hot-reload path promotes the
   declaration to the global registry.
 
 ## Restart-Bound Sections
@@ -187,12 +202,12 @@ When changing manifest reload behavior, include tests for:
 - preserving lazy DO route behavior, meaning route registration does not warm or
   build the DO until the first request;
 - rejecting invalid configs without mutating the live registry;
-- loading startup declarations from protected `main` when source projection is
-  stale;
-- accepting both bare hashes and `state:<hash>` refs in state-backed manifest
-  reads;
-- mutating workspace config through protected `meta/main` while preserving
-  protected YAML fields and without reading a stale source projection;
+- loading startup declarations from the exact main event when source
+  projection is stale;
+- refusing to treat a bare content identity as manifest revision authority;
+- mutating workspace config through edit → complete-chain commit → protected push,
+  while preserving YAML fields from the exact basis and without reading a
+  stale source projection;
 - resolving a service declared only in the caller's context without allowing a
   context duplicate to bypass a denied `main` service;
 - resolving a direct DO target declared only in the caller's context without

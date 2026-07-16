@@ -1,6 +1,6 @@
 # WebRTC Remote Access Deployment
 
-Remote clients reach a Vibestudio server over a peer-to-peer WebRTC pipe
+Remote clients reach a Vibestudio server over peer-to-peer WebRTC pipes
 (DTLS-encrypted, paired by QR). The server itself stays on loopback and needs no
 public inbound port. Cloudflare hosts only the public coordination surfaces:
 
@@ -9,11 +9,11 @@ desktop / mobile / CLI client                    home server / VPS
          |  https://vibestudio.app/pair#...              |
          v                                               v
   +----------------------+  offer/answer/ICE  +-------------------------+
-  | signal.vibestudio.app|<------------------>| WebRTC answerer server  |
-  | Signaling Worker DO  |                    | loopback gateway only   |
+  | signal.vibestudio.app|<------------------>| hub control answerer    |
+  | Signaling Worker DO  |                    | + workspace answerers   |
   +----------------------+                    +-------------------------+
          |                                               ^
-         +----------- DTLS-pinned WebRTC pipe -----------+
+         +---------- DTLS-pinned direct pipes -----------+
 
 OAuth redirects / webhooks -> vibestudio.app apex Worker -> server backhaul
 ```
@@ -22,11 +22,17 @@ The signaling Worker blind-relays SDP/ICE and mints ICE servers. The apex Worker
 owns `/pair`, app-link verification, OAuth callbacks, webhook ingress, and the
 server backhaul. Neither Worker is a data-plane proxy for workspace traffic.
 
-The hub owns users, devices, memberships, pairing codes, and workspace routing
-in its identity database. It is not a media relay: each workspace child keeps a
-persistent DTLS identity and its own WebRTC ingress, and an authorized client's
-pipe terminates directly at that child. The hub returns the selected child's
-room, fingerprint, and ICE policy only after checking membership.
+The hub owns users, devices, memberships, pairing codes, workspace routing, and
+one stable control WebRTC ingress in its identity database. Each paired client
+keeps that hub control pipe while it selects or switches workspaces. The hub is
+not a media relay: each workspace child keeps a separate persistent DTLS
+identity and WebRTC ingress, and workspace RPC terminates directly at the
+selected child. The hub returns only that child's room, fingerprint, and ICE
+policy after checking membership.
+
+Pairing rooms exist only on the hub ingress. A workspace child owns only its
+workspace device/user rooms; it does not activate a proposed credential or
+serve a shadow pairing/control path.
 
 ## Cloudflare Zone
 
@@ -186,28 +192,37 @@ vibestudio remote doctor --signal-url wss://signal.vibestudio.app/
 vibestudio remote serve --port 3030
 ```
 
+`remote doctor` checks the stable hub control identity by default. Use
+`--workspace <name>` only when diagnosing that child's workspace ingress.
+
 The server prints a pair URL:
 
 ```text
 https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2
 ```
 
-The server presents a persistent DTLS identity. `remote deploy` pins the hub
-identity at:
+The hub control ingress presents a persistent DTLS identity at:
 
 ```text
-$HOME/.config/vibestudio/webrtc/identity.pem
+$HOME/.config/vibestudio/server-auth/webrtc/identity.pem
 ```
 
 Workspace child answerers use:
 
 ```text
-$HOME/.config/vibestudio/workspaces/<workspace>/state/webrtc/identity.pem
+$HOME/.config/vibestudio/workspaces/<workspace>/reach/webrtc/identity.pem
 ```
 
-Override with `VIBESTUDIO_WEBRTC_IDENTITY` only for explicit local setups. The
-certificate SHA-256 is the `fp` in the pair link; clients pin it and fail closed
-on mismatch.
+Override a child identity with `VIBESTUDIO_WEBRTC_IDENTITY` only for explicit
+local setups. The certificate SHA-256 is the `fp` in each reach; clients pin it
+and fail closed on mismatch.
+
+Back up the hub control identity with the identity database. In-place hub
+identity rotation is intentionally unsupported: it is account/device trust, not
+a disposable reach cache. Restore its exact backup if damaged. A workspace
+child identity may be rotated explicitly with
+`remote repair-identity --workspace <name> --yes`; paired devices then obtain a
+fresh child reach through the unchanged hub control connection.
 
 Force a TURN-only pass when validating production NAT traversal:
 
@@ -228,13 +243,30 @@ Deploy writes the systemd unit with an absolute `ExecStart` (resolved via
 `command -v vibestudio` on the host), waits for the loopback gateway `/healthz`
 before minting the first invite, and — on `update` — restarts the unit so the
 new build takes over. `remove --purge` also uninstalls the npm package and
-deletes the WebRTC identity material (paired devices must re-pair).
+deletes workspace-child reaches. It preserves the hub control identity,
+accounts, and paired devices; after reinstall, clients re-route workspaces
+through their existing control connection.
 
 ## Pair A Client
 
 Open or scan the printed `https://vibestudio.app/pair#...` URL from desktop,
-mobile, or CLI. The client redeems the one-time pairing code over the WebRTC
-pipe, receives a durable device credential, and persists it for reconnects.
+mobile, or CLI. The URL reaches a one-time room on the hub control ingress. Its
+redemption atomically promotes that room to the new device's durable control
+room and returns:
+
+- one durable, user-bound device credential;
+- the exact `PairingContext.workspaceId` selected by the invite; and
+- the already-known hub reach from the invite, minus its one-time code.
+
+The client immediately calls `hubControl.routeWorkspace({ workspaceId })` over
+that same hub connection. The route returns only the workspace child's
+`workspaceReach`; it never replaces the hub control reach. Clients persist the
+device credential, stable control reach, selected workspace ID, and current
+workspace reach. Switching workspaces routes another exact ID over the stable
+control pipe and replaces only the workspace reach.
+
+There is no child-side pairing activation, proposed credential, inferred
+current workspace, or compatibility path for older stored transport shapes.
 
 ## OAuth And Webhooks
 

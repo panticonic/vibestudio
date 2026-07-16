@@ -96,9 +96,7 @@ function renderService(def) {
     const shellBlocked =
       Array.isArray(method.policy?.allowed) && !method.policy.allowed.includes("shell");
     if (shellBlocked) continue; // method-level override excludes the CLI
-    lines.push(
-      `| \`${def.name}.${methodName}\` | ${escapeTableCell(method.description ?? "")} |`
-    );
+    lines.push(`| \`${def.name}.${methodName}\` | ${escapeTableCell(method.description ?? "")} |`);
   }
   return lines.join("\n");
 }
@@ -121,7 +119,9 @@ vibestudio agent services SERVICE_NAME --json
 
 Generated statically from \`src/server/services/\`; a server build may register
 a subset depending on its configuration — \`vibestudio agent services\` shows what
-is actually live.
+is actually live. This is the selected workspace child's API. Server-wide
+workspace, device, and account mutation commands run over the client's separate
+stable hub session and intentionally do not appear as child services here.
 
 Some internal services (e.g. workerd) are not shell-callable and do not appear
 here. Create workers and DOs via \`runtime.createEntity\` (\`kind: "worker"\` /
@@ -139,7 +139,9 @@ async function main() {
   const current = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : null;
   if (checkOnly) {
     if (next !== current) {
-      throw new Error("skills/vibestudio-agent/API.md is out of date. Run: pnpm generate:agent-docs");
+      throw new Error(
+        "skills/vibestudio-agent/API.md is out of date. Run: pnpm generate:agent-docs"
+      );
     }
     return;
   }

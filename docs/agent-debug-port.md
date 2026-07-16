@@ -1,108 +1,116 @@
-# Agent Debug Port
+# Agent inspection
 
-Vibestudio agents expose a read-only debug method named `getDebugState`.
+Agent diagnosis has two complementary sources of truth:
 
-Call it through the agent participant:
+- GAD inspectors report durable trajectory, invocation, roster, and channel
+  facts.
+- Agent inspection reports a small activation-local/SQLite snapshot from the
+  agent vessel itself.
+
+Neither source fabricates the other. In particular, agent inspection never
+hydrates a folded loop from GAD: a diagnostic read must not wait on the
+subsystem whose stall it is trying to explain.
+
+## Recommended read order
+
+Start with the durable view:
+
+```ts
+const health = await gad.inspectAgentHealth({ channelId });
+const turn = await gad.inspectTurnState({ channelId });
+```
+
+Then inspect the agent vessel when local execution state matters:
+
+```ts
+const channel = await workers.resolveService("vibestudio.channel.v1", channelId);
+const debug = await rpc.call(channel.targetId, "inspectAgent", [
+  agentParticipantId,
+  "getDebugState",
+]);
+```
+
+The channel calls the agent's dedicated read-only inspection RPC directly.
+This path is separate from ordinary participant `onMethodCall` routing, is
+bounded to five seconds, and does not require a live roster row. The host relay
+requires an already-active entity, so a retired or missing agent fails without
+being resolved, reactivated, or recreated.
+
+Non-host callers receive the normal approval prompt because debug data can
+contain settings and pending work. The standard inspection methods are:
+
+- `getDebugState`
+- `getAgentSettings`
+- `inspectMethodSuspensions`
+
+No arbitrary agent method can be reached through `inspectAgent`.
+
+## `getDebugState`
+
+The payload contains only facts already present in the activation or its local
+SQLite:
+
+- `participantId`
+- `loops[channelId]`
+- `outbox`
+- `subagentProgressOutbox`
+
+An already-folded loop has:
+
+```ts
+{
+  loaded: true,
+  turnStatus,
+  lastSeq,
+  pendingInvocations,
+  pendingApprovals,
+  pendingCredentialWaits,
+  settings,
+}
+```
+
+If the loop is not resident in this activation, the honest result is:
+
+```ts
+{
+  loaded: false,
+  note: "No folded loop is loaded in this activation; inspect GAD for durable trajectory state."
+}
+```
+
+`loaded: false` does not mean the channel has no trajectory or pending work. It
+means exactly that the vessel has no activation-local folded view. Use GAD for
+the durable answer; do not force hydration merely to make the debug payload
+look complete.
+
+## Suspension inspection
+
+`inspectMethodSuspensions` returns the agent's local effect outbox. Join its
+invocation and transport coordinates with `gad.inspectInvocationState(...)`
+when durable terminality or provenance matters. Missing local state and missing
+durable state remain distinct facts.
+
+## Current-channel convenience
+
+A live participant can still expose the same standard reads through
+`chat.callMethod(...)`:
 
 ```ts
 const debug = await chat.callMethod(agentParticipantId, "getDebugState", {});
 ```
 
-The result is a JSON snapshot. It does not mutate the agent and it does not use
-timers or timeout recovery. Open work stays open until an explicit completion,
-abort, unsubscribe, or user interruption changes state.
+That form is an ordinary channel-scoped participant invocation and therefore
+requires the target to be joined. Prefer the channel's `inspectAgent` facade
+for out-of-band diagnosis, especially when the live method path is itself in
+question.
 
-## Top-Level Shape
+## Failure interpretation
 
-- `schemaVersion`: debug payload schema.
-- `generatedAt`: snapshot time.
-- `requestedChannelId`: channel filter used by the method.
-- `branchInfo`: per-channel trajectory branch ids, context id, participant id,
-  and clone/fork metadata.
-- `persisted`: Durable Object SQLite tables relevant to agent ownership:
-  `state`, `do_identity`, `subscriptions`, `delivery_cursor`, and
-  `model_credential_interruptions`.
-- `persisted.methodSuspensions` / `persisted.methodSuspensionUpdates`:
-  durable external-tool suspension ledger and bounded partial-update log used
-  to recover channel method, approval, UI prompt, and ask-user waits after
-  hibernation.
-- `persisted.recoveryContinuations`: channels with a recovered tool result
-  already in the transcript but whose follow-up model continuation still needs
-  to start after activation.
-- `volatile`: process-local state that is lost on hibernation/restart.
-
-## Volatile State
-
-`volatile.runners[channelId]` includes the Pi runner view:
-
-- `running` and `currentTurnId`.
-- `phase.currentOperation`: active `prompt` or `continue` call.
-- `phase.awaitingProviderFirstEvent`: true after the provider request hook until
-  the first subsequent harness event arrives.
-- `phase.checkpoints`: recent prompt/continue, context, provider, and credential
-  checkpoints.
-- `openInvocationIds` and `openToolInvocations`.
-- `recentHarnessEvents` and `recentTrajectoryEvents`.
-- `pendingProvenance`, `pendingMutations`, `channelPublicationBroadcasts`.
-- `sessionLeafId`, `sessionEntries`, and `contextMessages`.
-- `branchInfo` for the runner's GAD trajectory/branch.
-- `lastErrors`.
-
-`volatile.dispatchers[channelId]` includes the turn dispatcher queue:
-
-- pending prompt/continue items.
-- pending steered user messages.
-- active drain generation and lifecycle observations.
-- typing/busy flags.
-
-`volatile.methodResultWaiters` lists channel method/tool calls currently waiting
-for canonical `invocation.completed`, `invocation.failed`, or cancellation:
-
-- `callId`: transport call id.
-- `invocationId`: model/tool invocation id.
-- `method`, `participantHandle`, `targetParticipantId`.
-- `turnId`, `createdAt`, and summarized args.
-
-There is intentionally no local timeout field. A stuck dispatch remains visible
-here until a real channel result or explicit abort arrives.
-
-`volatile.recentPhases` records worker-owned credential/fetch phases, including
-model credential resolution and URL-bound model fetch proxy dispatch/response.
-
-`volatile.recentChannelEvents` records recently observed channel events by id,
-type, sender, agentic kind, and dispatch mode.
-
-`volatile.lastErrors` records recent worker-owned errors.
-
-## Common Reads
-
-Open turn stuck before provider output:
-
-```ts
-debug.volatile.runners[channelId].currentTurnId
-debug.volatile.runners[channelId].phase.awaitingProviderFirstEvent
-debug.volatile.runners[channelId].phase.checkpoints
-```
-
-Open channel tool call:
-
-```ts
-debug.volatile.methodResultWaiters
-debug.volatile.runners[channelId].openToolInvocations
-```
-
-Credential or credentialed fetch stall:
-
-```ts
-debug.volatile.recentPhases
-debug.persisted.modelCredentialInterruptions
-debug.volatile.runners[channelId].phase.checkpoints
-```
-
-Replay or dispatcher queue issue:
-
-```ts
-debug.volatile.recentChannelEvents
-debug.volatile.dispatchers[channelId]
-debug.persisted.deliveryCursor
-```
+- Entity resolution failure: the agent is retired, missing, or no longer an
+  active runtime entity.
+- Five-second RPC deadline: the diagnostic transport or vessel activation is
+  unhealthy. The snapshot implementation itself performs no external I/O.
+- `loaded: false`: the activation has no folded loop; consult GAD.
+- Local outbox row with a durable terminal: reconcile the local projection.
+- Durable nonterminal with no local row: inspect delivery/recovery rather than
+  inventing local state.

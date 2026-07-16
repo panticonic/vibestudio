@@ -92,7 +92,7 @@ zero importers). Export map updated in `packages/rpc/package.json`.
 ## Pairing link (Workstream B — `packages/shared/src/connect.ts`)
 
 Rewritten **outright** to the new grammar (no shim):
-`vibestudio://connect?room=<uuid>&fp=<dtls-sha256>&code=<secret>&sig=<endpoint>&v=<ver>&ice=<policy>&srv=<label>`.
+`vibestudio://connect?room=<uuid>&fp=<dtls-sha256>&code=<secret>&sig=<endpoint>&v=<ver>&ice=<policy>`.
 Kept the load-bearing manual (non-`new URL()`) parse for the vibestudio: custom
 scheme. `isTrustedCleartextHost` + `isPrivateIPv4`/`isTailscaleIPv4`/
 `isSingleLabelHostname` DELETED → one `isLoopbackHost` (127/8, ::1, localhost,

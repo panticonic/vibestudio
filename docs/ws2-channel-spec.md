@@ -3,7 +3,7 @@
 Binding implementation spec for workstream WS2 of the Unified Log Architecture
 plan (`~/.claude/plans/ok-grat-create-a-unified-shore.md`, §WS2). It builds
 ONLY on the Stage-0 foundation contract (`docs/stage0-unified-log-spec.md`):
-the gad-store DO's `appendLogEvent` / `forkLog` / `readLog` / `getLogEvent` /
+the semantic control plane's `appendLogEvent` / `forkLog` / `readLog` / `getLogEvent` /
 `getLogHead` / `refs` surface and the protocol's `LogEnvelope`. Names and
 signatures below are exact. This spec is self-contained: implementers do NOT
 need to read the current `channel-do.ts`.
@@ -19,14 +19,14 @@ our own callers).
 
 `workspace/workers/pubsub-channel/` contains:
 
-| File | Lines | Role today |
-|---|---|---|
-| `channel-do.ts` | 2,265 | `PubSubChannel extends DurableObjectBase`, schemaVersion 104. Everything: roster, publish, method calls, registry cache, conversation state, alarms, fork, admin inspection. |
-| `channel-log-store.ts` | 296 | Historical channel-log bridge, replaced by direct unified-log access; payload blobs use `blobstore.putText`/`getText`. |
-| `broadcast.ts` | 210 | Per-subscriber FIFO emit chains (`queueEmit`), ordered DO delivery (`queueDoEnvelope`), `broadcast()`, `buildChannelEvent`, wire encoders `channelEventToRpcLog`/`channelEventToRpcSignal`. |
-| `invocation-calls.ts` | 159 | Raw SQL helpers over `pending_calls`: `storeCall`, `consumeCall`, `peekCall`, `cancelCall`, `cancelCallsForTarget`. |
-| `types.ts` | 60 | `SubscribeResult`, `ChannelConfig`, `PresencePayload`, `BroadcastEnvelope`, `StoredAttachment`. |
-| `channel-do.test.ts` | 1,456 | The UX-guard suite (must keep passing; legitimate changes enumerated in §9). |
+| File                   | Lines                                                                                                                                                                        | Role today                                                                                                             |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `channel-do.ts`        | `PubSubChannel extends DurableObjectBase`; roster resources, publish, method calls, policies, fork, and admin inspection.                                                    |
+| `channel-log-store.ts` | 296                                                                                                                                                                          | Historical channel-log bridge, replaced by direct unified-log access; payload blobs use `blobstore.putText`/`getText`. |
+| `broadcast.ts`         | Subscription-stream delivery for RPC participants, ordered structured delivery (`queueDoEnvelope`) for agent vessels, `broadcast()`, `buildChannelEvent`, and wire encoders. |
+| `invocation-calls.ts`  | 159                                                                                                                                                                          | Raw SQL helpers over `pending_calls`: `storeCall`, `consumeCall`, `peekCall`, `cancelCall`, `cancelCallsForTarget`.    |
+| `types.ts`             | 60                                                                                                                                                                           | `SubscribeResult`, `ChannelConfig`, `PresencePayload`, `BroadcastEnvelope`, `StoredAttachment`.                        |
+| `channel-do.test.ts`   | 1,456                                                                                                                                                                        | The UX-guard suite (must keep passing; legitimate changes enumerated in §9).                                           |
 
 Local SQLite tables (channel DO): `participants(id, metadata, transport,
 connected_at, session_id, handle)`, `pending_calls(transport_call_id PK,
@@ -125,24 +125,23 @@ list — each is asserted by `channel-do.test.ts`):
   - advertised method-name validation: each `metadata.methods[].name` must
     match `/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/` and not be in
     `{read, edit, write, grep, find, ls}`;
-  - re-subscribe with same id: leave-presence published with reason
-    `replaced` (session id changed or unknown) or `graceful`, old row deleted,
-    emit/delivery chains reset; on session replacement, still-pending calls
-    targeting this participant are re-delivered as signals
-    (`redeliverPendingCallsTo`);
+  - the authenticated caller identity selects the delivery endpoint. A
+    re-subscribe replaces that endpoint's old response generation. The
+    participant receives a semantic presence update, not a transport-derived
+    leave/join pair, and subscription recovery never synthesizes invocation
+    events;
   - subscribe-time hints stripped from stored metadata: `contextId`,
-    `channelConfig`, `replay`, `sinceId`, `replayMessageLimit`, `transport`,
-    `PARTICIPANT_SESSION_METADATA_KEY`;
+    `channelConfig`, `replay`, `sinceId`, `replayMessageLimit`, `transport`;
   - join presence published BEFORE replay is built (initial roster snapshot
     includes self);
   - replay: `mode = "after"` when `replay !== false && sinceId > 0`, else
     `initial` with limit `replayMessageLimit ?? 50` (0 when `replay === false`);
-    replay events, then roster snapshot, then `ready` control message, all
-    through the per-subscriber FIFO (`queueEmit`, plus `queueDoEnvelope` for
-    DO transports); fatal delivery errors (`TARGET_NOT_REACHABLE`,
-    `RECONNECT_GRACE_EXPIRED`, `DO_NOT_CREATED`) evict the participant
-    silently;
-  - returns `{ ok, channelConfig?, envelope }`.
+    replay is returned in the first `subscribed` record;
+  - returns a long-lived NDJSON `Response`. Its body is the subscription
+    resource: cancellation, transport loss, or generation replacement releases
+    exactly that authenticated endpoint generation. Later `message` records carry live delivery. Agent
+    vessels retain structured `onChannelEnvelope` delivery while draining this
+    response solely as their lifetime owner.
 - `publish(participantId, type, payload, opts)`:
   - `idempotencyKey` dedup: `dedup_keys` row + `publishDedupInFlight`
     in-memory map dedupes CONCURRENT publishes before the append settles
@@ -161,10 +160,10 @@ list — each is asserted by `channel-do.test.ts`):
     durable `invocation.started` with `envelopeId = invocationId` (via
     `messageId`), `causality = {invocationId, transportCallId}`, payload
     `{name: method, invocationType: "panel", request: args, transport:
-    {kind:"channel", channelId, target, transportCallId}, userVisible:false}`,
+{kind:"channel", channelId, target, transportCallId}, userVisible:false}`,
     broadcasts it, then dispatches: DO target → `rpc.call(target,
-    "onMethodCall", [channelId, transportCallId, method, args, {invocationId,
-    turnId}])` fire-and-forget via `waitUntil` (the DO's return value settles
+"onMethodCall", [channelId, transportCallId, method, args, {invocationId,
+turnId}])` fire-and-forget via `waitUntil` (the DO's return value settles
     the call through `handleMethodResult`); RPC target → no extra dispatch
     (the log broadcast IS the delivery). Missing target → immediate error
     settle. `opts.timeoutMs` sets `deadline_at`.
@@ -180,7 +179,7 @@ list — each is asserted by `channel-do.test.ts`):
     timeout additionally publishes a `ui.feedback` event (category
     `method_call_failed`, occurrenceKey `method_call_failed:{transportCallId}`)
     targeted at the non-responsive provider.
-  - `failPendingCallsTargeting(targetId, reason)` on unsubscribe/eviction:
+  - `failPendingCallsTargeting(targetId, reason)` when a subscription resource closes:
     every pending call targeting the leaver gets a durable
     `invocation.abandoned` terminal with a reason-specific message.
   - Terminal payload mapping (`invocationResultPayload`): outcome
@@ -197,9 +196,8 @@ list — each is asserted by `channel-do.test.ts`):
 - Presence: durable `presence` envelopes for join/leave/update with PUBLIC
   metadata (`publicParticipantMetadata` — method schemas are stripped to
   `[{name}]`); typing state is signal-only (`broadcastPresenceSignal`, no
-  append); `touch()` bumps `connected_at`; stale RPC participants (no
-  heartbeat for 5 min) evicted by alarm, with abandoned-terminals + leave
-  presence.
+  append). Membership lifetime is the exact subscription response; there is no
+  touch method, stale timeout, inferred delivery liveness, or eviction alarm.
 - `sendSignal` / signal broadcasts: never appended, `kind:"signal"` wire shape.
 - `error(participantId, messageId, errorMessage, code?)`: durable `error`
   envelope `{id, error, code?}`.
@@ -243,22 +241,23 @@ workspace/workers/pubsub-channel/
 ```
 
 The channel DO becomes a generic substrate: durable ordered log + live fan-out
-+ roster + call transport. Every agentic decision (hop stamping, conversation
-fold, invocation payload shapes) lives in `@workspace/channel-policies`,
-selected by name from channel config — fixed registry, not user code
-(annotation must be atomic with sequencing; sandboxing is unnecessary
-pre-release).
+
+- roster + call transport. Every agentic decision (hop stamping, conversation
+  fold, invocation payload shapes) lives in `@workspace/channel-policies`,
+  selected by name from channel config — fixed registry, not user code
+  (annotation must be atomic with sequencing; sandboxing is unnecessary
+  pre-release).
 
 State taxonomy after this spec (P1 classification — normative):
 
-| Structure | Kind | Derivation |
-|---|---|---|
-| Channel log (`log_events` rows in gad-store, `logId=channelId, head="main"`) | **Log** | authority |
-| `participants` table | operational transport state (live connections — not derivable from the log; presence events are journal *observations* of it) |
-| `pending_calls` table | **Cache** | `derivePendingCalls(fold(log))` — §5 |
-| `policy_state:*` KV | **Cache** | `policy.reduce` folded through `foldedThroughSeq` — §4 |
-| `dedup_keys` table | **Cache** | lineage-scoped envelopeId dedupe in GAD is the authority (§3.2); rows only short-circuit the round-trip |
-| KV `contextId`, `config`, `createdAt`, `forkedFrom`, `forkPointId`, `__objectKey` | **Ref**-like channel metadata (mutable pointers/config; config changes journaled as `config-update` envelopes) |
+| Structure                                                                                     | Kind                                                                                                                          | Derivation                                                                                              |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Channel log (`log_events` rows in the semantic control plane, `logId=channelId, head="main"`) | **Log**                                                                                                                       | authority                                                                                               |
+| `participants` table                                                                          | operational transport state (live connections — not derivable from the log; presence events are journal _observations_ of it) |
+| `pending_calls` table                                                                         | **Cache**                                                                                                                     | `derivePendingCalls(fold(log))` — §5                                                                    |
+| `policy_state:*` KV                                                                           | **Cache**                                                                                                                     | `policy.reduce` folded through `foldedThroughSeq` — §4                                                  |
+| `dedup_keys` table                                                                            | **Cache**                                                                                                                     | lineage-scoped envelopeId dedupe in GAD is the authority (§3.2); rows only short-circuit the round-trip |
+| KV `contextId`, `config`, `createdAt`, `forkedFrom`, `forkPointId`, `__objectKey`             | **Ref**-like channel metadata (mutable pointers/config; config changes journaled as `config-update` envelopes)                |
 
 `message_types` table: DELETED (GAD's `channel_message_types` projection is
 the only copy). Conversation KV: DELETED (absorbed into policy_state).
@@ -267,7 +266,7 @@ the only copy). Conversation KV: DELETED (absorbed into policy_state).
 
 ## 2. `log-store.ts` — unified-log access (replaces `channel-log-store.ts`)
 
-Talks to gad-store DIRECTLY through Stage-0 core methods (P6: do not build on
+Talks to the semantic control plane directly through Stage-0 core methods (P6: do not build on
 the legacy channel adapters, which die in Stage B). Same blob spill/hydrate
 behavior as today (`encodeChannelPayloadStoredValues` /
 `hydrateStoredValueRefs` via `main.blobstore.putText/getText`).
@@ -277,13 +276,13 @@ behavior as today (`encodeChannelPayloadStoredValues` /
 import { CHANNEL_LOG_HEAD } from "@workspace/agentic-protocol"; // "main", Stage 0
 
 export interface ChannelAppendInput {
-  payloadKind: string;                 // "agentic.trajectory.v1/event" | "presence" | "error" | "config-update" | ...
+  payloadKind: string; // "agentic.trajectory.v1/event" | "presence" | "error" | "config-update" | ...
   payload: unknown;
   senderId: string;
-  senderMetadata?: Record<string, unknown>;   // PUBLIC metadata; stored under annotations.metadata
-  envelopeId?: string;                 // deterministic ids welcome (invocationId, terminal:{id}, ik:{key})
-  annotations?: Record<string, unknown>;      // policy annotations (agentHops, ...)
-  attachments?: StoredAttachment[];    // stored under annotations.attachments
+  senderMetadata?: Record<string, unknown>; // PUBLIC metadata; stored under annotations.metadata
+  envelopeId?: string; // deterministic ids welcome (invocationId, terminal:{id}, ik:{key})
+  annotations?: Record<string, unknown>; // policy annotations (agentHops, ...)
+  attachments?: StoredAttachment[]; // stored under annotations.attachments
 }
 
 export class ChannelLog {
@@ -307,8 +306,12 @@ export class ChannelLog {
   hasEnvelope(envelopeId: string): Promise<boolean>;
 
   /** readLog pages (ascending), lineage-aware. */
-  read(opts: { afterSeq?: number; beforeSeq?: number; limit?: number;
-               payloadKind?: string }): Promise<LogEnvelope[]>;
+  read(opts: {
+    afterSeq?: number;
+    beforeSeq?: number;
+    limit?: number;
+    payloadKind?: string;
+  }): Promise<LogEnvelope[]>;
 
   /** Replay windows: same ChannelReplayEnvelope shapes as today
    *  (mode/logEvents/snapshots/ready{totalCount, envelopeCount,
@@ -316,10 +319,10 @@ export class ChannelLog {
    *  totalCount/headSeq from getLogHead; firstEnvelopeSeq = forkSeq+1 for
    *  forked channels else 1; hasMoreBefore computed against that bound. */
   replayInitial(limit, ctx): Promise<ChannelReplayEnvelope>;
-  replayAfter(sinceSeq, ctx): Promise<ChannelReplayEnvelope>;     // limit 500
+  replayAfter(sinceSeq, ctx): Promise<ChannelReplayEnvelope>; // limit 500
   replayBefore(beforeSeq, limit, ctx): Promise<ChannelReplayEnvelope>;
 
-  inspectRows(opts): Promise<Record<string, unknown>[]>;          // for admin*
+  inspectRows(opts): Promise<Record<string, unknown>[]>; // for admin*
   inspectEnvelope(envelopeId): Promise<Record<string, unknown>[]>;
 }
 ```
@@ -354,9 +357,9 @@ payloads through opaquely. Sender-side sanitization
 (`sanitizeAgenticEventParticipantRefs`) also moves fully to GAD — the
 log-store only does blob encoding.
 
-**Registry mutation moves to a GAD projection (WS2-owned delta to gad-store,
+**Registry mutation moves to a GAD projection (WS2-owned delta to the semantic control plane,
 layered on Stage 0):** add a projection applier `projectMessageTypeEvent` in
-`workspace/workers/gad-store/index.ts` — when a channel-log append has
+`workspace/packages/semantic-control-plane/src/index.ts` — when a channel-log append has
 `payloadKind === AGENTIC_EVENT_PAYLOAD_KIND` and `payload.kind ===
 "messageType.registered" | "messageType.cleared"`, upsert/clear
 `channel_message_types` in the same txn (identical SQL semantics to today's
@@ -371,30 +374,29 @@ callers until Stage B but the channel DO stops calling it.
 
 ## 3. `channel-do.ts` — RPC surface (method-by-method mapping)
 
-| Old (channel-do.ts) | New home | Change |
-|---|---|---|
-| `subscribe` | channel-do.ts, delegating to `roster.ts` | zod metadata validation (§8.4); handle uniqueness via partial unique index (§8.5); DO columns persisted (§8.3); otherwise byte-identical behavior incl. replay/redelivery |
-| `unsubscribe`, `adminUnsubscribeParticipant`, `unsubscribeParticipant` | roster.ts | unchanged |
-| `touch` | roster.ts | unchanged |
-| `publish` | channel-do.ts | drop `stampAgentHops` + `recordConversationState` + schema validation + registry branch; add policy `annotate` + post-append `foldAppended` (§4); deterministic envelopeId for idempotent publishes (§3.2) |
-| `error`, `sendSignal`, `updateMetadata`, `adminUpdateParticipantMetadata`, `setTypingState`, `adminSetParticipantTypingState` | roster.ts / channel-do.ts | unchanged |
-| `getReplayAfter`, `getReplayBefore` | channel-do.ts → log-store | unchanged shapes |
-| `getParticipants`, `getContextId`, `getConfig`, `updateConfig` | channel-do.ts | unchanged (updateConfig append goes through policy host like any append) |
-| `getMessageTypes`, `getMessageType` | channel-do.ts | direct passthrough to gad `listMessageTypes`/`getMessageType` — NO local cache, NO hydration (§6.2) |
-| `getConversationState` | **deleted** | replaced by `getPolicyState` (§4.4) |
-| `stampAgentHops`, `recordConversationState` | **deleted** | absorbed by `agentic.conversation.v1` policy |
-| `invocationStartedPayload` / `invocationResultPayload` / `invocationOutputPayload` / `invocationCancelledPayload` | **moved** to `channel-policies` `callEventPayload` (§4.2) | calls.ts invokes via policy host |
-| `registryMutationFromPublishedPayload`, `appendRegistryEvent`, `cacheMessageTypeMutation`, `cacheMessageTypes`, `localMessageTypes`, `ensureRegistryHydrated` | **deleted** | GAD projection (§2) |
-| `callMethod` | channel-do.ts → calls.ts | journal-before-dispatch order (§5.2) |
-| `submitMethodResult`, `submitMethodProgress`, `assertSubmitterIsTarget`, `pendingCallTarget` | calls.ts | unchanged auth semantics |
-| `handleMethodResult`, `settleConsumedMethodCall`, `deliverCallResult` | calls.ts `settleCall` | **terminal ordering fixed** (§5.3) |
-| `cancelMethodCall`, `timeoutMethodCall`, `failPendingCallsTargeting`, `publishMethodCallFeedback`, `ensureMethodRoot`, `redeliverPendingCallsTo`, `timeoutExpiredPendingCalls` | calls.ts | same wire behavior; settle pipeline shared |
-| `scheduleNextAlarm`, `scheduleDedupCleanup`, `scheduleParticipantCleanup`, `alarm` | channel-do.ts | single scheduler over pure next-time sources (§8.2) + `reconcilePendingCalls` on alarm |
-| `broadcastStoredEnvelopes` | channel-do.ts | + `foldAppended` into policy state (out-of-band appends must advance the fold; see §4.3 ordering note) |
-| `postClone` | channel-do.ts | + delete `policy_state:*` and rebuild by replay (§4.5); stop deleting conversation KV (gone) |
-| `adminInspect*`, `adminValidateLog`, `adminReconstructTranscript`, `getState` | channel-do.ts | table list updated; otherwise unchanged |
+| Old (channel-do.ts)                                                                                                                                                            | New home                                                  | Change                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subscribe`                                                                                                                                                                    | channel-do.ts, delegating to `roster.ts`                  | zod metadata validation (§8.4); handle uniqueness via partial unique index (§8.5); response resource owns delivery and lifetime; no parallel session or redelivery lifecycle                               |
+| subscription response cancellation, `adminUnsubscribeParticipant`, `unsubscribeParticipant`                                                                                    | roster.ts                                                 | the response terminal is the only public release operation; admin release remains explicit                                                                                                                 |
+| `publish`                                                                                                                                                                      | channel-do.ts                                             | drop `stampAgentHops` + `recordConversationState` + schema validation + registry branch; add policy `annotate` + post-append `foldAppended` (§4); deterministic envelopeId for idempotent publishes (§3.2) |
+| `error`, `sendSignal`, `updateMetadata`, `adminUpdateParticipantMetadata`, `setTypingState`, `adminSetParticipantTypingState`                                                  | roster.ts / channel-do.ts                                 | unchanged                                                                                                                                                                                                  |
+| `getReplayAfter`, `getReplayBefore`                                                                                                                                            | channel-do.ts → log-store                                 | unchanged shapes                                                                                                                                                                                           |
+| `getParticipants`, `getContextId`, `getConfig`, `updateConfig`                                                                                                                 | channel-do.ts                                             | unchanged (updateConfig append goes through policy host like any append)                                                                                                                                   |
+| `getMessageTypes`, `getMessageType`                                                                                                                                            | channel-do.ts                                             | direct passthrough to gad `listMessageTypes`/`getMessageType` — NO local cache, NO hydration (§6.2)                                                                                                        |
+| `getConversationState`                                                                                                                                                         | **deleted**                                               | replaced by `getPolicyState` (§4.4)                                                                                                                                                                        |
+| `stampAgentHops`, `recordConversationState`                                                                                                                                    | **deleted**                                               | absorbed by `agentic.conversation.v1` policy                                                                                                                                                               |
+| `invocationStartedPayload` / `invocationResultPayload` / `invocationOutputPayload` / `invocationCancelledPayload`                                                              | **moved** to `channel-policies` `callEventPayload` (§4.2) | calls.ts invokes via policy host                                                                                                                                                                           |
+| `registryMutationFromPublishedPayload`, `appendRegistryEvent`, `cacheMessageTypeMutation`, `cacheMessageTypes`, `localMessageTypes`, `ensureRegistryHydrated`                  | **deleted**                                               | GAD projection (§2)                                                                                                                                                                                        |
+| `callMethod`                                                                                                                                                                   | channel-do.ts → calls.ts                                  | journal-before-dispatch order (§5.2)                                                                                                                                                                       |
+| `submitMethodResult`, `submitMethodProgress`, `assertSubmitterIsTarget`, `pendingCallTarget`                                                                                   | calls.ts                                                  | unchanged auth semantics                                                                                                                                                                                   |
+| `handleMethodResult`, `settleConsumedMethodCall`, `deliverCallResult`                                                                                                          | calls.ts `settleCall`                                     | **terminal ordering fixed** (§5.3)                                                                                                                                                                         |
+| `cancelMethodCall`, `timeoutMethodCall`, `failPendingCallsTargeting`, `publishMethodCallFeedback`, `ensureMethodRoot`, `timeoutExpiredPendingCalls` | calls.ts                                                  | settle pipeline shared; transport recovery does not manufacture invocation-started signals                                                                                                                 |
+| `nextAlarmSchedule`, `alarm`                                                                                                                                                   | channel-do.ts                                             | domain-time maintenance only: dedup retention and presence status/last-seen transitions; never connection liveness or delivery retry                                                                       |
+| `broadcastStoredEnvelopes`                                                                                                                                                     | channel-do.ts                                             | + `foldAppended` into policy state (out-of-band appends must advance the fold; see §4.3 ordering note)                                                                                                     |
+| `postClone`                                                                                                                                                                    | channel-do.ts                                             | + delete `policy_state:*` and rebuild by replay (§4.5); stop deleting conversation KV (gone)                                                                                                               |
+| `adminInspect*`, `adminValidateLog`, `adminReconstructTranscript`, `getState`                                                                                                  | channel-do.ts                                             | table list updated; otherwise unchanged                                                                                                                                                                    |
 
-`PubSubChannel.schemaVersion` bumps 104 → 105. `migrate()` drops and
+`PubSubChannel.schemaVersion` is 114. `migrate()` drops and
 recreates `participants`, `pending_calls`, `dedup_keys`; drops `message_types`
 without recreation (pre-release, no data migration).
 
@@ -463,20 +465,19 @@ ids scoped to log lineage):
 ### 4.1 Package API (`workspace/packages/channel-policies/src/index.ts`)
 
 ```ts
-import type { ParticipantRef, AgenticEvent, InvocationOutcome }
-  from "@workspace/agentic-protocol";
+import type { ParticipantRef, AgenticEvent, InvocationOutcome } from "@workspace/agentic-protocol";
 
 /** Minimal durable-envelope view a policy folds over. Pure data. */
 export interface PolicyEnvelopeView {
   envelopeId: string;
   seq: number;
   payloadKind: string;
-  payload: unknown;                       // hydration NOT guaranteed; policies
-                                          // must not depend on blob-spilled fields
-  senderId: string;                       // actor.participantId ?? actor.id
-  senderKind: string;                     // actor.kind
+  payload: unknown; // hydration NOT guaranteed; policies
+  // must not depend on blob-spilled fields
+  senderId: string; // actor.participantId ?? actor.id
+  senderKind: string; // actor.kind
   annotations?: Record<string, unknown>;
-  appendedAt: string;                     // ISO — the ONLY time source (P4)
+  appendedAt: string; // ISO — the ONLY time source (P4)
 }
 
 /** Draft of an envelope about to be appended (annotate input). */
@@ -496,13 +497,15 @@ export interface ChannelCallDescriptor {
   turnId?: string;
   method: string;
   args?: unknown;
-  deadlineAt?: number;                    // epoch ms; journaled (§5.1)
-  createdAt: string;                      // injected by host — NOT wall clock in the policy (P4)
+  deadlineAt?: number; // epoch ms; journaled (§5.1)
+  createdAt: string; // injected by host — NOT wall clock in the policy (P4)
 }
 
 export interface ChannelCallTerminalInput {
-  descriptor: Pick<ChannelCallDescriptor,
-    "channelId" | "caller" | "invocationId" | "transportCallId" | "turnId">;
+  descriptor: Pick<
+    ChannelCallDescriptor,
+    "channelId" | "caller" | "invocationId" | "transportCallId" | "turnId"
+  >;
   result: unknown;
   isError: boolean;
   terminalOutcome?: InvocationOutcome;
@@ -513,16 +516,23 @@ export interface ChannelCallTerminalInput {
 /** Synthesizes the call-transport event payloads. All pure. */
 export interface ChannelCallEventBuilders {
   started(input: ChannelCallDescriptor): AgenticEvent;
-  terminal(input: ChannelCallTerminalInput): AgenticEvent;   // completed/failed/cancelled/abandoned mapping per §0
-  output(input: { descriptor: ChannelCallTerminalInput["descriptor"];
-                  output: unknown; createdAt: string }): AgenticEvent;
-  cancelled(input: { descriptor: ChannelCallTerminalInput["descriptor"];
-                     actorId: string; reason: string; createdAt: string }): AgenticEvent;
+  terminal(input: ChannelCallTerminalInput): AgenticEvent; // completed/failed/cancelled/abandoned mapping per §0
+  output(input: {
+    descriptor: ChannelCallTerminalInput["descriptor"];
+    output: unknown;
+    createdAt: string;
+  }): AgenticEvent;
+  cancelled(input: {
+    descriptor: ChannelCallTerminalInput["descriptor"];
+    actorId: string;
+    reason: string;
+    createdAt: string;
+  }): AgenticEvent;
 }
 
 export interface ChannelPolicy<S = unknown> {
-  readonly name: string;                  // registry key, e.g. "agentic.conversation.v1"
-  readonly version: number;               // bump ⇒ policy_state cache invalidated
+  readonly name: string; // registry key, e.g. "agentic.conversation.v1"
+  readonly version: number; // bump ⇒ policy_state cache invalidated
   init(): S;
   /** Pure fold over durable envelopes in seq order (P4: no clock/random/IO). */
   reduce(state: S, envelope: PolicyEnvelopeView): S;
@@ -536,8 +546,8 @@ export interface ChannelPolicy<S = unknown> {
 }
 
 export const CHANNEL_POLICIES: ReadonlyMap<string, ChannelPolicy>;
-export function getChannelPolicy(name: string): ChannelPolicy;  // throws on unknown
-export const DEFAULT_CHANNEL_POLICIES: readonly string[];        // ["agentic.conversation.v1"]
+export function getChannelPolicy(name: string): ChannelPolicy; // throws on unknown
+export const DEFAULT_CHANNEL_POLICIES: readonly string[]; // ["agentic.conversation.v1"]
 ```
 
 Channel config gains `policies?: string[]` (in `types.ts` `ChannelConfig`);
@@ -552,7 +562,7 @@ State (exact shape — this is also the `getPolicyState` wire shape):
 interface ConversationStateV1 {
   lastCompletedSender: string | null;
   lastCompletedSeq: number | null;
-  lastCompletedAt: string | null;          // = envelope.appendedAt, never wall clock
+  lastCompletedAt: string | null; // = envelope.appendedAt, never wall clock
   previousCompletedSender: string | null;
   previousCompletedSeq: number | null;
   agentStreak: number;
@@ -587,9 +597,12 @@ structurally.
 ```ts
 export class PolicyHost {
   constructor(deps: {
-    sql; getStateValue; setStateValue; deleteStateValue;
-    log: ChannelLog;                       // for rebuild-by-replay
-    policies: ChannelPolicy[];             // resolved from config at first use
+    sql;
+    getStateValue;
+    setStateValue;
+    deleteStateValue;
+    log: ChannelLog; // for rebuild-by-replay
+    policies: ChannelPolicy[]; // resolved from config at first use
   }) {}
 
   /** KV cache per policy: key `policy_state:{name}`, value JSON
@@ -610,7 +623,7 @@ export class PolicyHost {
    *  Skips (idempotent) when env.seq <= foldedThroughSeq. */
   foldAppended(env: PolicyEnvelopeView): void;
 
-  callBuilders(): ChannelCallEventBuilders;   // from the unique owning policy
+  callBuilders(): ChannelCallEventBuilders; // from the unique owning policy
 
   /** postClone: delete every `policy_state:*` key, then getState() each
    *  configured policy (forces rebuild-by-replay over the forked lineage). */
@@ -649,13 +662,14 @@ async getPolicyState(name?: string): Promise<{
 ```
 
 Caller updates (P6, no shim — same cut):
+
 - `workspace/packages/agentic-do/src/channel-client.ts:158` —
   `getConversationState()` method replaced by
   `getPolicyState(name?)` with the shape above.
 - `workspace/packages/agentic-do/src/trajectory-vessel-base.ts:4691`
   (`shouldRespond`) — destructures `state` as `ConversationStateV1`; the
   previous-slot correction logic is unchanged (`lastCompletedSeq === event.id
-  ⇒ use previousCompletedSender`).
+⇒ use previousCompletedSender`).
 
 ### 4.5 `postClone` (new body)
 
@@ -692,17 +706,17 @@ a pending row except the deadline. Additions:
 
 Row ⇄ log field mapping (`derivePendingCalls` uses exactly this):
 
-| pending_calls column | log source (started event `e`, envelope `env`) |
-|---|---|
-| transport_call_id | `e.causality.transportCallId` (== `e.payload.transport.transportCallId`) |
-| invocation_id | `e.causality.invocationId` |
-| turn_id | `e.turnId` |
-| caller_id | `env.senderId` (== `e.actor.participantId ?? e.actor.id`) |
-| target_id | `e.payload.transport.target.participantId ?? .id` |
-| method | `e.payload.name` |
-| args | `e.payload.request` (JSON) |
-| created_at | `Date.parse(env.appendedAt)` |
-| deadline_at | `e.payload.transport.deadlineAt ?? null` |
+| pending_calls column | log source (started event `e`, envelope `env`)                           |
+| -------------------- | ------------------------------------------------------------------------ |
+| transport_call_id    | `e.causality.transportCallId` (== `e.payload.transport.transportCallId`) |
+| invocation_id        | `e.causality.invocationId`                                               |
+| turn_id              | `e.turnId`                                                               |
+| caller_id            | `env.senderId` (== `e.actor.participantId ?? e.actor.id`)                |
+| target_id            | `e.payload.transport.target.participantId ?? .id`                        |
+| method               | `e.payload.name`                                                         |
+| args                 | `e.payload.request` (JSON)                                               |
+| created_at           | `Date.parse(env.appendedAt)`                                             |
+| deadline_at          | `e.payload.transport.deadlineAt ?? null`                                 |
 
 ### 5.2 `callMethod` — journal before dispatch (P2)
 
@@ -713,9 +727,8 @@ dispatch):
 1. APPEND invocation.started   envelopeId = invocationId (deterministic, as today)
    — via appendDurable (policy annotate/fold included)
 2. INSERT pending_calls row    (cache write)
-3. scheduleNextAlarm()
-4. broadcast started (log, live)
-5. dispatch: DO target → waitUntil(onMethodCall …); RPC target → nothing extra;
+3. broadcast started (log, live)
+4. dispatch: DO target → waitUntil(onMethodCall …); RPC target → nothing extra;
    missing target → settleCall(transportCallId, error, …) immediately
 ```
 
@@ -743,14 +756,14 @@ settleCall(transportCallId, result, isError, terminalOutcome?, terminalReasonCod
      outcome mapping; attachments via opts. Idempotent: a duplicate settle
      replays in GAD (same id, same lineage) and returns the existing envelope.
   4. DELETE pending_calls row (consume — cache delete AFTER durable append)
-  5. scheduleNextAlarm()
-  6. broadcast terminal (log, live) — skipped if caller no longer in roster
+  5. broadcast terminal (log, live) — skipped if caller no longer in roster
      (the durable event is still appended; test "persists method terminal
      events even when the caller participant has left")
   return event.id (seq)
 ```
 
 Crash matrix (all converge — this is the §10 crash-injection test):
+
 - after 3, before 4: row still present, but the log has a terminal →
   `derivePendingCalls` excludes it → reconcile deletes the row. A concurrent
   duplicate settle replays the same envelopeId (no second terminal).
@@ -789,12 +802,9 @@ export function derivePendingCalls(envelopes: PolicyEnvelopeView[]): PendingCall
 `reconcilePendingCalls()` (DO method in calls.ts): page the full lineage view
 via `log.read({payloadKind: AGENTIC_EVENT_PAYLOAD_KIND, afterSeq, limit:500})`,
 compute `derivePendingCalls`, then diff against the table: insert missing
-rows, delete orphans (row without a non-terminal started). Runs:
-- on `alarm()` (cheap guard: skip when a KV `calls_reconciled_through` equals
-  current head seq; update it after each reconcile and each settle/append),
-- in `postClone` step 7,
-- NOT on every wake (the deterministic terminal id already makes the bug
-  class harmless; reconcile is the convergence sweep).
+rows, delete orphans (row without a non-terminal started). Recovery is invoked
+by the operation that needs the cache (and by explicit clone/recovery paths),
+never by a liveness timer or periodic redelivery sweep.
 
 `pending_calls` thereby satisfies P3: `DELETE FROM pending_calls` at any
 moment + one reconcile restores identical behavior (cache-amnesia test §10).
@@ -824,11 +834,12 @@ private helpers; `consumeCall`/`cancelCall`/`cancelCallsForTarget` disappear
    shape checks only (GAD validates at append; `checkLogIntegrity` covers the
    chain).
 4. **`delivery_cursor`** — vessel-side (`trajectory-vessel-base.ts:3450/
-   5168/5175/8042/8442/8592` and the two integration-test touchpoints). Falls
+5168/5175/8042/8442/8592` and the two integration-test touchpoints). Falls
    with the vessel in the Stage B cut (WS1.7); the replacement
    "last-observed seq" is folded from events by the new agent-loop driver.
    WS2 deliverable: nothing in the new channel modules may reference it, and
-   `README.md` (workspace/workers/README.md:309) drops the row.
+   the canonical worker reference (`workspace/skills/workspace-dev/WORKERS.md`)
+   drops the row.
 5. **`channel-log-store.ts`** (replaced by `log-store.ts`) and
    **`invocation-calls.ts`** (absorbed into `calls.ts`).
 6. The channel targets `appendLogEvent`/`readLog`/`getLogEvent`/
@@ -877,14 +888,11 @@ UX guard: chat reducers (`reducer-channel.ts`, `channel-chat-merge.ts`,
    sweep on the happy path). New: `idx_dedup_keys_created` (§3.1);
    `alarm()` always runs `DELETE FROM dedup_keys WHERE created_at < now - 5min`;
    the next-time source is `SELECT MIN(created_at) + 5min FROM dedup_keys`.
-2. **Single `scheduleNextAlarm`** over three PURE next-time sources, each
-   `(sql, now) => number | null` (epoch ms): `nextDedupSweepAt`,
-   `nextParticipantSweepAt` (`now + 60s` iff any `transport='rpc'` row
-   exists), `nextCallDeadlineAt` (`MIN(deadline_at)`). `scheduleNextAlarm()`
-   = `setAlarm(max(min(non-null sources) - now, 100))`; delete
-   `scheduleDedupCleanup` and `scheduleParticipantCleanup`. `alarm()` body:
-   `evictStaleParticipants(); sweepDedupKeys(); timeoutExpiredPendingCalls();
-   reconcilePendingCalls-if-stale; scheduleNextAlarm()`.
+2. **One domain-maintenance alarm projection.** Its pure next-time sources are
+   dedup retention, user presence status transitions, and retained last-seen
+   expiry. It does not inspect open subscriptions, redeliver calls, retry
+   cross-DO effects, or infer liveness. The response/session terminal owns all
+   connection cleanup.
 3. **`do_source`/`do_class`/`do_object_key` columns** — `parseDOParticipantId`
    runs ONCE at subscribe and populates the columns (§3.1);
    `getParticipants()` builds `doRef` from columns; broadcast/dispatch decide
@@ -893,23 +901,36 @@ UX guard: chat reducers (`reducer-channel.ts`, `channel-chat-merge.ts`,
 4. **zod `participantMetadataSchema` at subscribe** (in `types.ts`):
 
    ```ts
-   export const participantMetadataSchema = z.object({
-     name: z.string().optional(),
-     type: z.string().optional(),
-     handle: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/).optional(),
-     roles: z.array(z.string()).optional(),
-     methods: z.array(z.object({
-       name: z.string()
+   export const participantMetadataSchema = z
+     .object({
+       name: z.string().optional(),
+       type: z.string().optional(),
+       handle: z
+         .string()
          .regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/)
-         .refine((n) => !["read","edit","write","grep","find","ls"].includes(n),
-                 { message: "method name collides with a built-in tool name" }),
-     }).passthrough()).optional(),
-     contextId: z.string().optional(),
-     channelConfig: z.record(z.string(), z.unknown()).optional(),
-     replay: z.boolean().optional(),
-     sinceId: z.number().int().nonnegative().optional(),
-     replayMessageLimit: z.number().int().positive().optional(),
-   }).passthrough();   // unknown keys flow through to stored metadata
+         .optional(),
+       roles: z.array(z.string()).optional(),
+       methods: z
+         .array(
+           z
+             .object({
+               name: z
+                 .string()
+                 .regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/)
+                 .refine((n) => !["read", "edit", "write", "grep", "find", "ls"].includes(n), {
+                   message: "method name collides with a built-in tool name",
+                 }),
+             })
+             .passthrough()
+         )
+         .optional(),
+       contextId: z.string().optional(),
+       channelConfig: z.record(z.string(), z.unknown()).optional(),
+       replay: z.boolean().optional(),
+       sinceId: z.number().int().nonnegative().optional(),
+       replayMessageLimit: z.number().int().positive().optional(),
+     })
+     .passthrough(); // unknown keys flow through to stored metadata
    ```
 
    `subscribe` parses with this FIRST; a zod failure throws with the issue
@@ -919,6 +940,7 @@ UX guard: chat reducers (`reducer-channel.ts`, `channel-chat-merge.ts`,
    declared key is validated and `name` absent fails… NOTE: to preserve the
    tolerance, model name as `z.string()…optional()` and refine only when
    present.
+
 5. **Partial unique index on handles** (§3.1). The pre-INSERT SELECT check is
    KEPT for its friendly error message (tests and agents depend on the text);
    the index is the race-proof enforcement. A constraint violation that slips
@@ -950,16 +972,16 @@ GAD-backed channel log during postClone". Also the test harness's direct
 
 Semantic changes (each is a deliberate behavior move, update the assertion):
 
-| Test | Change |
-|---|---|
-| "rejects malformed message type registry events instead of persisting plain log rows" | Rejection now comes from GAD append-time schema validation, not the channel's `Invalid registry payload` throw. Matcher changes from `/Invalid registry payload/` to the zod-derived message (e.g. `/displayMode/`). The no-row assertion is unchanged. |
+| Test                                                                                    | Change                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "rejects malformed message type registry events instead of persisting plain log rows"   | Rejection now comes from GAD append-time schema validation, not the channel's `Invalid registry payload` throw. Matcher changes from `/Invalid registry payload/` to the zod-derived message (e.g. `/displayMode/`). The no-row assertion is unchanged.     |
 | "hydrates the message type registry from GAD instead of trusting a partial local cache" | The cache-poisoning setup (private `cacheMessageTypeMutation` call) no longer exists. Test renames to "reads message types directly from GAD"; keep the two gad-side registrations and the `getMessageTypes()` assertion verbatim, delete the poison block. |
-| "settles pending method calls as an error from malformed terminal invocation events" | Still rejects (`/terminalOutcome/` matcher still valid — GAD uses the same `storedAgenticEventSchema`), pending row still present. Comment updates only. |
-| "reports an envelope-only schema" / `adminInspectSchema` | Inspected table list: `message_types` gone, `participants` has three new columns + handle index. The `channel_envelopes`-absent invariant unchanged. |
-| "routes pause method calls through visible method invocation transport" | `callMethod` now appends BEFORE inserting the row and before dispatch; the `rpcCalls` assertion and event assertions are order-insensitive enough to pass unchanged — verify only that the started append precedes `onMethodCall` (it now provably does). |
+| "settles pending method calls as an error from malformed terminal invocation events"    | Still rejects (`/terminalOutcome/` matcher still valid — GAD uses the same `storedAgenticEventSchema`), pending row still present. Comment updates only.                                                                                                    |
+| "reports an envelope-only schema" / `adminInspectSchema`                                | Inspected table list: `message_types` gone, `participants` has three new columns + handle index. The `channel_envelopes`-absent invariant unchanged.                                                                                                        |
+| "routes pause method calls through visible method invocation transport"                 | `callMethod` now appends BEFORE inserting the row and before dispatch; the `rpcCalls` assertion and event assertions are order-insensitive enough to pass unchanged — verify only that the started append precedes `onMethodCall` (it now provably does).   |
 
 Everything else — seq numbering (`result.id === 2`), replay windows,
-live delivery, eviction-on-fatal-delivery, provider-identity auth, abandoned/
+live subscription delivery, exact response-terminal cleanup, provider-identity auth, abandoned/
 cancelled outcome preservation, blob spill, fork replay (`[2,3]` then `[4]`) —
 must pass without assertion changes.
 
@@ -970,7 +992,7 @@ must pass without assertion changes.
    row survives a failed append; a successful append followed by simulated
    crash-before-delete + `reconcilePendingCalls()` removes the row without a
    second terminal (`SELECT COUNT(*) FROM log_events WHERE envelope_id =
-   'terminal:…'` is 1); duplicate `settleCall` is a no-op returning the same
+'terminal:…'` is 1); duplicate `settleCall` is a no-op returning the same
    seq.
 2. **`derivePendingCalls` cache amnesia**: start two calls, settle one,
    `DELETE FROM pending_calls`, reconcile → exactly the unsettled row is
@@ -991,8 +1013,8 @@ must pass without assertion changes.
    `dedup_keys`, publish again with same key → same seq, one `log_events` row
    (envelopeId `ik:{key}` lineage dedupe).
 7. **Dedup TTL sweep** without any successful publish; **handle unique index**
-   race (two inserts, second throws friendly message); **single alarm**
-   next-time sources unit tests (pure).
+   race (two inserts, second throws friendly message); domain-maintenance
+   next-time source unit tests (pure, with no subscription-liveness source).
 8. **getPolicyState shape** + vessel previous-slot correction still holds via
    `agent-worker-base.integration.test.ts` (update its `getConversationState`
    touchpoints to `getPolicyState`).
@@ -1001,7 +1023,7 @@ must pass without assertion changes.
 
 `addressing.test.ts` (zero diffs), `reducer-channel`/`channel-chat-merge`/
 `useChannelMessages`/`transcriptPipeline` tests (payload shapes for
-`agentic.trajectory.v1/event` are byte-identical), gadStore.test.ts (Stage-0
+`agentic.trajectory.v1/event` are byte-identical), `semanticControlPlane.test.ts` (Stage-0
 owned; WS2 adds only the `projectMessageTypeEvent` coverage there: registry
 upsert/clear ordering via plain `appendLogEvent` of `messageType.*`
 publications).
@@ -1022,7 +1044,7 @@ compiles and tests green standalone.
 Rewrite the store onto `appendLogEvent`/`readLog`/`getLogEvent`/`getLogHead`/
 `forkLog`; replay-window math from `getLogHead`; `ChannelEvent.annotations`
 plumb (harness type + `buildChannelEvent`); `projectMessageTypeEvent` in
-gad-store + its gadStore.test.ts cases; deterministic `ik:{key}` envelopeIds.
+semantic control plane + its `semanticControlPlane.test.ts` cases; deterministic `ik:{key}` envelopeIds.
 No channel-DO behavior change yet beyond the store swap (old DO code can sit
 on the new store's compatibility methods during this chunk's PR).
 

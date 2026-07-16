@@ -253,7 +253,7 @@ with the destination path where it should live:
 ```ts
 import { git } from "@workspace/runtime";
 
-await git.importProject({
+const imported = await git.importProject({
   path: "panels/my-panel",
   remote: {
     name: "origin",
@@ -262,26 +262,38 @@ await git.importProject({
   },
   credentialId: "cred_github_...",
 });
+
+console.log(imported.candidate.contextId, imported.candidate.eventId);
 ```
 
 Supported parent directories are `panels`, `packages`, `workers`,
 `skills`, `about`, `templates`, and `projects`. `git.importProject()` uses one
 workspace config approval showing destination path, remote URL, and branch;
 then it records the shared remote and matching upstream with `autoPush: false`
-in `meta/vibestudio.yml`, clones into canonical workspace source, and makes the
-repo available to future contexts. It may also prompt to use the selected
-GitHub credential for the clone.
+in `meta/vibestudio.yml` and clones the exact Git tree as a committed semantic
+candidate. The clone does not advance protected `main` or make host bytes a
+second workspace source of truth. Integrate the returned candidate event in
+small ordinary VCS steps, run checks, commit the complete chain, and publish it
+explicitly before treating the repo as shared workspace source. `autoPush`
+controls only later outgoing Git pushes. The import may also prompt to use the
+selected GitHub credential for the clone.
 
-Repos declared in `meta/vibestudio.yml` are imported automatically at startup.
-Use `git.completeWorkspaceDependencies()` as an explicit retry/backfill when a
-configured workspace repo is still missing. For private repos, pass the GitHub
-credential id on this retry path because startup auto-import has no interactive
-`credentialId` argument:
+At startup, the configured Git provider reports operational checkout state via
+`upstreamStatus`. Vibestudio clones/imports only `not-materialized`
+declarations; all other provider-reported states are skipped as
+`already-materialized`, including `integration-required`. Use
+`git.completeWorkspaceDependencies()` for the same explicit retry/backfill flow.
+For private repos, pass the GitHub credential id because startup auto-import has
+no interactive `credentialId` argument:
 
 ```ts
 const result = await git.completeWorkspaceDependencies({ credentialId: "cred_github_..." });
 console.log(result.imported, result.skipped, result.failed);
 ```
+
+Operational clones live under server `state/git-checkouts/`, not workspace
+source. Build V2 reads exact semantic/CAS state and cannot build an unpublished
+candidate merely because its Git checkout was materialized.
 
 For the full external-project model, including string vs `{ url, branch }`
 config declarations, see

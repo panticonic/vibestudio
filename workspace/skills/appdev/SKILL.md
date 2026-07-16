@@ -17,15 +17,15 @@ from panels, workers, and extensions:
 
 ## Files
 
-| Document                               | Content                                                                           |
-| -------------------------------------- | --------------------------------------------------------------------------------- |
-| [AUTHORING.md](AUTHORING.md)           | Package layout, manifest shape, source paths, dependencies, and declaration rules |
-| [TARGETS.md](TARGETS.md)               | Electron, React Native, and terminal target contracts                             |
-| [CAPABILITIES.md](CAPABILITIES.md)     | Capability declarations and what each app capability unlocks                      |
-| [DEV_LOOP.md](DEV_LOOP.md)             | Edit, preview-build, commit, push, approve, reload, and debugging workflow       |
-| [MOBILE.md](MOBILE.md)                 | Native mobile host bootstrap, pairing, principal grants, and RN build artifacts   |
-| [REMOTE_CLIENTS.md](REMOTE_CLIENTS.md) | Server pairing, remote shells, terminal-client direction, and credential model    |
-| [TESTING.md](TESTING.md)               | Focused checks and smoke scenarios for app changes                                |
+| Document                               | Content                                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------------------- |
+| [AUTHORING.md](AUTHORING.md)           | Package layout, manifest shape, source paths, dependencies, and declaration rules     |
+| [TARGETS.md](TARGETS.md)               | Electron, React Native, and terminal target contracts                                 |
+| [CAPABILITIES.md](CAPABILITIES.md)     | Capability declarations and what each app capability unlocks                          |
+| [DEV_LOOP.md](DEV_LOOP.md)             | Semantic source, explicit context checks, publication, approval, reload, and debugging workflow |
+| [MOBILE.md](MOBILE.md)                 | Native mobile host bootstrap, pairing, principal grants, and RN build artifacts       |
+| [REMOTE_CLIENTS.md](REMOTE_CLIENTS.md) | Server pairing, remote shells, terminal-client direction, and credential model        |
+| [TESTING.md](TESTING.md)               | Focused checks and smoke scenarios for app changes                                    |
 
 ## Critical Rules
 
@@ -34,12 +34,13 @@ from panels, workers, and extensions:
    identity, not from a special filesystem path.
 3. App code is trusted client code. Add capabilities deliberately and keep the
    capability list no broader than the target needs.
-4. The dev loop is build-on-push: `vcs.edit` (via the `edit`/`write` tools) lands
-   WORKING content on your context head with no build; `vcs.commit({ message })`
-   snapshots it; `vcs.push({ repoPaths })` is build-gated and ff-only and is the
-   only step that advances `main` and produces the authoritative app build. Use
-   `vcs.previewBuild({ repoPaths })` to dev-build working content before
-   committing. Do not edit app source via `fs.writeFile` and expect it to build.
+4. App source participates in the workspace-wide semantic VCS. Read
+   [vibestudio-vcs](../vibestudio-vcs/SKILL.md) before changing it. Author exact
+   working intent, build or test the returned working head, commit the complete
+   local application chain, and publish through `vcs.push`. Explicit checks are
+   advisory; push validates semantic ancestry/integration, obtains approval,
+   and atomically advances protected refs. Do not reconstruct the workflow from
+   filesystem dirtiness, paths, or repository state hashes.
 5. Electron shell apps that manage panel layout must declare `panel-hosting`.
 6. React Native workspace apps are loaded by the shipped native host bootstrap;
    clean-install pairing must work before the workspace app bundle is available.
@@ -99,3 +100,5 @@ before editing.
 - Use `extensiondev` for trusted Node service units.
 - Use `system-testing` after app changes that affect startup, pairing, shell
   UX, mobile bootstrap, or client auth.
+- Use `vibestudio-vcs` for every app-source mutation, comparison, semantic
+  commit, external snapshot import, and publication.

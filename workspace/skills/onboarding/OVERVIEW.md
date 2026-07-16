@@ -35,7 +35,8 @@ A workspace is a named collection of panels, packages, workers, and configuratio
 - Switch between workspaces (triggers app relaunch)
 - Configure which panels open on first launch (`initPanels`)
 
-Workspace config lives in `meta/vibestudio.yml`. Each workspace gets its own GAD VCS state graph.
+Workspace config lives in `meta/vibestudio.yml`. Each workspace gets one
+semantic provenance/VCS graph with a committed event and exact working head.
 
 ### Contexts
 
@@ -89,7 +90,11 @@ Additional surfaces: `browserData` from `@workspace/runtime` (browser data impor
 
 ### Build System
 
-Panels and workers are built **on demand** — when you navigate to a panel URL or create a worker instance, the build system compiles the source with esbuild. Committing a workspace VCS state triggers rebuilds of affected units.
+Panels and workers are built **on demand** — when you navigate to a panel URL or
+create a worker instance, the build system compiles an explicit semantic or
+content build source with esbuild. A protected publication can notify build
+subscribers, which recompute affected effective versions as derived
+projections. Publication itself does not run or certify those builds.
 
 ## Architecture at a Glance
 
@@ -110,7 +115,7 @@ Panels and workers are built **on demand** — when you navigate to a panel URL 
 │  └───────────────────────┘                      │
 │       │                                         │
 │  ┌────┴──────────────────┐                      │
-│  │  GAD VCS (source)     │                      │
+│  │  Semantic VCS graph    │                      │
 │  └───────────────────────┘                      │
 └─────────────────────────────────────────────────┘
 ```
@@ -118,4 +123,5 @@ Panels and workers are built **on demand** — when you navigate to a panel URL 
 - **Panels** connect to the server over WebSocket for RPC
 - The **server** handles builds, file access, VCS, external Git interop, database, AI proxy, and service routing
 - **Workerd** runs workers and Durable Objects in V8 isolates
-- **GAD VCS** stores workspace source state; committed state advances trigger rebuilds
+- The **semantic VCS graph** unifies source intent, applications, decisions,
+  ancestry, provenance, and exact content projections

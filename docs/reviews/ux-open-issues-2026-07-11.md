@@ -532,10 +532,12 @@ No change on this branch (file untouched by the four fix commits). startMemoryMo
   _Evidence:_ src/main/serverSession.ts:174-185 (onCrash → unconditional relaunchApp); src/main/localServerManager.ts:343-357 (restart throttle → onCrash); src/main/index.ts:43-51 (marker consumed, not counted)
   _Fix:_ Persist a small consecutive-crash counter (e.g. in centralData or the relaunch arg) and after 2-3 crash relaunches stop relaunching: set bootstrapStartupError and show the recovery window with the log tail instead.
 
-- **Failed server event subscriptions are warn-only with no retry — shell silently misses approvals/notifications** (`server-error-propagation`)
-  serverEventSubscriptionBridge.ensureRemote catches an events.subscribe failure with log.warn and leaves the event unconfirmed; nothing retries until the next reconnect-triggered replay (which may be never on a stable connection). If the subscribe for e.g. shell-approval:pending-changed or notification:show fails once at startup, the approval bar and server notifications silently never update while the connection looks healthy. The same function also silently resolves when getServerClient() is null.
-  _Evidence:_ src/main/serverEventSubscriptionBridge.ts:27-28 (null client → resolve silently), 35-38 (catch → log.warn only); replay only on connect transitions/recovery: src/main/index.ts:2067-2069, 1944-1945
-  _Fix:_ Retry failed subscribes with backoff while the connection is up, and after N failures emit a notification or degrade the connection badge ('some updates may be missing').
+- **Resolved: server event lifetime is now a response resource** (`server-error-propagation`)
+  The confirmation table, retry timers, replay bookkeeping, and unary membership
+  calls were deleted. Electron main now owns one `events.watch` response for the
+  exact retained topic set; local response terminals release their topics, and
+  transport recovery reopens the desired response. Failure is therefore the
+  ordinary RPC stream failure path, not a silently divergent subscription table.
 
 - **Memory pressure is invisible: memoryMonitor is env-gated, log-only, and takes no action** (`server-error-propagation`)
   startMemoryMonitor returns immediately unless VIBESTUDIO_MEMORY_LOG_MS or VIBESTUDIO_MEMORY_LOG_ONCE is set, so in every normal install it does nothing. Even when enabled, logMemorySnapshot only writes dev-log lines; there is no threshold detection, no notification, no automatic unload of bloated panel views. A user whose panel leaks to multi-GB working sets learns about it only when the OS or renderer falls over.
@@ -695,7 +697,7 @@ No change on this branch (file untouched by the four fix commits). startMemoryMo
 
 - **Testbench: non-CPU profile artifacts tell the user to open them externally but never show the path** (`panels-apps`) — Cards for heap snapshots/other artifacts say 'Open this artifact in DevTools or speedscope; inline viewing is available for CPU profiles' but the artifact's file path (ref.path) is not displayed or copyable anywhere — only opened CPU profiles reveal their path in the flamegraph card. The instruction is unactionable. _Fix:_ Show ref.path (with a copy button) on every profile card, or add an 'Open folder / copy path' action.
 
-- **Spectrolite: starter note tells users to 'Delete this file' but the UI has no way to delete or rename a note** (`panels-apps`) — Both starter documents end with 'Delete this file or replace its contents when you're ready' / 'Replace this file with your own content', yet neither FileTree, the drawers, nor any menu offers delete/rename/move for notes — the only file operation is create. The copy points at a nonexistent capability and a vault accumulates unremovable notes. _Fix:_ Either add delete/rename to FileTree rows (vcs.edit supports delete/rename kinds) or reword the starter copy until the capability exists.
+- **Spectrolite: starter note tells users to 'Delete this file' but the UI has no way to delete or rename a note** (`panels-apps`) — Both starter documents end with 'Delete this file or replace its contents when you're ready' / 'Replace this file with your own content', yet neither FileTree, the drawers, nor any menu offers delete/rename/move for notes — the only file operation is create. The copy points at a nonexistent capability and a vault accumulates unremovable notes. _Fix:_ Add delete through `vcs.edit` and rename/move through `vcs.move` so stable file identity and provenance survive, or reword the starter copy until those capabilities exist.
 
 - **gad-browser: 10s git poll clobbers action feedback with repeated error text** (`panels-apps`) — The background upstream-status poll writes any failure into the shared operationStatus/operationFailed banner every 10 seconds. A transient git failure keeps re-asserting a stale error, and it can overwrite a just-shown success message from an unrelated action (push, integrity check) since all features share one status slot. _Fix:_ Keep git-poll errors in a git-tab-scoped status, or only surface a poll failure once until it changes; don't let background polls overwrite foreground action feedback.
 

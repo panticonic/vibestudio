@@ -9,14 +9,14 @@ Guide new users through understanding Vibestudio and getting their workspace set
 
 ## Files
 
-| Document                                             | Content                                                                                                        |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| [OVERVIEW.md](OVERVIEW.md)                           | What Vibestudio is, key concepts, architecture at a glance                                                       |
-| [WORKSPACE_STRUCTURE.md](WORKSPACE_STRUCTURE.md)     | Workspace directory layout, meta/, context folders, template vs live                                           |
-| [EXTERNAL_GIT_PROJECTS.md](EXTERNAL_GIT_PROJECTS.md) | External Git project declarations, import APIs, branch config, startup auto-import, private repo retries       |
-| [GETTING_STARTED.md](GETTING_STARTED.md)             | First-time setup: API provider integrations, incremental browser import/open tabs, workspace setup, first panel |
-| [REMOTE_SERVER.md](REMOTE_SERVER.md)                 | Running the state server on a different machine (home server, VPS) and connecting desktop/mobile clients to it |
-| [ActionBar.tsx](ActionBar.tsx)                       | Pinned first-run action bar loaded by the onboarding chat panel                                                |
+| Document                                             | Content                                                                                                                |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| [OVERVIEW.md](OVERVIEW.md)                           | What Vibestudio is, key concepts, architecture at a glance                                                             |
+| [WORKSPACE_STRUCTURE.md](WORKSPACE_STRUCTURE.md)     | Workspace directory layout, meta/, context folders, template vs live                                                   |
+| [EXTERNAL_GIT_PROJECTS.md](EXTERNAL_GIT_PROJECTS.md) | External Git declarations, exact semantic snapshot work units, branch config, startup import, and private-repo retries |
+| [GETTING_STARTED.md](GETTING_STARTED.md)             | First-time setup: API provider integrations, incremental browser import/open tabs, workspace setup, first panel        |
+| [REMOTE_SERVER.md](REMOTE_SERVER.md)                 | Running the state server on a different machine (home server, VPS) and connecting desktop/mobile clients to it         |
+| [ActionBar.tsx](ActionBar.tsx)                       | Pinned first-run action bar loaded by the onboarding chat panel                                                        |
 
 ## Related Skills
 
@@ -29,7 +29,7 @@ Guide new users through understanding Vibestudio and getting their workspace set
 | `sandbox`          | Learning the eval tool, inline UI, runtime APIs                                                       |
 | `workspace-dev`    | Building and launching panels, workers, full development workflow                                     |
 | `appdev`           | Authoring trusted workspace apps under `apps/`: Electron shell, mobile React Native, terminal clients |
-| `remote-access`    | Deploying a remote server, pairing desktop/mobile clients, and troubleshooting WebRTC access           |
+| `remote-access`    | Deploying a remote server, pairing desktop/mobile clients, and troubleshooting WebRTC access          |
 
 ## First: Detect User Experience Level
 
@@ -42,8 +42,7 @@ eval({ code: `
   import { getGoogleOnboardingStatus } from "@workspace-skills/google-workspace";
   import { getActiveSearchProvider } from "@workspace-skills/web-research";
 
-  const workspaces = await services.workspace.list();
-  const active = await services.workspace.getActive();
+  const config = await services.workspace.getConfig();
   const storedCredentials = await services.credentials.listStoredCredentials().catch(() => []);
   const google = await getGoogleOnboardingStatus()
     .catch(error => ({ error: error instanceof Error ? error.message : String(error) }));
@@ -55,9 +54,7 @@ eval({ code: `
   ))];
 
   return {
-    workspaceCount: workspaces.length,
-    workspaceNames: workspaces.map(w => w.name),
-    active,
+    workspaceId: config.id,
     providerIds,
     storedCredentialCount: storedCredentials.length,
     google,
@@ -79,8 +76,13 @@ rooted at the current context folder; `panels` and `/panels` refer to the same
 context-root directory, but onboarding examples prefer `panels` to avoid
 confusing this with a host absolute path.
 
-- **New user** (`workspaceCount <= 1`, or `workspaceCount === 0` with an active workspace) — give the full walkthrough with explanations of key concepts. These users need context on what Vibestudio is and what it can do. Note: in some runtime modes `workspace.list()` may return an empty array even when an active workspace exists — treat this as a new user.
-- **Returning user** (`workspaceCount > 1`) — skip the overview, be succinct, and ask what they need help with. They already know the basics.
+- **Little setup evidence** (no stored providers, imports, or panels beyond the
+  template) — give the full walkthrough with explanations of key concepts.
+- **Existing setup evidence** — be succinct and ask what they need help with.
+
+Workspace catalog operations are intentionally absent from agent eval. They
+belong to the human shell's stable hub session; do not probe or mutate the
+catalog through the selected workspace child.
 
 ## Typical Onboarding Flow
 

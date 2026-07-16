@@ -1,14 +1,13 @@
 ---
 name: gad-context
-description: Query Vibestudio's canonical trajectory model for conversation context, runtime events, channel envelopes, worktree states, file provenance, and semantic facts.
+description: Query Vibestudio's canonical trajectory model for conversation context, runtime events, channel envelopes, provenance links, and semantic facts.
 ---
 
 # GAD Context
 
 Use the `gad` runtime namespace. The storage model is canonical log-first:
 
-- Agent, channel, and VCS history lives in `log_events` plus `log_heads`; `log_kind`
-  on the head distinguishes `trajectory`, `channel`, and `vcs` logs.
+- Agent and channel delivery history lives in `log_events` plus `log_heads`.
 - Agent context projections live in `trajectory_messages`,
   `trajectory_message_blocks`, `trajectory_invocations`, `trajectory_approvals`,
   `trajectory_turns`, and usage/checkpoint tables.
@@ -16,11 +15,11 @@ Use the `gad` runtime namespace. The storage model is canonical log-first:
   trajectory events are joined to transmitted channel messages through the
   channel row's `origin_log_id`, `origin_head`, and `origin_envelope_id` columns;
   do not infer this relationship by matching payload text or timestamps.
-- Worktree state lives in `gad_worktree_states`, manifest tables, file versions,
-  `gad_state_transitions`, `gad_transition_parents`, `gad_worktree_heads`
-  (structured per-`(log_id, head)` state pointers with `commit_event_id`),
-  `vcs_context_bases` (durable context base pins), and `gad_worktree_edit_ops`
-  (working + committed edit provenance with `actor_id`/`invocation_id`).
+- Semantic version-control state is a separate, walkable graph exposed by the
+  canonical `vcs` runtime namespace. Use `vcs.status`, `vcs.listFiles`,
+  `vcs.compare`, `vcs.inspect`, `vcs.neighbors`, `vcs.history`, and `vcs.blame`; do not recover
+  a second worktree/state model from GAD SQL. Read
+  [the VCS skill](../vibestudio-vcs/SKILL.md) before semantic VCS work.
 
 Use only the canonical tables above. Older event/session families such as
 `trajectory_events`, `trajectory_branches`, `channel_envelopes`,
@@ -28,7 +27,7 @@ Use only the canonical tables above. Older event/session families such as
 `gad_file_observations`, and `gad_file_change_hunks` are not part of this schema.
 
 For live incident work, read [DIAGNOSTICS.md](DIAGNOSTICS.md) first. It explains
-the summary-first inspector APIs, current invariants, and context/worktree model.
+the summary-first inspector APIs and current trajectory/channel invariants.
 
 Useful APIs:
 
@@ -53,18 +52,12 @@ Useful APIs:
   `after` window's `throughSeq`, so paging does not chase a moving live tail.
 - `gad.getTrajectoryForEnvelope({ envelopeId })`
 - `gad.listPublishedEnvelopesForTrajectory({ trajectoryId, branchId, eventId, turnId, channelId, limit })`
-- `gad.listGadBranchFiles({ branchId })`
-- `gad.diffGadStates({ leftStateHash, rightStateHash })`
-- `gad.readGadFileAtState({ stateHash, path })`
-- `gad.getGadStateProducer({ stateHash })`
 - `gad.inspectStorageDiagnostics({ rowByteLimit, limit })`
 
-Branch/state lookups are sentinel-based: an unknown branch returns an empty
-file list, while missing state files/producers return `null`. During the
-inspecting agent's own active turn, `inspectAgentHealth().summary.ok` may be
-false solely because that turn/invocation is still open; zero durable issue
-counters distinguish this expected in-flight state from corruption. The summary
-makes that distinction explicit: `durableIntegrityOk: true` plus
+During the inspecting agent's own active turn, `inspectAgentHealth().summary.ok`
+may be false solely because that turn/invocation is still open; zero durable
+issue counters distinguish this expected in-flight state from corruption. The
+summary makes that distinction explicit: `durableIntegrityOk: true` plus
 `inFlightOnly: true` means that the snapshot found activity but no durable
 integrity failure.
 
@@ -86,7 +79,9 @@ Current implemented hardening:
 - `gad.query` accepts read-only CTEs and still rejects write CTEs, but it is a
   schema-level escape hatch after bounded inspectors have found the exact table
   or artifact you need.
-- Manifest/state hashes are synchronous SHA-256 over stable JSON.
+- Stored values are content-addressed; semantic event, application, work-unit,
+  change, and decision identities are validated by the canonical VCS
+  graph integrity checker.
 - Standard agent workers expose `inspectMethodSuspensions` to join local
   suspension rows with GAD invocation state.
 - Oversized method/eval results are capped before durable terminal invocation
@@ -131,13 +126,12 @@ const channelId = String(args.channelName ?? args.channelId ?? "");
 const health = await gad.inspectAgentHealth({ channelId, limit: 50 });
 ```
 
-To enumerate logs and their current heads with SQL instead:
+To enumerate trajectory and channel log heads with SQL instead:
 
 ```sql
-SELECT h.log_id, h.head, h.log_kind, w.state_hash, w.updated_at
+SELECT h.log_id, h.head, h.log_kind, h.created_at
 FROM log_heads h
-LEFT JOIN gad_worktree_heads w ON w.log_id = h.log_id AND w.head = h.head
-ORDER BY w.updated_at DESC, h.created_at DESC;
+ORDER BY h.created_at DESC;
 ```
 
 Do not query `trajectory_branches`; it is not a public table in the current GAD
@@ -191,19 +185,12 @@ broken.
 
 ## Reviewing code provenance
 
-Start with the bounded inspector and provenance APIs above. Use raw SQL only
-after they identify the exact invocation, state, or envelope that needs deeper
-inspection. To connect one tool invocation to its precise file operations:
-
-```sql
-SELECT st.event_id, st.invocation_id, st.input_state_hash, st.output_state_hash,
-       op.ordinal, op.kind, op.path, op.old_content_hash, op.new_content_hash,
-       op.hunks_json
-FROM gad_state_transitions st
-JOIN gad_worktree_edit_ops op ON op.event_id = st.event_id
-WHERE st.invocation_id = ?
-ORDER BY st.created_at, op.ordinal;
-```
+Start with the bounded inspector APIs above. For code provenance, switch to the
+canonical semantic graph: begin with the exact event/application state or a
+typed file, change, work-unit, decision, command, or trajectory root. Use
+`vcs.inspect` for one node, `vcs.neighbors` for immediate edges, `vcs.history`
+for a chronological projection, and `vcs.blame` for content coordinates. GAD
+SQL contains trajectory delivery facts, not a parallel file-history authority.
 
 Do not treat every channel envelope without `origin_*` columns as a publication
 bug. User- and channel-origin envelopes are expected to have no trajectory

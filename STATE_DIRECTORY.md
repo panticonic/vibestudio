@@ -87,13 +87,61 @@ Stores external dependency installs (npm `node_modules`) for panels and workers,
 
 Stores extension runtime dependency installs for packages esbuild leaves external, keyed by dependency hash plus platform, architecture, and Node ABI. Unlike `external-deps/`, this cache may run package lifecycle scripts because extension install/update approval grants native-code trust.
 
-### `.contexts/`
+### `workspaces/{name}/state/git-checkouts/`
 
-Per-context filesystem scopes at `workspaces/{name}/state/.contexts/{contextId}/` (the server's state directory is already per-workspace, so there is no workspace level inside it). Each context gets an isolated filesystem root managed by `ContextFolderManager` and used by sessions, panels, workers, and DOs.
+Operational Git interchange checkouts live at
+`workspaces/{name}/state/git-checkouts/<repoPath>/`. The manifest-selected
+`gitInterop` provider owns these directories for fetch, exact HEAD-tree import,
+protected-main export, commit trailers, and Git transport. They are host state,
+not workspace source, semantic context projections, or durable provenance.
+
+The semantic boundary is explicit in both directions. Import reads an exact
+immutable Git tree and admits it through `vcs.importSnapshot` as a committed
+candidate; export reads an exact protected semantic event through VCS/CAS and
+projects it into Git. Deleting an operational checkout removes transport state,
+not semantic workspace content. Startup asks provider `upstreamStatus` whether
+each declared checkout is materialized; it does not infer that fact by looking
+for a source directory.
+
+Build V2 never reads these checkouts. It resolves exact semantic repository
+states through the content store and materializes only a disposable build-source
+closure under its own cache namespace.
+
+### `.context-projections/v5/`
+
+Disposable filesystem projections of semantic contexts live at
+`workspaces/{name}/state/.context-projections/v5/{contextId}/`. The server's
+state directory is already per-workspace, so there is no additional workspace
+level inside this namespace. `v5` is the only projection epoch understood by
+the current process: the loader derives it from the canonical workspace
+topology, and `ContextFolderManager` receives that exact root rather than
+discovering a directory or selecting among versions.
+
+These directories are caches of VCS-authoritative context state, not independent
+filesystem scopes or durable sources of truth. Sessions, panels, workers, and
+DOs may use a projection after the VCS host has materialized it. A missing
+projection is rebuilt from semantic state. A malformed current-epoch projection
+is an error; the server does not reinterpret it through an older schema or
+migrate it in place. Pre-epoch debris is ignored by loading and denied to source
+scans and copy/build tooling.
 
 In the multi-user model each **panel slot** gets its own context (the context id is derived per slot, so two users opening the same panel source get independent contexts), and each runtime (worker/DO/agent) gets its own per-runtime scratch context. Shared workspace Durable Objects stay **shared** across the workspace's members — mutual inspectability is the product; there is no per-user DO partitioning.
 
-At materialization, `WorkspaceVcs.ensureContextFolder` writes a host-owned bookkeeping marker `.vibestudio-context.json` at the context folder root — `{ contextId, workspaceId, serverUrl? }` (`serverUrl` is the loopback ws RPC base URL, present once the gateway port is finalized). It lets CLI + agent scope resolution (cwd-upward search) bind to the right server, workspace, and context with zero flags. It is **not** workspace source: `.vibestudio-context.json` is in `ALWAYS_IGNORED_FILES` (and the userland `VCS_IGNORED_FILES` twin), so the VCS scan never captures it, `vcs.edit` refuses to write it, and it never appears in projection/diff/status. The marker is rewritten idempotently only when its contents drift.
+At materialization, `WorkspaceVcs.ensureContextFolder` writes the strict public
+binding `.vibestudio-context.json` at the projection root. Its exact
+`vibestudio.context-binding.v1` shape contains only the durable `workspaceId` and
+`contextId`. CLI and agent scope resolution find it by walking upward from cwd,
+verify its workspace against the paired credential, and use that credential's
+current hub/WebRTC route for reach. The binding never stores an endpoint,
+credential, projection generation, semantic receipt, or agent attribution.
+
+The host's disposable materialization receipt lives separately at
+`.gad/context-materialization.json`. It records the last semantic basis and
+repository targets needed for crash recovery and mirror reads, but is not a public
+protocol or durable semantic source. Both files are **not** workspace source:
+`.vibestudio-context.json` is in `ALWAYS_IGNORED_FILES` (and the userland
+`VCS_IGNORED_FILES` twin), `.gad/` is always ignored, `vcs.edit` refuses to write
+either, and neither appears in projection, diff, or status.
 
 ### `.databases/workerd-do/`
 
@@ -180,7 +228,7 @@ detached loopback hub and one selected WebRTC remote
 and include `{ transport, deviceId, refreshToken, pairedAt }`. The loopback
 credential is machine-global and never workspace-bound. The schema-v3 WebRTC
 entry carries distinct `controlPairing` and `workspacePairing` coordinates,
-each with exact `room`/`fp`/`sig`/`v`/`ice` and optional `srv`, minus the
+each with exact `room`/`fp`/`sig`/`v`/`ice`, minus the
 one-time code. The stable control reach lists/routes workspaces; the selected
 workspace reach serves workspace RPC. On later launches the shell reattaches
 with `refresh:<deviceId>:<refreshToken>` instead of re-pairing.
@@ -195,18 +243,30 @@ The validator rejects unknown fields, more than one remote entry, persisted
 one-time codes, and any retired credential shape. Previous stores are neither
 read nor migrated.
 
-### `workspaces/{name}/state/webrtc/identity.pem`
+### `workspaces/{name}/reach/webrtc/`
 
-Combined WebRTC DTLS certificate and private key used by one workspace child answerer.
-The certificate SHA-256 fingerprint is embedded as `fp` in pairing links. This
-combined file is the only recognized identity layout. Operators deliberately
-replace it with `vibestudio remote repair-identity --workspace <name> --yes`.
+Hub-owned reachability state for the advertised workspace, deliberately outside
+its semantic `state/` tree:
+
+- `identity.pem` is the combined WebRTC DTLS certificate and private key. Its
+  SHA-256 fingerprint is embedded as `fp` in pairing links.
+- `routes.json` maps authenticated devices, users, and outstanding invites to
+  their durable signaling rooms.
+- `pairing-activations.json` holds bounded, expiring activation receipts while
+  a one-time invite is promoted into a durable device route.
+
+Deleting or reseeding semantic state must not rotate either file: a paired
+device's transport contract is independent of semantic history. Deleting the
+workspace removes the whole workspace envelope, including reachability.
+`vibestudio remote repair-identity --workspace <name> --yes` deliberately
+rotates the identity and therefore requires devices to re-pair. No retired
+`state/webrtc/` layout is read or migrated.
 
 ### `server-auth/hub-ready.json`
 
 Ready file written by the one detached local hub once its gateway is listening
 (`src/server/hubServer.ts`). Payload includes `mode`, `gatewayPort`, the first-run
-`rootInvites` (complete desktop/mobile invites, or `null` after bootstrap),
+`rootInvite` (one complete pairing invite, or `null` after bootstrap),
 `serverId`, `serverBootId`, `pid`, and `version`. The desktop accepts only a
 fresh hub-mode record, pairs its global device once, and asks the hub to route
 the selected workspace child.

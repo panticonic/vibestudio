@@ -23,8 +23,12 @@ agentic system tests, use the running server through the CLI:
 5. Classify the root cause as infrastructure, documentation, harness, or
    validator. Default to repairing infrastructure; do not route around platform
    bugs by over-specifying prompts.
-6. Implement the fix, run focused conventional tests/type checks, restart the
-   source server when host code changed, and rerun the exact agentic test.
+6. Implement the fix and run focused conventional tests/type checks. Restarting
+   the current source server is sufficient for host-code-only changes. Changes
+   under `workspace/` are workspace source: a named `--bootstrap-workspace`
+   preserves its semantic state across restarts and does not reread the checkout
+   template. Stop it and start `pnpm server:live --ephemeral` to test a fresh
+   checkout copied from the current template, then rerun the exact agentic test.
 7. After it passes, run its category and then smoke coverage. Use
    `pnpm cli system-test rerun RUN_ID` to rerun every failure or unexpected tool
    failure from a prior run.

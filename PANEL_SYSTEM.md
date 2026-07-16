@@ -105,7 +105,7 @@ import {
   fs, // RPC-backed filesystem
   workspace, // Workspace catalog, source tree, units
   vcs, // GAD VCS: edit → commit → push
-  gad, // GAD store queries
+  gad, // Semantic control-plane queries
   git,
   blobstore,
   credentials,
@@ -261,7 +261,7 @@ await parent?.emit("saved", { path: "/file.txt" }); // Typed when a parent is pr
 Query workspace repo metadata through the workspace and VCS namespaces:
 
 ```typescript
-import { workspace, vcs } from "@workspace/runtime";
+import { contextId, workspace, vcs } from "@workspace/runtime";
 
 // Get the full workspace source tree
 const tree = await workspace.sourceTree();
@@ -272,8 +272,9 @@ const tree = await workspace.sourceTree();
 const owner = await workspace.findUnitForPath("panels/editor/src/index.tsx");
 // { unitPath: "panels/editor", relativePath: "src/index.tsx" }
 
-// Read recent GAD-native repo history
-const history = await vcs.log("panels/editor", { limit: 50 });
+// Read recent committed semantic workspace history
+const { committed } = await vcs.status({ contextId });
+const history = await vcs.history({ root: committed, direction: "past", limit: 50 });
 ```
 
 ## Connection Error Handling

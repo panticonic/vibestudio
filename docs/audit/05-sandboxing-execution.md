@@ -79,7 +79,7 @@ services.push({
 
 - `fetch("http://169.254.169.254/latest/meta-data/iam/security-credentials/…")` — AWS IMDSv1, no token. The proxy's per-provider manifest machinery was the only thing that would have blocked this.
 - `fetch("http://127.0.0.1:${rpcPort}/rpc", { headers: { authorization: "Bearer "+RPC_AUTH_TOKEN }, body: JSON.stringify({ service:"workerd", method:"createInstance", args:[{ source:"workers/attacker", contextId:"ctx", name:"x", …}]})})` — privilege-escalate by RPC'ing `workerd.createInstance` with arbitrary `source` / `stateArgs`. (`workerdService.policy.allowed` includes `"worker"`, so callerKind=worker is acceptable.)
-- `fetch(GATEWAY_URL + "/rpc", { headers: { authorization: "Bearer "+RPC_AUTH_TOKEN }, body: JSON.stringify({method:"vcs.status", args:["main"]}) })` — workers receive a real caller token plus gateway URL. If RPC policy over-allows that caller, a compromised worker can still exercise workspace services through the authenticated gateway path.
+- `fetch(GATEWAY_URL + "/rpc", { headers: { authorization: "Bearer "+RPC_AUTH_TOKEN }, body: JSON.stringify({method:"vcs.status", args:[{contextId:"ctx"}]}) })` — workers receive a real caller token plus gateway URL. If RPC policy over-allows that caller, a compromised worker can still exercise workspace services through the authenticated gateway path.
 - Any on-host service: Redis at 6379, Postgres at 5432, Elasticsearch at 9200, the developer's ssh-agent UNIX socket forwarded over TCP, etc.
 - Data exfiltration to any attacker-controlled host with no audit trail.
 

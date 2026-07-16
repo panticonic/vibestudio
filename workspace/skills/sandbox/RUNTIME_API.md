@@ -17,7 +17,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `id` | value |  |  |
 | `contextId` | value |  |  |
 | `rpc` | value |  | Portable RPC client (the full createRpcClient). |
-| `fs` | value |  | Per-context filesystem sandbox. Paths are context-root-relative. For valid workspace-repo paths, writeFile, appendFile, truncate, chmod, unlink/rmdir/rm, copyFile destinations, and supported renames into or within repos route through GAD working edits; tracked-to-scratch renames and open with write flags are rejected. mkdir and utimes remain direct filesystem operations. Platform-ignored paths and paths outside reserved workspace source roots are local scratch. |
+| `fs` | value |  | Per-context filesystem sandbox. Paths are context-root-relative. The semantic workspace records managed mutations before projection; moves preserve file identity and copies mint a new identity with exact copy provenance. Tracked-to-scratch renames, managed empty-directory mkdir, and open with write flags are rejected. Scratch mkdir and utimes remain direct filesystem operations. Platform-excluded paths and paths outside reserved workspace source roots are local scratch. |
 | `callMain` | value |  | Call a `main` (server) service method: callMain("fs.readFile", path). |
 | `parent` | value |  | This runtime's parent panel handle (a no-panel handle when there is none). |
 | `getParent` | value |  | Get the parent panel handle, or null when there is no parent. |
@@ -30,15 +30,15 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
 | `browserData` | namespace | `detectBrowsers`, `getOpenTabs`, `openTabsAsPanels`, `startImport`, `getImportHistory`, `getProfileImportState`, `previewImport`, `getCookieDomains`, `getHistoryDomains`, `getPasswordOrigins`, `getAutofillFieldNames`, `getDomainReadiness`, `getAutocompleteDebug`, `getBookmarks`, `addBookmark`, `updateBookmark`, `deleteBookmark`, `moveBookmark`, `searchBookmarks`, `getHistory`, `deleteHistoryEntry`, `deleteHistoryRange`, `clearAllHistory`, `searchHistory`, `searchHistoryForAutocomplete`, `recordHistoryVisit`, `updateHistoryTitle`, `getPasswords`, `getPasswordForSite`, `addPassword`, `updatePassword`, `deletePassword`, `updatePasswordLastUsed`, `addNeverSavePassword`, `isNeverSavePassword`, `getNeverSavePasswordOrigins`, `removeNeverSavePassword`, `getAutofillSuggestions`, `getSearchEngines`, `setDefaultEngine`, `getPermissions`, `setPermission`, `exportBookmarks`, `exportPasswords`, `exportCookies`, `exportAll`, `getCookies`, `deleteCookie`, `clearCookies` | Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export. |
-| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `createDisposableRemote`, `publishToDisposableRemote`, `pushDisposableRemote`, `inspectDisposableRemote`, `removeDisposableRemote`, `resetExportMarker`, `commitMapping`, `importProject`, `completeWorkspaceDependencies` | Typed external Git operations routed through the workspace's configured gitInterop provider. |
-| `vcs` | namespace | `edit`, `commit`, `discardEdits`, `readFile`, `listFiles`, `revert`, `status`, `log`, `diff`, `resolveHead`, `workspaceViewWithRepoAt`, `merge`, `abortMerge`, `pendingMerge`, `push`, `pushStatus`, `previewBuild`, `commitEdits`, `fileHistory`, `commitAncestors`, `editsByActor`, `editsByTurn`, `editsByInvocation`, `forkRepo`, `contextStatus`, `rebaseContext`, `recall` | Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance. |
-| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryEvents`, `appendChannelEnvelope`, `appendChannelEnvelopeWithRegistryMutation`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections`, `provenanceForFile`, `provenanceForSession`, `provenanceForClaim` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
+| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `createDisposableRemote`, `publishToDisposableRemote`, `pushDisposableRemote`, `inspectDisposableRemote`, `removeDisposableRemote`, `commitMapping`, `importProject`, `completeWorkspaceDependencies` | Typed external Git operations routed through the workspace's configured gitInterop provider. |
+| `vcs` | namespace | `edit`, `move`, `copy`, `integrate`, `revert`, `commit`, `discard`, `importSnapshot`, `push`, `status`, `compare`, `inspect`, `neighbors`, `history`, `blame`, `resolveRepository`, `readFile`, `listFiles` | Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, and directly walkable provenance. |
+| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryEvents`, `appendChannelEnvelope`, `appendChannelEnvelopeWithRegistryMutation`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
 | `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree`, `delete`, `list`, `putBytes`, `readText` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string \| null. Runtime-only putBytes(Uint8Array \| ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` | Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings. |
 | `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on`, `list`, `reload` |  |
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
-| `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `sourceTree`, `findUnitForPath`, `units` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
+| `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
 | `openPanel` | value |  |  |
 | `listPanels` | value |  |  |
 | `getPanelHandle` | value |  |  |
@@ -62,13 +62,14 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `adblock` | namespace | `getStats`, `isActive`, `getStatsForPanel`, `isEnabledForPanel`, `setEnabledForPanel`, `resetStatsForPanel`, `getPanelUrl`, `addToWhitelist`, `removeFromWhitelist` |  |
 <!-- END GENERATED: panel-runtime-surface -->
 
-Workspace source follows **edit → commit → push**: the `edit`/`write` tools — and
-`vcs.edit` directly — record each change as a tracked _working_ edit on your
-context head and project it to disk, so rebuilt panels, workers, packages, or
-skills pick it up immediately. A working edit is not a commit: seal working edits
-as a messaged milestone with `vcs.commit({ message })`, then advance `main` with
-the fast-forward-only, build-gated `vcs.push`. Use `git` only for external
-project import, shared remotes/upstreams, status, push/pull, and publication.
+Workspace source is one semantic VCS over exact event/application states. Read
+[vibestudio-vcs](../vibestudio-vcs/SKILL.md) before source mutation,
+comparison, commit, external import, or publication. Use `git` only for external
+remote transport; cross that boundary with one exact `vcs.importSnapshot`
+rather than ordinary local edits. One coherent non-Git source snapshot may
+contain several repositories when partial visibility would be incorrect. A Git
+import has exactly one repository and one provenance boundary so unrelated remotes never
+share a misleading source coordinate.
 For external Git smart HTTP, construct `GitClient` from `@vibestudio/git` with
 `credentials.gitHttp()`.
 For workspace-managed external repo declarations, startup auto-import, branches,
@@ -90,37 +91,38 @@ contained relative targets. Link creation under a GAD workspace repo is
 rejected because GAD states do not represent link entries. `chown()` remains
 absent; use `copyFile()` when the destination must be tracked workspace source.
 
-## Workspace Catalog
+## Current Workspace
 
-Import `workspace` from `@workspace/runtime` to inspect the active workspace,
-workspace catalog, and registered runtime units:
+Import `workspace` from `@workspace/runtime` to inspect the current workspace
+and its registered runtime units:
 
 ```ts
 import { contextId, workspace } from "@workspace/runtime";
 
 const active = await workspace.getActive();
-const activeEntry = await workspace.getActiveEntry(); // { name, lastOpened }
-const workspaces = await workspace.list();
 const units = await workspace.units.list();
 
-console.log({ contextId, active, activeEntry, workspaceCount: workspaces.length });
+console.log({ contextId, active });
 console.log(
   "Unit sample:",
   units.slice(0, 5).map((unit) => unit.id)
 );
 ```
 
-`workspace.getActive()` returns the active workspace id. `getActiveEntry()`
-returns the catalog entry for that id. Use `workspace.units.*` for source unit
-inspection, diagnostics, logs, versions, restart, and rollback.
+`workspace.getActive()` returns the current workspace id. Use
+`workspace.units.*` for source unit inspection, diagnostics, logs, versions,
+restart, and rollback. Workspace catalog operations belong to the human
+shell's stable hub session and are intentionally absent from runtime eval.
 
 Workspace host logs are exposed through the service catalog, not as an
 `@workspace/runtime` namespace. Use `services.serverLog.tail/query/stats` in
 eval, or raw RPC calls such as
 `rpc.call("main", "serverLog.query", [{ level: "warn", limit: 100 }])`.
-Live following uses `rpc.call("main", "events.subscribe",
-["server-log:append"])`; humans can open the `about/server-logs` viewer. See
-[`server-logs`](../server-logs/SKILL.md) for the full contract and cleanup
+Live following uses
+`rpc.stream("main", "events.watch", [["server-log:append"]], { signal })`,
+normally through `EventsClient`; cancelling that response is the only
+unsubscribe operation. Humans can open the `about/server-logs` viewer. See
+[`server-logs`](../server-logs/SKILL.md) for the full contract and exact cleanup
 pattern.
 
 ## Notifications
@@ -197,72 +199,24 @@ lifecycle probe is harmless. `direct` requires a co-located public gateway;
 is available, report that concrete availability error rather than inventing a
 target or switching to an unrelated service.
 
-### Workspace VCS Call Shape
+### Workspace semantic VCS
 
-The `vcs` API is per-repo and state-based, not cwd-based. Each workspace repo
-(`packages/foo`, `panels/chat`, `projects/<vault>`, `meta`) is its own versioned
-unit with its own log + history. Reads take a `repoPath` (positional) to scope to
-one repo; `vcs.diff` takes only `state:…` hashes. Do not pass the workspace root
-or `process.cwd()`.
+The `vcs` namespace is workspace-wide and schema-generated. Use
+`await help("vcs")` for the live method list and exact arguments. Use the
+[canonical VCS skill](../vibestudio-vcs/SKILL.md) for semantics instead of
+copying a method catalog into this runtime guide.
 
-| Task                                          | Call shape                                                 |
-| --------------------------------------------- | ---------------------------------------------------------- |
-| A repo's uncommitted + committed changes      | `await vcs.status("panels/chat")` (includes `uncommitted`) |
-| Status for a specific head in a repo          | `await vcs.status("panels/chat", "ctx:...")`               |
-| Log a repo's commit history                   | `await vcs.log("panels/chat", 20)`                         |
-| Resolve a head to a state hash in a repo      | `(await vcs.resolveHead("main", "panels/chat")).stateHash` |
-| Diff two states                               | `await vcs.diff(leftStateHash, rightStateHash)`            |
-| Read a file from a repo's head                | `await vcs.readFile({ path: "notes.md", repoPath: "panels/chat" })` |
-| Record a working edit (projects to disk)      | `await vcs.edit({ edits: [...] })`                         |
-| Seal working edits as a milestone             | `await vcs.commit({ message: "…", repoPaths: [...] })`     |
-| Drop uncommitted working edits                | `await vcs.discardEdits("panels/chat")`                    |
-| Pre-push check (ahead/diverged/uncommitted)   | `await vcs.pushStatus(["panels/chat"])`                    |
-| Ship a repo's committed changes into its main | `await vcs.push({ repoPaths: ["panels/chat"] })`           |
-| Fold main into your head after a diverge      | `await vcs.merge("panels/chat")`                           |
-| Dry-run a build of your working content       | `await vcs.previewBuild({ repoPaths: ["panels/chat"] })`   |
+Important routing rules:
 
-`vcs.status(repoPath, head?)` reports that repo head's `uncommitted` working-edit
-count and its committed changes vs the repo's own `main` — a GAD state-diff, not
-filesystem dirtiness. The model is **edit → commit → push**: `vcs.edit({ edits })`
-records a working change (projected to disk, builds immediately, but NOT a
-commit), `vcs.commit({ message })` seals working edits as a messaged milestone
-(message mandatory), and `vcs.push({ repoPaths: [...] })` advances `main` —
-fast-forward-only and build-gated, multiple repoPaths push as one atomic group.
-Push throws if working edits are uncommitted, and returns `status: "diverged"` if
-`main` moved past your base; recover from a diverge with `vcs.merge(repoPath)`
-(clean merges auto-commit; conflicts write markers you resolve via `vcs.edit` +
-`vcs.commit`). To diff repo states, use state hashes: `vcs.diff` accepts
-`state:…` hashes, not file paths and not head names. If you have heads, resolve
-them first with `vcs.resolveHead(head, repoPath)`; otherwise use the `stateHash`
-returned by `vcs.edit`/`vcs.commit`. Those VCS hashes are repo-rooted; before
-using one as a pinned `build.getBuild` ref, convert it with
-`vcs.workspaceViewWithRepoAt(repoPath, repoStateHash)` and pass the returned
-workspace-rooted `stateHash`.
-
-VCS tracks workspace **source**, so every `vcs.edit`/`write` path must live
-under a tracked directory (`projects/`, `panels/`, `packages/`, `apps/`,
-`workers/`, `skills/`, `extensions/`). A _temporary_ or throwaway file you record
-still goes inside a repo under one of those — e.g. `projects/tmp-foo/note.txt` —
-**not** a
-platform-ignored path. `vcs.edit` rejects ignored dirs (`.vibestudio`,
-`.tmp`, `.git`, `.gad`, `node_modules`, `dist`) and ignored files (`.env`,
-`*.log`); in particular do **not** pass an `fs.mktemp()` path (it returns an
-ignored `.tmp/` location) to `vcs.edit`. In container sections such as
-`projects/`, `section/name` is the repo root; write `section/name/file`, not the
-repo root itself. File-oriented APIs also accept a file-looking shorthand such
-as `projects/note.txt`; it resolves uniformly to the canonical path
-`projects/note/note.txt`, which the tool returns. A name without a file extension
-(`projects/note`) remains a repo root. No scaffold is needed for a temporary project repo: writing
-`projects/tmp-name/file` creates context-local working content. Commit only for a
-named local snapshot; push only when it should become visible on `main`.
-
-`vcs.readFile({ path })` returns `{ content, stateHash, contentHash, mode, size }`
-— there is no `baseStateHash` field; use the returned `stateHash` as the
-`baseStateHash` for a follow-up `vcs.edit`. `content` is a tagged union:
-text files return `{ kind: "text", text: "..." }`, while binary files return
-`{ kind: "bytes", base64: "..." }`. Do not interpolate `read.content` directly;
-check `read.content.kind` and then use `read.content.text` or
-`read.content.base64`.
+- `status` returns the exact committed event and working event/application node;
+- every context mutation carries `expectedWorkingHead` and `commandId`;
+- `compare` classifies source changes against one exact target state;
+- `integrate` appends local adopt/reconcile/decline decisions;
+- `commit` and `discard` consume the complete local application chain;
+- `move` and `copy` preserve explicit identity/content provenance;
+- ordinary build and test services validate the current context; VCS does not
+  expose a second preview-build path;
+- `push` publishes one already-committed exact event after protected checks.
 
 ## Store
 
@@ -553,92 +507,10 @@ that already have a Vibestudio permission flow, use `openExternal()`,
 `credentials.*`, `git.*`, `vcs.*`, or the relevant runtime API so the host can apply the
 right trust scope and audit model.
 
-## Workspace VCS Edits
+## Workspace VCS operations
 
-Workspace runtime source is activated from your context head's working GAD state,
-and follows **edit → commit → push**: the `edit`/`write` tools and
-`vcs.edit({ edits })` record each change as a tracked _working_ edit on your
-context head and project it to disk. A working edit advances effective versions,
-triggers rebuilds, and is immediately visible to workspace runtime units — but it
-is NOT a commit. `vcs.commit({ message })` seals your accumulated working edits as
-a messaged milestone (message mandatory; this is what shows up in `vcs.log`), and
-`vcs.push` advances `main` (fast-forward-only, build-gated). Do not edit source
-through `fs.writeFile` and expect it to build: the worktree is a disposable
-projection, and builds read GAD state, so source edits must go through
-`edit`/`write`/`vcs.edit` to land on the head. Use the repo-rooted `stateHash`
-returned by `vcs.edit`/`vcs.commit` (or `vcs.resolveHead(head, repoPath).stateHash`)
-for `vcs.diff`. For a pinned `build.getBuild` ref, first compose it into a
-workspace-rooted state with `vcs.workspaceViewWithRepoAt(repoPath, repoStateHash)`.
-Drop unwanted working edits with `vcs.discardEdits(repoPath)`.
-
-`vcs.edit` accepts `kind: "write"` for create-or-overwrite behavior and also
-accepts the common `kind: "upsert"` spelling as an alias. A string `content` is
-expanded to text content automatically.
-
-### Advanced VCS recipes
-
-Use a temporary path that belongs to a real workspace repo and is not ignored,
-for example `projects/tmp-probes/vcs-probe-<unique>.txt`. Bare tracked paths are
-relative to the workspace's explicit `defaultRepo` declaration in
-`meta/vibestudio.yml`; when that field is absent, name the repo in the path.
-`projects/name` names a repo root. As a convenience, file-oriented APIs expand
-an ordinary file-looking shorthand such as `projects/probe.txt` into
-`projects/probe/probe.txt`; use the canonical full form when composing paths
-programmatically. Paths under `.git`,
-`.vibestudio`, logs, or generic ignored temp directories are intentionally not
-tracked and therefore cannot have workspace VCS history or provenance.
-
-To undo a committed change, keep the `eventId` or repo-rooted `stateHash` from
-the commit, then forward-apply its inverse:
-
-```ts
-import { vcs } from "@workspace/runtime";
-
-const repoPath = "projects/default";
-const reversal = await vcs.revert({ eventId: committed.eventId, repoPath });
-const restored = await vcs.readFile({ path: "vcs-probe-example.txt", repoPath });
-// reversal is an uncommitted working edit. Seal it only if requested:
-// await vcs.commit({ message: "Revert probe change", repoPaths: [repoPath] });
-return { reversal, restored: restored?.content };
-```
-
-File reads use one address shape on every transport:
-`vcs.readFile({ path, repoPath?, ref?, scope? })`. File listings similarly use
-`vcs.listFiles({ repoPath?, ref?, scope? })` (or no argument for the caller's
-composed current view). File history is
-`vcs.fileHistory({ path, repoPath?, head?, limit? })`; pass either a full
-workspace path or an explicit `repoPath` for repo-relative input. It never
-searches unrelated repo logs or guesses between duplicate filenames.
-
-Calling the agent `commit` tool with no working edits is a completed no-op and
-returns `diagnostic: "nothing-to-commit"`. When some requested repos commit and
-others are already clean, it reports the committed snapshots plus
-`diagnostic: "partially-unchanged"`.
-
-`vcs.revert` does not create a revert commit automatically. It restores the
-content as a working edit so callers can inspect or amend it before an explicit
-`vcs.commit`.
-
-For agent-turn provenance, create the tracked edit with the agent's `write` or
-`edit` tool, then query the history surface. Those authoring tools stamp the
-actor, turn, and tool invocation onto the VCS edit. A direct `vcs.edit` from an
-eval has actor identity, but it is not itself an agent authoring-tool invocation
-and therefore does not automatically acquire the calling chat tool's turn and
-invocation causality.
-
-```ts
-import { vcs } from "@workspace/runtime";
-
-const rows = await vcs.fileHistory({ path: "projects/default/vcs-probe-example.txt" });
-const latest = rows.at(-1);
-return {
-  actorId: latest?.actorId,
-  turnId: latest?.turnId,
-  invocationId: latest?.invocationId,
-};
-```
-
-Other provenance traversals are `vcs.editsByActor(actorId, limit?)`,
-`vcs.editsByTurn(turnId)`, `vcs.editsByInvocation(invocationId)`,
-`vcs.commitEdits(repoPath, { eventId })`, and
-`vcs.commitAncestors(repoPath, eventId, limit?)`.
+Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md) and the live `help("vcs")`
+schema. That skill is the single maintained workflow source for semantic edits,
+comparison/integration, commit/remainder handling, move/copy, external snapshot
+import (including coherent non-Git multi-repository bootstrap), counteraction-based
+revert, provenance, typed recovery, and protected publication.

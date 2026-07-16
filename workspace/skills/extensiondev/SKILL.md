@@ -16,7 +16,7 @@ If you're calling an existing extension from a panel or worker, you don't need t
 | [AUTHORING.md](AUTHORING.md)   | Workspace layout, `package.json`, `activate(ctx)`, the API contract, the `ctx.*` surface                      |
 | [APPROVALS.md](APPROVALS.md)   | `ctx.invocation.current()`, `ctx.approvals.request(...)`, shared-resource grants for extension-owned services |
 | [FETCH.md](FETCH.md)           | Optional default-export `fetch` handler and the `/_r/ext/<name>/*` route                                      |
-| [DEV_LOOP.md](DEV_LOOP.md)     | Workspace VCS state advances as the dev signal, dev-session approval, inspector, log stream                   |
+| [DEV_LOOP.md](DEV_LOOP.md)     | Semantic publication as the dev signal, dev-session approval, inspector, log stream                           |
 | [MIGRATIONS.md](MIGRATIONS.md) | Migrating an in-host service into an extension (the canary pattern)                                           |
 
 ## When to write an extension
@@ -35,7 +35,16 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
 4. **Use `ctx.approvals.request(...)` only for extension-owned shared resources exposed to other userland callers.** Do not use it as a generic confirmation prompt or wrapper around ordinary filesystem/process/network work; the host/runtime APIs own those permission boundaries.
 5. **Prefer ESM**. For external CommonJS packages, use default imports + destructure (`import pkg from "x"; const { fn } = pkg`). Named imports from CJS are blocked.
 6. **No `console.log` in production paths.** Use `ctx.log.{debug,info,warn,error}` so logs land in the workspace-unit stream (`workspace.units.logs(name)`). `console.*` is captured too, but as `source: "stdout"` / `"stderr"` instead of structured records.
-7. **A push into `main` is the dev signal.** Edit working content (`vcs.edit`), `vcs.commit({ message })`, then `vcs.push({ repoPaths })` — the build-gated, ff-only `main`-head advance triggers an extension update approval and the manager rebuilds + replaces the running process. Working/committed context-head work alone does nothing. There is no `extensions.reload` for source changes.
+7. **Protected semantic publication is the dev signal.** Read
+   [vibestudio-vcs](../vibestudio-vcs/SKILL.md), author source on an exact
+   working head, commit the complete local application chain, and publish the
+   committed event through semantic ancestry/integration validation, approval,
+   and atomic protected-ref publication. Explicit builds are advisory, while a
+   successful `main` advance triggers the separate build/update projection.
+   That projection requires extension update approval before replacement and
+   retains the previous runnable extension on any build or activation failure.
+   Working or merely committed context work does not update the active
+   extension.
 8. **Every extension ships a repo-local `SKILL.md`.** Put it at
    `workspace/extensions/<name>/SKILL.md` and document the extension's RPC
    surface, logs, trust boundaries, and any remote-server topology assumptions.
@@ -97,10 +106,10 @@ The declared set in `meta/vibestudio.yml` is the single source of truth, reconci
 | Task                                              | How                                                                                                                            |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Scaffold a new extension                          | Copy from `docs/extensions/templates/{minimal,plain-js-dep,external-cjs,native-wasm}/`                                         |
-| Read manifest rules                               | See [AUTHORING.md](AUTHORING.md) — `vibestudio.extension` shape, `dependencyMode`                                                |
+| Read manifest rules                               | See [AUTHORING.md](AUTHORING.md) — `vibestudio.extension` shape, `dependencyMode`                                              |
 | Gate access to an extension-owned shared resource | See [APPROVALS.md](APPROVALS.md) — `ctx.approvals.request` + grant lookup                                                      |
 | Add an HTTP endpoint                              | See [FETCH.md](FETCH.md) — default-export `fetch` handler                                                                      |
-| Push edits and pick up changes                    | See [DEV_LOOP.md](DEV_LOOP.md) — build-gated `vcs.push`, dev-session, inspector                                                |
+| Publish source and pick up changes                | See [DEV_LOOP.md](DEV_LOOP.md) — semantic commit/publication gates, dev-session, inspector                                     |
 | Migrate from `src/server/services/*`              | See [MIGRATIONS.md](MIGRATIONS.md) — canary pattern, `extensions.use(...)` codemod                                             |
 | Inspect an extension's status / health / logs     | `workspace.units.list()`, `workspace.units.diagnostics(name)`, `workspace.units.logs(name)`, `workspace.units.inspector(name)` |
 | Force restart (no source change)                  | `extensions.reload(name)` — approval-gated, restarts the active approved build                                                 |

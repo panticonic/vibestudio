@@ -46,7 +46,7 @@ the "user"-shaped slots that do exist mean something _different_ from an account
 
 - GAD (the durable knowledge/trajectory ledger) stamps `actor: ActorRef` on **every** log
   event, and its `ActorKind` union includes `"user"`
-  (`workspace/workers/gad-store/index.ts:186-200`;
+  (`workspace/packages/semantic-control-plane/src/index.ts:186-200`;
   `workspace/packages/agentic-protocol/src/events.ts:22-41`).
 - The channel/messaging layer likewise has `"user"` as a first-class
   `ParticipantKind` / `SemanticParticipantKind` (`events.ts:32`), and a human is a
@@ -126,13 +126,14 @@ security-hardened one.
 Vibestudio maintains a **narrow host boundary**: the native/server host does not know
 userland concepts, and userland cannot manufacture host authority. This is guarded by
 `scripts/check-host-workspace-imports.mjs` (`pnpm check:host-boundary`) and described in
-`docs/narrow-host-boundary-refactor-plan.md`. Two multi-user features touch this boundary
+`docs/provenance-aware-diff-merge-plan.md`. Two multi-user features touch this boundary
 directly; both were reshaped to respect it, and every downstream section obeys these
 invariants:
 
 - **INV-1 — The host never learns about channels.** Pubsub channels
   (`workspace/workers/pubsub-channel`) are userland. **Channel presence** and channel
-  membership are computed _only_ in the userland channel layer (roster + heartbeat); the
+  membership are computed _only_ in the userland channel layer (roster + exact
+  subscription-response lifetime); the
   host/hub must never import, reference, or derive state from channels. A connected panel is
   its own channel-presence signal — no host involvement is needed or permitted (§9.1).
 
@@ -165,8 +166,8 @@ invariants:
 | **Panel trees**            | One flat `slots` table in one per-workspace `WorkspaceDO`; null-parent slots collapse into **one** global tree, broadcast identically to all clients. No owner column anywhere.                                                                         | `workspaceDO.ts:335-345`, `panelManager.ts:1001-1011`, `panelRegistry.ts:102-107`                                  |
 | **Approvals**              | Single shared in-memory queue (`approvalQueue`), one global instance. Grants keyed by **code identity** `(callerId, repoPath, effectiveVersion)`. **No resolver identity captured** — only an in-memory metric counter of decision×kind.                | `approvalQueue.ts`, `shellApprovalService.ts`, `capabilityGrantStore.ts`                                           |
 | **Channels / handles**     | `PubSubChannel` DO: durable log (in GAD) + roster + calls. `"user"` is a valid participant kind, but every human panel joins hardcoded as handle `"user"`, name `"Chat Panel"`. Handles are **client-asserted** (spoofable). No channel membership/ACL. | `workspace/workers/pubsub-channel/channel-do.ts`, `agentic-chat/hooks/useAgenticChat.ts:224`, `useChatCore.ts:267` |
-| **Presence**               | Real foundation exists: join/leave/update presence envelopes, typing signals, heartbeat eviction (5 min). No account aggregation, no online/idle/away model, no last-seen persistence.                                                                  | `channel-do.ts:592-615,945,1217,1777-1825`                                                                         |
-| **GAD / provenance**       | Append-only, workspace-scoped, forkable, integrity-checked ledger. **Already stamps `actor: ActorRef` on every event, with `"user"` a valid actor kind.** Channel logs live here.                                                                       | `workspace/workers/gad-store/index.ts:186-200,404-445`                                                             |
+| **Presence**               | Channel join/leave/update envelopes, typing signals, account aggregation, domain-activity status, and retained last-seen. Each live session is owned by its subscription response; there is no timeout-based eviction.                                  | `workspace/workers/pubsub-channel/channel-do.ts`                                                                   |
+| **GAD / provenance**       | Append-only, workspace-scoped, forkable, integrity-checked ledger. **Already stamps `actor: ActorRef` on every event, with `"user"` a valid actor kind.** Channel logs live here.                                                                       | `workspace/packages/semantic-control-plane/src/index.ts:186-200,404-445`                                           |
 
 ---
 
@@ -374,7 +375,7 @@ approves, all consume" fall out naturally (§6).
 **Decision 5 — The approval-provenance log splits by ownership (host-owned queue log +
 existing GAD agent-approval projection).** GAD already journals _agent tool-call_ approvals
 via `approval.requested`/`approval.resolved` + a resolve-once `trajectory_approvals`
-projection (`gad-store/index.ts:1833-1846,4008-4056`) — keep that. The **host approval
+projection (`semantic-control-plane/src/index.ts:1833-1846,4008-4056`) — keep that. The **host approval
 queue** (credential/capability/userland) plus **membership governance** (invite/revoke/
 add/remove/role) get a **host-owned transactional SQLite governance ledger** —
 because writing host decisions into userland GAD would be a boundary inversion (INV-2). **No
@@ -397,14 +398,14 @@ security boundary (§0.0, §8).
 
 | Area                        | Change                                                                                                                                                                                                            | Anchor                                                                                                |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| **User entity**             | New `User`, `UserStore` (hub-owned, persisted), root bootstrap                                                                                                                                                    | new `packages/identity/src/`, hub                                                                 |
+| **User entity**             | New `User`, `UserStore` (hub-owned, persisted), root bootstrap                                                                                                                                                    | new `packages/identity/src/`, hub                                                                     |
 | **Device→User**             | `DeviceRecord.userId` FK; `issueDevice`/`completePairing`/`validateRefresh` carry user                                                                                                                            | `deviceAuthStore.ts:8-61`                                                                             |
 | **Principal kind**          | Keep the 8 runtime kinds; add `subject.userId` to `VerifiedCaller` (do **not** add a `user` _runtime_ kind — humans still connect as `shell`/`panel`, now with a subject)                                         | `serviceDispatcher.ts:181-191`, `principalKinds.ts`                                                   |
 | **Auth binding**            | Populate `subject` at `handleAuth` from each credential path; agents/workers inherit spawner's `userId` via `parentId` lineage                                                                                    | `rpcServer.ts:845-917`, `workspaceDO.ts` entities                                                     |
 | **Membership**              | `WorkspaceMembership(userId, workspaceId)` on hub; route-time access check                                                                                                                                        | `hubServer.ts` route boundary                                                                         |
 | **Panel forest**            | `slots.owner_user_id`, `entities.owner_user_id`; owner-tagged `slotListOpen`; group roots into forest; `Panel.owner` / `PanelTreeSnapshot` grouping                                                               | `workspaceDO.ts:335-345`, `panelManager.ts:1001-1011`, `panelRegistry.ts:102-107`, `types.ts:241,319` |
 | **Context isolation**       | Salt deterministic context ids with `userId`                                                                                                                                                                      | `panelFactory.ts:199`, `index.ts:2295`, `appHost.ts:2276`                                             |
-| **Approval provenance**     | Capture resolver `userId` from the authenticated `ServiceContext`; append through the hub-owned SQLite governance ledger (+ extend GAD projection for the agent-approval half); no acting-principal wire override | `shellApprovalService.ts`, `approvalQueue.ts`, `governance/*`, `gad-store/index.ts`                   |
+| **Approval provenance**     | Capture resolver `userId` from the authenticated `ServiceContext`; append through the hub-owned SQLite governance ledger (+ extend GAD projection for the agent-approval half); no acting-principal wire override | `shellApprovalService.ts`, `approvalQueue.ts`, `governance/*`, `semantic-control-plane/src/index.ts`  |
 | **Push routing**            | Member-filtered, exact `{userId, clientId}` snapshots; retry outstanding targets and cancel only successful deliveries                                                                                            | `approvalPushBridge.ts`, `pushService.ts`                                                             |
 | **Handles**                 | Replace hardcoded `handle:"user"`; derive channel handle from verified subject; account→handle registry                                                                                                           | `useAgenticChat.ts:224`, `useChatCore.ts:267`, `channel-do.ts:644-793`                                |
 | **Channel membership**      | Lightweight per-channel roster invite/notify; `participantKindFromMetadata` maps `user:` ids → `user`; `askUserPolicy` multi-user aware                                                                           | `channel-do.ts`, `participant-ref.ts:227`, `agent-loop/src/policies/index.ts:172`                     |
@@ -480,18 +481,20 @@ systems, and only one is journaled today.**
 - **(a) Agent tool-call approvals** — _already in GAD._ An `approval.requested` /
   `approval.resolved` trajectory-event pair, keyed by `causality.approvalId`, projected
   into a live, resolve-once `trajectory_approvals` table with **`requested_by_json`** and
-  **`resolved_by_json`** columns (`gad-store/index.ts:1833-1846`, `projectApproval` at
+  **`resolved_by_json`** columns (`semantic-control-plane/src/index.ts:1833-1846`, `projectApproval` at
   `:4008-4056`). This is _already_ a hash-chained, replayable, fork-aware "who requested /
   who resolved" ledger — the exact skeleton we want.
 - **(b) Host approval-queue resolutions** — _the shared queue this plan cares about_
   (credential, capability, client-config, credential-input, userland, unit-batch,
   device-code, external-agent). These resolve **in-process** via `shellApprovalService` /
-  `mainAdvanceApproval` / `credentialService`; their only durable trace is the protected
-  main-ref log + an **in-memory metric counter** (`pushMetrics.ts`, `approval_resolved_total`).
+  protected-push approval effect / `credentialService`; their only durable trace is the
+  protected-publication audit + an **in-memory metric counter**
+  (`pushMetrics.ts`, `approval_resolved_total`).
   **They are not journaled into GAD or anywhere queryable.** This is the gap.
 
 **Boundary & ownership (decided in the spirit of the host-boundary rule).** GAD
-(`workspace/workers/gad-store`) is **userland**; the host approval queue is host-side.
+(`workspace/packages/semantic-control-plane`) is product-sealed internal bundle
+source; the host approval queue remains host-side.
 Making the host write its security-decision audit into a userland-owned, userland-forkable
 store would be a boundary inversion — the same class of concern as host-knows-channels. So
 the provenance log splits **by ownership, mirroring the two approval systems**:
@@ -542,7 +545,7 @@ acted (WP5 §6). The _agent-approval_ half (a) additionally extends GAD's existi
 }
 ```
 
-**GAD (agent-approval half only):** extend `projectApproval` (`gad-store/index.ts:4008`) so
+**GAD (agent-approval half only):** extend `projectApproval` (`semantic-control-plane/src/index.ts:4008`) so
 `resolved_by_json` carries the account, and set `actor.metadata.userId` on
 `approval.resolved` — **never** `actor.kind = "user"` (that is the semantic "human-authored"
 role, not an account).
@@ -617,11 +620,12 @@ the whole point:
 
 Who is participating in a **pubsub channel** (a conversation roster). Lives **entirely in
 the userland channel layer**; the **host/hub never learn about channels** (narrow-host
-boundary — `scripts/check-host-workspace-imports.mjs`, `docs/narrow-host-boundary-refactor-plan.md`;
+boundary — `scripts/check-host-workspace-imports.mjs`, `docs/provenance-aware-diff-merge-plan.md`;
 the host has no knowledge that `pubsub-channel` exists). It needs no host involvement
-because **a connected panel is, by definition, present**: it joins the channel roster on
-connect, heartbeats while live, and is evicted when it drops — all in the channel DO. Build
-on the existing userland foundation (`channel-do.ts:592-615, 945, 1217, 1777-1825`):
+because **an open subscription response is, by definition, present**: opening it joins the
+channel roster and its exact terminal releases the session. A fresh DO activation drops any
+persisted roster rows because no activation-local response can own them. Build on the existing
+userland foundation (`workspace/workers/pubsub-channel/channel-do.ts`):
 
 - **Account aggregation (userland).** Collapse a user's multiple live panel participants
   into one channel presence keyed by `user:<userId>` — online in the channel if any of that
@@ -630,7 +634,7 @@ on the existing userland foundation (`channel-do.ts:592-615, 945, 1217, 1777-182
   `agentic-core`, never by the host.
 - **Status + last-seen (userland).** `online | idle | away | offline` in presence metadata
   (add `status`/`avatar`/`color` to the public whitelist, `participant-ref.ts:17-26`);
-  idle/away derived userland-side from heartbeat recency; persist last-seen on leave in the
+  idle/away derived userland-side from real channel activity; persist last-seen on leave in the
   channel DO.
 
 ### 9.2 Workspace user presence — a first-class surface, _not_ via channels
@@ -731,7 +735,7 @@ account-scoped user notification inbox (initial/reconnect snapshot plus targeted
 no polling); call-group `ask_user` targeting; `participantKindFromMetadata` `user:` case.
 
 **WP8 — Presence (two systems).** (i) _Channel presence_ — account aggregation, status,
-last-seen, whitelist, all in the channel/pubsub DO + `agentic-core`, no host involvement.
+last-seen, and response-owned session lifetime, all in the channel/pubsub DO + `agentic-core`, no host involvement.
 (ii) _Workspace user presence_ — new host `workspacePresence` service + event, fed by the
 session/connection registry keyed on `userId`, emitting only `{userId, handle, online,
 lastSeen}`, with **zero** channel coupling (guarded by `check:host-boundary`); consumed by
@@ -847,9 +851,9 @@ Every claim above is grounded in a seven-track code investigation. Primary ancho
 - **Channels/handles/presence:** `workspace/workers/pubsub-channel/channel-do.ts`,
   `agentic-protocol/src/events.ts:32`, `participant-ref.ts:17-26,227`,
   `agentic-chat/hooks/useAgenticChat.ts:224`, `agent-loop/src/policies/index.ts:33,172`.
-- **GAD/provenance:** `workspace/workers/gad-store/index.ts` (`ACTOR_KINDS` 186-200,
+- **GAD/provenance:** `workspace/packages/semantic-control-plane/src/index.ts` (`ACTOR_KINDS` 186-200,
   `log_events` 1655-1676, `trajectory_approvals` 1833-1846, `projectApproval` 4008-4056),
   `docs/stage0-unified-log-spec.md` (append/fork/replay contract),
-  `docs/gad-provenance-fibers-design.md` (graph + on-behalf-of), `packages/shared/src/approvals.ts`
+  `docs/provenance-aware-diff-merge-plan.md` (semantic graph + on-behalf-of), `packages/shared/src/approvals.ts`
   (host approval identity), `src/server/services/mainAdvanceApproval.ts`,
   `credentialService.ts:3895`, `workspace/panels/gad-browser`.
