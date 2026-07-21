@@ -5,6 +5,20 @@ import React from 'react'
 import type { JsxComponentDescriptor } from './jsx-types'
 
 /**
+ * Props handed to a custom frontmatter editor (see {@link DescriptorContextValue.frontmatterEditor}).
+ * The {@link FrontmatterNode} owns the Lexical wiring and delegates presentation here.
+ */
+export interface FrontmatterEditorProps {
+  /** The inner YAML of the frontmatter block (no `---` fences). */
+  yaml: string
+  /** Emit replacement inner YAML for the block. */
+  onChange: (yaml: string) => void
+}
+
+/** A component that renders the frontmatter editing surface. */
+export type FrontmatterEditorComponent = React.ComponentType<FrontmatterEditorProps>
+
+/**
  * The values carried by {@link DescriptorContext}. Provide these via {@link DescriptorProvider}
  * so the decorator nodes ({@link CodeBlockNode}, {@link LexicalJsxNode}) can resolve their editors.
  */
@@ -15,6 +29,11 @@ export interface DescriptorContextValue {
   codeBlockLanguages?: Record<string, string>
   /** Optional default language used when a code block has no explicit language. */
   defaultCodeBlockLanguage?: string
+  /**
+   * Optional custom editor for the YAML frontmatter block. When omitted, the
+   * {@link FrontmatterNode} falls back to a bare textarea.
+   */
+  frontmatterEditor?: FrontmatterEditorComponent
 }
 
 const defaultValue: DescriptorContextValue = {

@@ -386,6 +386,78 @@
   margin: var(--space-2) 0;
 }
 
+/* ----------------------------------------------------------------
+ * Frontmatter — chrome around the document's YAML properties, so it
+ * reads as metadata sitting above the prose rather than as body text.
+ * ---------------------------------------------------------------- */
+.spectrolite-frontmatter {
+  border: 1px solid var(--gray-5);
+  border-radius: var(--radius-3);
+  background: var(--gray-a2);
+  margin: var(--space-1) 0 var(--space-5);
+  font-size: var(--font-size-1);
+  line-height: 1.4;
+  /* Metadata, not prose: a compact system font, never the reading serif/measure. */
+  font-family: var(--default-font-family);
+}
+
+.spectrolite-frontmatter-header {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--gray-a4);
+}
+
+/* Collapsed: the header is the whole card, so drop the divider. */
+.spectrolite-frontmatter-header:last-child {
+  border-bottom: none;
+}
+
+.spectrolite-frontmatter-title {
+  color: var(--gray-11);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.spectrolite-frontmatter-toggle {
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-2);
+  background: var(--gray-a3);
+}
+
+.spectrolite-frontmatter-body {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.spectrolite-frontmatter-key {
+  width: 30%;
+  min-width: 96px;
+  flex-shrink: 0;
+}
+
+.spectrolite-frontmatter-value,
+.spectrolite-frontmatter-depref {
+  flex: 1;
+  min-width: 0;
+}
+
+.spectrolite-frontmatter-depname {
+  width: 40%;
+  min-width: 96px;
+  flex-shrink: 0;
+}
+
+/* Dependency rows nest under the `dependencies` label with a quiet rail. */
+.spectrolite-frontmatter-deprows {
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--gray-a4);
+}
+
+.spectrolite-frontmatter-yaml {
+  font-family: var(--code-font-family, ui-monospace, monospace);
+  font-size: var(--font-size-1);
+}
+
 /* Subtle scrollbars inside our panes */
 .spectrolite-file-tree ::-webkit-scrollbar,
 .spectrolite-mdx ::-webkit-scrollbar {

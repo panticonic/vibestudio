@@ -29,6 +29,7 @@ import {
 } from "lexical";
 import { DescriptorProvider, type JsxComponentDescriptor } from "@workspace/mdx-editor-core";
 
+import { FrontmatterEditor } from "../components/FrontmatterEditor.js";
 import { MdxEditorCore } from "./mdxEditorCore.js";
 import type { BuiltMdxConfig } from "./mdxConfig.js";
 import type { LexicalUndo } from "../coedit/undoCoordinator.js";
@@ -122,6 +123,7 @@ export function MdxLexicalEditor({
           jsxComponentDescriptors: config.jsxComponentDescriptors as JsxComponentDescriptor[],
           codeBlockLanguages: {},
           defaultCodeBlockLanguage: "tsx",
+          frontmatterEditor: FrontmatterEditor,
         }}
       >
         <RichTextPlugin

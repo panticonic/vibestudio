@@ -1,8 +1,10 @@
 // vendored from @mdxeditor/editor v3.55.0 src/plugins/frontmatter/FrontmatterNode.tsx — MIT © Petyo Ivanov
-// SEAM CUT: decorate() renders a minimal fallback editor (controlled textarea) instead of the
-// upstream FrontmatterEditor (which depends on react-hook-form / gurx / CSS modules).
-import { DecoratorNode, EditorConfig, LexicalEditor, LexicalNode, NodeKey, SerializedLexicalNode, Spread } from 'lexical'
+// SEAM CUT: decorate() delegates to a host that resolves a consumer-provided frontmatter editor
+// from the descriptor context (falling back to a bare textarea), instead of the upstream
+// FrontmatterEditor (which depends on react-hook-form / gurx / CSS modules).
+import { $getNodeByKey, DecoratorNode, EditorConfig, LexicalEditor, LexicalNode, NodeKey, SerializedLexicalNode, Spread } from 'lexical'
 import React, { JSX } from 'react'
+import { useDescriptors } from '../descriptor-context'
 
 export type SerializedFrontmatterNode = Spread<
   {
@@ -67,16 +69,7 @@ export class FrontmatterNode extends DecoratorNode<JSX.Element> {
   }
 
   decorate(editor: LexicalEditor): JSX.Element {
-    return (
-      <FallbackFrontmatterEditor
-        yaml={this.getYaml()}
-        onChange={(yaml) => {
-          editor.update(() => {
-            this.setYaml(yaml)
-          })
-        }}
-      />
-    )
+    return <FrontmatterEditorHost editor={editor} nodeKey={this.getKey()} yaml={this.getYaml()} />
   }
 
   isKeyboardSelectable(): boolean {
@@ -85,10 +78,39 @@ export class FrontmatterNode extends DecoratorNode<JSX.Element> {
 }
 
 /**
- * A minimal fallback frontmatter editor: a controlled textarea.
+ * Bridges the Lexical node to a presentation component: resolves a
+ * consumer-provided editor from the descriptor context (or the fallback
+ * textarea), and wires its `onChange` back to node mutations. The mutation
+ * resolves the node by key inside `editor.update`, so it stays correct across
+ * Lexical's node cloning.
+ */
+const FrontmatterEditorHost: React.FC<{ editor: LexicalEditor; nodeKey: NodeKey; yaml: string }> = ({
+  editor,
+  nodeKey,
+  yaml
+}) => {
+  const { frontmatterEditor: Injected } = useDescriptors()
+  const onChange = React.useCallback(
+    (next: string) => {
+      editor.update(() => {
+        const node = $getNodeByKey(nodeKey)
+        if ($isFrontmatterNode(node)) node.setYaml(next)
+      })
+    },
+    [editor, nodeKey]
+  )
+  const Editor = Injected ?? FallbackFrontmatterEditor
+  return <Editor yaml={yaml} onChange={onChange} />
+}
+
+/**
+ * A minimal fallback frontmatter editor: an uncontrolled textarea.
  * SEAM CUT: replaces the upstream FrontmatterEditor.
  */
-const FallbackFrontmatterEditor: React.FC<{ yaml: string; onChange: (yaml: string) => void }> = ({ yaml, onChange }) => {
+const FallbackFrontmatterEditor: React.FC<{
+  yaml: string
+  onChange: (yaml: string) => void
+}> = ({ yaml, onChange }) => {
   return (
     <div className="mdx-frontmatter">
       <textarea

@@ -59,7 +59,11 @@ export type { CodeBlockEditorDescriptor, CodeBlockEditorProps } from './nodes/co
 
 // --- Descriptor React context (replaces gurx cells for the decorator nodes) ---
 export { DescriptorProvider, useDescriptors } from './descriptor-context'
-export type { DescriptorContextValue } from './descriptor-context'
+export type {
+  DescriptorContextValue,
+  FrontmatterEditorProps,
+  FrontmatterEditorComponent
+} from './descriptor-context'
 
 // --- Utilities ---
 export { voidEmitter } from './utils/voidEmitter'
