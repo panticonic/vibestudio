@@ -15,10 +15,7 @@ export async function hasPanelHostingAuthority(ctx: ServiceContext): Promise<boo
   return await ctx.authority.allows({
     capability: PANEL_HOSTING_CAPABILITY,
     resourceKey: PANEL_HOSTING_RESOURCE,
-    requirement: requirementForPrincipals(
-      ["host", "user", "code"],
-      PANEL_HOSTING_CAPABILITY
-    ),
+    requirement: requirementForPrincipals(["host", "user", "code"], PANEL_HOSTING_CAPABILITY),
   });
 }
 
@@ -53,4 +50,3 @@ export async function requireRuntimeCapability(
   error.code = "EACCES";
   throw error;
 }
-

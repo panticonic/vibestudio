@@ -41,4 +41,3 @@ export interface MethodAccessDescriptor {
   approval?: AccessApproval[];
   requires?: AccessRequirement[];
 }
-

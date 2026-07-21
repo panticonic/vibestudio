@@ -112,17 +112,9 @@ export function requirementForPrincipals(
       case "code":
         return allOf(grant, relationship("workspace-member"));
       case "device":
-        return allOf(
-          grant,
-          relationship("device-owned-by-user"),
-          relationship("workspace-member")
-        );
+        return allOf(grant, relationship("device-owned-by-user"), relationship("workspace-member"));
       case "entity":
-        return allOf(
-          grant,
-          relationship("agent-binding"),
-          relationship("workspace-member")
-        );
+        return allOf(grant, relationship("agent-binding"), relationship("workspace-member"));
     }
   });
   return requirements.length === 1 ? requirements[0]! : anyOf(...requirements);
@@ -222,7 +214,8 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       };
     }
     if (requirement.principal === "code") {
-      const manifest = input.context.codeAuthority.execution ?? input.context.codeAuthority.executor;
+      const manifest =
+        input.context.codeAuthority.execution ?? input.context.codeAuthority.executor;
       const requested =
         manifest?.principal === principal &&
         manifest.requested.some(
@@ -368,14 +361,16 @@ function builtinRelationship(
     case "device-owned-by-user":
       return Boolean(
         context.device &&
-          context.actingUser &&
-          context.deviceOwnership?.device === context.device &&
-          context.deviceOwnership.user === context.actingUser
+        context.actingUser &&
+        context.deviceOwnership?.device === context.device &&
+        context.deviceOwnership.user === context.actingUser
       );
     case "entity-self":
       return context.entity !== null && (value === undefined || context.entity === value);
     case "entity-owner":
-      return context.entity !== null && context.ownerChain.includes(context.actingUser as Principal);
+      return (
+        context.entity !== null && context.ownerChain.includes(context.actingUser as Principal)
+      );
     case "entity-deputy":
       return (
         context.entity !== null &&
@@ -392,7 +387,9 @@ function builtinRelationship(
       if (context.authorizingOrigin.kind !== "code" || value === undefined) return false;
       const match = /^code:([^@]+)@[0-9a-f]{64}$/.exec(context.authorizingOrigin.principal);
       const repoPath = match?.[1];
-      return Boolean(repoPath && (value.endsWith("/") ? repoPath.startsWith(value) : repoPath === value));
+      return Boolean(
+        repoPath && (value.endsWith("/") ? repoPath.startsWith(value) : repoPath === value)
+      );
     }
     case "delegation":
       return context.codeAuthority.delegations.some(
@@ -415,7 +412,10 @@ function requirementMatchesOrigin(
     const capabilities = requirement.requirements.filter((child) =>
       containsCapabilityRequirement(child)
     );
-    return capabilities.length === 0 || capabilities.some((child) => requirementMatchesOrigin(child, origin));
+    return (
+      capabilities.length === 0 ||
+      capabilities.some((child) => requirementMatchesOrigin(child, origin))
+    );
   }
   if (requirement.kind === "any") {
     return requirement.requirements.some((child) => requirementMatchesOrigin(child, origin));
@@ -450,7 +450,8 @@ function grantConstraintsMatch(grant: AuthorityGrant, context: AuthorizationCont
 }
 
 function isCanonicalPrincipal(principal: Principal, expected: PrincipalKind): boolean {
-  if (!principal.startsWith(`${expected}:`) || principal.length <= expected.length + 1) return false;
+  if (!principal.startsWith(`${expected}:`) || principal.length <= expected.length + 1)
+    return false;
   if (expected !== "code") return true;
   return /^code:[^@]+@[0-9a-f]{64}$/.test(principal);
 }
@@ -465,4 +466,3 @@ function compareVersions(left: string, right: string): number {
   }
   return 0;
 }
-

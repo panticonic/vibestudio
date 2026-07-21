@@ -47,8 +47,11 @@ function context(): AuthorizationContext {
   };
 }
 
-function grant(subject: Principal, capabilityName: string, effect: "allow" | "deny" = "allow"):
-  AuthorityGrant {
+function grant(
+  subject: Principal,
+  capabilityName: string,
+  effect: "allow" | "deny" = "allow"
+): AuthorityGrant {
   return {
     subject,
     capability: capabilityName,
@@ -65,10 +68,7 @@ describe("compositional authority", () => {
   it("intersects the authorizing code capability with live relationship facts", () => {
     const decision = evaluateAuthority({
       context: context(),
-      requirement: allOf(
-        capability("code", "fs.write"),
-        relationship("workspace-member")
-      ),
+      requirement: allOf(capability("code", "fs.write"), relationship("workspace-member")),
       resourceKey: "workspace:ws-1/repo:projects/vibestudio",
       grants: [grant(code, "fs.write")],
       now: 100,
@@ -81,10 +81,7 @@ describe("compositional authority", () => {
       context: context(),
       requirement: {
         kind: "any",
-        requirements: [
-          capability("code", "fs.write"),
-          capability("user", "workspace.edit"),
-        ],
+        requirements: [capability("code", "fs.write"), capability("user", "workspace.edit")],
       },
       resourceKey: "workspace:ws-1/repo:projects/vibestudio",
       grants: [grant(user, "fs.write"), grant(user, "workspace.edit")],
@@ -256,4 +253,3 @@ describe("compositional authority", () => {
     ).toBe("missing-grant");
   });
 });
-

@@ -386,4 +386,3 @@ function assertCanonicalValue(value: CanonicalBuildValue, path: string): void {
   }
   throw new Error(`${path} contains an unsupported value`);
 }
-

@@ -10,4 +10,3 @@ export const EvalAuthorityDelegationSchema = z
     capabilities: z.array(CapabilityScopeSchema).readonly(),
   })
   .strict() satisfies z.ZodType<EvalAuthorityDelegation>;
-
