@@ -43,11 +43,11 @@ describe("identity package schema cut", () => {
     const before = fs.readFileSync(databasePath);
 
     expect(() => new IdentityDb({ path: databasePath, readOnly: false })).toThrow(
-      /schema version is 0, expected 10/
+      /schema version 0 predates production baseline 10/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
     expect(() => new IdentityDb({ path: databasePath, readOnly: true })).toThrow(
-      /schema version is 0, expected 10/
+      /schema version 0 predates production baseline 10/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
 

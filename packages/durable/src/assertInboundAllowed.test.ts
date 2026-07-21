@@ -13,7 +13,7 @@ import { createTestDO } from "./test-utils.js";
 class ServerOnlyProbeDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   echo(...args: unknown[]): unknown[] {
     return args;
   }
@@ -24,16 +24,14 @@ class ServerOnlyProbeDO extends DurableObjectBase {
   ): void {
     if (kind === "event") return; // deliveries are opt-in — accept any publisher
     if (caller?.callerKind !== "server") {
-      throw new Error(`probe: server-only; refusing caller kind ${caller?.callerKind ?? "unknown"}`);
+      throw new Error(
+        `probe: server-only; refusing caller kind ${caller?.callerKind ?? "unknown"}`
+      );
     }
   }
 }
 
-function post(
-  instance: unknown,
-  path: string,
-  body: unknown
-): Promise<Response> {
+function post(instance: unknown, path: string, body: unknown): Promise<Response> {
   const fetchable = instance as { fetch(request: Request): Promise<Response> };
   return fetchable.fetch(
     new Request(`http://test/${path}`, {
@@ -54,7 +52,9 @@ describe("assertInboundAllowed path distinction", () => {
       __caller: { callerId: "do:other", callerKind: "do" },
     });
     expect(res.status).toBe(500);
-    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("server-only") });
+    await expect(res.json()).resolves.toMatchObject({
+      error: expect.stringContaining("server-only"),
+    });
   });
 
   it("allows a server METHOD CALL (call path)", async () => {
@@ -74,7 +74,9 @@ describe("assertInboundAllowed path distinction", () => {
     // An event envelope (message.type != request) POSTed to __rpc by a channel DO.
     const res = await post(instance, "test-key/__rpc", {
       message: { type: "event", event: "vcs:publication", payload: { ok: true } },
-      delivery: { caller: { callerId: "do:workers/pubsub-channel:PubSubChannel:c", callerKind: "do" } },
+      delivery: {
+        caller: { callerId: "do:workers/pubsub-channel:PubSubChannel:c", callerKind: "do" },
+      },
     });
     // The guard must NOT reject it — delivery returns 200 (no listener is fine).
     expect(res.status).toBe(200);

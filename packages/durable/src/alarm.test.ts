@@ -7,11 +7,15 @@ class AlarmProbeDO extends DurableObjectBase {
 
   protected createTables(): void {}
 
+  runtimeId(): string {
+    return this.rpcSelfId;
+  }
+
   override async alarm(): Promise<AlarmSchedule | null> {
     return this.nextAlarm;
   }
 
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   schedule(wakeAt: number): string {
     this.setAlarmAt(wakeAt);
     return "scheduled";
@@ -23,6 +27,16 @@ afterEach(() => {
 });
 
 describe("DurableObjectBase alarm dispatch", () => {
+  it("attributes outbound RPC to the concrete durable object entity", async () => {
+    const { instance } = await createTestDO(AlarmProbeDO, {
+      WORKER_SOURCE: "workers/alarm-probe",
+      WORKER_CLASS_NAME: "AlarmProbeDO",
+      __objectKey: "object-7",
+    });
+
+    expect(instance.runtimeId()).toBe("do:workers/alarm-probe:AlarmProbeDO:object-7");
+  });
+
   it("returns the handler's explicit next schedule without RPC or a concurrency gate", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const { instance, call } = await createTestDO(AlarmProbeDO);
@@ -41,7 +55,7 @@ describe("DurableObjectBase alarm dispatch", () => {
 
   it("returns no next alarm when the handler is complete", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const { instance, call } = await createTestDO(AlarmProbeDO);
+    const { call } = await createTestDO(AlarmProbeDO);
 
     await expect(call("__alarm")).resolves.toEqual({ nextAlarm: null });
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -51,7 +65,11 @@ describe("DurableObjectBase alarm dispatch", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("workspace alarm store unavailable", { status: 503 })
     );
-    const { call } = await createTestDO(AlarmProbeDO);
+    const { call } = await createTestDO(AlarmProbeDO, {
+      WORKER_SOURCE: "workers/alarm-probe",
+      WORKER_CLASS_NAME: "AlarmProbeDO",
+      __objectKey: "object-7",
+    });
 
     await expect(call("schedule", 200)).rejects.toThrow();
   });

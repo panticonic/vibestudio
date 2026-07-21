@@ -11,6 +11,11 @@ import {
   type RpcEnvelope,
   type RpcRequest,
 } from "@vibestudio/rpc";
+import {
+  migrateDurableObjectSchema,
+  type DurableObjectSchemaBaseline,
+  type DurableObjectSchemaMigration,
+} from "./schema.js";
 
 // Re-export the `@rpc` exposure decorator so DO authors import it alongside the base.
 export { rpc } from "@vibestudio/rpc";
@@ -45,9 +50,7 @@ export interface DORef {
   objectKey: string;
 }
 
-function quoteSqlIdentifier(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
-}
+export type { DurableObjectSchemaBaseline, DurableObjectSchemaMigration } from "./schema.js";
 
 export interface LifecyclePrepareInput {
   epoch: string;
@@ -102,6 +105,16 @@ export abstract class DurableObjectBase {
 
   protected abstract createTables(): void;
 
+  /** Explicit persisted-state upgrades. Fresh databases never replay these. */
+  protected schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [];
+  }
+
+  /** Oldest production schema shape this class can open without data loss. */
+  protected schemaProductionBaseline(): DurableObjectSchemaBaseline | undefined {
+    return undefined;
+  }
+
   protected requiredTables(): readonly string[] {
     return [];
   }
@@ -122,78 +135,16 @@ export abstract class DurableObjectBase {
 
   protected ensureReady(): void {
     if (this.schemaReady) return;
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    let currentVersion = 0;
-    const row = this.sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).toArray();
-    if (row.length > 0) currentVersion = parseInt(String(row[0]!["value"]), 10) || 0;
-    const targetVersion = (this.constructor as typeof DurableObjectBase).schemaVersion;
-    if (currentVersion > targetVersion) {
-      throw new Error(
-        `${this.constructor.name} schema version ${currentVersion} is newer than supported version ${targetVersion}`
-      );
-    }
-
-    if (currentVersion === 0) {
-      this.createTables();
-      this.validateSchema();
-      this.sql.exec(
-        `INSERT OR REPLACE INTO state (key, value) VALUES ('schema_version', ?)`,
-        String(targetVersion)
-      );
-    } else if (currentVersion < targetVersion) {
-      this.resetPersistenceForSchemaEpoch();
-      this.createTables();
-      this.validateSchema();
-      this.sql.exec(
-        `INSERT OR REPLACE INTO state (key, value) VALUES ('schema_version', ?)`,
-        String(targetVersion)
-      );
-    } else {
-      this.createTables();
-      this.validateSchema();
-    }
+    migrateDurableObjectSchema({
+      className: this.constructor.name,
+      targetVersion: (this.constructor as typeof DurableObjectBase).schemaVersion,
+      storage: this.ctx.storage,
+      migrations: this.schemaMigrations(),
+      productionBaseline: this.schemaProductionBaseline(),
+      createSchema: () => this.createTables(),
+      validateSchema: () => this.validateSchema(),
+    });
     this.schemaReady = true;
-  }
-
-  /**
-   * Pre-release schema epochs are hard cuts. A Durable Object owns every
-   * non-framework SQLite object in its database, so an older epoch is replaced
-   * wholesale instead of interpreted by compatibility code. Virtual tables are
-   * dropped before ordinary tables so SQLite can remove their shadow tables.
-   * The old epoch stamp remains until the exact current schema validates, making
-   * an interrupted reset repeat safely on the next activation.
-   */
-  private resetPersistenceForSchemaEpoch(): void {
-    const rows = this.sql
-      .exec(
-        `SELECT type, name, sql FROM sqlite_master
-         WHERE type IN ('table', 'view')
-           AND name <> 'state'
-           AND name NOT LIKE 'sqlite_%'`
-      )
-      .toArray() as Array<{ type: string; name: string; sql?: unknown }>;
-    const isVirtual = (row: { sql?: unknown }): boolean =>
-      typeof row.sql === "string" && /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(row.sql);
-
-    for (const row of rows) {
-      if (row.type === "view") {
-        this.sql.exec(`DROP VIEW IF EXISTS ${quoteSqlIdentifier(row.name)}`);
-      }
-    }
-    for (const row of rows) {
-      if (row.type === "table" && isVirtual(row)) {
-        this.sql.exec(`DROP TABLE IF EXISTS ${quoteSqlIdentifier(row.name)}`);
-      }
-    }
-    for (const row of rows) {
-      if (row.type !== "table" || isVirtual(row)) continue;
-      const stillExists =
-        this.sql
-          .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, row.name)
-          .toArray().length > 0;
-      if (stillExists) this.sql.exec(`DROP TABLE IF EXISTS ${quoteSqlIdentifier(row.name)}`);
-    }
-    this.sql.exec(`DELETE FROM state WHERE key <> 'schema_version'`);
   }
 
   protected getStateValue(key: string): string | null {
@@ -247,17 +198,15 @@ export abstract class DurableObjectBase {
   }
 
   /**
-   * Runtime identity presented on outbound RPC (the RPC_RUNTIME_ID_HEADER, distinct from
-   * the bearer token). Default is the service-level `do-service:<source>:<class>` shared by
-   * every instance of the class. Subclasses needing PER-OBJECT context (e.g. EvalDO's
-   * owner-scoped fs) override this to `do:<source>:<class>:<objectKey>`; the server accepts
-   * it because the service bearer covers the `do:<source>:<class>:*` prefix
-   * (`rpcServer.isRuntimeIdForServiceToken`).
+   * Concrete runtime identity presented on outbound RPC (the RPC_RUNTIME_ID_HEADER,
+   * distinct from the class-scoped bearer token). The bearer proves that this code is
+   * running inside the declared DO service; the concrete id selects the immutable entity
+   * row that supplies this object's owner, context, execution digest, and sealed authority.
    */
   protected get rpcSelfId(): string {
     const source = String(this.env["WORKER_SOURCE"] ?? "");
     const className = String(this.env["WORKER_CLASS_NAME"] ?? "");
-    return `do-service:${source}:${className}`;
+    return `do:${source}:${className}:${this.objectKey}`;
   }
 
   /**
@@ -571,6 +520,11 @@ export abstract class DurableObjectBase {
    * DELIVERY ("event"). Event deliveries are opt-in — the DO subscribed to a
    * topic/channel and the publisher (server event-push, a channel DO, …) pushes
    * to it — so a server-only DO should still ACCEPT them while refusing "call".
+   *
+   * This receiver hook remains an independent fail-closed boundary. `@rpc`
+   * authority metadata does not supersede it: privileged internal DOs must keep
+   * overriding this method until the shared inbound authority evaluator is the
+   * sole enforced receiver boundary.
    */
   protected assertInboundAllowed(
     _caller: AuthenticatedCaller | null,
