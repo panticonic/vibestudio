@@ -121,20 +121,19 @@ describe("PanelView app views", () => {
   it("retries transient main-frame load failures for app views", async () => {
     vi.useFakeTimers();
     const url = "https://server.example/_workspace/dev/_a/app/index.html";
-    const loadURL = vi.fn(async () => undefined);
     const webContents = Object.assign(new EventEmitter(), {
       id: 10,
       isDestroyed: vi.fn(() => false),
       getURL: vi.fn(() => url),
       canGoBack: vi.fn(() => false),
       canGoForward: vi.fn(() => false),
-      loadURL,
       setWindowOpenHandler: vi.fn(),
     });
     const viewManager = {
       hasView: vi.fn(() => false),
       getViewUrl: vi.fn(() => null),
       navigateView: vi.fn(async () => undefined),
+      retryViewNavigation: vi.fn(async () => true),
       updateAppView: vi.fn(async () => undefined),
       createView: vi.fn(() => ({ webContents })),
       getWebContents: vi.fn(() => webContents),
@@ -159,7 +158,7 @@ describe("PanelView app views", () => {
     webContents.emit("did-fail-load", {}, -21, "ERR_NETWORK_CHANGED", url, true);
     await vi.advanceTimersByTimeAsync(500);
 
-    expect(loadURL).toHaveBeenCalledWith(url);
+    expect(viewManager.retryViewNavigation).toHaveBeenCalledWith("@workspace-apps/shell", url);
     vi.useRealTimers();
   });
 });

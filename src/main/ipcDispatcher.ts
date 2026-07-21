@@ -33,6 +33,7 @@ import {
   FRAME_HEAD,
 } from "@vibestudio/rpc/protocol/streamCodec";
 import {
+  createHostCaller,
   createVerifiedCaller,
   type ServiceDispatcher,
   type VerifiedCodeIdentity,
@@ -56,6 +57,16 @@ type ActiveIpcStream = {
 
 function panelRuntimeConnectionKey(conn: PanelRuntimeConnection): string {
   return `${conn.runtimeEntityId}\u0000${conn.connectionId}`;
+}
+
+function localVerifiedCaller(
+  callerId: string,
+  callerKind: CallerKind,
+  code: VerifiedCodeIdentity | null
+) {
+  return callerKind === "shell"
+    ? createHostCaller(callerId, "shell")
+    : createVerifiedCaller(callerId, callerKind, code);
 }
 
 function envelopeFor(target: string, from: string, message: RpcMessage): RpcEnvelope {
@@ -331,11 +342,11 @@ export class IpcDispatcher {
 
       try {
         let result: unknown;
-        if (this.deps.dispatcher.routesToHost(service, callerKind)) {
-          // Dispatch locally to Electron services. The dispatcher itself
-          // enforces policy via checkServiceAccess (single choke-point).
+        if (this.deps.dispatcher.hasService(service)) {
+          // A registered Electron endpoint has one explicit local owner. All
+          // other names belong to the authenticated workspace session.
           const ctx = {
-            caller: createVerifiedCaller(
+            caller: localVerifiedCaller(
               callerId,
               callerKind,
               this.deps.getCodeIdentityForCaller?.(callerId) ?? null
@@ -505,10 +516,10 @@ export class IpcDispatcher {
 
     try {
       let response: Response;
-      if (this.deps.dispatcher.routesToHost(service, callerKind)) {
+      if (this.deps.dispatcher.hasService(service)) {
         const result = await this.deps.dispatcher.dispatch(
           {
-            caller: createVerifiedCaller(
+            caller: localVerifiedCaller(
               callerId,
               callerKind,
               this.deps.getCodeIdentityForCaller?.(callerId) ?? null

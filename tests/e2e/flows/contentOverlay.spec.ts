@@ -248,17 +248,22 @@ test.describe("Content overlay", () => {
     // The full severe-capability action set rendered.
     expect(probe?.text).toContain("Allow once");
     expect(probe?.text).toContain("Allow this session");
-    expect(probe?.text).toContain("Trust repo");
     expect(probe?.text).toContain("Trust version");
     expect(probe?.text).toContain("Deny");
 
     // Panels were NOT blanked — at least one panel remains in the live tree.
-    const panelCount = await testApp.app.evaluate(async () => {
-      const api = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } }).__testApi;
-      const tree = api?.getPanelTree?.() ?? [];
-      return Array.isArray(tree) ? tree.length : 0;
-    });
-    expect(panelCount).toBeGreaterThan(0);
+    await expect
+      .poll(
+        () =>
+          testApp!.app.evaluate(async () => {
+            const api = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } })
+              .__testApi;
+            const tree = api?.getPanelTree?.() ?? [];
+            return Array.isArray(tree) ? tree.length : 0;
+          }),
+        { timeout: 30_000, intervals: [300, 600, 1000] }
+      )
+      .toBeGreaterThan(0);
 
     // The card is draggable: driving a full start→move→end gesture through the
     // overlay's reportDrag bridge (the same path the surface uses) snaps it to a

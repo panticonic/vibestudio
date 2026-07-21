@@ -139,16 +139,18 @@ Execute TypeScript/JavaScript code server-side in your own persistent sandbox (a
 | `code` | string | Yes | Code to execute |
 | `syntax` | `"javascript"` \| `"typescript"` \| `"tsx"` \| `"jsx"` | No | Syntax mode (default: `"tsx"`) |
 | `imports` | `Record<string, string>` | No | Packages to build on-demand. Workspace packages: `"latest"` or a git ref. npm packages: `"npm:<version>"` (e.g. `"npm:^4.17.21"`, `"npm:latest"`) |
+| `timeoutMs` | positive integer | No | Optional wall-clock deadline in milliseconds; omitted means no deadline |
 
 ### Panel APIs
 
 `openPanel`/`listPanels`/`getPanelHandle`/`panelTree` are part of the **portable runtime surface** — importable from `@workspace/runtime` (and injected ambiently) in panel, worker, **and server-side eval**. They are host-mediated over RPC: in eval they create/inspect panels via the server. A handful of panel-only extras (`panel.focusPanel`, `buildPanelLink`, `panel.reopen`, `panel.stateArgs`, `adblock`, `journal.Journal`, `agentApi`) are NOT in the eval surface — those need a real panel host:
 
-| API                            | Description                                                                                |
-| ------------------------------ | ------------------------------------------------------------------------------------------ |
-| `openPanel(source, opts?)`     | Open any panel — URLs become browser panels, source paths open workspace panels (eval too) |
-| `buildPanelLink(source, opts)` | Build a URL for panel navigation (panel/component code — not in eval)                      |
-| `panel.focusPanel(panelId)`    | Focus an existing panel by ID (panel/component code — not in eval)                         |
+| API                              | Description                                                                                           |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `openPanel(source, opts?)`       | Open any panel — URLs become browser panels, source paths open workspace panels (eval too)            |
+| `buildPanelLink(source, opts)`   | Build a URL for panel navigation (panel/component code — not in eval)                                 |
+| `panel.focusPanel(panelId)`      | Focus an existing panel by ID (panel/component code — not in eval)                                    |
+| `panel.switchContext(id, opts?)` | Explicitly move this panel to an already-created workspace branch; state args cannot select a context |
 
 `openPanel(source)` creates a new panel for main/pushed code. To run code from
 the current context branch, pass `ref: \`ctx:${ctx.contextId}\``explicitly (and
@@ -266,7 +268,7 @@ semantic working state. Omit `ref` to follow the owning context. Pass
 `ref: "main"` only when intentionally pinning protected main, or another exact
 selector when deliberately testing a different semantic state.
 
-Launch/list/retire: `workers.create(source, { key, contextId, env, stateArgs, ref? })` returns a handle (`{ id, targetId, … }`); `workers.list()` lists live regular worker **instances**; `workers.destroy(handleOrId)` retires one. `workspace.units.list()` is the unified **registered-unit/build-health** view (workers, panels, apps, extensions, jobs), so it is also the right answer to workspace-level questions such as “which worker units are running/available?”—but it does not replace instance handles. Discover sources with `workers.listSources()`; use each row's `entry` instead of guessing `index.ts`. The raw `runtime.createEntity/listEntities/retireEntity` methods are the canonical entity-lifecycle lower layer, not redundant aliases for `workspace.units`. A successful create proves `env` configuration was accepted, while value observation requires a narrow worker endpoint/RPC for a named non-secret probe. The `workers` binding also exposes service resolution — `listServices()`, `resolveService(...)`, `resolveDurableObject(...)`, `durableObjectService(...)`. To duplicate or tear down a whole context's durable state (every DO's storage + the file snapshot), use `runtime.cloneContext({ sourceContextId, include? })` → `{ contextId, entities }` and `runtime.destroyContext({ contextId })` — both gated by the context-boundary capability; the low-level cloneDO/destroyDO primitives are server-internal. See [WORKERS.md](WORKERS.md) for details.
+Launch/list/retire: `workers.create(source, { key, contextId, env, stateArgs, ref? })` returns a handle (`{ id, targetId, … }`); `workers.list()` lists live regular worker **instances**; `workers.destroy(handleOrId)` retires one. `workspace.units.list()` is the unified **registered-unit/build-health** view (workers, panels, apps, extensions, jobs), so it is also the right answer to workspace-level questions such as “which worker units are running/available?”—but it does not replace instance handles. Discover sources with `workers.listSources()`; use each row's `entry` instead of guessing `index.ts`. The raw `runtime.createEntity/listEntities/retireEntity` methods are the canonical entity-lifecycle lower layer, not redundant aliases for `workspace.units`. A successful create proves `env` configuration was accepted, while value observation requires a narrow worker endpoint/RPC for a named non-secret probe. The `workers` binding also exposes service resolution — `listServices()`, `resolveService(...)`, `resolveDurableObject(...)`, `durableObjectService(...)`. Prefer `resolveService(...)`; raw resolution can address workspace worker DO classes, while product-internal DOs require an exact reviewed source/class/key and cannot be discovered by guessing. To duplicate or tear down a whole context's durable state (every DO's storage + the file snapshot), use `runtime.cloneContext({ sourceContextId, include? })` → `{ contextId, entities }` and `runtime.destroyContext({ contextId })` — both gated by the context-boundary capability; the low-level cloneDO/destroyDO primitives are server-internal. See [WORKERS.md](WORKERS.md) for details.
 
 For app data, prefer a Durable Object service over eval `db` or ad hoc files:
 the DO owns SQLite through `this.sql`, the manifest service declares
@@ -288,20 +290,20 @@ and typed recovery.
 
 Core routing:
 
-| Intent                       | Runtime surface                                                                                                         |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Orient in a context          | `vcs.status` returns committed event, working head, main relation, and local counts                                     |
-| Compare committed work       | `vcs.compare` from an exact target state to one source event                                                            |
-| Account for incoming changes | `vcs.integrate` with one explicit adopt, reconcile, or decline decision                                                 |
-| Commit coherent context work | `vcs.commit` consumes the complete local application chain                                                              |
-| Publish committed work       | `vcs.push` advances protected main to one exact committed event                                                         |
-| Read or list managed files   | `vcs.readFile` and `vcs.listFiles` at an event/application state                                                        |
-| Move managed identities      | `vcs.move` preserves file or repository identity                                                                        |
-| Copy managed content         | `vcs.copy` mints file identity and records immediate copy provenance                                                    |
+| Intent                       | Runtime surface                                                                                                                    |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Orient in a context          | `vcs.status` returns committed event, working head, main relation, and local counts                                                |
+| Compare committed work       | `vcs.compare` from an exact target state to one source event                                                                       |
+| Account for incoming changes | `vcs.integrate` with one explicit adopt, reconcile, or decline decision                                                            |
+| Commit coherent context work | `vcs.commit` consumes the complete local application chain                                                                         |
+| Publish committed work       | `vcs.push` advances protected main to one exact committed event                                                                    |
+| Read or list managed files   | `vcs.readFile` and `vcs.listFiles` at an event/application state                                                                   |
+| Move managed identities      | `vcs.move` preserves file or repository identity                                                                                   |
+| Copy managed content         | `vcs.copy` mints file identity and records immediate copy provenance                                                               |
 | Import external content      | `vcs.importSnapshot` records one exact complete snapshot and an honest provenance boundary; it does not import per-path authorship |
-| Undo named changes           | `vcs.revert` authors explicit counteractions                                                                            |
-| Explain history or content   | `vcs.inspect`, `vcs.neighbors`, `vcs.history`, and `vcs.blame`                                                          |
-| Validate a working build     | use the ordinary typecheck, test, and build services for the context                                                    |
+| Undo named changes           | `vcs.revert` authors explicit counteractions                                                                                       |
+| Explain history or content   | `vcs.inspect`, `vcs.neighbors`, `vcs.history`, and `vcs.blame`                                                                     |
+| Validate a working build     | use the ordinary typecheck, test, and build services for the context                                                               |
 
 Every context mutation includes `contextId`, `expectedWorkingHead`, and a stable
 `commandId`. A command ID identifies

@@ -5,7 +5,14 @@
  * waiting for panels, and cleaning up after tests.
  */
 
-import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import {
+  _electron as electron,
+  expect,
+  test as playwrightTest,
+  type ElectronApplication,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -13,8 +20,17 @@ import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
-import { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
+import { getCentralDataPath } from "@vibestudio/env-paths";
+import {
+  WORKSPACE_SOURCE_DIRS,
+  WORKSPACE_STATE_DIRS,
+} from "@vibestudio/workspace-contracts/sourceDirs";
+import { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
+import type { PanelReadinessSnapshot, TestApi } from "../../src/main/testApi.js";
+import type { MainProcessErrorRecord } from "../../src/main/mainProcessErrorLedger.js";
+import type { PanelInitializationFailure } from "../../src/main/panelInitializationFailure.js";
+import { isAutomationContextReplacement } from "./automationContext.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,6 +43,8 @@ export interface TestApp {
   window: Page;
   /** Path to the isolated test workspace */
   workspacePath: string;
+  /** Captured stdout and stderr from the Electron process. */
+  getOutput: () => string;
   /** Clean up the app and test workspace */
   cleanup: () => Promise<void>;
 }
@@ -50,14 +68,31 @@ export interface LaunchOptions {
   devTools?: boolean;
   /** Additional environment variables */
   env?: Record<string, string>;
-  /** Timeout for app launch in milliseconds (default: 30000) */
+  /** Timeout for app launch in milliseconds (default: 120000) */
   launchTimeout?: number;
+  /** Exact main-process failures intentionally induced by this launch. */
+  expectedMainProcessErrors?: ReadonlyArray<Pick<MainProcessErrorRecord, "kind" | "message">>;
 }
 
 interface ManagedWorkspaceInfo {
   workspaceName: string;
   testRoot: string;
   env: Record<string, string>;
+}
+
+const SHARED_MACHINE_CACHE_DIRS = ["npm-cache", "external-deps", "extension-runtime-deps"] as const;
+
+function linkSharedMachineCaches(isolatedCentralDataDir: string): void {
+  const sharedCentralDataDir = getCentralDataPath();
+  if (path.resolve(sharedCentralDataDir) === path.resolve(isolatedCentralDataDir)) return;
+
+  fs.mkdirSync(isolatedCentralDataDir, { recursive: true });
+  for (const cacheDir of SHARED_MACHINE_CACHE_DIRS) {
+    const source = path.join(sharedCentralDataDir, cacheDir);
+    const destination = path.join(isolatedCentralDataDir, cacheDir);
+    if (!fs.existsSync(source) || fs.existsSync(destination)) continue;
+    fs.symlinkSync(source, destination, process.platform === "win32" ? "junction" : "dir");
+  }
 }
 
 function getTestEnv(testRoot: string): Record<string, string> {
@@ -144,7 +179,10 @@ function initializeUnitGitRepos(sourceRoot: string): void {
       cwd: unitDir,
       stdio: "ignore",
     });
-    execFileSync("git", ["config", "user.name", "Vibestudio E2E"], { cwd: unitDir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Vibestudio E2E"], {
+      cwd: unitDir,
+      stdio: "ignore",
+    });
     execFileSync("git", ["add", "-A"], { cwd: unitDir, stdio: "ignore" });
     execFileSync("git", ["commit", "-m", "Initial e2e workspace snapshot"], {
       cwd: unitDir,
@@ -166,6 +204,11 @@ export function createManagedTestWorkspace(projectRoot?: string): string {
   for (const dir of Object.values(env)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+  // Test identity, workspace source, and mutable state remain private. Reuse
+  // only machine-scoped dependency caches, whose entries are keyed by content,
+  // so repeated cold workspace launches do not depend on external network
+  // latency or duplicate immutable installs.
+  linkSharedMachineCaches(getCentralDataDirFromEnv(env));
 
   fs.mkdirSync(sourceRoot, { recursive: true });
   fs.mkdirSync(stateRoot, { recursive: true });
@@ -174,7 +217,13 @@ export function createManagedTestWorkspace(projectRoot?: string): string {
     const src = path.join(templateDir, dir);
     const dest = path.join(sourceRoot, dir);
     if (fs.existsSync(src)) {
-      fs.cpSync(src, dest, { recursive: true });
+      fs.cpSync(src, dest, {
+        recursive: true,
+        filter: (candidate) => {
+          const name = path.basename(candidate);
+          return name !== ".git" && name !== "node_modules" && name !== ".cache";
+        },
+      });
     } else {
       fs.mkdirSync(dest, { recursive: true });
     }
@@ -184,6 +233,19 @@ export function createManagedTestWorkspace(projectRoot?: string): string {
 
   for (const dir of WORKSPACE_STATE_DIRS) {
     fs.mkdirSync(path.join(stateRoot, dir), { recursive: true });
+  }
+
+  const centralData = new CentralDataManager({
+    databasePath: path.join(getCentralDataDirFromEnv(env), "server-auth", "identity.db"),
+  });
+  try {
+    centralData.addWorkspace(workspaceName);
+    // E2E owns the isolated hub lifecycle. Persist the explicit "stop" quit
+    // policy in this fixture's private identity database so Electron can take
+    // its normal graceful shutdown path without opening an interactive dialog.
+    centralData.setKeepServerOnQuit(false);
+  } finally {
+    centralData.close();
   }
 
   return workspaceDir;
@@ -209,7 +271,14 @@ export function removeManagedTestWorkspace(workspaceDir: string): void {
  * ```
  */
 export async function launchTestApp(options: LaunchOptions = {}): Promise<TestApp> {
-  const { workspace, initialPanel, devTools = false, env = {}, launchTimeout = 120000 } = options;
+  const {
+    workspace,
+    initialPanel,
+    devTools = false,
+    env = {},
+    launchTimeout = 120000,
+    expectedMainProcessErrors = [],
+  } = options;
 
   const projectRoot = path.resolve(__dirname, "../..");
   const workspacePath = workspace ?? createManagedTestWorkspace(projectRoot);
@@ -265,22 +334,152 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   child.stdout?.on("data", (chunk) => output.push(String(chunk)));
   child.stderr?.on("data", (chunk) => output.push(String(chunk)));
 
-  // Get the first window
+  // Cleanup is available before readiness waits so a failed launch cannot
+  // orphan the detached local hub (or its workspace/workerd children).
+  let testApiReady = false;
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = (): Promise<void> => {
+    cleanupPromise ??= (async () => {
+      let ledgerFailure: Error | undefined;
+      await playwrightTest.info().attach(`electron-output-${workspaceInfo.workspaceName}.log`, {
+        body: output.join(""),
+        contentType: "text/plain",
+      });
+      const hubLogPath = path.join(getCentralDataDirFromEnv(workspaceInfo.env), "logs", "hub.log");
+      if (fs.existsSync(hubLogPath)) {
+        await playwrightTest.info().attach(`hub-output-${workspaceInfo.workspaceName}.log`, {
+          body: fs.readFileSync(hubLogPath),
+          contentType: "text/plain",
+        });
+      }
+      if (testApiReady) {
+        try {
+          const panelInitializationFailure = await readPanelInitializationFailure(app);
+          await playwrightTest
+            .info()
+            .attach(`panel-initialization-${workspaceInfo.workspaceName}.json`, {
+              body: JSON.stringify(panelInitializationFailure, null, 2),
+              contentType: "application/json",
+            });
+          const errors = await readMainProcessErrors(app);
+          await playwrightTest
+            .info()
+            .attach(`main-process-errors-${workspaceInfo.workspaceName}.json`, {
+              body: JSON.stringify(errors, null, 2),
+              contentType: "application/json",
+            });
+          const remaining = [...errors];
+          const missing = expectedMainProcessErrors.filter((expected) => {
+            const index = remaining.findIndex(
+              (actual) => actual.kind === expected.kind && actual.message === expected.message
+            );
+            if (index < 0) return true;
+            remaining.splice(index, 1);
+            return false;
+          });
+          if (missing.length > 0 || remaining.length > 0) {
+            ledgerFailure = new Error(
+              `Main-process error ledger mismatch. Missing expected errors: ${JSON.stringify(
+                missing
+              )}; unexpected errors: ${JSON.stringify(remaining)}`
+            );
+          }
+        } catch (error) {
+          ledgerFailure =
+            error instanceof Error
+              ? error
+              : new Error(`Failed to assert main-process error ledger: ${String(error)}`);
+        }
+      }
+
+      const mainPid = child.pid;
+      const workspaceServerPid = readReadyFilePid(
+        path.join(workspacePath, "state", "server-ready.json")
+      );
+      const centralDataDir = getCentralDataDirFromEnv(workspaceInfo.env);
+      const hubReady = readHubReadyFile(path.join(centralDataDir, "server-auth", "hub-ready.json"));
+      const hubPid = hubReady?.pid;
+      const closeWithTimeout = async (timeoutMs: number): Promise<void> =>
+        Promise.race([
+          app.close(),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error("App close timed out")), timeoutMs)
+          ),
+        ]);
+
+      try {
+        // HubProcessManager allows up to 12 seconds for the detached hub's
+        // ordered shutdown. Cutting Electron off earlier strands its 30-second
+        // machine-control lease and makes an immediate restart fail.
+        await closeWithTimeout(20_000);
+      } catch (error) {
+        console.warn("[TestSetup] Graceful close failed, force killing:", error);
+        try {
+          killProcessTree(mainPid, "SIGKILL");
+          await waitForProcessExit(mainPid, 3000);
+        } catch {
+          // Process may already be dead.
+        }
+      }
+
+      cleanupKnownChildProcesses(mainPid);
+      cleanupKnownChildProcesses(workspaceServerPid);
+      for (const detachedPid of [workspaceServerPid, hubPid]) {
+        killProcessTree(detachedPid, "SIGTERM");
+        if (!(await waitForProcessExit(detachedPid, 15_000))) {
+          cleanupKnownChildProcesses(detachedPid);
+          killProcessTree(detachedPid, "SIGKILL");
+          await waitForProcessExit(detachedPid, 3000);
+        }
+      }
+
+      // A forced hub stop cannot execute its final lease release. Once the
+      // exact ready-file PID is confirmed dead, release only that boot's lease
+      // so an immediate restart does not wait for the 30-second fencing TTL.
+      if (hubReady && !isProcessAlive(hubReady.pid)) {
+        const centralData = new CentralDataManager({
+          databasePath: path.join(centralDataDir, "server-auth", "identity.db"),
+        });
+        try {
+          centralData.releaseHubProcessLease(hubReady.serverBootId);
+        } finally {
+          centralData.close();
+        }
+      }
+
+      if (ownsWorkspace) {
+        try {
+          await removeManagedTestWorkspaceWithRetry(workspacePath);
+        } catch (error) {
+          console.warn("[TestSetup] Error removing workspace:", error);
+        }
+      }
+
+      if (ledgerFailure) throw ledgerFailure;
+    })();
+    return cleanupPromise;
+  };
+
+  // Get the first window and wait for the test bridge. Readiness failures must
+  // carry the detached hub log because child startup diagnostics live there.
   let window: Page;
   try {
     window = await app.firstWindow({ timeout: launchTimeout });
+    await window.waitForLoadState("domcontentloaded");
+    await waitForTestApiReady(app, launchTimeout, output);
+    testApiReady = true;
   } catch (error) {
-    const details = output.join("").trim();
+    const electronDetails = output.join("").trim();
+    const hubDetails = readLogTail(
+      path.join(getCentralDataDirFromEnv(workspaceInfo.env), "logs", "hub.log")
+    );
+    await cleanup();
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}${
-        details ? `\n\nElectron output before first window:\n${details}` : ""
-      }`
+        electronDetails ? `\n\nElectron output before readiness:\n${electronDetails}` : ""
+      }${hubDetails ? `\n\nLocal hub log before readiness:\n${hubDetails}` : ""}`
     );
   }
-
-  // Wait for the app to initialize
-  await window.waitForLoadState("domcontentloaded");
-  await waitForTestApiReady(app, launchTimeout, output);
 
   // Optionally open DevTools
   if (devTools) {
@@ -290,55 +489,16 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     });
   }
 
-  // Cleanup function with timeout to prevent hanging
-  const cleanup = async () => {
-    const appProcess = child;
-    const mainPid = appProcess.pid;
-    const readyFile = path.join(workspacePath, "state", "server-ready.json");
-    const detachedServerPid = readReadyFilePid(readyFile);
-    // Use a timeout to prevent hanging on app.close()
-    const closeWithTimeout = async (timeoutMs: number): Promise<void> => {
-      return Promise.race([
-        app.close(),
-        new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error("App close timed out")), timeoutMs)
-        ),
-      ]);
-    };
+  return { app, window, workspacePath, getOutput: () => output.join(""), cleanup };
+}
 
-    try {
-      // Try graceful close first with 5 second timeout
-      await closeWithTimeout(5000);
-    } catch (error) {
-      console.warn("[TestSetup] Graceful close failed, force killing:", error);
-      // Force kill the whole process tree if graceful close fails. Killing only the Electron
-      // parent can orphan workerd/extension children under the user session.
-      try {
-        killProcessTree(mainPid, "SIGKILL");
-        await waitForProcessExit(mainPid, 3000);
-      } catch {
-        // Process may already be dead
-      }
-    }
-
-    cleanupKnownChildProcesses(mainPid);
-    cleanupKnownChildProcesses(detachedServerPid);
-    killProcessTree(detachedServerPid, "SIGTERM");
-    if (!(await waitForProcessExit(detachedServerPid, 3000))) {
-      killProcessTree(detachedServerPid, "SIGKILL");
-      await waitForProcessExit(detachedServerPid, 3000);
-    }
-
-    if (ownsWorkspace) {
-      try {
-        await removeManagedTestWorkspaceWithRetry(workspacePath);
-      } catch (error) {
-        console.warn("[TestSetup] Error removing workspace:", error);
-      }
-    }
-  };
-
-  return { app, window, workspacePath, cleanup };
+function readLogTail(logFile: string, maxCharacters = 20_000): string {
+  try {
+    const content = fs.readFileSync(logFile, "utf8");
+    return content.slice(-maxCharacters).trim();
+  } catch {
+    return "";
+  }
 }
 
 function readReadyFilePid(readyFile: string): number | undefined {
@@ -347,6 +507,27 @@ function readReadyFilePid(readyFile: string): number | undefined {
     return typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0
       ? parsed.pid
       : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readHubReadyFile(readyFile: string): { pid: number; serverBootId: string } | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(readyFile, "utf8")) as {
+      pid?: unknown;
+      serverBootId?: unknown;
+    };
+    if (
+      typeof parsed.pid !== "number" ||
+      !Number.isInteger(parsed.pid) ||
+      parsed.pid <= 0 ||
+      typeof parsed.serverBootId !== "string" ||
+      parsed.serverBootId.length === 0
+    ) {
+      return undefined;
+    }
+    return { pid: parsed.pid, serverBootId: parsed.serverBootId };
   } catch {
     return undefined;
   }
@@ -365,6 +546,11 @@ async function waitForProcessExit(pid: number | undefined, timeoutMs: number): P
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+    if (process.platform === "linux") {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const closeParen = stat.lastIndexOf(")");
+      if (closeParen >= 0 && stat.slice(closeParen + 2).startsWith("Z ")) return false;
+    }
     return true;
   } catch {
     return false;
@@ -406,7 +592,8 @@ async function waitForTestApiReady(
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   const details = output.join("").trim();
-  const reason = lastError instanceof Error ? lastError.message : lastError ? String(lastError) : "";
+  const reason =
+    lastError instanceof Error ? lastError.message : lastError ? String(lastError) : "";
   throw new Error(
     `Timed out waiting for VIBESTUDIO_TEST_MODE test API.${reason ? ` Last error: ${reason}` : ""}${
       details ? `\n\nElectron output before test API timeout:\n${details}` : ""
@@ -522,10 +709,17 @@ export async function waitForPanel(
 /**
  * Get the panel tree from the main process via TestApi.
  */
-export async function getPanelTree(
-  app: ElectronApplication
-): Promise<
-  Array<{ id: string; title: string; children: unknown[]; snapshot?: { source?: string } }>
+export async function getPanelTree(app: ElectronApplication): Promise<
+  Array<{
+    id: string;
+    title: string;
+    children: unknown[];
+    snapshot?: {
+      source?: string;
+      contextId?: string;
+      stateArgs?: Record<string, unknown>;
+    };
+  }>
 > {
   return app.evaluate(() => {
     const testApi = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } }).__testApi;
@@ -534,7 +728,16 @@ export async function getPanelTree(
     }
     return testApi.getPanelTree();
   }) as Promise<
-    Array<{ id: string; title: string; children: unknown[]; snapshot?: { source?: string } }>
+    Array<{
+      id: string;
+      title: string;
+      children: unknown[];
+      snapshot?: {
+        source?: string;
+        contextId?: string;
+        stateArgs?: Record<string, unknown>;
+      };
+    }>
   >;
 }
 
@@ -639,18 +842,175 @@ export async function reloadPanel(
   }, panelId);
 }
 
-/**
- * Check if a panel's view is loaded.
- */
-export async function isPanelLoaded(app: ElectronApplication, panelId: string): Promise<boolean> {
+export async function getPanelReadiness(
+  app: ElectronApplication,
+  panelId: string
+): Promise<PanelReadinessSnapshot> {
   return app.evaluate((_electron, id) => {
-    const testApi = (globalThis as { __testApi?: { isPanelLoaded: (id: string) => boolean } })
-      .__testApi;
+    const testApi = (globalThis as { __testApi?: Pick<TestApi, "getPanelReadiness"> }).__testApi;
     if (!testApi) {
       throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
     }
-    return testApi.isPanelLoaded(id);
+    return testApi.getPanelReadiness(id);
   }, panelId);
+}
+
+export async function isPanelReady(app: ElectronApplication, panelId: string): Promise<boolean> {
+  return (await getPanelReadiness(app, panelId)).terminal;
+}
+
+/** True once background panel content is built and live, without requiring visible-slot binding. */
+export async function isPanelContentReady(
+  app: ElectronApplication,
+  panelId: string
+): Promise<boolean> {
+  return (await getPanelReadiness(app, panelId)).contentReady;
+}
+
+export async function readPanelInitializationFailure(
+  app: ElectronApplication
+): Promise<PanelInitializationFailure | null> {
+  return app.evaluate(() => {
+    const testApi = (
+      globalThis as {
+        __testApi?: Pick<TestApi, "readPanelInitializationFailure">;
+      }
+    ).__testApi;
+    if (!testApi) throw new Error("Test API not available");
+    return testApi.readPanelInitializationFailure();
+  });
+}
+
+export function panelInitializationFailureError(
+  failure: PanelInitializationFailure | null
+): Error | null {
+  if (!failure) return null;
+  const stack = failure.stack ? `\n${failure.stack}` : "";
+  return new Error(
+    `Hosted shell panel initialization failed during ${failure.trigger}: ${failure.message}${stack}`
+  );
+}
+
+export async function ensureHostedShellReady(
+  app: ElectronApplication,
+  options: { panelSource: string; timeoutMs?: number }
+): Promise<PanelReadinessSnapshot> {
+  const deadline = Date.now() + (options.timeoutMs ?? 180_000);
+  let launchSessionId: string | null = null;
+  let lastState: unknown = null;
+  while (Date.now() < deadline) {
+    try {
+      const initializationError = panelInitializationFailureError(
+        await readPanelInitializationFailure(app)
+      );
+      if (initializationError) throw initializationError;
+
+      const launch = await app.evaluate(async (_electron, currentSessionId) => {
+        const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
+        if (!testApi) throw new Error("Test API not available");
+        return currentSessionId
+          ? testApi.rpcCall("workspace", "hostTargets.getLaunchSession", [currentSessionId])
+          : testApi.rpcCall("workspace", "hostTargets.beginLaunch", ["electron"]);
+      }, launchSessionId);
+      if (launch && typeof launch === "object") {
+        const sessionId = (launch as { sessionId?: unknown }).sessionId;
+        if (typeof sessionId === "string") launchSessionId = sessionId;
+        const approvals = (launch as { approvals?: unknown }).approvals;
+        if (launchSessionId && Array.isArray(approvals) && approvals.length > 0) {
+          await app.evaluate(async (_electron, id) => {
+            const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
+            if (!testApi) throw new Error("Test API not available");
+            await testApi.rpcCall("workspace", "hostTargets.resolveLaunchSessionApproval", [
+              id,
+              "once",
+            ]);
+          }, launchSessionId);
+        }
+      }
+
+      const panel = (await getPanelTree(app)).find(
+        (entry) => entry.snapshot?.source === options.panelSource
+      );
+      if (panel) {
+        const readiness = await getPanelReadiness(app, panel.id);
+        lastState = readiness;
+        if (readiness.terminal) return readiness;
+      } else {
+        lastState = { panelSource: options.panelSource, panel: "missing", launch };
+      }
+    } catch (error) {
+      // Bootstrap navigation replaces Electron's automation context. Retry the
+      // authoritative probes for that narrow race only. Product/service errors
+      // are terminal diagnostics and must not be disguised as readiness waits.
+      if (!isAutomationContextReplacement(error)) throw error;
+      lastState = { error: error instanceof Error ? error.message : String(error) };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  const surfaces = await app.evaluate(async ({ webContents }) =>
+    Promise.all(
+      webContents
+        .getAllWebContents()
+        .filter((contents) => !contents.isDestroyed())
+        .map(async (contents) => {
+          let documentState: { readyState: string; bodyText: string } | null = null;
+          try {
+            documentState = (await contents.executeJavaScript(
+              `({ readyState: document.readyState, bodyText: (document.body?.innerText ?? "").slice(0, 2000) })`,
+              true
+            )) as { readyState: string; bodyText: string };
+          } catch {
+            // Non-DOM WebContents are still useful by type and URL.
+          }
+          return {
+            id: contents.id,
+            type: contents.getType(),
+            url: contents.getURL(),
+            title: contents.getTitle(),
+            loading: contents.isLoading(),
+            documentState,
+          };
+        })
+    )
+  );
+  throw new Error(
+    `Hosted shell did not reach terminal readiness for ${options.panelSource}: ${JSON.stringify({ lastState, surfaces })}`
+  );
+}
+
+export async function readMainProcessErrors(
+  app: ElectronApplication
+): Promise<MainProcessErrorRecord[]> {
+  return app.evaluate(() => {
+    const testApi = (globalThis as { __testApi?: Pick<TestApi, "readMainProcessErrors"> })
+      .__testApi;
+    if (!testApi) throw new Error("Test API not available");
+    return testApi.readMainProcessErrors();
+  });
+}
+
+export async function clearMainProcessErrors(app: ElectronApplication): Promise<void> {
+  await app.evaluate(() => {
+    const testApi = (globalThis as { __testApi?: Pick<TestApi, "clearMainProcessErrors"> })
+      .__testApi;
+    if (!testApi) throw new Error("Test API not available");
+    testApi.clearMainProcessErrors();
+  });
+}
+
+export async function assertNoMainProcessErrors(
+  app: ElectronApplication,
+  testInfo: TestInfo,
+  label = "main-process-errors"
+): Promise<void> {
+  const errors = await readMainProcessErrors(app);
+  await testInfo.attach(`${label}.json`, {
+    body: JSON.stringify(errors, null, 2),
+    contentType: "application/json",
+  });
+  expect(errors, "main process must not leak uncaught exceptions or unhandled rejections").toEqual(
+    []
+  );
 }
 
 export async function getPanelText(app: ElectronApplication, panelId: string): Promise<string> {

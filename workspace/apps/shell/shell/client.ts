@@ -10,7 +10,6 @@ import {
   type RpcClient,
   type RpcEnvelope,
 } from "@vibestudio/rpc";
-import { RPC_METHODS } from "@vibestudio/shared/approvalContract";
 import { appMethods } from "@vibestudio/service-schemas/app";
 import {
   accountMethods,
@@ -30,6 +29,7 @@ import {
 } from "@vibestudio/service-schemas/remoteCred";
 import { settingsMethods } from "@vibestudio/service-schemas/settings";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
+import { shellPresenceMethods } from "@vibestudio/service-schemas/shellPresence";
 import { autofillMethods } from "@vibestudio/service-schemas/autofill";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import { viewMethods } from "@vibestudio/service-schemas/view";
@@ -92,13 +92,20 @@ const shellApprovalClient = createTypedServiceClient(
   shellApprovalMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
+const shellPresenceClient = createTypedServiceClient(
+  "shellPresence",
+  shellPresenceMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
 const appClient = createTypedServiceClient("app", appMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
 const accountClient = createTypedServiceClient("account", accountMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
-const eventsClient = new EventsClient(rpc);
+// Electron chrome owns a distinct event domain that projects workspace events
+// together with native host state. Other runtimes use the canonical `events`.
+const eventsClient = new EventsClient(rpc, undefined, "desktopEvents");
 const extensionsClient = createTypedServiceClient(
   "extensions",
   extensionsMethods,
@@ -728,7 +735,7 @@ export const userNotifications = {
       focus: true,
       contextId,
       name: config?.title?.trim() || undefined,
-      stateArgs: { channelName: channelId, contextId },
+      stateArgs: { channelName: channelId },
     });
   },
 };
@@ -827,5 +834,5 @@ export const shellApproval = {
 // Shell Presence Service
 // =============================================================================
 export const shellPresence = {
-  heartbeat: () => rpc.call<undefined>("main", RPC_METHODS.shellPresence.heartbeat, []),
+  heartbeat: () => shellPresenceClient.heartbeat(),
 };

@@ -142,15 +142,48 @@ describe("ApprovalCard", () => {
     expect(card.getAttribute("data-approval-tone")).toBe("red");
 
     const trustButton = screen.getByText("Trust version").closest("button");
-    expect(trustButton?.getAttribute("data-accent-color")).toBe("");
+    expect(trustButton?.getAttribute("data-accent-color")).toBe("red");
     expect(
       screen.getByText("Allow once").closest("button")?.getAttribute("data-accent-color")
-    ).toBe("amber");
+    ).toBe("");
     fireEvent.click(trustButton as HTMLButtonElement);
     expect(emit).toHaveBeenCalledWith({
       type: "decide",
       decision: "version",
       approvalId: "cap-severe",
+    });
+  });
+
+  it("recommends the durable version grant and uses it for keyboard confirmation", () => {
+    const credential = {
+      ...capabilityApproval({ approvalId: "credential", title: "Use model credential" }),
+      kind: "credential" as const,
+      credentialId: "openai-codex",
+      credentialLabel: "ChatGPT Codex model credential",
+      audience: [{ match: "path-prefix" as const, url: "https://chatgpt.com/backend-api" }],
+      injection: {
+        type: "header" as const,
+        name: "Authorization",
+        valueTemplate: "Bearer {{token}}",
+      },
+      accountIdentity: { providerUserId: "account" },
+      scopes: [],
+      credentialUse: "fetch" as const,
+    };
+    const { emit } = renderCard(credential);
+
+    expect(
+      screen.getByText("Trust version").closest("button")?.getAttribute("data-accent-color")
+    ).toBe("sky");
+    expect(screen.getByText("Use once").closest("button")?.getAttribute("data-accent-color")).toBe(
+      ""
+    );
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter" });
+    expect(emit).toHaveBeenCalledWith({
+      type: "decide",
+      decision: "version",
+      approvalId: "credential",
     });
   });
 

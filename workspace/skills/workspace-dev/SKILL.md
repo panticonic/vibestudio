@@ -92,6 +92,13 @@ context by default. Pass `ref: "main"` only when deliberately running protected
 main. Panel navigation still needs an explicit context build ref when testing
 unpublished panel code.
 
+One context is a complete workspace branch spanning all repositories. A vault,
+project, or repository is focus within that branch, never a context. A panel's
+context is host-bound; its agents and channels must use that same context, and
+`stateArgs` cannot override it. Create a new context only through an explicit
+fork/clone/subagent lifecycle operation. Use `panel.switchContext(...)` only to
+move the current panel to an already-created branch.
+
 For context-local scratch files under `projects/`, do not scaffold. Write inside
 a repo-shaped path such as `projects/tmp-name/note.md`; that repo remains private
 to the current context until you intentionally commit the complete local chain

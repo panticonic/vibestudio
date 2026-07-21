@@ -8,12 +8,11 @@ import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { ServerClient } from "../serverClient.js";
 import type { ViewManager } from "../viewManager.js";
 import type { AppOrchestrator } from "../appOrchestrator.js";
-import {
-  callerHasPlatformCapability,
-  requireAppCapability,
-  requireChromeCaller,
-} from "./appCapabilities.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import {
+  requirePanelHostingAuthority,
+  requireRuntimeCapability,
+} from "@vibestudio/shared/serviceAuthorityChecks";
 
 export function createAppService(deps: {
   panelOrchestrator: PanelOrchestrator;
@@ -36,7 +35,7 @@ export function createAppService(deps: {
   return {
     name: "app",
     description: "App lifecycle, theme, devtools",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "host", "code"] },
     methods: appMethods,
     handler: defineServiceHandler("app", appMethods, {
       getInfo: () => ({
@@ -51,28 +50,26 @@ export function createAppService(deps: {
         connectionCandidateType: deps.serverClient?.candidateType?.() ?? null,
       }),
       getSystemTheme: () => (nativeTheme.shouldUseDarkColors ? "dark" : "light"),
-      setThemeMode: (ctx, [mode]) => {
-        requireAppCapability(ctx, deps.getViewManager(), "window-management", "app.setThemeMode");
+      setThemeMode: async (ctx, [mode]) => {
+        await requireRuntimeCapability(ctx, "window-management", "app.setThemeMode");
         nativeTheme.themeSource = mode;
         return;
       },
-      openDevTools: (ctx) => {
+      openDevTools: async (ctx) => {
         const vm = deps.getViewManager();
-        requireAppCapability(ctx, vm, "window-management", "app.openDevTools");
+        await requireRuntimeCapability(ctx, "window-management", "app.openDevTools");
         vm.openDevTools(ctx.caller.runtime.kind === "app" ? ctx.caller.runtime.id : "shell");
         return;
       },
       openExternal: async (ctx, [url]) => {
-        requireAppCapability(ctx, deps.getViewManager(), "open-external", "app.openExternal");
+        await requireRuntimeCapability(ctx, "open-external", "app.openExternal");
         if (!/^https?:\/\//i.test(url))
           throw new Error("Only http(s) URLs can be opened externally");
         await shell.openExternal(url);
         return;
       },
       openWorkspacePath: async (ctx) => {
-        // Chrome-only (cross-workspace surface). The hosted shell resolves as
-        // kind:"app", so gate on authorized chrome, not kind.
-        requireChromeCaller(ctx, deps.getViewManager(), "app.openWorkspacePath");
+        await requirePanelHostingAuthority(ctx, "app.openWorkspacePath");
         const info = await workspaceClient?.getInfo();
         const workspacePath = info?.path;
         if (typeof workspacePath !== "string" || workspacePath.length === 0) {
@@ -83,7 +80,7 @@ export function createAppService(deps: {
         return;
       },
       clearBuildCache: async (ctx) => {
-        requireAppCapability(ctx, deps.getViewManager(), "panel-hosting", "app.clearBuildCache");
+        await requirePanelHostingAuthority(ctx, "app.clearBuildCache");
         const failures: string[] = [];
         if (buildClient) {
           try {
@@ -105,7 +102,7 @@ export function createAppService(deps: {
         return;
       },
       getShellPages: async (ctx) => {
-        requireAppCapability(ctx, deps.getViewManager(), "panel-hosting", "app.getShellPages");
+        await requirePanelHostingAuthority(ctx, "app.getShellPages");
         if (buildClient) {
           try {
             return await buildClient.getAboutPages();
@@ -119,28 +116,15 @@ export function createAppService(deps: {
         return [];
       },
       applyUpdate: async (ctx, [appId]) => {
-        requireShellOrPanelHostingApp(ctx, deps.getViewManager(), "app.applyUpdate");
+        await requirePanelHostingAuthority(ctx, "app.applyUpdate");
         return {
           applied: (await deps.getAppOrchestrator?.()?.applyPendingAppUpdate(appId)) ?? false,
         };
       },
-      listPendingUpdates: (ctx) => {
-        requireShellOrPanelHostingApp(ctx, deps.getViewManager(), "app.listPendingUpdates");
+      listPendingUpdates: async (ctx) => {
+        await requirePanelHostingAuthority(ctx, "app.listPendingUpdates");
         return deps.getAppOrchestrator?.()?.listPendingAppUpdates() ?? [];
       },
     }),
   };
-}
-
-function requireShellOrPanelHostingApp(
-  ctx: Parameters<ServiceDefinition["handler"]>[0],
-  viewManager: ViewManager,
-  operation: string
-): void {
-  if (
-    callerHasPlatformCapability(ctx.caller.runtime.id, ctx.caller.runtime.kind, "panel-hosting")
-  ) {
-    return;
-  }
-  requireAppCapability(ctx, viewManager, "panel-hosting", operation);
 }

@@ -32,7 +32,7 @@ function createHarness(
     ...overrides,
   };
   return {
-    policy: new PanelResourcePolicy(deps),
+    authority: new PanelResourcePolicy(deps),
     state,
     unload,
     reportUnloadError,
@@ -53,12 +53,12 @@ describe("PanelResourcePolicy", () => {
     const harness = createHarness({ idleUnloadMs: 100 });
     for (const panelId of ["focused", "pinned", "automated", "idle"]) {
       harness.state.panels.add(panelId);
-      harness.policy.track(panelId);
+      harness.authority.track(panelId);
     }
     harness.state.focusedPanelId = "focused";
     harness.state.pinned.add("pinned");
     harness.state.keepLoaded.add("automated");
-    harness.policy.start();
+    harness.authority.start();
 
     await vi.advanceTimersByTimeAsync(100);
 
@@ -70,8 +70,8 @@ describe("PanelResourcePolicy", () => {
     const harness = createHarness({ idleUnloadMs: 100 });
     harness.state.panels.add("panel-1");
     harness.state.pinned.add("panel-1");
-    harness.policy.track("panel-1");
-    harness.policy.start();
+    harness.authority.track("panel-1");
+    harness.authority.start();
 
     await vi.advanceTimersByTimeAsync(200);
     expect(harness.unload).not.toHaveBeenCalled();
@@ -85,12 +85,12 @@ describe("PanelResourcePolicy", () => {
     const harness = createHarness({ idleUnloadMs: 100 });
     harness.state.panels.add("loaded");
     harness.state.panels.add("unloaded");
-    harness.policy.track("loaded");
-    harness.policy.start();
+    harness.authority.track("loaded");
+    harness.authority.start();
 
     await vi.advanceTimersByTimeAsync(75);
-    harness.policy.refreshActivity("loaded");
-    harness.policy.refreshActivity("unloaded");
+    harness.authority.refreshActivity("loaded");
+    harness.authority.refreshActivity("unloaded");
     await vi.advanceTimersByTimeAsync(75);
 
     expect(harness.unload).not.toHaveBeenCalled();
@@ -103,13 +103,13 @@ describe("PanelResourcePolicy", () => {
     const harness = createHarness({ maximumLoadedPanels: 2 });
     for (const panelId of ["pinned", "old", "new"]) harness.state.panels.add(panelId);
     harness.state.pinned.add("pinned");
-    harness.policy.track("pinned");
+    harness.authority.track("pinned");
     vi.setSystemTime(1);
-    harness.policy.track("old");
+    harness.authority.track("old");
     vi.setSystemTime(2);
-    harness.policy.track("new");
+    harness.authority.track("new");
 
-    await harness.policy.enforceCap("new");
+    await harness.authority.enforceCap("new");
 
     expect(harness.unload).toHaveBeenCalledOnce();
     expect(harness.unload).toHaveBeenCalledWith("old", "resource-cap");
@@ -122,10 +122,10 @@ describe("PanelResourcePolicy", () => {
       idleUnloadMs: 1,
     });
     harness.state.panels.add("panel-1");
-    harness.policy.track("panel-1");
-    harness.policy.start();
+    harness.authority.track("panel-1");
+    harness.authority.start();
 
-    await harness.policy.enforceCap("other");
+    await harness.authority.enforceCap("other");
     await vi.advanceTimersByTimeAsync(100);
 
     expect(harness.unload).not.toHaveBeenCalled();
@@ -133,15 +133,15 @@ describe("PanelResourcePolicy", () => {
 
   it("prunes missing panels and reports unload failures exactly once", async () => {
     const harness = createHarness({ maximumLoadedPanels: 1 });
-    harness.policy.track("missing");
+    harness.authority.track("missing");
     harness.state.panels.add("broken");
-    harness.policy.track("broken");
+    harness.authority.track("broken");
     harness.state.panels.add("new");
-    harness.policy.track("new");
+    harness.authority.track("new");
     harness.unload.mockRejectedValueOnce(new Error("unload failed"));
 
-    await harness.policy.enforceCap("new");
-    await harness.policy.enforceCap("new");
+    await harness.authority.enforceCap("new");
+    await harness.authority.enforceCap("new");
 
     expect(harness.unload).toHaveBeenCalledOnce();
     expect(harness.unload).toHaveBeenCalledWith("broken", "resource-cap");

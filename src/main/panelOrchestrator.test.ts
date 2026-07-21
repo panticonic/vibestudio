@@ -15,6 +15,10 @@ function makePanel(id: string, children: Panel[] = [], overrides?: Partial<Panel
   return {
     id,
     title: id,
+    buildKey: "b".repeat(64),
+    executionDigest: "e".repeat(64),
+    authorityRequests: [],
+    authorityDelegations: [],
     children,
     snapshot,
     artifacts: {},
@@ -76,10 +80,9 @@ function createOrchestrator(
     getViewPartition: vi.fn((_panelId: string) => undefined as string | undefined),
     setViewVisible: vi.fn((_panelId: string, _visible: boolean) => {}),
     destroyView: vi.fn((_panelId: string) => {}),
-    reloadView: vi.fn((_panelId: string) => true),
+    reloadView: vi.fn(async (_panelId: string) => true),
   };
   const panelHttpServer = {
-    hasBuild: vi.fn(() => false),
     getBuildRevision: vi.fn(() => undefined as number | undefined),
     invalidateBuild: vi.fn(),
     getPort: vi.fn(),
@@ -154,6 +157,9 @@ function createOrchestrator(
       return { acquired: true, lease };
     }
     if (method === "getSnapshot") return { version: { epoch: "test", counter: 1 }, leases: [] };
+    if (service === "panelTree" && method === "getTreeSnapshot") {
+      return registry.getPanelTreeSnapshot();
+    }
     // Simulate the server panel-tree authority: create adds a panel to the
     // mirror (as the broadcast would) and returns its identity; archive removes
     // it. This lets the desktop orchestrator's panelTree create/close paths
@@ -456,14 +462,12 @@ describe("PanelOrchestrator.focusPanel", () => {
     });
     registry.addPanel(panel, null, { addAsRoot: true });
 
-    const { orchestrator, panelView, panelHttpServer } = createOrchestrator(registry);
+    const { orchestrator, panelView } = createOrchestrator(registry);
     const loadedPanels = new Set<string>();
     panelView.hasView.mockImplementation((panelId: string) => loadedPanels.has(panelId));
     panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
       loadedPanels.add(panelId);
     });
-    panelHttpServer.hasBuild.mockReturnValue(true);
-
     const result = await orchestrator.focusPanel(panel.id, { loadIfNeeded: true });
 
     expect(panelView.createViewForPanel).toHaveBeenCalledWith(
@@ -802,6 +806,25 @@ describe("PanelOrchestrator.navigatePanel", () => {
       `ctx-${panel.id}`
     );
   });
+
+  it("keeps a build failure that arrives while the awaited panel load is in flight", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/current");
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.createViewForPanel.mockImplementationOnce(async () => {
+      orchestrator.applyBuildComplete("panels/chat", "compile failed");
+    });
+
+    await orchestrator.navigatePanel(panel.id, "panels/chat");
+
+    expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
+      buildState: "error",
+      error: "compile failed",
+      buildProgress: "compile failed",
+    });
+  });
 });
 
 describe("PanelOrchestrator.applyBuildComplete", () => {
@@ -883,8 +906,8 @@ describe("PanelOrchestrator.rebuildPanel", () => {
       "ctx-panel:tree/parent"
     );
     expect(registry.getPanel(parent.id)?.artifacts).toMatchObject({
-      buildState: "building",
-      buildProgress: "Rebuilding panel...",
+      buildState: "ready",
+      buildProgress: undefined,
     });
     expect(registry.getPanel(child.id)?.artifacts).toMatchObject({
       buildState: "ready",
@@ -1009,11 +1032,10 @@ describe("PanelOrchestrator.recoverShellSnapshot", () => {
 
 describe("PanelOrchestrator.initializePanelTree", () => {
   it("never client-seeds initPanels — the server is the sole tree authority", async () => {
-    // The server seeds initPanels server-side (seedPanelTreeIfEmpty) before the
-    // panelTree service is ready, so loadTree() returns the seeded tree. The
-    // desktop must NOT create init panels itself; it only loads + restores.
+    // The authenticated getTreeSnapshot read is the server-owned first-attach
+    // trigger. The desktop must NOT create init panels itself.
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
-    const { orchestrator, serverClient } = createOrchestrator(registry, vi.fn(), {
+    const { orchestrator, serverClient, shellCore } = createOrchestrator(registry, vi.fn(), {
       workspaceConfig: {
         id: "test",
         panelRestorePolicy: "none",
@@ -1034,13 +1056,14 @@ describe("PanelOrchestrator.initializePanelTree", () => {
     );
     expect(createCalls).toHaveLength(0);
     expect(createAsCalls).toHaveLength(0);
+    expect(serverClient.call).toHaveBeenCalledWith("panelTree", "getTreeSnapshot", []);
+    expect(shellCore.loadTree).not.toHaveBeenCalled();
     expect(registry.getRootPanels()).toHaveLength(0);
   });
 
   it("syncs the server-seeded tree without re-creating or loading panels", async () => {
-    // loadTree() (server RPC) returns the already-seeded roots; the desktop
-    // restores their metadata. The hosted shell loads the visible panel later
-    // through the local panel.ensureLoaded path; no panelTree.create from the client.
+    // getTreeSnapshot returns the already-seeded roots. The hosted shell loads
+    // the visible panel later through panel.ensureLoaded; no client create.
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const seeded = makePanel("panel:tree/seeded", [], { artifacts: { buildState: "ready" } });
     registry.addPanel(seeded, null, { addAsRoot: true });

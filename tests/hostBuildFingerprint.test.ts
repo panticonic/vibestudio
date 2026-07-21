@@ -56,6 +56,25 @@ describe("host build fingerprint", () => {
     );
   });
 
+  it("ignores mutable local Wrangler state under app sources", () => {
+    const cwd = fixture();
+    const appSource = path.join(cwd, "apps", "signaling", "src", "index.ts");
+    const wranglerState = path.join(cwd, "apps", "signaling", ".wrangler", "state.sqlite");
+    fs.mkdirSync(path.dirname(appSource), { recursive: true });
+    fs.mkdirSync(path.dirname(wranglerState), { recursive: true });
+    fs.writeFileSync(appSource, "export default {}\n");
+    fs.writeFileSync(wranglerState, "transient state");
+    const initial = computeHostBuildFingerprint({ cwd, mode: "development" });
+
+    fs.writeFileSync(wranglerState, "different transient state");
+    expect(computeHostBuildFingerprint({ cwd, mode: "development" })).toEqual(initial);
+
+    fs.writeFileSync(appSource, "export default { fetch() {} }\n");
+    expect(computeHostBuildFingerprint({ cwd, mode: "development" }).fingerprint).not.toBe(
+      initial.fingerprint
+    );
+  });
+
   it("persists the completed-build contract", () => {
     const cwd = fixture();
     const fingerprint = computeHostBuildFingerprint({ cwd, mode: "development" });

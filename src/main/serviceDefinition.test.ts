@@ -18,7 +18,7 @@ describe("ServiceDispatcher.registerService", () => {
 
     const def: ServiceDefinition = {
       name: "echo",
-      policy: { allowed: ["shell", "panel"] },
+      authority: { principals: ["user", "code"] },
       methods: {
         greet: { args: z.tuple([z.string()]) },
       },
@@ -40,7 +40,7 @@ describe("ServiceDispatcher.registerService", () => {
 
     const def: ServiceDefinition = {
       name: "math",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         add: { args: z.tuple([z.number(), z.number()]) },
       },
@@ -63,7 +63,7 @@ describe("ServiceDispatcher.registerService", () => {
 
     const def: ServiceDefinition = {
       name: "flex",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         known: { args: z.tuple([z.string()]) },
       },
@@ -78,20 +78,24 @@ describe("ServiceDispatcher.registerService", () => {
     expect(result).toEqual({ method: "unknown", args: [42] });
   });
 
-  it("getPolicy returns policy for registered services", () => {
+  it("exposes registered service authority through the canonical definition", () => {
     const sd = new ServiceDispatcher();
 
     const def: ServiceDefinition = {
       name: "secret",
-      policy: { allowed: ["server"] },
+      authority: { principals: ["host"] },
       methods: {},
       handler: async () => {},
     };
 
     sd.registerService(def);
 
-    expect(sd.getPolicy("secret")).toEqual({ allowed: ["server"] });
-    expect(sd.getPolicy("nonexistent")).toBeUndefined();
+    expect(sd.getServiceDefinitions().find((entry) => entry.name === "secret")?.authority).toEqual({
+      principals: ["host"],
+    });
+    expect(
+      sd.getServiceDefinitions().find((entry) => entry.name === "nonexistent")
+    ).toBeUndefined();
   });
 
   it("getServiceDefinitions returns all registered definitions", () => {
@@ -99,14 +103,14 @@ describe("ServiceDispatcher.registerService", () => {
 
     sd.registerService({
       name: "a",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {},
       handler: async () => {},
     });
 
     sd.registerService({
       name: "b",
-      policy: { allowed: ["panel"] },
+      authority: { principals: ["code"] },
       methods: {},
       handler: async () => {},
     });
@@ -122,7 +126,7 @@ describe("ServiceDispatcher.registerService", () => {
 
     sd.registerService({
       name: "svc",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         foo: { args: argsSchema, description: "test method" },
       },

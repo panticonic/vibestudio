@@ -10,6 +10,7 @@ import {
   type RpcCallOptions,
   type RpcConnectionStatus,
   type RpcEnvelope,
+  type RpcStreamRequest,
   type RpcStreamOptions,
 } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
@@ -357,6 +358,11 @@ export async function createServerClient(
         },
       });
       await panelTransport.connectAndWait();
+      const panelRpc = createRpcClient({
+        selfId: runtimeEntityId,
+        callerKind: "panel",
+        transport: panelTransport,
+      });
       return {
         send: (envelope: RpcEnvelope) => panelTransport.send(envelope),
         onMessage: (listener: ServerMessageListener) => panelTransport.onMessage(listener),
@@ -365,8 +371,21 @@ export async function createServerClient(
         // IS terminal here. This keeps the relay's isClosed()-only recycle
         // (§3.3) correct on the loopback WS path too.
         isClosed: () => (panelTransport.status?.() ?? "disconnected") === "disconnected",
-        // No streamReadable: the WS panel session has no first-class stream
-        // plane, so §1.6 uploads fail loudly instead of falling back.
+        streamReadable: (envelope, signal, body) => {
+          const request = envelope.message as RpcStreamRequest;
+          if (request.type !== "stream-request") {
+            throw new Error(`Panel stream requires a stream-request envelope, got ${request.type}`);
+          }
+          return panelRpc.streamReadable(envelope.target, request.method, request.args, {
+            signal: signal ?? undefined,
+            body: body ?? undefined,
+            ...(request.causalParent ? { causalParent: request.causalParent } : {}),
+            ...(envelope.delivery.idempotencyKey
+              ? { idempotencyKey: envelope.delivery.idempotencyKey }
+              : {}),
+            ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
+          });
+        },
         close: () => {
           void panelTransport.close();
         },

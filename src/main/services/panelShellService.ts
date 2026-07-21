@@ -78,7 +78,7 @@ export function createPanelShellService(deps: {
   return {
     name: "panel",
     description: "Electron-local panel view helpers",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "code"] },
     methods: panelMethods,
     handler: defineServiceHandler("panel", panelMethods, {
       updateTheme: (ctx, [theme]) => {

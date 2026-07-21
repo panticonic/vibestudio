@@ -23,7 +23,7 @@ import {
   getPanelDiagnostics,
   getPanelHtml,
   getPanelSelectorWindowPoint,
-  isPanelLoaded,
+  isPanelReady,
   launchTestApp,
   reloadPanel,
   removeManagedTestWorkspace,
@@ -48,11 +48,12 @@ type PendingApproval = {
   }>;
 };
 
-async function getTerminalPanelId(app: ElectronApplication): Promise<string> {
+async function getTerminalPanelId(app: ElectronApplication, window: Page): Promise<string> {
   const deadline = Date.now() + 45_000;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
+      await resolvePendingTerminalWork(app, window);
       const id = await app.evaluate(() => {
         type PanelNode = {
           id: string;
@@ -149,12 +150,12 @@ async function resolvePendingTerminalWork(app: ElectronApplication, window?: Pag
 
 async function waitForTerminalPanel(app: ElectronApplication, window: Page): Promise<string> {
   await resolvePendingTerminalWork(app, window);
-  const panelId = await getTerminalPanelId(app);
+  const panelId = await getTerminalPanelId(app, window);
   await expect
     .poll(
       async () => {
         await approvePendingTerminalWork(app, window).catch(() => {});
-        return isPanelLoaded(app, panelId).catch(() => false);
+        return isPanelReady(app, panelId).catch(() => false);
       },
       { timeout: 30_000, intervals: [250, 500, 1000] }
     )
@@ -320,6 +321,11 @@ async function waitForUsableTerminalSession(
     .poll(
       async () => {
         await approvePendingTerminalWork(app, window);
+        // The panel may mount before the approved shell extension's first build
+        // finishes. Once approvals are resolved, drive its explicit recovery
+        // action so the same panel instance reconnects instead of waiting for a
+        // manual click forever.
+        await clickPanelText(app, panelId, "button", "Retry").catch(() => false);
         let sessions = await listTerminalSessions(app, panelId).catch(() => []);
         const alive = sessions.find((session) => session.alive !== false)?.sessionId;
         if (alive) return alive;
@@ -684,6 +690,7 @@ test.describe("Terminal Startup", () => {
       await typePanelText(app, terminalPanelId, "\u0015printf 'vibestudio-paste-input\\n'\r");
     }
     await expectScrollbackToContain(app, terminalPanelId, sessionRef, "vibestudio-paste-input");
+    await expectRenderedToContain(app, terminalPanelId, sessionRef, "vibestudio-paste-input");
 
     await clickPanelSelector(app, terminalPanelId, "[aria-label='Pane menu']");
     await expect

@@ -7,11 +7,13 @@ import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { PanelManager } from "./panelManager.js";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
-import type { RuntimeEntityCreateSpec, RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
+import type {
+  RuntimeEntityCreateSpec,
+  RuntimeEntityHandle,
+} from "@vibestudio/shared/runtime/entitySpec";
 import type {
   RuntimeClient,
   SlotCreateInput,
-  SlotHistoryEntryInput,
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
@@ -39,6 +41,7 @@ function createWorkspaceMemory() {
     source: string;
     context_id: string;
     state_args: string | null;
+    options: string | null;
     recorded_at: number;
   }
   interface MemEntity {
@@ -48,6 +51,9 @@ function createWorkspaceMemory() {
     contextId: string;
     status: "active" | "retired";
     key: string;
+    activeBuildKey: string;
+    activeExecutionDigest: string;
+    activeAuthority: { requests: []; delegations: [] };
     displayTitle?: string | null;
   }
 
@@ -97,6 +103,7 @@ function createWorkspaceMemory() {
         source: row.source,
         context_id: row.context_id,
         state_args: row.state_args,
+        options: row.options,
         recorded_at: row.recorded_at,
       }));
     },
@@ -109,9 +116,12 @@ function createWorkspaceMemory() {
         source: { repoPath: e.source, effectiveVersion: "test" },
         contextId: e.contextId,
         key: e.key,
+        activeBuildKey: e.activeBuildKey,
+        activeExecutionDigest: e.activeExecutionDigest,
+        activeAuthority: e.activeAuthority,
         createdAt: Date.now(),
         status: e.status,
-        cleanupComplete: false,
+        cleanupComplete: true,
       };
     },
     async resolveSlotByEntity(entityId) {
@@ -141,31 +151,60 @@ function createWorkspaceMemory() {
             source: input.initialEntry.source,
             context_id: input.initialEntry.contextId,
             state_args: stringifyStateArgs(input.initialEntry.stateArgs),
+            options: stringifyStateArgs(input.initialEntry.options),
             recorded_at: Date.now(),
           },
         ]);
       }
     },
-    async appendSlotHistory(slotId, entry: SlotHistoryEntryInput) {
-      const rows = history.get(slotId) ?? [];
-      rows.push({
-        entry_key: entry.entryKey,
-        entity_id: entry.entityId,
-        source: entry.source,
-        context_id: entry.contextId,
-        state_args: stringifyStateArgs(entry.stateArgs),
-        recorded_at: Date.now(),
-      });
-      history.set(slotId, rows);
-      return rows.length - 1;
-    },
-    async setSlotCurrent(slotId, entryKey) {
+    async commitPreparedNavigation(input) {
+      const { slotId, expectedCurrentEntityId, mutation } = input;
       const slot = slots.get(slotId);
       const rows = history.get(slotId) ?? [];
-      const row = rows.find((r) => r.entry_key === entryKey);
-      if (!slot || !row) throw new Error(`No such entry: ${slotId}/${entryKey}`);
+      const nextRows = rows.slice();
+      if (!slot || slot.current_entity_id !== expectedCurrentEntityId) {
+        throw new Error(`Slot navigation conflict: ${slotId}`);
+      }
+      const previousEntityId = slot.current_entity_id;
+      const currentCursor = rows.findIndex((row) => row.entry_key === slot.current_entry_key);
+      if (currentCursor < 0) throw new Error(`Missing current history: ${slotId}`);
+      let cursor: number;
+      let row: MemHistoryEntry | undefined;
+      if (mutation.kind === "select") {
+        cursor = nextRows.findIndex((candidate) => candidate.entry_key === mutation.entryKey);
+        row = nextRows[cursor];
+      } else {
+        const entry = mutation.entry;
+        row = {
+          entry_key: entry.entryKey,
+          entity_id: entry.entityId,
+          source: entry.source,
+          context_id: entry.contextId,
+          state_args: stringifyStateArgs(entry.stateArgs),
+          options: stringifyStateArgs(entry.options),
+          recorded_at: Date.now(),
+        };
+        if (mutation.kind === "append") {
+          nextRows.splice(currentCursor + 1, nextRows.length, row);
+          cursor = currentCursor + 1;
+        } else {
+          nextRows[currentCursor] = row;
+          cursor = currentCursor;
+        }
+      }
+      const entity = row && entities.get(row.entity_id);
+      if (!row || !entity || entity.status !== "active") {
+        throw new Error(`Prepared panel incarnation is not active and complete`);
+      }
       slot.current_entity_id = row.entity_id;
       slot.current_entry_key = row.entry_key;
+      history.set(slotId, nextRows);
+      return {
+        previousEntityId: previousEntityId as PanelEntityId,
+        currentEntityId: row.entity_id,
+        currentEntryKey: row.entry_key,
+        cursor,
+      };
     },
     async updateCurrentStateArgs(slotId, stateArgs) {
       const slot = slots.get(slotId);
@@ -173,25 +212,6 @@ function createWorkspaceMemory() {
       const rows = history.get(slotId) ?? [];
       const row = rows.find((r) => r.entry_key === slot.current_entry_key);
       if (row) row.state_args = stringifyStateArgs(stateArgs);
-    },
-    async replaceSlotHistory(slotId, entries, cursor) {
-      history.set(
-        slotId,
-        entries.map((entry) => ({
-          entry_key: entry.entryKey,
-          entity_id: entry.entityId,
-          source: entry.source,
-          context_id: entry.contextId,
-          state_args: stringifyStateArgs(entry.stateArgs),
-          recorded_at: Date.now(),
-        }))
-      );
-      const slot = slots.get(slotId);
-      const row = entries[cursor];
-      if (slot && row) {
-        slot.current_entity_id = row.entityId;
-        slot.current_entry_key = row.entryKey;
-      }
     },
     async setSlotParent(slotId, parentSlotId) {
       const slot = slots.get(slotId);
@@ -234,6 +254,9 @@ function createWorkspaceMemory() {
           contextId: spec.contextId ?? "ctx-default",
           status: "active",
           key,
+          activeBuildKey: "b".repeat(64),
+          activeExecutionDigest: "a".repeat(64),
+          activeAuthority: { requests: [], delegations: [] },
         });
       }
       created.push(id);
@@ -243,6 +266,10 @@ function createWorkspaceMemory() {
         source: { repoPath: spec.source, effectiveVersion: "test" },
         contextId: spec.contextId ?? "ctx-default",
         targetId: id,
+        buildKey: "b".repeat(64),
+        executionDigest: "a".repeat(64),
+        authorityRequests: [],
+        authorityDelegations: [],
       };
     },
     async retireEntity(id) {
@@ -782,6 +809,78 @@ describe("PanelManager", () => {
     await manager.navigateHistory(created.panelId, 1);
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).source).toBe("panels/second");
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).options.ref).toBe("feature");
+  });
+
+  it("keeps the current incarnation active when navigate or replace preparation fails", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
+    tempDirs.push(workspacePath);
+    for (const name of ["first", "second"]) {
+      const panelDir = path.join(workspacePath, "panels", name);
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
+      );
+    }
+
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+    const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
+    const originalEntityId = mem.state.slots.get(created.panelId)?.current_entity_id;
+    const createEntity = vi.spyOn(deps.runtime, "createEntity");
+    const retireEntity = vi.spyOn(deps.runtime, "retireEntity");
+
+    createEntity.mockRejectedValueOnce(new Error("prepare failed"));
+    await expect(manager.navigate(created.panelId, "panels/second")).rejects.toThrow(
+      "prepare failed"
+    );
+    expect(mem.state.slots.get(created.panelId)?.current_entity_id).toBe(originalEntityId);
+    expect(mem.state.history.get(created.panelId)).toHaveLength(1);
+    expect(mem.state.entities.get(originalEntityId!)?.status).toBe("active");
+    expect(retireEntity).not.toHaveBeenCalled();
+
+    createEntity.mockRejectedValueOnce(new Error("replace prepare failed"));
+    await expect(
+      manager.replaceCurrentSnapshot(created.panelId, { source: "panels/second" })
+    ).rejects.toThrow("replace prepare failed");
+    expect(mem.state.slots.get(created.panelId)?.current_entity_id).toBe(originalEntityId);
+    expect(mem.state.history.get(created.panelId)).toHaveLength(1);
+    expect(mem.state.entities.get(originalEntityId!)?.status).toBe("active");
+    expect(retireEntity).not.toHaveBeenCalled();
+  });
+
+  it("prepares a history destination before swapping and retiring the current incarnation", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
+    tempDirs.push(workspacePath);
+    for (const name of ["first", "second"]) {
+      const panelDir = path.join(workspacePath, "panels", name);
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
+      );
+    }
+
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+    const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
+    await manager.navigate(created.panelId, "panels/second");
+    const secondEntityId = mem.state.slots.get(created.panelId)?.current_entity_id;
+    const retireEntity = vi.spyOn(deps.runtime, "retireEntity");
+    retireEntity.mockClear();
+    vi.spyOn(deps.runtime, "createEntity").mockRejectedValueOnce(
+      new Error("history prepare failed")
+    );
+
+    await expect(manager.navigateHistory(created.panelId, -1)).rejects.toThrow(
+      "history prepare failed"
+    );
+    expect(mem.state.slots.get(created.panelId)?.current_entity_id).toBe(secondEntityId);
+    expect(mem.state.entities.get(secondEntityId!)?.status).toBe("active");
+    expect(registry.getPanel(created.panelId)?.history?.index).toBe(1);
+    expect(retireEntity).not.toHaveBeenCalled();
   });
 
   it("navigates existing slots to URL-like sources as browser snapshots", async () => {

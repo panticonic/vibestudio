@@ -180,12 +180,11 @@ describe("ViewManager", () => {
       });
     });
 
-    it("creates a panel view via path-based HTTP URL", () => {
+    it("creates a panel view ready for owned navigation", () => {
       const view = vm.createView({
         id: "test-panel",
         type: "panel",
         preload: null,
-        url: "http://localhost:9100/panels/test-panel/?state=abc",
       });
 
       expect(view).toBeDefined();
@@ -210,7 +209,6 @@ describe("ViewManager", () => {
         id: "test-browser",
         type: "panel",
         preload: null,
-        url: "https://example.com",
       });
 
       expect(view).toBeDefined();
@@ -222,7 +220,6 @@ describe("ViewManager", () => {
         id: "test-view",
         type: "panel",
         preload: null,
-        url: "http://localhost:9100/panels/test-view/",
       });
 
       expect(() => {
@@ -230,7 +227,6 @@ describe("ViewManager", () => {
           id: "test-view",
           type: "panel",
           preload: null,
-          url: "http://localhost:9100/panels/test-view/",
         });
       }).toThrow("View already exists: test-view");
     });
@@ -1175,6 +1171,120 @@ describe("ViewManager", () => {
       await vm.navigateView("test-view", "https://example.com");
 
       expect(view.webContents.loadURL).toHaveBeenCalledWith("https://example.com");
+    });
+
+    it("absorbs ERR_ABORTED only when a newer navigation supersedes it", async () => {
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      let rejectFirst!: (error: unknown) => void;
+      const firstLoad = new Promise<void>((_resolve, reject) => {
+        rejectFirst = reject;
+      });
+      (view.webContents.loadURL as Mock)
+        .mockReturnValueOnce(firstLoad)
+        .mockResolvedValueOnce(undefined);
+
+      const superseded = vm.navigateView("test-view", "https://example.com/old");
+      await vm.navigateView("test-view", "https://example.com/new");
+      rejectFirst(Object.assign(new Error("ERR_ABORTED (-3)"), { code: -3 }));
+
+      await expect(superseded).resolves.toBeUndefined();
+      expect(view.webContents.loadURL).toHaveBeenNthCalledWith(2, "https://example.com/new");
+    });
+
+    it("rejects ERR_ABORTED when the latest requested navigation did not commit", async () => {
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      const aborted = Object.assign(new Error("ERR_ABORTED (-3)"), { code: -3 });
+      (view.webContents.loadURL as Mock).mockRejectedValueOnce(aborted);
+
+      await expect(vm.navigateView("test-view", "https://example.com/latest")).rejects.toBe(
+        aborted
+      );
+    });
+
+    it("coalesces concurrent requests for the same desired URL", async () => {
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      let resolveLoad!: () => void;
+      const load = new Promise<void>((resolve) => {
+        resolveLoad = resolve;
+      });
+      (view.webContents.loadURL as Mock).mockReturnValueOnce(load);
+
+      const first = vm.navigateView("test-view", "https://example.com/desired");
+      const second = vm.navigateView("test-view", "https://example.com/desired");
+      expect(view.webContents.loadURL).toHaveBeenCalledTimes(1);
+      resolveLoad();
+
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+    });
+
+    it("does not reload an already committed desired URL", async () => {
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      (view.webContents.getURL as Mock).mockReturnValue("https://example.com/committed");
+      (view.webContents.isLoading as Mock).mockReturnValue(false);
+
+      await vm.navigateView("test-view", "https://example.com/committed");
+
+      expect(view.webContents.loadURL).not.toHaveBeenCalled();
+    });
+
+    it("lets the committed URL supersede a different in-flight desired URL", async () => {
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      let rejectFirst!: (error: unknown) => void;
+      const firstLoad = new Promise<void>((_resolve, reject) => {
+        rejectFirst = reject;
+      });
+      (view.webContents.getURL as Mock).mockReturnValue("https://example.com/committed");
+      (view.webContents.isLoading as Mock).mockReturnValue(false);
+      (view.webContents.loadURL as Mock)
+        .mockReturnValueOnce(firstLoad)
+        .mockResolvedValueOnce(undefined);
+
+      const superseded = vm.navigateView("test-view", "https://example.com/other");
+      const latest = vm.navigateView("test-view", "https://example.com/committed");
+      rejectFirst(Object.assign(new Error("ERR_ABORTED (-3)"), { code: -3 }));
+
+      await expect(Promise.all([superseded, latest])).resolves.toEqual([undefined, undefined]);
+      expect(view.webContents.loadURL).toHaveBeenNthCalledWith(2, "https://example.com/committed");
+    });
+
+    it("restarts the latest desired URL when reload races an in-flight navigation", async () => {
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      let rejectFirst!: (error: unknown) => void;
+      const firstLoad = new Promise<void>((_resolve, reject) => {
+        rejectFirst = reject;
+      });
+      (view.webContents.loadURL as Mock)
+        .mockReturnValueOnce(firstLoad)
+        .mockResolvedValueOnce(undefined);
+
+      const first = vm.navigateView("test-view", "https://example.com/desired");
+      const reload = vm.reloadView("test-view");
+      rejectFirst(Object.assign(new Error("ERR_ABORTED (-3)"), { code: -3 }));
+
+      await expect(first).resolves.toBeUndefined();
+      await expect(reload).resolves.toBe(true);
+      expect(view.webContents.loadURL).toHaveBeenNthCalledWith(1, "https://example.com/desired");
+      expect(view.webContents.loadURL).toHaveBeenNthCalledWith(2, "https://example.com/desired");
+      expect(view.webContents.reload).not.toHaveBeenCalled();
+    });
+
+    it("retries a failed load only while its URL remains desired", async () => {
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      (view.webContents.getURL as Mock).mockReturnValue("https://example.com/desired");
+      (view.webContents.isLoading as Mock).mockReturnValue(false);
+
+      await vm.navigateView("test-view", "https://example.com/desired");
+      await expect(
+        vm.retryViewNavigation("test-view", "https://example.com/desired")
+      ).resolves.toBe(true);
+      await vm.navigateView("test-view", "data:text/html,error");
+      await expect(
+        vm.retryViewNavigation("test-view", "https://example.com/desired")
+      ).resolves.toBe(false);
+
+      expect(view.webContents.loadURL).toHaveBeenCalledTimes(2);
+      expect(view.webContents.loadURL).toHaveBeenNthCalledWith(1, "https://example.com/desired");
+      expect(view.webContents.loadURL).toHaveBeenNthCalledWith(2, "data:text/html,error");
     });
 
     it("getViewUrl returns current URL", () => {

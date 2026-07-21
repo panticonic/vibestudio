@@ -8,6 +8,7 @@ function createHarness(
     onCredentialCaptureRequest?: (
       payload: Record<string, unknown>
     ) => Promise<Record<string, unknown>>;
+    onNotificationAction?: (id: string, actionId: string) => void | Promise<void>;
   } = {}
 ) {
   const eventService = { emit: vi.fn() };
@@ -35,6 +36,7 @@ function createHarness(
     onAppHostTargetChanged,
     resolveAppAvailableEvent: opts.resolveAppAvailableEvent,
     onCredentialCaptureRequest: opts.onCredentialCaptureRequest,
+    onNotificationAction: opts.onNotificationAction,
     warn,
   });
   return {
@@ -122,6 +124,21 @@ describe("createServerEventBridge", () => {
       id: "n1",
       type: "info",
       title: "Hello",
+    });
+  });
+
+  it("projects notification actions to their desktop implementation", async () => {
+    const onNotificationAction = vi.fn(async () => undefined);
+    const { handle, eventService } = createHarness({ onNotificationAction });
+
+    handle("notification:action", { id: "update", actionId: "desktop-update-download" });
+
+    await vi.waitFor(() =>
+      expect(onNotificationAction).toHaveBeenCalledWith("update", "desktop-update-download")
+    );
+    expect(eventService.emit).toHaveBeenCalledWith("notification:action", {
+      id: "update",
+      actionId: "desktop-update-download",
     });
   });
 

@@ -40,21 +40,16 @@ export function createShellCore(deps: {
   const workspaceState: WorkspaceStateClient = {
     listSlots: () => call<SlotRow[]>("workspace-state", "slot.list", []),
     getSlot: (slotId) => call<SlotRow | null>("workspace-state", "slot.get", [slotId]),
-    getSlotHistory: (slotId) =>
-      call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
+    getSlotHistory: (slotId) => call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
     resolveActiveEntity: (id) =>
       call<EntityRecord | null>("workspace-state", "entity.resolveActive", [id]),
     resolveSlotByEntity: (entityId) =>
       call<string | null>("workspace-state", "slot.resolveByEntity", [entityId]),
     createSlot: (input) => call<void>("workspace-state", "slot.create", [input]),
-    appendSlotHistory: (slotId, entry) =>
-      call<number>("workspace-state", "slot.appendHistory", [slotId, entry]),
-    setSlotCurrent: (slotId, entryKey) =>
-      call<void>("workspace-state", "slot.setCurrent", [slotId, entryKey]),
+    commitPreparedNavigation: (input) =>
+      call("workspace-state", "slot.commitPreparedNavigation", [input]),
     updateCurrentStateArgs: (slotId, stateArgs) =>
       call<void>("workspace-state", "slot.updateCurrentStateArgs", [slotId, stateArgs]),
-    replaceSlotHistory: (slotId, entries, cursor) =>
-      call<void>("workspace-state", "slot.replaceHistory", [slotId, entries, cursor]),
     setSlotParent: (slotId, parentSlotId) =>
       call<void>("workspace-state", "slot.setParent", [slotId, parentSlotId]),
     setSlotPosition: (slotId, positionId) =>

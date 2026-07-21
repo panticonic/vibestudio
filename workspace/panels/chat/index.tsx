@@ -49,7 +49,7 @@ import type { DurableObjectServiceClient } from "@workspace/runtime";
 import {
   appendInstalledAgent,
   buildAgentSubscriptionConfig,
-  resolveChatContextId,
+  requireChatContextId,
   sanitizeHandle,
 } from "./bootstrap.js";
 import { createAndSubscribeAgent } from "./agentLifecycle.js";
@@ -159,7 +159,6 @@ interface InstalledAgent {
 interface ChatStateArgs {
   channelName?: string;
   channelConfig?: Record<string, unknown>;
-  contextId?: string;
   installedAgents?: InstalledAgent[];
   agentSource?: string;
   agentClass?: string;
@@ -202,7 +201,7 @@ export default function ChatPanel() {
   const theme = usePanelTheme();
   const appTheme = useAppTheme();
   const stateArgs = useStateArgs<ChatStateArgs>();
-  const resolvedContextId = resolveChatContextId(stateArgs.contextId, contextId);
+  const resolvedContextId = requireChatContextId(contextId);
   const initialPromptCaptured = useRef(stateArgs.initialPrompt);
   const modelSettingsServiceRef = useRef<DurableObjectServiceClient | null>(null);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
@@ -268,7 +267,7 @@ export default function ChatPanel() {
       // agent rather than backlog replay. Creating the channel here just lets the
       // composer connect; nothing else is persisted until an agent is added.
       const channelName = `chat-${crypto.randomUUID().slice(0, 8)}`;
-      void panel.stateArgs.set({ channelName, contextId: resolvedContextId });
+      void panel.stateArgs.set({ channelName });
       setBootstrapChannel(channelName);
     })();
   }, [resolvedContextId, stateArgs.channelName]);
@@ -617,10 +616,7 @@ export default function ChatPanel() {
       agentId?: string,
       config?: AgentSubscriptionConfig
     ) => {
-      const activeContextId = resolveChatContextId(channelContextId, contextId);
-      if (!activeContextId) {
-        throw new Error("Cannot add an agent without a context ID");
-      }
+      const activeContextId = requireChatContextId(contextId, channelContextId);
       // Resolve the agent type. An explicit agentId wins; otherwise honor a
       // caller-pinned stateArgs.agentSource/agentClass (programmatic opens — e.g.
       // the test-agent harness, or the onboarding chat — where the agent may not
@@ -692,10 +688,7 @@ export default function ChatPanel() {
       agentId?: string,
       config?: AgentSubscriptionConfig
     ) => {
-      const activeContextId = resolveChatContextId(stateArgs.contextId, contextId);
-      if (!activeContextId) {
-        throw new Error("Cannot replace an agent without a context ID");
-      }
+      const activeContextId = requireChatContextId(contextId);
       const target = parseDoTargetId(participantId);
       if (!target) {
         throw new Error(`Cannot resolve agent participant: ${participantId}`);
@@ -884,8 +877,8 @@ export default function ChatPanel() {
     ]
   );
 
-  // In-place fork switch: rebind the panel's channel + context and let the
-  // useChatCore bootstrap effect (keyed on channelName/contextId) reconnect.
+  // In-place fork switch: explicitly move the panel runtime to the fork's
+  // already-created workspace branch. State args carry only the channel.
   const handleForkSwitch = useCallback(
     (forkChannelId: string, forkContextId: string) => {
       console.info("[ChatPanel] switching to fork", {
@@ -896,7 +889,11 @@ export default function ChatPanel() {
       });
       initialPromptCaptured.current = undefined;
       rehydrationCheckedRef.current = false;
-      void panel.stateArgs.set({ channelName: forkChannelId, contextId: forkContextId });
+      const current = panel.stateArgs.get<ChatStateArgs & { contextId?: unknown }>();
+      const { contextId: _obsoleteContextId, ...panelState } = current;
+      void panel.switchContext(forkContextId, {
+        stateArgs: { ...panelState, channelName: forkChannelId },
+      });
     },
     [bootstrapChannel, resolvedContextId, stateArgs.channelName]
   );
@@ -912,7 +909,8 @@ export default function ChatPanel() {
       });
       void openPanel("panels/chat", {
         focus: true,
-        stateArgs: { channelName: forkChannelId, contextId: forkContextId },
+        contextId: forkContextId,
+        stateArgs: { channelName: forkChannelId },
       });
     },
     [bootstrapChannel, resolvedContextId, stateArgs.channelName]

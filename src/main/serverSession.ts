@@ -305,7 +305,6 @@ export async function establishServerSession(args: {
 
     const gatewayPort = target.gatewayPort;
     const panelHttpServer: PanelHttpServerLike = {
-      hasBuild: () => false,
       getBuildRevision: () => undefined,
       invalidateBuild: () => {},
       getPort: () => gatewayPort,
@@ -624,7 +623,6 @@ async function buildRemoteSessionConnection(
     log.info(`[Workspace] Remote workspace: ${wsInfo.config.id}`);
 
     const panelHttpServer: PanelHttpServerLike = {
-      hasBuild: () => false,
       getBuildRevision: () => undefined,
       invalidateBuild: () => {},
       getPort: () => facade.port,

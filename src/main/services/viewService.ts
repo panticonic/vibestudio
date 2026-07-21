@@ -57,7 +57,7 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
   return {
     name: "view",
     description: "View bounds, visibility, theme CSS",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "code"] },
     methods: viewMethods,
     handler: defineServiceHandler("view", viewMethods, {
       setBounds: (ctx, [viewId, bounds]) => {

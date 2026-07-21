@@ -13,7 +13,6 @@ export interface PersistedInstalledAgent {
 export interface ChatStateArgs {
   channelName: string;
   channelConfig?: Record<string, unknown>;
-  contextId?: string;
   installedAgents?: PersistedInstalledAgent[];
   agentSource?: string;
   agentClass?: string;

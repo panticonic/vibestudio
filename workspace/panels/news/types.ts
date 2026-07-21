@@ -1,7 +1,6 @@
 export interface NewsStateArgs {
   /** Pubsub channel backing this panel; minted on first bootstrap. */
   channelName?: string;
-  contextId?: string;
   /** Stable DO key for the news agent so reloads reuse the same entity. */
   agentKey?: string;
   /** Extra subscription config layered onto the agent (model etc.). */
