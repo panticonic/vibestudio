@@ -367,6 +367,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
             : undefined,
         name: String(payload["name"] ?? "unknown"),
         transport,
+        executionMode: payload["executionMode"] === "parallel" ? "parallel" : "sequential",
         ...(Array.isArray(payload["askUserTargets"])
           ? { askUserTargets: payload["askUserTargets"] as ParticipantRef[] }
           : {}),

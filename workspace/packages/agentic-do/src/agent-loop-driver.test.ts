@@ -108,7 +108,7 @@ async function makeHarness(opts: {
     sql: driverHost.sql as never,
     gad: {
       // The driver runs INSIDE the agent DO, so its control-plane calls are attributed
-      // as a "do" — gad write methods (appendLogEvent/…) are `@rpc({ callers: ["do"] })`.
+      // as a durable entity — GAD write methods require entity authority.
       call: <T>(method: string, args: Record<string, unknown>) => {
         const fault = opts.gadFault?.(method);
         if (fault) return Promise.reject(fault);
@@ -447,21 +447,51 @@ describe("AgentLoopDriver", () => {
     await alarm;
   });
 
-  it("releases activation executors without journaling a semantic terminal", async () => {
+  it("persists channel retirement after a user interrupt without reusing its envelope id", async () => {
+    const harness = await makeHarness({ script: { model: [], tool: [] } });
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-retire-after-interrupt"));
+
+    await harness.driver.handleIncoming(CHANNEL, {
+      type: "command",
+      command: { kind: "interrupt" },
+    });
+    await harness.driver.handleIncoming(CHANNEL, {
+      type: "command",
+      command: { kind: "abort", reason: "channel_unsubscribe" },
+    });
+
+    const turnId = ids.turnId(CHANNEL, "env-retire-after-interrupt", "agent:self");
+    const rows = await harness.gad.call<{ rows: Array<{ envelope_id: string }> }>(
+      "query",
+      `SELECT envelope_id FROM log_events
+       WHERE log_id = '${LOG_ID}' AND payload_kind = 'system.event'
+       ORDER BY seq`,
+      []
+    );
+    expect(rows.rows.map((row) => row.envelope_id)).toEqual([
+      ids.interruptEvent(turnId, "user_interrupted"),
+      ids.interruptEvent(turnId, "channel_unsubscribe"),
+    ]);
+  });
+
+  it("releases an executor waiting in ensureLoaded without journaling a semantic terminal", async () => {
     const started = deferred<void>();
     let executions = 0;
+    const ensureLoaded = vi.fn(
+      (_modelId: string, signal: AbortSignal) =>
+        new Promise<EffectOutcome>((_resolve, reject) => {
+          executions += 1;
+          started.resolve();
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        })
+    );
     const harness = await makeHarness({
       script: { model: [], tool: [] },
       executorOverride: (descriptor) =>
         descriptor.kind === "model_call"
           ? ({
               kind: "model_call",
-              execute: ({ signal }) =>
-                new Promise<EffectOutcome>((_resolve, reject) => {
-                  executions += 1;
-                  started.resolve();
-                  signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-                }),
+              execute: ({ signal }) => ensureLoaded("lfm2.5-1.2b", signal),
             } as EffectExecutor)
           : null,
     });
@@ -482,6 +512,7 @@ describe("AgentLoopDriver", () => {
 
     await harness.driver.alarm();
     expect(executions).toBe(1);
+    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b", expect.any(AbortSignal));
   });
 
   it("closes effect admission while the interrupt marker is being journaled", async () => {
@@ -685,6 +716,8 @@ describe("AgentLoopDriver", () => {
       idempotencyKey: "tc-1",
       invocationId: "tc-1",
       turnId: `turn:${channelId}`,
+      invocationSeq: 1,
+      executionMode: "parallel",
       tool: "read",
       args: {},
     });
@@ -701,6 +734,69 @@ describe("AgentLoopDriver", () => {
     expect(harness.driver.outbox.get(otherLog, ids.invocationEffect("tc-1"))?.channelId).toBe(
       otherChannel
     );
+  });
+
+  it("dispatches local tools in durable ordered waves around sequential barriers", async () => {
+    const starts: string[] = [];
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "local_tool"
+          ? {
+              kind: "local_tool",
+              async execute() {
+                starts.push(descriptor.tool);
+                return { deferred: true };
+              },
+            }
+          : null,
+    });
+    const effect = (
+      invocationSeq: number,
+      tool: string,
+      executionMode: "sequential" | "parallel"
+    ): EffectDescriptor => ({
+      kind: "local_tool",
+      effectId: ids.invocationEffect(`tc-${invocationSeq}`),
+      channelId: CHANNEL,
+      idempotencyKey: `tc-${invocationSeq}`,
+      invocationId: `tc-${invocationSeq}`,
+      turnId: "turn:ordered-wave",
+      invocationSeq,
+      executionMode,
+      tool,
+      args: {},
+    });
+    const rows = [
+      effect(10, "read-a", "parallel"),
+      effect(11, "read-b", "parallel"),
+      effect(12, "write-a", "sequential"),
+      effect(13, "read-after-write", "parallel"),
+      effect(14, "write-b", "sequential"),
+    ];
+    for (const descriptor of rows) harness.driver.outbox.insert(LOG_ID, descriptor, null);
+
+    await harness.driver.dispatchDue();
+    expect(starts).toEqual(["read-a", "read-b"]);
+
+    for (const descriptor of rows.slice(0, 2)) {
+      harness.driver.outbox.delete(LOG_ID, descriptor.effectId);
+    }
+    await harness.driver.dispatchDue();
+    expect(starts).toEqual(["read-a", "read-b", "write-a"]);
+
+    // A deferred/leased mutation remains a durable barrier. A later read must
+    // not observe the pre-mutation state merely because another alarm fires.
+    await harness.driver.dispatchDue();
+    expect(starts).toEqual(["read-a", "read-b", "write-a"]);
+
+    harness.driver.outbox.delete(LOG_ID, rows[2]!.effectId);
+    await harness.driver.dispatchDue();
+    expect(starts).toEqual(["read-a", "read-b", "write-a", "read-after-write"]);
+
+    harness.driver.outbox.delete(LOG_ID, rows[3]!.effectId);
+    await harness.driver.dispatchDue();
+    expect(starts).toEqual(["read-a", "read-b", "write-a", "read-after-write", "write-b"]);
   });
 
   it("applies policy filters to executor-side ephemeral signals", async () => {
@@ -1527,6 +1623,46 @@ describe("AgentLoopDriver", () => {
         leaseExpiresAt: null,
         nextAttemptAt: expect.any(Number),
       }),
+    ]);
+  });
+
+  it("keeps retry-classified model work durable across an extended network outage", async () => {
+    let attempts = 0;
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              async execute() {
+                attempts += 1;
+                return attempts <= 4
+                  ? {
+                      kind: "retry",
+                      reason: "fetch failed",
+                      retryAfterMs: 1_000,
+                      code: "unknown_retryable",
+                    }
+                  : textReply("network recovered");
+              },
+            } satisfies EffectExecutor)
+          : null,
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-network-outage"));
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      harness.setNow((attempt + 1) * 10_000);
+      await harness.driver.alarm();
+    }
+
+    expect(attempts).toBe(5);
+    expect(harness.driver.outbox.all()).toEqual([]);
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "message.completed",
+      "turn.closed",
     ]);
   });
 

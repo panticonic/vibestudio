@@ -3,11 +3,23 @@ import { describe, expect, it } from "vitest";
 import type { TestExecutionResult } from "../types.js";
 import { agenticRuntimeTests } from "./agentic-runtime.js";
 import { agentCapabilityTests } from "./agent-capabilities.js";
+import { blobstoreTests } from "./blobstore.js";
+import { cdpGadDiagnosticTests } from "./cdp-gad-diagnostics.js";
+import { credentialTests } from "./credentials.js";
+import { docsDiscoveryTests } from "./docs-discovery.js";
+import { docsProbeTests } from "./docs-probes.js";
 import { finalMessageHasAll } from "./_helpers.js";
 import { interactionSurfaceTests } from "./interaction-surfaces.js";
+import { gitInteropTests } from "./git-interop.js";
 import { harnessToolTests } from "./harness-tools.js";
+import { notificationTests } from "./notifications.js";
+import { oauthTests } from "./oauth.js";
 import { rpcTests } from "./rpc-communication.js";
+import { serverLogTests } from "./server-logs.js";
+import { skillTests } from "./skills.js";
+import { unitDiagnosticsTests } from "./unit-diagnostics.js";
 import { vcsAdvancedTests } from "./vcs-advanced.js";
+import { webhookTests } from "./webhooks.js";
 
 function execution(
   final: string,
@@ -30,13 +42,36 @@ function execution(
 }
 
 describe("semantic system-test validators", () => {
+  it("keeps the assigned diagnostic prompts user-like and free of proof choreography", () => {
+    const tests = [
+      ...agenticRuntimeTests,
+      ...skillTests,
+      ...unitDiagnosticsTests,
+      ...credentialTests,
+      ...oauthTests,
+      ...harnessToolTests,
+      ...notificationTests,
+      ...cdpGadDiagnosticTests,
+      ...blobstoreTests,
+      ...docsDiscoveryTests,
+      ...docsProbeTests,
+      ...serverLogTests,
+      ...webhookTests,
+      ...gitInteropTests,
+    ];
+    for (const test of tests) {
+      expect(test.prompt, test.name).not.toMatch(
+        /Finish with|Return (?:only|exactly)|[A-Z][A-Z0-9_]{3,}_OK|\w+:<(?:count|number)>|\b(?:blobstore|credentials|docs|git|notifications|serverLog|webhooks|workspace|gad)\.\w+\s*\(/u
+      );
+    }
+  });
+
   it("requires direct semantic causality and blame evidence", () => {
     const test = vcsAdvancedTests.find(
       (candidate) => candidate.name === "vcs-walkable-causality-blame"
     )!;
     expect(test.workspaceRepoFixture).toEqual({ kind: "content", section: "projects" });
-    const final =
-      "VCS_CAUSALITY_OK untouched:original command:command:1 invocation:invocation:1 turn:turn:1 message:exact sender:exact request:walkable intent:observable-private blame:exact edges:walkable";
+    const final = "The untouched line is supported by the recorded request and causal history.";
     const invocation = (code: string, result?: unknown) => [
       {
         name: "eval",
@@ -49,16 +84,16 @@ describe("semantic system-test validators", () => {
         execution(
           final,
           invocation(
-            "await vcs.blame(input); await vcs.inspect({ node: command }); await vcs.neighbors({ root: command });",
+            "await vcs.edit(change); await vcs.commit(commit); await vcs.push(push); await vcs.blame(input); await vcs.inspect({ node: command }); await vcs.neighbors({ root: command });",
             {
               spans: [
                 {
                   start: 0,
                   end: 8,
                   path: [],
-                  changeId: "change:1",
-                  workUnitId: "work-unit:1",
-                  commandId: "command:1",
+                  change: { kind: "change", changeId: "change:1" },
+                  workUnit: { kind: "work-unit", workUnitId: "work-unit:1" },
+                  command: { kind: "command", commandId: "command:1" },
                 },
               ],
               edges: [
@@ -166,7 +201,7 @@ describe("semantic system-test validators", () => {
     });
   });
 
-  it("requires provenance orientation to return and accurately count complete edge roots", () => {
+  it("requires provenance orientation to return a typed root and complete typed edges", () => {
     const test = harnessToolTests.find((candidate) => candidate.name === "provenance-orientation")!;
     const invocation = {
       name: "provenance",
@@ -207,51 +242,98 @@ describe("semantic system-test validators", () => {
         },
       },
     };
-    expect(test.validate(execution("PROVENANCE_OK roots:3", [invocation]))).toEqual({
+    const final =
+      "This session originates in the current trajectory; the returned trajectory root and trigger edge connect its turn to the initiating message context.";
+    expect(test.validate(execution(final, [invocation]))).toEqual({
       passed: true,
       reason: undefined,
     });
-    expect(test.validate(execution("PROVENANCE_OK roots:0", [invocation]))).toEqual({
-      passed: false,
-      reason:
-        "Agent reported roots:0; completed provenance evidence contained 3 unique complete roots",
-    });
+    expect(test.validate(execution(final))).toMatchObject({ passed: false });
   });
 
-  it("accepts a large-output marker followed directly by its numeric count", () => {
+  it("requires memory-search prose to be backed by canonical recall results", () => {
+    const test = harnessToolTests.find((candidate) => candidate.name === "memory-search")!;
+    const final =
+      "Workspace memory found one prior conversation about a build failure, with the recalled message as its source provenance.";
+    const recall = {
+      name: "memory_recall",
+      arguments: { query: "build failures", limit: 10 },
+      execution: {
+        status: "complete",
+        isError: false,
+        result: { details: { results: [{ kind: "message", snippet: "build failed" }] } },
+      },
+    };
+    expect(test.validate(execution(final, [recall]))).toEqual({ passed: true });
+    expect(test.validate(execution(final))).toMatchObject({ passed: false });
+  });
+
+  it("requires a large collection summary to be backed by its completed eval count", () => {
     const test = agentCapabilityTests.find((candidate) => candidate.name === "large-output")!;
-    expect(test.validate(execution("Generated the data. AGENT_LARGE_SUMMARY_OK 100000"))).toEqual({
-      passed: true,
-      reason: undefined,
+    const invocation = {
+      name: "eval",
+      arguments: {
+        code: "const values = Array.from({ length: 100000 }, (_, index) => index); return { count: values.length };",
+      },
+      execution: {
+        status: "complete",
+        isError: false,
+        result: { details: { returnValue: { count: 100000 } } },
+      },
+    };
+    expect(
+      test.validate(
+        execution("The generated collection contained 100,000 items; I kept the report compact.", [
+          invocation,
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(test.validate(execution("The collection contained 100,000 items."))).toMatchObject({
+      passed: false,
     });
   });
 
-  it("accepts natural-language bounded channel evidence", () => {
+  it("rejects natural-language channel claims without an executed bounded inspection", () => {
     const test = agenticRuntimeTests.find(
       (candidate) => candidate.name === "channel-envelope-inspection-bounded"
     )!;
     const result = test.validate(
-      execution("Inspected the channel with a limit of 5. CHANNEL_INSPECT_OK")
+      execution("The nonexistent channel had no envelope history in the bounded inspection.")
     );
-    expect(result).toMatchObject({ passed: true });
+    expect(result).toMatchObject({ passed: false });
   });
-  it("accepts a marker followed directly by the worker count", () => {
+  it("joins a reported worker count to the completed worker RPC result", () => {
     const test = rpcTests.find((candidate) => candidate.name === "worker-rpc")!;
-    expect(test.validate(execution("RPC worker inspection succeeded. RPC_WORKERS_OK 14"))).toEqual({
-      passed: true,
-      reason: undefined,
-    });
+    expect(
+      test.validate(
+        execution("The worker service reported 2 launchable worker sources.", [
+          {
+            name: "eval",
+            arguments: { code: "return workers.listSources();" },
+            execution: {
+              status: "complete",
+              isError: false,
+              result: {
+                details: {
+                  returnValue: [{ source: "workers/alpha" }, { source: "workers/beta" }],
+                },
+              },
+            },
+          },
+        ])
+      )
+    ).toEqual({ passed: true });
   });
 
-  it("accepts an explicit channel history limit as bounded evidence", () => {
+  it("does not treat a prose limit as canonical bounded evidence", () => {
     const test = agenticRuntimeTests.find(
       (candidate) => candidate.name === "channel-envelope-inspection-bounded"
     )!;
     expect(
-      test.validate(execution("CHANNEL_INSPECT_OK; queried with limit 5 and got 0 rows"))
-    ).toEqual({
-      passed: true,
-    });
+      test.validate(
+        execution("The channel history query used a limit of 5 and found no envelopes.")
+      )
+    ).toMatchObject({ passed: false });
   });
 
   it("accepts a bounded executed channel-inspection call when prose omits the limit", () => {
@@ -260,7 +342,7 @@ describe("semantic system-test validators", () => {
     )!;
     expect(
       test.validate(
-        execution("Inspected 0 envelopes. CHANNEL_INSPECT_OK", [
+        execution("The bounded channel history inspection found no envelopes.", [
           {
             name: "eval",
             arguments: {
@@ -271,6 +353,20 @@ describe("semantic system-test validators", () => {
         ])
       )
     ).toEqual({ passed: true });
+  });
+
+  it("requires a real completed tool before accepting a natural no-stall response", () => {
+    const test = agenticRuntimeTests.find(
+      (candidate) => candidate.name === "turn-no-silent-stall-after-tool"
+    )!;
+    const final = "The read-only check completed, and this is the visible final response.";
+    const completed = {
+      name: "read",
+      arguments: { path: "README.md", limit: 1 },
+      execution: { status: "complete", isError: false, result: { text: "Vibestudio" } },
+    };
+    expect(test.validate(execution(final, [completed]))).toEqual({ passed: true });
+    expect(test.validate(execution(final))).toMatchObject({ passed: false });
   });
 
   it("does not require eval when action-bar files are already available", () => {

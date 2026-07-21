@@ -69,7 +69,9 @@ export class HeadlessRunner {
     sessionPolicies: Map<HeadlessSession, ModelPolicyState>;
   };
   private readonly testName: string | null;
-  private readonly workspaceRepoFixture: (WorkspaceRepoFixtureSpec & { repoName: string }) | null;
+  private readonly workspaceRepoFixture:
+    | (WorkspaceRepoFixtureSpec & { repoName: string | null })
+    | null;
   private readonly workspaceRepoFixtureLifecycle: WorkspaceRepoFixtureLifecycle | null;
 
   /**
@@ -91,7 +93,13 @@ export class HeadlessRunner {
   ) {
     this.contextId = contextId;
     const primaryModel = opts?.model ?? SYSTEM_TEST_AGENT_MODEL;
-    const modelRoute = systemTestModelRoute(primaryModel);
+    const modelRoute = systemTestModelRoute(primaryModel, {
+      // The default unattended policy may fall back on a journaled terminal
+      // usage limit. Any explicit override is a model-specific run, including
+      // an explicit request for the same model as the default, and must never
+      // silently execute a different model.
+      allowUsageLimitFallback: opts?.model === undefined,
+    });
     this.shared = shared ?? {
       sessions: new Set(),
       testNames: new Map(),
@@ -126,7 +134,7 @@ export class HeadlessRunner {
     return this.shared.modelPolicy.activeModel;
   }
 
-  /** Exact disposable repository basename reserved for this test, when enabled. */
+  /** Seed repository basename, or null for a task-created repository scope. */
   get workspaceRepoName(): string | null {
     return this.workspaceRepoFixture?.repoName ?? null;
   }
@@ -148,7 +156,10 @@ export class HeadlessRunner {
     const repoNameStem = `system-test-${slugifyTestName(testName)}-`;
     const workspaceRepoFixture = opts?.workspaceRepoFixture
       ? {
-          repoName: `${repoNameStem}${crypto.randomUUID().slice(0, 8)}`,
+          repoName:
+            opts.workspaceRepoFixture.kind === "created-repository"
+              ? null
+              : `${repoNameStem}${crypto.randomUUID().slice(0, 8)}`,
           ...opts.workspaceRepoFixture,
         }
       : null;
@@ -162,18 +173,18 @@ export class HeadlessRunner {
   }
 
   /**
-   * Create one exact task context and commit its typed repository fixture only
-   * on that local line. The scenario publishes it explicitly when sharing is
-   * part of the user-visible workflow.
+   * Create one exact task context. Seeded variants commit their typed source
+   * repository only on that local line; task-created variants deliberately
+   * begin with no repository and derive ownership from the task's work.
    */
   async prepareWorkspaceRepoFixture(): Promise<WorkspaceRepoFixtureState> {
     return this.requireWorkspaceRepoFixtureLifecycle().prepare();
   }
 
   /**
-   * Retire the exact fixture identity. If it reached main, delete only that
-   * identity; other task-authored published repositories are reported and left
-   * intact, avoiding accidental deletion of concurrent user work.
+   * Retire the exact task-authored scope. Published work on this context's
+   * first-parent line is counteracted; concurrent integration-parent work is
+   * never attributed to this test.
    */
   async cleanupWorkspaceRepoFixture(
     state: WorkspaceRepoFixtureState
@@ -227,10 +238,20 @@ export class HeadlessRunner {
           ? taskContextId
           : undefined;
     const fixturePrompt = this.workspaceRepoFixture
-      ? `\n\nHarness-owned test scope: the exact disposable repository ${JSON.stringify(
-          `${this.workspaceRepoFixture.section}/${this.workspaceRepoFixture.repoName}`
-        )} is already present in this context. It is the only repository owned by this test; ` +
-        `all other repositories are outside the fixture scope.`
+      ? this.workspaceRepoFixture.kind === "created-repository"
+        ? `\n\nHarness-owned test scope: this task owns exactly one repository that it creates under ${JSON.stringify(
+            `${this.workspaceRepoFixture.section}/`
+          )}. All pre-existing repositories and every other newly created repository are outside the test scope.`
+        : this.workspaceRepoFixture.kind === "buildable-panel-with-derived"
+          ? `\n\nHarness-owned test scope: the disposable source repository ${JSON.stringify(
+              `${this.workspaceRepoFixture.section}/${this.workspaceRepoFixture.repoName}`
+            )} is already present in this context. This task owns that source and exactly one derived repository it creates under ${JSON.stringify(
+              `${this.workspaceRepoFixture.section}/`
+            )}; all other repositories are outside the test scope.`
+          : `\n\nHarness-owned test scope: the exact disposable repository ${JSON.stringify(
+              `${this.workspaceRepoFixture.section}/${this.workspaceRepoFixture.repoName}`
+            )} is already present in this context. It is the only repository owned by this test; ` +
+            `all other repositories are outside the fixture scope.`
       : "";
     const session = await HeadlessSession.createWithAgent({
       config: {

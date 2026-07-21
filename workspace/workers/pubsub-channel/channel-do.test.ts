@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO, createTestDirectAuthority } from "@workspace/runtime/worker/test-utils";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -248,7 +248,17 @@ async function createGadBackedChannel(
           };
           internal._currentRpcCallerId = callerId;
           internal._currentRpcCallerKind = "do";
-          internal._currentVerifiedCaller = { callerId, callerKind: "do" };
+          internal._currentVerifiedCaller = {
+            callerId,
+            callerKind: "do",
+            authorization: createTestDirectAuthority({
+              callerKind: "do",
+              method,
+              source: "vibestudio/internal",
+              className: "GadWorkspaceDO",
+              objectKey: "workspace-semantic-control-plane",
+            }),
+          };
           const callable = gad.instance as unknown as Record<
             string,
             (...methodArgs: unknown[]) => unknown
@@ -769,6 +779,17 @@ describe("PubSubChannel", () => {
   it("sendAsCaller ignores an agent-supplied display handle", async () => {
     const { instance, gad } = await createGadBackedChannel();
     setRpcCaller(instance, "agent:session-1", "agent");
+    const caller = (
+      instance as unknown as {
+        _currentVerifiedCaller: {
+          authorization?: ReturnType<typeof createTestDirectAuthority>;
+        };
+      }
+    )._currentVerifiedCaller;
+    caller.authorization = createTestDirectAuthority({
+      callerKind: "agent",
+      method: "sendAsCaller",
+    });
 
     await instance.sendAsCaller("hello", { handle: "Alice" });
 
@@ -788,8 +809,10 @@ describe("PubSubChannel", () => {
 
   it("rejects arbitrary participant labels for durable-object callers", async () => {
     const { instance } = await createGadBackedChannel({
-      rpcCall: (target, method) => {
-        if (target === "main" && method === "workers.resolveDurableObject") return {};
+      rpcCall: (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
         return undefined;
       },
     });
@@ -817,6 +840,25 @@ describe("PubSubChannel", () => {
         type: "client",
       })
     ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("rejects a Durable Object participant that is not an active runtime entity", async () => {
+    const participantId = "do:vibestudio/internal:EvalDO:retired-eval";
+    const { instance } = await createGadBackedChannel({
+      rpcCall: (target, method) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") return null;
+        return undefined;
+      },
+    });
+    setRpcCaller(instance, participantId, "do");
+
+    await expect(
+      instance.subscribe(participantId, {
+        contextId: "ctx-1",
+        name: "Retired eval",
+        type: "headless",
+      })
+    ).rejects.toThrow(`subscribe: Durable Object participant ${participantId} is not active`);
   });
 
   it("dedupes concurrent publishes with the same idempotency key before append settles", async () => {
@@ -1048,15 +1090,9 @@ describe("PubSubChannel", () => {
     const missingDoId = "do:workers/agent-worker:AiChatWorker:headless-missing";
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const { instance, sql } = await createGadBackedChannel({
-      rpcCall: async (target, method) => {
-        if (target === "main" && method === "workers.resolveDurableObject") {
-          return {
-            kind: "durable-object",
-            source: "workers/agent-worker",
-            className: "AiChatWorker",
-            objectKey: "headless-missing",
-            targetId: missingDoId,
-          };
+      rpcCall: async (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
         }
         if (target === missingDoId && method === "onChannelEnvelope") {
           const err = new Error("runtime entity not registered") as Error & { code?: string };
@@ -1100,17 +1136,11 @@ describe("PubSubChannel", () => {
     const agentDoId = "do:workers/agent-worker:AiChatWorker:agent-x";
     const clientDoId = "do:vibestudio/internal:EvalDO:client-x";
     const { instance } = await createGadBackedChannel({
-      // resolveDurableObject is an existence check (result ignored); onChannelEnvelope
-      // is the structured delivery we record per target.
-      rpcCall: async (target, method) => {
-        if (target === "main" && method === "workers.resolveDurableObject") {
-          return {
-            kind: "durable-object",
-            source: "s",
-            className: "C",
-            objectKey: "k",
-            targetId: target,
-          };
+      // The active entity read is the liveness check; onChannelEnvelope is the
+      // structured delivery we record per target.
+      rpcCall: async (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
         }
         if (method === "onChannelEnvelope") {
           envelopeTargets.push(target);
@@ -1161,7 +1191,9 @@ describe("PubSubChannel", () => {
     const rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
     const { instance, gad } = await createGadBackedChannel({
       rpcCall: (target, method, args) => {
-        if (target === "main" && method === "workers.resolveDurableObject") return {};
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
         if (target === targetPid && method === "onChannelEnvelope") return null;
         if (target === targetPid && method === "onMethodCall") {
           rpcCalls.push({ target, method, args });
@@ -1239,8 +1271,10 @@ describe("PubSubChannel", () => {
     const evalPid = "do:vibestudio/internal:EvalDO:eval-1";
     const rpcCalls: Array<{ target: string; method: string }> = [];
     const { instance, gad } = await createGadBackedChannel({
-      rpcCall: (target, method) => {
-        if (target === "main" && method === "workers.resolveDurableObject") return {};
+      rpcCall: (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
         rpcCalls.push({ target, method });
         return undefined;
       },
@@ -1407,7 +1441,11 @@ describe("PubSubChannel", () => {
     const routedMethods: string[] = [];
     const { instance } = await createGadBackedChannel({
       rpcCall: (target, method) => {
-        if (target === "main" && method === "workers.resolveDurableObject") {
+        if (
+          target === "main" &&
+          (method === "workers.resolveDurableObject" ||
+            method === "workspace-state.entity.resolveActive")
+        ) {
           throw new Error("agent inspection must not resolve or reactivate its target");
         }
         if (target === targetPid) {
@@ -1773,7 +1811,7 @@ describe("PubSubChannel", () => {
       { invocationId: "invocation-1", transportCallId: "transport-1", turnId: "turn-1" }
     );
 
-    await instance.cancelMethodCall("transport-1");
+    await instance.cancelMethodCall("panel:caller", "transport-1");
 
     const rows = gad.sql
       .exec(
@@ -1798,6 +1836,60 @@ describe("PubSubChannel", () => {
       turnId: "turn-1",
       causality: { invocationId: "invocation-1", transportCallId: "transport-1" },
     });
+  });
+
+  it("lets a DO participant cancel its own call but rejects cancellation by another participant", async () => {
+    const { instance, gad } = await createGadBackedChannel({
+      rpcCall: (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
+        return undefined;
+      },
+    });
+    const caller = "do:vibestudio/internal:EvalDO:system-tests";
+
+    setRpcCaller(instance, caller, "do");
+    await instance.subscribe(caller, {
+      contextId: "ctx-1",
+      name: "System tests",
+      type: "headless",
+    });
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
+    setRpcCaller(instance, "panel:other", "panel");
+    await instance.subscribe("panel:other", {
+      contextId: "ctx-1",
+      name: "Other",
+      type: "panel",
+    });
+
+    setRpcCaller(instance, caller, "do");
+    await instance.callMethod(caller, "panel:provider", "transport-owned-by-do", "eval", {
+      code: "await forever()",
+    });
+
+    setRpcCaller(instance, "panel:other", "panel");
+    await expect(instance.cancelMethodCall("panel:other", "transport-owned-by-do")).rejects.toThrow(
+      /did not initiate method call/
+    );
+    expect(
+      gad.sql
+        .exec(`SELECT 1 FROM log_events WHERE envelope_id = ?`, "terminal:transport-owned-by-do")
+        .toArray()
+    ).toHaveLength(0);
+
+    setRpcCaller(instance, caller, "do");
+    await instance.cancelMethodCall(caller, "transport-owned-by-do");
+    expect(
+      gad.sql
+        .exec(`SELECT 1 FROM log_events WHERE envelope_id = ?`, "terminal:transport-owned-by-do")
+        .toArray()
+    ).toHaveLength(1);
   });
 
   it("reconstructs pending_calls during cancelMethodCall before dropping (cache-cold)", async () => {
@@ -1830,7 +1922,7 @@ describe("PubSubChannel", () => {
     // the SQLite cache row is gone. A cancel must reconcile and still settle.
     sql.exec(`DELETE FROM pending_calls WHERE transport_call_id = ?`, "transport-cancel-cold");
 
-    await instance.cancelMethodCall("transport-cancel-cold");
+    await instance.cancelMethodCall("panel:caller", "transport-cancel-cold");
 
     const cancelled = gad.sql
       .exec(
@@ -1945,7 +2037,9 @@ describe("PubSubChannel", () => {
     const { instance, sql } = await createGadBackedChannel({
       emitted,
       rpcCall: async (target, method, args) => {
-        if (target === "main" && method === "workers.resolveDurableObject") return {};
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
         if (target === targetPid && method === "onChannelEnvelope") return null;
         if (target === targetPid && method === "onMethodCall") {
           methodCalls.push(args);
@@ -2599,7 +2693,7 @@ describe("PubSubChannel", () => {
       }
     );
 
-    await instance.cancelMethodCall("transport-cancel-envelope");
+    await instance.cancelMethodCall("panel:caller", "transport-cancel-envelope");
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     // No method-* wire envelope — provider abort derives from invocation.cancelled.
@@ -2973,8 +3067,10 @@ describe("PubSubChannel", () => {
     let methodStartedRecorded = false;
     const targetPid = "do:workers/agent-worker:AiChatWorker:agent-1";
     const { instance, gad } = await createGadBackedChannel({
-      rpcCall: (target, method) => {
-        if (target === "main" && method === "workers.resolveDurableObject") return {};
+      rpcCall: (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
         if (target === targetPid && method === "onChannelEnvelope") return null;
         if (target === targetPid && method === "onMethodCall") {
           if (!methodStartedRecorded) {
@@ -3021,7 +3117,8 @@ describe("PubSubChannel", () => {
     ).resolves.toBe("returned");
     await methodStarted;
 
-    await instance.cancelMethodCall("transport-do");
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.cancelMethodCall("panel:caller", "transport-do");
     resolveMethod({ result: { ok: true } });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -3708,17 +3805,29 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
     expect(seed.actor.participantId ?? seed.actor.id).toBe("panel:victim");
   });
 
-  it("admits normal channel caller realms at the relay gate", async () => {
+  it("admits attested channel caller principals at the relay gate", async () => {
     const { instance } = await createGadBackedChannel();
     const gate = instance as unknown as {
       inboundCallerDenial(
         method: string,
-        caller: { callerId: string; callerKind: string } | null
+        caller: {
+          callerId: string;
+          callerKind: string;
+          authorization?: ReturnType<typeof createTestDirectAuthority>;
+        } | null
       ): string | null;
     };
     for (const kind of ["panel", "worker", "server", "do", "shell"]) {
       expect(
-        gate.inboundCallerDenial("appendSeed", { callerId: `${kind}:x`, callerKind: kind })
+        gate.inboundCallerDenial("appendSeed", {
+          callerId: `${kind}:x`,
+          callerKind: kind,
+          authorization: createTestDirectAuthority({
+            callerKind: kind as "panel" | "worker" | "server" | "do" | "shell",
+            method: "appendSeed",
+            objectKey: "channel-1",
+          }),
+        })
       ).toBeNull();
     }
   });

@@ -366,10 +366,32 @@ describe("@workspace/agentic-protocol schemas", () => {
   });
 
   it("requires turnId for owner-authored turn-scoped trajectory events", async () => {
-    const event = await trajectoryEvent(messageEvent({ actor: agent }));
+    const event = await trajectoryEvent(
+      messageEvent({
+        actor: agent,
+        payload: textCompletedPayload("msg-1", "assistant", "done"),
+      })
+    );
     const result = trajectoryEventSchema.safeParse(event);
     expect(result.success).toBe(false);
     expect(result.success ? "" : result.error.issues[0]?.message).toContain("turnId");
+  });
+
+  it("accepts an inbound user message copied into an agent-owned trajectory before turn assignment", async () => {
+    const event = await trajectoryEvent(
+      messageEvent({
+        actor: agent,
+        payload: {
+          ...textCompletedPayload("msg-1", "user", "hello"),
+          senderRef: user,
+        } as never,
+      })
+    );
+
+    expect(trajectoryEventSchema.parse(event).payload).toMatchObject({
+      role: "user",
+      senderRef: user,
+    });
   });
 
   it("accepts owner-authored turn-scoped trajectory events with turnId", async () => {

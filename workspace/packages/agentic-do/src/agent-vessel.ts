@@ -104,6 +104,7 @@ import {
   createModelCredentialSentinel,
   installUrlBoundModelFetchProxy,
 } from "./model-fetch-proxy.js";
+import { prepareAgentToolArguments } from "./tool-arguments.js";
 
 export interface AgentToolExecutionContext {
   readonly invocationId: string;
@@ -940,7 +941,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           );
         },
         cancelMethodCall: async (channelId, transportCallId) => {
-          await this.createChannelClient(channelId).cancelCall(transportCallId);
+          await this.createChannelClient(channelId).cancelCall(
+            this.participantId(),
+            transportCallId
+          );
         },
         publish: async (input) => {
           await this.rpc.call(await this.channelTarget(input.channelId), "publish", [
@@ -962,18 +966,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         // Loopback model runtime (design §6.3). The key crosses this boundary
         // per call and is never persisted vessel-side; the extension enforces
         // do-kind + vessel-allowlist caller gating on getLoopbackAuth.
-        ensureLoaded: async (modelId) =>
-          await this.rpc.call<{ baseUrl: string }>("main", "extensions.invoke", [
-            LOCAL_MODELS_EXTENSION_ID,
-            "ensureLoaded",
-            [modelId],
-          ]),
-        getLoopbackAuth: async () =>
-          await this.rpc.call<{ apiKey: string }>("main", "extensions.invoke", [
-            LOCAL_MODELS_EXTENSION_ID,
-            "getLoopbackAuth",
-            [],
-          ]),
+        ensureLoaded: async (modelId, signal) =>
+          await this.rpc.call<{ baseUrl: string }>(
+            "main",
+            "extensions.invoke",
+            [LOCAL_MODELS_EXTENSION_ID, "ensureLoaded", [modelId]],
+            { signal }
+          ),
+        getLoopbackAuth: async (signal) =>
+          await this.rpc.call<{ apiKey: string }>(
+            "main",
+            "extensions.invoke",
+            [LOCAL_MODELS_EXTENSION_ID, "getLoopbackAuth", []],
+            { signal }
+          ),
       },
       credentials: {
         getApiKey: async ({ providerId, modelBaseUrl, requestId, idempotencyKey }) => {
@@ -1068,9 +1074,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             if (!agentTool) {
               return { result: `unknown tool: ${tool}`, isError: true };
             }
-            const params = agentTool.prepareArguments
-              ? agentTool.prepareArguments(args)
-              : (args as never);
+            const params = prepareAgentToolArguments(agentTool, args);
             const result = await agentTool.execute(
               invocationId,
               params as never,
@@ -1372,6 +1376,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       activeToolNames: JSON.parse(
         this.getStateValue(`agent:toolNames:${channelId}`) ?? "[]"
       ) as string[],
+      localToolExecutionModes: JSON.parse(
+        this.getStateValue(`agent:toolExecutionModes:${channelId}`) ?? "{}"
+      ) as Record<string, "sequential" | "parallel">,
       roster: { participants: [] }, // roster snapshots fold from system.event
       maxSubagentDepth: this.getMaxSubagentDepth(),
       maxConcurrentSubagents: this.getMaxConcurrentSubagents(),
@@ -1451,6 +1458,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         description: tool.description,
         parameters: tool.parameters,
       }));
+      const executionModes = Object.fromEntries(
+        [...registry.values()].map((tool) => [
+          tool.name,
+          tool.executionMode === "parallel" ? "parallel" : "sequential",
+        ])
+      ) satisfies Record<string, "sequential" | "parallel">;
       // Channel tools: roster participants' advertised methods become model
       // tools dispatched as channel_call effects (the panel's UI surface —
       // inline_ui/feedback/action_bar). eval is a LOCAL tool now, not a channel method.
@@ -1474,10 +1487,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       const schemasJson = JSON.stringify(schemas);
       const names = JSON.stringify([...registry.keys()]);
-      const signature = stableSha256Hex({ systemPrompt, schemas });
+      const executionModesJson = JSON.stringify(executionModes);
+      const signature = stableSha256Hex({ systemPrompt, schemas, executionModes });
       const promptHashKey = `agent:promptHash:${channelId}`;
       const toolsHashKey = `agent:toolsHash:${channelId}`;
       const toolNamesKey = `agent:toolNames:${channelId}`;
+      const toolExecutionModesKey = `agent:toolExecutionModes:${channelId}`;
       const artifactSigKey = `agent:artifactSig:${channelId}`;
       const existingPromptHash = this.getStateValue(promptHashKey) ?? "";
       const existingToolsHash = this.getStateValue(toolsHashKey) ?? "";
@@ -1485,7 +1500,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         existingPromptHash &&
         existingToolsHash &&
         this.getStateValue(artifactSigKey) === signature &&
-        this.getStateValue(toolNamesKey) === names
+        this.getStateValue(toolNamesKey) === names &&
+        this.getStateValue(toolExecutionModesKey) === executionModesJson
       ) {
         return;
       }
@@ -1500,10 +1516,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       const changed =
         existingPromptHash !== promptHash ||
         existingToolsHash !== toolsHash ||
-        this.getStateValue(toolNamesKey) !== names;
+        this.getStateValue(toolNamesKey) !== names ||
+        this.getStateValue(toolExecutionModesKey) !== executionModesJson;
       this.setStateValue(promptHashKey, promptHash);
       this.setStateValue(toolsHashKey, toolsHash);
       this.setStateValue(toolNamesKey, names);
+      this.setStateValue(toolExecutionModesKey, executionModesJson);
       this.setStateValue(artifactSigKey, signature);
       this.deleteStateValue(`agent:promptArtifactError:${channelId}`);
       if (changed) {
@@ -1615,6 +1633,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return {
       name: "memory_recall",
       label: "memory_recall",
+      executionMode: "parallel",
       description:
         "Search workspace memory: past conversation messages and committed file content. " +
         "Returns snippets with provenance (who/when/where). Use before re-deriving facts that may already be known.",
@@ -1676,7 +1695,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel membership ───────────────────────────────────────────────────
 
-  @rpc({ callers: ["panel", "do", "extension"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async subscribeChannel(opts: {
     channelId: string;
     contextId: string;
@@ -1763,7 +1782,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
   }
 
-  @rpc({ callers: ["panel", "do"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async unsubscribeChannel(channelId: string): Promise<{ ok: boolean }> {
     try {
       await this.driver.handleIncoming(channelId, {
@@ -1781,7 +1800,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel intake ───────────────────────────────────────────────────────
 
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async onChannelEnvelope(channelId: string, envelope: RpcChannelMessage): Promise<void> {
     this.assertChannelDeliveryCaller("onChannelEnvelope");
     if (envelope.kind === "control") {
@@ -2354,7 +2373,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Method calls (agent as PROVIDER) ─────────────────────────────────────
 
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async onMethodCall(
     channelId: string,
     _transportCallId: string,
@@ -2378,7 +2397,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * below is in-memory or local SQLite; missing folded state remains explicitly
    * missing instead of being hydrated through GAD.
    */
-  @rpc({ callers: ["do", "server"] })
+  @rpc({ principals: ["host", "entity"], sensitivity: "read" })
   async readAgentInspection(
     channelId: string,
     methodName: string
@@ -2413,7 +2432,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * stale, which is precisely when timeout/cancellation diagnostics need it.
    * The response contains no prompt, tool argument, credential, or secret.
    */
-  @rpc({ callers: ["server", "do"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "read" })
   async getModelExecutionEvidence(channelId: string): Promise<unknown> {
     return this.driver.modelExecutionEvidence(channelId);
   }
@@ -2615,7 +2634,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * `do:vibestudio/internal:EvalDO:<key>`. Any other caller is rejected; the
    * generic DO relay is open, so a sensitive receiver gates on receipt.
    */
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async chatOp(channelId: string, op: string, args: unknown[]): Promise<unknown> {
     await this.assertOwnEvalCaller(channelId);
     const channel = this.createChannelClient(channelId);
@@ -3013,7 +3032,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   /** Channel DO settle path: terminals for our channel_call effects POST back
    *  here. Duplicate delivery is a no-op (deterministic terminal ids). */
-  @rpc({ callers: ["server", "do"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async deliverEffectOutcome(
     effectId: string,
     outcome: EffectOutcome,
@@ -3028,7 +3047,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  delivery no-ops once the row is gone. Eviction between defer and delivery
    *  is healed by lease-expiry redrive: the retried call re-attaches via its
    *  idempotencyKey / already-granted capability. */
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   async onDeferredResult(payload: {
     requestId: string;
     result?: unknown;
@@ -3064,6 +3083,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       reset?: boolean;
       syntax?: "javascript" | "typescript" | "jsx" | "tsx";
       imports?: Record<string, string>;
+      timeoutMs?: number;
     };
     let source;
     try {
@@ -3081,6 +3101,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         ...source,
         syntax: p.syntax,
         imports: p.imports,
+        timeoutMs: p.timeoutMs,
         runId,
       },
     ]);
@@ -3136,7 +3157,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * before completing, so every output precedes the `invocation.completed` terminal (the reducer drops
    * output after terminal).
    */
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async onEvalProgress(payload: {
     runId: string;
     agentInvocationId: string;
@@ -3165,7 +3186,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * identity is carried separately for causality and never reconstructed from
    * the effect id. Duplicate settlement is an idempotent driver no-op.
    */
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   async onEvalComplete(payload: {
     runId: string;
     agentInvocationId?: string;
@@ -3396,7 +3417,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** Per-channel fork preflight. Vets ONLY the named subscription (it must
    *  exist); a multi-channel agent forks the one channel and drops the rest in
    *  the clone (see {@link postClone}), so the old ≤1-subscription gate is gone. */
-  @rpc({ callers: ["worker", "server", "do"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "read" })
   async canFork(channelId: string): Promise<{ ok: boolean; reason?: string }> {
     if (!this.subscriptions.getParticipantId(channelId)) {
       return { ok: false, reason: `no subscription for channel ${channelId}` };
@@ -3404,7 +3425,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return { ok: true };
   }
 
-  @rpc({ callers: ["worker", "server", "do"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async postClone(
     _parentObjectKey: string,
     newChannelId: string,
@@ -3501,7 +3522,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * just created), so there is nothing to wipe: outbox/fold caches start empty.
    * The child boots knowing everything the parent knew at the fork point.
    */
-  @rpc({ callers: ["worker", "server", "do"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async initFromTrajectoryFork(opts: {
     parentLogId: string;
     seq: number;
@@ -4652,7 +4673,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * relay otherwise lets any DO forge a completion and drive the parent loop.
    * Idempotent: a duplicate / post-terminal call no-ops.
    */
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async onSubagentComplete(payload: {
     runId: string;
     channelId?: string;

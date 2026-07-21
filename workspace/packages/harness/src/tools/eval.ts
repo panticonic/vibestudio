@@ -9,6 +9,13 @@ import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 
 const evalCommonSchema = {
+  timeoutMs: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      description:
+        "Optional wall-clock deadline in milliseconds for this run. Omit it for no deadline; set it when work may stall or must finish within a known bound.",
+    })
+  ),
   reset: Type.Optional(
     Type.Boolean({
       description:
@@ -23,7 +30,10 @@ const evalCommonSchema = {
         Type.Literal("jsx"),
         Type.Literal("tsx"),
       ],
-      { description: "Source syntax (default: tsx)." }
+      {
+        description:
+          'Parser mode (default: "tsx"). Omit this for TypeScript/TSX. Select "javascript" only for plain JavaScript with no type annotations, `as` assertions, interfaces, or other TypeScript syntax.',
+      }
     )
   ),
   imports: Type.Optional(
@@ -165,7 +175,7 @@ export function createEvalTool(
     name: "eval",
     label: "eval",
     description:
-      "Execute TypeScript/JS in your persistent sandbox (a per-agent EvalDO, not the visible panel). REPL scope persists across calls via `scope`; a synchronous in-DO SQLite `db` is available. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.",
+      "Execute TypeScript/JS in your persistent sandbox (a per-agent EvalDO, not the visible panel). Calls have no implicit wall deadline; pass a positive integer timeoutMs when work may stall or must finish within a known bound. Split intentionally bounded workflows when useful and persist intermediate state in `scope` or `db`. REPL scope persists across calls via `scope`; a synchronous in-DO SQLite `db` is available. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.",
     parameters: evalSchema,
     execute: async (_toolCallId, params): Promise<AgentToolResult<EvalRunResult>> => {
       // Some model transports materialize an optional string as "". Treat an
@@ -180,6 +190,7 @@ export function createEvalTool(
           // service can give the sandbox a `chat` binding proxied to this agent.
           channelId: opts.subKey,
           reset: params.reset,
+          timeoutMs: params.timeoutMs,
           ...source,
           syntax: params.syntax,
           imports: params.imports,

@@ -21,7 +21,8 @@ export interface StoredSystemTestRun {
     all: boolean;
     model?: string;
     concurrency: number;
-    testTimeoutMs: number;
+    /** Explicit per-test deadline. Omitted runs have no per-test timeout. */
+    testTimeoutMs?: number;
   };
 }
 

@@ -1,127 +1,106 @@
 import { describe, expect, it } from "vitest";
 
-import type { ChatMessage } from "@workspace/agentic-core";
 import type { TestExecutionResult } from "../types.js";
 import { smokeTests } from "./smoke.js";
 
-function invocationMessage(
-  name: string,
-  status: string,
-  isError = false,
-  args?: Record<string, unknown>
-): ChatMessage {
-  return {
-    id: `invocation-message-${name}-${status}-${isError ? "error" : "ok"}`,
-    kind: "message",
-    senderId: "agent",
-    complete: true,
-    contentType: "invocation",
-    content: JSON.stringify({
-      id: `call-${name}-${status}-${isError ? "error" : "ok"}`,
-      name,
-      ...(args ? { arguments: args } : {}),
-      execution: {
-        status,
-        terminalOutcome: isError ? "tool_error" : "success",
-        isError,
+function execution(readPath = "notes/marker.txt"): TestExecutionResult {
+  const invocations = [
+    {
+      id: "write",
+      name: "write",
+      status: "complete",
+      isError: false,
+      arguments: {
+        path: "notes/marker.txt",
+        content: "agentic-file-tools-smoke",
       },
-    }),
-  };
-}
-
-function finalAgentMessage(content: string): ChatMessage {
-  return {
-    id: `final-agent-message-${content.slice(0, 24).replace(/\W+/g, "-")}`,
-    kind: "message",
-    senderId: "agent",
-    complete: true,
-    content,
-  };
-}
-
-function execution(messages: TestExecutionResult["messages"]): TestExecutionResult {
+      result: { ok: true },
+    },
+    {
+      id: "find",
+      name: "find",
+      status: "complete",
+      isError: false,
+      arguments: { path: ".", name: "marker.txt" },
+      result: { paths: ["notes/marker.txt"] },
+    },
+    {
+      id: "grep",
+      name: "grep",
+      status: "complete",
+      isError: false,
+      arguments: { path: ".", pattern: "agentic-file-tools-smoke" },
+      result: { matches: ["notes/marker.txt:1"] },
+    },
+    {
+      id: "read",
+      name: "read",
+      status: "complete",
+      isError: false,
+      arguments: { path: readPath },
+      result: { text: "agentic-file-tools-smoke" },
+    },
+  ];
   return {
     duration: 0,
     messages: [
-      {
-        id: "prompt",
-        kind: "message",
-        senderId: "user",
+      { kind: "message", senderId: "user", complete: true, content: "prompt" },
+      ...invocations.map((invocation) => ({
+        kind: "message" as const,
+        senderId: "agent",
         complete: true,
-        content: "prompt",
-      },
-      ...messages,
-    ],
-    toolFailures: [
+        contentType: "invocation" as const,
+        invocation,
+      })),
       {
-        name: "write",
-        status: "error",
-        terminalOutcome: "tool_error",
-        error: "recovered write failure",
-        source: "message",
+        kind: "message",
+        senderId: "agent",
+        complete: true,
+        content: "I found the note again and its contents matched.",
       },
     ],
   } as TestExecutionResult;
 }
 
-describe("smoke test validation", () => {
-  it("allows recovered tool failures in the file write/read smoke", () => {
-    const test = smokeTests.find((entry) => entry.name === "fs-write-read");
+describe("smoke validators", () => {
+  const test = smokeTests.find((candidate) => candidate.name === "file-search-read-tools")!;
 
-    expect(
-      test?.validate(
-        execution([
-          invocationMessage("write", "error", true),
-          invocationMessage("write", "complete"),
-          invocationMessage("read", "complete"),
-          finalAgentMessage("Basic file write/read round-trip succeeded."),
-        ])
-      )
-    ).toEqual({ passed: true, reason: undefined });
+  it("accepts natural reporting backed by an exact write/search/read chain", () => {
+    expect(test.prompt).not.toMatch(/finish with|FIND_OK|GREP_OK|READ_OK/i);
+    expect(test.validate(execution())).toEqual({ passed: true, reason: undefined });
   });
 
-  it("allows recovered tool failures in the file search/read smoke", () => {
-    const test = smokeTests.find((entry) => entry.name === "file-search-read-tools");
-
-    expect(
-      test?.validate(
-        execution([
-          invocationMessage("write", "error", true),
-          invocationMessage("write", "complete"),
-          invocationMessage("find", "complete"),
-          invocationMessage("grep", "complete"),
-          invocationMessage("read", "complete"),
-          finalAgentMessage("FIND_OK GREP_OK READ_OK agentic-file-tools-smoke"),
-        ])
-      )
-    ).toEqual({ passed: true, reason: undefined });
+  it("rejects a read that is not joined to the written path", () => {
+    expect(test.validate(execution("notes/unrelated.txt")).passed).toBe(false);
   });
 
-  it("accepts the sandbox skill's eval fs round-trip with semantic invocation evidence", () => {
-    const test = smokeTests.find((entry) => entry.name === "fs-write-read");
+  it("requires the factorial claim to agree with the canonical runtime result", () => {
+    const factorial = smokeTests.find((candidate) => candidate.name === "eval-return-value")!;
+    const result = {
+      duration: 0,
+      messages: [
+        { kind: "message", senderId: "user", complete: true, content: "prompt" },
+        {
+          kind: "message",
+          senderId: "agent",
+          complete: true,
+          contentType: "invocation",
+          invocation: {
+            id: "eval",
+            name: "eval",
+            status: "complete",
+            isError: false,
+            arguments: { code: "return [1, 2, 3, 4, 5].reduce((a, b) => a * b, 1)" },
+            result: { details: { returnValue: 120 } },
+          },
+        },
+        { kind: "message", senderId: "agent", complete: true, content: "The result is 120." },
+      ],
+    } as TestExecutionResult;
 
-    expect(
-      test?.validate(
-        execution([
-          invocationMessage("eval", "complete", false, {
-            code: 'await fs.writeFile(path, expected); return await fs.readFile(path, "utf8");',
-          }),
-          finalAgentMessage("Wrote and read the file; exact match: true."),
-        ])
-      )
-    ).toEqual({ passed: true, reason: undefined });
-  });
-
-  it("does not accept a generic eval that lacks file round-trip evidence", () => {
-    const test = smokeTests.find((entry) => entry.name === "fs-write-read");
-    const result = test?.validate(
-      execution([
-        invocationMessage("eval", "complete", false, { code: "return 42;" }),
-        finalAgentMessage("Write/read succeeded."),
-      ])
-    );
-
-    expect(result?.passed).toBe(false);
-    expect(result?.reason).toContain("fs.writeFile and fs.readFile");
+    expect(factorial.prompt).not.toMatch(/use eval/i);
+    expect(factorial.validate(result).passed).toBe(true);
+    result.messages.at(-1)!.content = "The result is 24.";
+    expect(factorial.validate(result).passed).toBe(false);
   });
 });

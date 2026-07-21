@@ -27,13 +27,11 @@ const modelLibraryMock = vi.hoisted(() => {
     error: null,
   });
 
-  let pendingDownload:
-    | {
-        job: TestDownloadJob;
-        promise: Promise<TestDownloadJob>;
-        resolve(job: TestDownloadJob): void;
-      }
-    | null = null;
+  let pendingDownload: {
+    job: TestDownloadJob;
+    promise: Promise<TestDownloadJob>;
+    resolve(job: TestDownloadJob): void;
+  } | null = null;
   const state = {
     downloads: [] as TestDownloadJob[],
     nextDownloadOrdinal: 1,
@@ -53,7 +51,7 @@ const modelLibraryMock = vi.hoisted(() => {
     library: {
       list: vi.fn(async () => []),
       get: vi.fn(async () => null),
-      ensureFallback: vi.fn(async () => {
+      ensureFallback: vi.fn<() => Promise<unknown>>(async () => {
         throw new Error("not used");
       }),
       startDownload: vi.fn(() => ensureDownload().promise),
@@ -288,6 +286,33 @@ describe("local-models extension", () => {
       }),
     ]);
   });
+
+  it("releases a cancelled ensureLoaded caller without cancelling shared model bootstrap", async () => {
+    let resolveSharedLoad!: () => void;
+    const sharedLoad = new Promise<void>((resolve) => {
+      resolveSharedLoad = resolve;
+    });
+    modelLibraryMock.library.ensureFallback.mockImplementation(async () => sharedLoad);
+    const controller = new AbortController();
+    const { activate } = await import("./index.js");
+    const api = await activate({
+      log: { info: vi.fn(), warn: vi.fn() },
+      emit: vi.fn(),
+      invocation: {
+        current: () => null,
+        signal: () => controller.signal,
+      },
+    });
+    const pending = api.ensureLoaded(FALLBACK_MODEL.ref);
+    await vi.waitFor(() => expect(modelLibraryMock.library.ensureFallback).toHaveBeenCalled());
+
+    controller.abort(new Error("durable-object activation released"));
+
+    await expect(pending).rejects.toThrow("durable-object activation released");
+    // Shared supervisor/bootstrap work is not caller-owned. It remains live
+    // and can satisfy another demand even though this invocation stopped waiting.
+    resolveSharedLoad();
+  });
 });
 
 function jsonLineReader(response: Response): {
@@ -326,7 +351,10 @@ function jsonLineReader(response: Response): {
   };
 }
 
-async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 1000): Promise<void> {
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 1000
+): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (await predicate()) return;

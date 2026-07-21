@@ -34,6 +34,10 @@ describe("canonical commit tool", () => {
       eventId: expect.stringMatching(/^event:/),
     });
     expect(result.details.result.committedApplicationIds).toEqual(["application:1"]);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Protected main was not changed"),
+    });
   });
 
   it("does not expose selective commit inputs", async () => {

@@ -1,14 +1,78 @@
 import type { TestCase } from "../types.js";
 import {
-  finalMessageHasAll,
-  finalMessageHasNumericField,
+  findLastAgentMessage,
+  getToolCalls,
   noIncompleteInvocations,
+  successfulEvalCode,
+  successfulEvalReturnValues,
 } from "./_helpers.js";
 
-function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
-  const msg = finalMessageHasAll(result, tokens);
-  if (!msg.passed) return msg;
+function semanticUnitInspection(
+  result: Parameters<typeof noIncompleteInvocations>[0],
+  requiredCode: RegExp[],
+  finalClaims: RegExp[]
+) {
+  const code = successfulEvalCode(result);
+  if (!requiredCode.every((pattern) => pattern.test(code))) {
+    return {
+      passed: false,
+      reason: "Successful eval evidence omitted a required unit diagnostic surface",
+    };
+  }
+  const final = findLastAgentMessage(result);
+  if (!finalClaims.every((pattern) => pattern.test(final))) {
+    return {
+      passed: false,
+      reason: "Final response did not report the observed unit diagnostics semantically",
+    };
+  }
   return noIncompleteInvocations(result);
+}
+
+function scheduleInspectionChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  const evalCalls = getToolCalls(result).filter((call) => call.name === "eval");
+  const code = successfulEvalCode(result);
+  if (
+    evalCalls.length !== 1 ||
+    !code.includes("workspace.recurring.list") ||
+    !code.includes("workspace.heartbeats.list")
+  ) {
+    return {
+      passed: false,
+      reason: "Expected exactly one successful eval inspecting recurring jobs and heartbeats",
+    };
+  }
+  const allEvalCode = getToolCalls(result)
+    .filter((call) => call.name === "eval")
+    .map((call) => (typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : ""))
+    .join("\n");
+  if (/heartbeats\.(?:runNow|pause|resume)|recurring\.(?:runNow|pause|resume)/u.test(allEvalCode)) {
+    return { passed: false, reason: "Schedule inspection probe attempted a mutating operation" };
+  }
+  if (!successfulEvalReturnValues(result).some(isExactScheduleCounts)) {
+    return {
+      passed: false,
+      reason:
+        "Schedule inspection eval did not return exact nonnegative recurring/heartbeat counts",
+    };
+  }
+  const final = findLastAgentMessage(result);
+  if (!/recurring/iu.test(final) || !/heartbeat/iu.test(final) || !/\d/u.test(final)) {
+    return { passed: false, reason: "Final response did not report both observed schedule counts" };
+  }
+  return noIncompleteInvocations(result);
+}
+
+function isExactScheduleCounts(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).sort().join(",") === "heartbeats,recurring" &&
+    Number.isSafeInteger(record["recurring"]) &&
+    (record["recurring"] as number) >= 0 &&
+    Number.isSafeInteger(record["heartbeats"]) &&
+    (record["heartbeats"] as number) >= 0
+  );
 }
 
 export const unitDiagnosticsTests: TestCase[] = [
@@ -17,36 +81,46 @@ export const unitDiagnosticsTests: TestCase[] = [
     description: "List running workspace units and inspect one of them",
     category: "unit-diagnostics",
     prompt:
-      "Find out which workspace units are currently running and inspect one of them in more detail. Finish with UNIT_LIST_OK, UNIT_INSPECT_OK, and count:<number>.",
-    validate: (result) => {
-      const base = checked(result, ["UNIT_LIST_OK", "UNIT_INSPECT_OK"]);
-      if (!base.passed) return base;
-      return finalMessageHasNumericField(result, "count");
-    },
+      "Which workspace units are currently running? Inspect one representative unit in more detail and summarize what you observed.",
+    validate: (result) =>
+      semanticUnitInspection(
+        result,
+        [/workspace\.units\.list/iu, /workspace\.units\.(?:diagnostics|inspector)/iu],
+        [/unit/iu, /running|available|status/iu, /\d/u]
+      ),
   },
   {
     name: "unit-diagnostics-error-buffer",
     description: "Read a unit's persisted logs and its separate error buffer",
     category: "unit-diagnostics",
     prompt:
-      "Pick a running workspace unit and pull its persisted diagnostics: its recent logs and its separate error buffer, keeping the evidence bounded. Finish with UNIT_DIAG_OK, logs:<count>, and errors:<count>.",
-    validate: (result) => checked(result, ["UNIT_DIAG_OK", "logs:", "errors:"]),
+      "For one running workspace unit, summarize a bounded slice of its recent persisted logs and its separate error buffer.",
+    validate: (result) =>
+      semanticUnitInspection(
+        result,
+        [/workspace\.units\.diagnostics/iu, /\b(?:limit|errorLimit)\s*:/u],
+        [/log/iu, /error/iu, /\d/u]
+      ),
   },
   {
     name: "unit-versions",
     description: "Report the version history of a workspace unit",
     category: "unit-diagnostics",
     prompt:
-      "Pick a workspace unit and report its version history — how many versions exist and which one is active. Finish with UNIT_VERSIONS_OK and versions:<count>.",
-    validate: (result) => checked(result, ["UNIT_VERSIONS_OK", "versions:"]),
+      "Pick a workspace unit and tell me how many recorded versions it has and which version is currently active.",
+    validate: (result) =>
+      semanticUnitInspection(
+        result,
+        [/workspace\.units\.versions/iu],
+        [/version/iu, /active|current/iu, /\d/u]
+      ),
   },
   {
     name: "schedule-surfaces-readonly",
     description: "Inspect recurring jobs and agent heartbeats without mutating them",
     category: "unit-diagnostics",
     prompt:
-      "Report what scheduled work this workspace has configured: recurring jobs and agent heartbeats, without pausing, resuming, or running any of them. Finish with SCHEDULE_LIST_OK, recurring:<count>, and heartbeats:<count>.",
-    validate: (result) =>
-      checked(result, ["SCHEDULE_LIST_OK", "recurring:", "heartbeats:"]),
+      "What recurring jobs and agent heartbeats are configured in this workspace? Report only their counts and do not pause, resume, or run anything.",
+    validate: scheduleInspectionChecked,
   },
 ];

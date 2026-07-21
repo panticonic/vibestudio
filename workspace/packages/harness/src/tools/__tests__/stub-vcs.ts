@@ -104,12 +104,14 @@ export class StubVcs implements ToolEditingVcs {
     this.version += 1;
     return {
       contextId: input.contextId,
+      commandId: input.commandId,
       workUnitId: `work:${this.version}`,
       applicationId: `application:${this.version}`,
       changeCount: input.changes.length,
       changeIds: input.changes.map((_, index) => `change:${this.version}:${index}`),
       incorporatedChangeCount: 0,
       incorporatedChangeIds: [],
+      decisionIds: [],
       workingHead: this.workingHead(),
     };
   }

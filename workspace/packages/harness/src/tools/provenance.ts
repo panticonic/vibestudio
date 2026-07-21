@@ -13,20 +13,83 @@ import {
   type CanonicalProvenanceResult,
 } from "./provenance-format.js";
 
+const stateRootSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("event"), eventId: Type.String() }),
+  Type.Object({ kind: Type.Literal("application"), applicationId: Type.String() }),
+]);
+
+const semanticRootSchema = Type.Union(
+  [
+    Type.Object({ kind: Type.Literal("event"), eventId: Type.String() }),
+    Type.Object({ kind: Type.Literal("application"), applicationId: Type.String() }),
+    Type.Object({ kind: Type.Literal("applied-change"), appliedChangeId: Type.String() }),
+    Type.Object({ kind: Type.Literal("work-unit"), workUnitId: Type.String() }),
+    Type.Object({ kind: Type.Literal("change"), changeId: Type.String() }),
+    Type.Object({ kind: Type.Literal("decision"), decisionId: Type.String() }),
+    Type.Object({ kind: Type.Literal("command"), commandId: Type.String() }),
+    Type.Object({
+      kind: Type.Literal("file"),
+      state: stateRootSchema,
+      repositoryId: Type.String(),
+      fileId: Type.String(),
+    }),
+    Type.Object({
+      kind: Type.Literal("repository"),
+      state: stateRootSchema,
+      repositoryId: Type.String(),
+    }),
+    Type.Object({
+      kind: Type.Literal("trajectory"),
+      logId: Type.String(),
+      head: Type.String(),
+    }),
+    Type.Object({
+      kind: Type.Literal("trajectory-invocation"),
+      logId: Type.String(),
+      head: Type.String(),
+      invocationId: Type.String(),
+    }),
+    Type.Object({
+      kind: Type.Literal("trajectory-turn"),
+      logId: Type.String(),
+      head: Type.String(),
+      turnId: Type.String(),
+    }),
+    Type.Object({
+      kind: Type.Literal("trajectory-message"),
+      logId: Type.String(),
+      head: Type.String(),
+      messageId: Type.String(),
+    }),
+  ],
+  {
+    description:
+      "Exact typed semantic root returned by provenance details or either endpoint of a returned edge. Copy it unchanged, especially for trajectory nodes.",
+  }
+);
+
 const provenanceSchema = Type.Object({
   target: Type.Optional(
+    Type.Union(
+      [
+        Type.String({
+          description:
+            'Friendly workspace file path, "session", or semantic shorthand such as "workspace-event:...", "applied-change:...", "change:...", or "decision:...".',
+        }),
+        semanticRootSchema,
+      ],
+      {
+        description:
+          "A friendly string or one exact typed root returned by provenance details or an edge endpoint. Pass typed roots unchanged.",
+      }
+    )
+  ),
+  after: Type.Optional(
     Type.String({
       description:
-        'Friendly workspace file path, "session", or semantic shorthand such as "applied-change:...", "change:...", or "decision:...". Omit when root is supplied.',
+        "Exact nextCursor from the preceding provenance result. Reuse it only with that result's unchanged target.",
     })
   ),
-  root: Type.Optional(
-    Type.Record(Type.String(), Type.Unknown(), {
-      description:
-        "Exact typed semantic root returned by inspect.root, neighbors.root, provenance details, or either endpoint of a returned edge.",
-    })
-  ),
-  after: Type.Optional(Type.String({ description: "Stable neighbor-page cursor." })),
 });
 
 export type ProvenanceToolInput = Static<typeof provenanceSchema>;
@@ -64,7 +127,9 @@ function semanticRootForTarget(
   target: string,
   session: WorkspacePathProvenanceDeps["session"]
 ): VcsSemanticNodeRef {
-  if (target.startsWith("event:")) return { kind: "event", eventId: target };
+  if (target.startsWith("event:") || target.startsWith("workspace-event:")) {
+    return { kind: "event", eventId: target };
+  }
   if (target.startsWith("application:")) return { kind: "application", applicationId: target };
   if (target.startsWith("applied-change:")) {
     return { kind: "applied-change", appliedChangeId: target };
@@ -74,6 +139,11 @@ function semanticRootForTarget(
   if (target.startsWith("decision:")) return { kind: "decision", decisionId: target };
   if (target.startsWith("command:")) return { kind: "command", commandId: target };
   if (target === "session") return { kind: "trajectory", ...session };
+  if (target.startsWith("trajectory")) {
+    throw new Error(
+      "Trajectory nodes require the exact typed target with kind, logId, head, and invocationId/turnId/messageId as applicable; copy the complete edge endpoint into target"
+    );
+  }
   throw new Error(
     `Provenance target must be a workspace path, session, or event/application/applied-change/work-unit/change/decision/command identity; received ${target}`
   );
@@ -187,18 +257,17 @@ export function createProvenanceTool(
   return {
     name: "provenance",
     label: "provenance",
+    executionMode: "parallel",
     description:
       "Inspect a semantic node and walk one bounded adjacency page; managed files also include a small exact change-history preview.",
     parameters: provenanceSchema,
     execute: async (_toolCallId, input) => {
-      if (input.root && input.target) throw new Error("provenance accepts either root or target");
       const cursor = typeof input.after === "string" && input.after ? input.after : undefined;
-      const target = String(input.target ?? "session").trim() || "session";
-      if (input.root) {
-        const root = parseRoot(input.root);
+      if (input.target && typeof input.target === "object") {
+        const root = parseRoot(input.target);
         const [inspection, neighbors, history] = await Promise.all([
           deps.vcs.inspect({ node: root, edgeLimit: 1 }),
-          deps.vcs.neighbors({ root, limit: 20, ...(cursor ? { cursor } : {}) }),
+          deps.vcs.neighbors({ root, limit: 100, ...(cursor ? { cursor } : {}) }),
           root.kind === "file"
             ? deps.vcs.history({ root, direction: "past", limit: 5 })
             : Promise.resolve(undefined),
@@ -209,9 +278,10 @@ export function createProvenanceTool(
           includeCursor: true,
         });
       }
+      const target = String(input.target ?? "session").trim() || "session";
       const path = target.startsWith("file:") ? target.slice(5) : target;
       if (splitRepoPath(path)) {
-        const page = await neighborsForWorkspacePath(cwd, deps, path, { cursor, limit: 20 });
+        const page = await neighborsForWorkspacePath(cwd, deps, path, { cursor, limit: 100 });
         const [inspection, history] = await Promise.all([
           deps.vcs.inspect({ node: page.root, edgeLimit: 1 }),
           deps.vcs.history({ root: page.root, direction: "past", limit: 5 }),
@@ -225,7 +295,7 @@ export function createProvenanceTool(
       const root = semanticRootForTarget(target, deps.session);
       const [inspection, neighbors] = await Promise.all([
         deps.vcs.inspect({ node: root, edgeLimit: 1 }),
-        deps.vcs.neighbors({ root, limit: 20, ...(cursor ? { cursor } : {}) }),
+        deps.vcs.neighbors({ root, limit: 100, ...(cursor ? { cursor } : {}) }),
       ]);
       return toolResult(target, inspection, neighbors, undefined, {
         kind: "root",

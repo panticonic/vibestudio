@@ -28,23 +28,28 @@ const IMPOSSIBLE_SUCCESS_PHRASES = [
   "does not expose dom",
 ];
 
-const GAD_INTEGRITY_MARKERS = [
-  "GAD_DIAGNOSTICS_OK",
-  "storage",
-  "publication",
-  "turn",
-  "invocation",
-  "hashes",
-  "integrity",
+const GAD_INTEGRITY_CLAIMS = [
+  /storage/iu,
+  /publication/iu,
+  /turn/iu,
+  /invocation/iu,
+  /hash/iu,
+  /integrity/iu,
 ];
 
 function checked(
   result: Parameters<typeof finalMessageHasAll>[0],
-  markers: string[],
+  finalClaims: RegExp[],
+  evidenceClaims: RegExp[],
   options: { allowInFlightHealthOkFalse?: boolean } = {}
 ) {
-  const msg = finalMessageHasAll(result, markers);
-  if (!msg.passed) return msg;
+  const final = findLastAgentMessage(result);
+  if (!finalClaims.every((pattern) => pattern.test(final))) {
+    return {
+      passed: false,
+      reason: "Final response did not semantically report every requested diagnostic outcome",
+    };
+  }
 
   const incomplete = noIncompleteInvocations(result);
   if (!incomplete.passed) return incomplete;
@@ -57,11 +62,30 @@ function checked(
     };
   }
 
+  const evalEvidence = getToolCalls(result)
+    .filter(
+      (call) =>
+        call.name === "eval" &&
+        call.execution?.status === "complete" &&
+        call.execution.isError !== true
+    )
+    .map(
+      (call) =>
+        `${JSON.stringify(call.arguments ?? {})}\n${JSON.stringify(call.execution?.result ?? null)}`
+    )
+    .join("\n");
+  if (!evalEvidence || !evidenceClaims.every((pattern) => pattern.test(evalEvidence))) {
+    return {
+      passed: false,
+      reason: "Canonical eval arguments/results omitted requested diagnostic evidence",
+    };
+  }
+
   const okFalsePath = firstOkFalsePath(result);
   if (okFalsePath) {
     return {
       passed: false,
-      reason: `Final success marker conflicts with ok:false diagnostic result at ${okFalsePath}`,
+      reason: `Final success claim conflicts with ok:false diagnostic result at ${okFalsePath}`,
     };
   }
 
@@ -76,7 +100,7 @@ function checked(
     }
     return {
       passed: false,
-      reason: `Final success marker conflicts with failure wording "${impossible}"`,
+      reason: `Final success claim conflicts with failure wording "${impossible}"`,
     };
   }
 
@@ -84,8 +108,13 @@ function checked(
 }
 
 function checkedGadIntegrity(result: Parameters<typeof finalMessageHasAll>[0]) {
-  const markers = finalMessageHasAll(result, GAD_INTEGRITY_MARKERS);
-  if (!markers.passed && !expectedLiveGadHealthOutcome(result)) return markers;
+  const final = findLastAgentMessage(result);
+  if (
+    !GAD_INTEGRITY_CLAIMS.every((pattern) => pattern.test(final)) &&
+    !expectedLiveGadHealthOutcome(result)
+  ) {
+    return { passed: false, reason: "Final response omitted part of the GAD health assessment" };
+  }
   const incomplete = noIncompleteInvocations(result);
   if (!incomplete.passed) return incomplete;
   const failed = unexpectedToolFailures(result);
@@ -95,10 +124,22 @@ function checkedGadIntegrity(result: Parameters<typeof finalMessageHasAll>[0]) {
       reason: `Expected no failed tool calls, got ${failed.map(formatToolFailure).join(", ")}`,
     };
   }
+  const evidence = collectInvocationResultText(result);
+  if (
+    !evidence ||
+    ![/storage/iu, /publication/iu, /turn/iu, /invocation/iu, /hash/iu, /integrity/iu].every(
+      (pattern) => pattern.test(evidence)
+    )
+  ) {
+    return {
+      passed: false,
+      reason: "Canonical eval results omitted a complete GAD health assessment",
+    };
+  }
   // This test validates the diagnostic surface, not that the live trajectory
   // being diagnosed is perfectly quiescent. `ok:false` is legitimate data for
   // an open turn/current invocation or a discovered integrity finding; it is
-  // not a tool failure and must not contradict the execution-success marker.
+  // not a tool failure and must not contradict successful diagnostic execution.
   return { passed: true };
 }
 
@@ -133,7 +174,11 @@ function unexpectedToolFailures(
 }
 
 function firstOkFalsePath(result: Parameters<typeof finalMessageHasAll>[0]): string | undefined {
-  const calls = getToolCalls(result);
+  // A contradiction must come from executed diagnostic evidence. Source/document
+  // reads routinely contain examples and implementation branches with `ok:false`;
+  // treating those bytes as the test's runtime outcome makes successful CDP
+  // probes fail merely because the agent inspected the implementation first.
+  const calls = getToolCalls(result).filter((call) => call.name === "eval");
   for (const [index, call] of calls.entries()) {
     const path = findOkFalse(
       call.execution?.result,
@@ -143,6 +188,7 @@ function firstOkFalsePath(result: Parameters<typeof finalMessageHasAll>[0]): str
   }
 
   for (const [index, invocation] of (result.snapshot?.invocations ?? []).entries()) {
+    if (invocation.name !== "eval") continue;
     for (const [suffix, value] of invocationResultCandidates(invocation)) {
       const path = findOkFalse(value, `snapshot.invocations[${index}].${suffix}`);
       if (path) return path;
@@ -270,8 +316,11 @@ function looksLikeControlledOkFalseText(value: string): boolean {
 
 function looksLikeExpectedInFlightHealthText(value: string): boolean {
   if (!/"?ok"?\s*[:=]\s*false|ok false/i.test(value)) return false;
-  const hasOpenWork =
-    hasPositiveMetric(value, ["openTurns", "nonterminalInvocations", "openProjectedInvocations"]);
+  const hasOpenWork = hasPositiveMetric(value, [
+    "openTurns",
+    "nonterminalInvocations",
+    "openProjectedInvocations",
+  ]);
   if (!hasOpenWork) return false;
   const issueFields = [
     "publicationIssues",
@@ -295,11 +344,9 @@ function hasExpectedInFlightHealthEvidence(
   return looksLikeExpectedInFlightHealthText(evidence);
 }
 
-function expectedLiveGadHealthOutcome(
-  result: Parameters<typeof finalMessageHasAll>[0]
-): boolean {
-  const nonOkMarkers = GAD_INTEGRITY_MARKERS.filter((marker) => marker !== "GAD_DIAGNOSTICS_OK");
-  if (!finalMessageHasAll(result, nonOkMarkers).passed) return false;
+function expectedLiveGadHealthOutcome(result: Parameters<typeof finalMessageHasAll>[0]): boolean {
+  if (!GAD_INTEGRITY_CLAIMS.every((pattern) => pattern.test(findLastAgentMessage(result))))
+    return false;
   if (!noIncompleteInvocations(result).passed) return false;
   if (unexpectedToolFailures(result).length > 0) return false;
 
@@ -432,42 +479,46 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     description: "Automate a browser page with the lightweight CDP client",
     category: "cdp-gad-diagnostics",
     prompt:
-      "Automate a tiny disposable browser page with the lightweight CDP client. Finish with CDP_LIGHTWEIGHT_INTERACTION_OK, clicked, evaluated, and screenshot.",
+      "On a tiny disposable browser page, use the lightweight automation client to click an element, evaluate a value, and capture a screenshot. Summarize what actually succeeded.",
     validate: (result) =>
-      checked(result, ["CDP_LIGHTWEIGHT_INTERACTION_OK", "clicked", "evaluated", "screenshot"]),
+      checked(
+        result,
+        [/click/iu, /evaluat/iu, /screenshot/iu],
+        [/click/iu, /evaluat/iu, /screenshot/iu]
+      ),
   },
   {
     name: "cdp-lightweight-console-dom-inspection",
     description: "Exercise explicit lightweight CDP inspection and host historical console APIs",
     category: "cdp-gad-diagnostics",
     prompt:
-      "Exercise lightweight CDP console and DOM inspection on a tiny disposable browser page. Finish with CDP_LIGHTWEIGHT_OK, console-events, console-history, console-errors, dom-inspect, visible, and lightweightPage.",
+      "Inspect a tiny disposable browser page with the lightweight client. Check its live console events, retained console history and errors, and visible DOM state, then report the observed results.",
     validate: (result) =>
-      checked(result, [
-        "CDP_LIGHTWEIGHT_OK",
-        "console-events",
-        "console-history",
-        "console-errors",
-        "dom-inspect",
-        "visible",
-        "lightweightPage",
-      ]),
+      checked(
+        result,
+        [/console/iu, /histor/iu, /error/iu, /dom/iu, /visible/iu],
+        [/console/iu, /histor/iu, /error/iu, /dom/iu, /visible/iu]
+      ),
   },
   {
     name: "panel-stateargs-cdp-roundtrip",
     description: "Inspect panel state after a change",
     category: "cdp-gad-diagnostics",
     prompt:
-      "Open a workspace panel, change its state, and inspect it through the panel automation surface. Finish with STATEARGS_CDP_OK, STATEARGS_CDP_OK_2, snapshot, and stateArgs.",
+      "Open a workspace panel, change its state, and inspect the resulting snapshot through the panel automation surface. Tell me whether the changed state was visible.",
     validate: (result) =>
-      checked(result, ["STATEARGS_CDP_OK", "STATEARGS_CDP_OK_2", "snapshot", "stateArgs"]),
+      checked(
+        result,
+        [/panel/iu, /state/iu, /snapshot/iu, /visible|observed/iu],
+        [/stateArgs/iu, /snapshot/iu]
+      ),
   },
   {
     name: "gad-integrity-diagnostics",
     description: "Run a GAD health check",
     category: "cdp-gad-diagnostics",
     prompt:
-      "Run a quick GAD health check. Finish with GAD_DIAGNOSTICS_OK, storage, publication, turn, invocation, hashes, and integrity.",
+      "Run a quick health assessment of the graph-and-data store, covering storage, publication, the current turn and invocation, hashes, and integrity. Report findings honestly, including healthy in-flight work.",
     validate: checkedGadIntegrity,
   },
   {
@@ -475,11 +526,16 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     description: "Probe GAD branch and state inspection",
     category: "cdp-gad-diagnostics",
     prompt:
-      "Probe GAD branch and state inspection. Finish with GAD_BRANCH_OK, branch-files, state-probe, and controlled-errors.",
+      "Probe graph-and-data branch files and state inspection, including a couple of harmless invalid requests so controlled rejection behavior is observable. Summarize successes and expected errors.",
     validate: (result) =>
       checked(
         result,
-        ["GAD_BRANCH_OK", "branch-files", "state-probe", "controlled-errors"],
+        [/branch/iu, /state/iu, /controlled|expected|reject/iu],
+        [
+          /branch.?files/iu,
+          /state.?probe/iu,
+          /controlled.?errors|rejected|rawSql writes are disabled/iu,
+        ],
         { allowInFlightHealthOkFalse: true }
       ),
   },

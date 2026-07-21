@@ -1,9 +1,10 @@
 import type { SqlStorage } from "@workspace/runtime/worker";
 
 /**
- * News tables are versioned by drop-and-recreate (see NewsAgentWorker
- * schemaVersion): dev-mode data is disposable and articles re-ingest from
- * feeds on the next poll.
+ * Production-baseline News tables (see NewsAgentWorker.schemaVersion).
+ * Future shape changes require an ordered migration; earlier experimental
+ * layouts are rejected intact because no lossless historical translation is
+ * known.
  */
 export function createNewsTables(sql: SqlStorage): void {
   sql.exec(`

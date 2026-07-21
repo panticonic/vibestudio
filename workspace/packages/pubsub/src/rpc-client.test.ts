@@ -1669,7 +1669,10 @@ describe("connectViaRpc", () => {
       controller.abort();
 
       await expect(handle.result).rejects.toMatchObject({ code: "cancelled" });
-      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "cancelMethodCall", [handle.callId]);
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "cancelMethodCall", [
+        SELF_ID,
+        handle.callId,
+      ]);
 
       client.close();
     });
@@ -1701,7 +1704,10 @@ describe("connectViaRpc", () => {
 
       await Promise.resolve();
       expect(settled).toBe(false);
-      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "cancelMethodCall", [handle.callId]);
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "cancelMethodCall", [
+        SELF_ID,
+        handle.callId,
+      ]);
 
       resolveCancel();
       await cancelPromise;
@@ -1752,6 +1758,128 @@ describe("connectViaRpc", () => {
 
       await expect(handle.result).resolves.toEqual({ content: { paused: true } });
       expect(handle.complete).toBe(true);
+
+      client.close();
+    });
+
+    it("re-drives ambiguous method-start acknowledgements with the exact same identity", async () => {
+      vi.useFakeTimers();
+      const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
+      try {
+        await emitReplayAndReady(emit, []);
+        await client.ready();
+        mockRpc.call.mockClear();
+
+        let attempts = 0;
+        mockRpc.call.mockImplementation(async (_target: string, method: string) => {
+          if (method === "callMethod" && attempts++ < 2) {
+            throw Object.assign(new Error("response lost after dispatch"), {
+              errorKind: "internal",
+            });
+          }
+          return undefined;
+        });
+
+        const handle = client.callMethod("agent-1", "pause", { reason: "test" });
+        await Promise.resolve();
+        expect(attempts).toBe(1);
+
+        await vi.advanceTimersByTimeAsync(100);
+        expect(attempts).toBe(2);
+        await vi.advanceTimersByTimeAsync(200);
+        expect(attempts).toBe(3);
+
+        const starts = mockRpc.call.mock.calls.filter((call) => call[1] === "callMethod");
+        expect(starts).toHaveLength(3);
+        expect(starts[1]).toEqual(starts[0]);
+        expect(starts[2]).toEqual(starts[0]);
+        expect(handle.complete).toBe(false);
+
+        emit({
+          stream: "log",
+          phase: "live",
+          id: 601,
+          type: AGENTIC_EVENT_PAYLOAD_KIND,
+          payload: invocation(
+            "invocation.completed",
+            handle.invocationId,
+            { result: { paused: true } },
+            { transportCallId: handle.transportCallId }
+          ),
+          senderId: "agent-1",
+          ts: Date.now(),
+        });
+
+        await expect(handle.result).resolves.toEqual({ content: { paused: true } });
+      } finally {
+        client.close();
+        vi.useRealTimers();
+      }
+    });
+
+    it("accepts a durable terminal after an ambiguous start ACK without waiting for redrive", async () => {
+      vi.useFakeTimers();
+      const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
+      try {
+        await emitReplayAndReady(emit, []);
+        await client.ready();
+        mockRpc.call.mockClear();
+
+        let attempts = 0;
+        mockRpc.call.mockImplementation(async (_target: string, method: string) => {
+          if (method === "callMethod") {
+            attempts += 1;
+            throw Object.assign(new Error("acknowledgement lost"), { errorKind: "internal" });
+          }
+          return undefined;
+        });
+
+        const handle = client.callMethod("agent-1", "pause", {});
+        await Promise.resolve();
+        expect(attempts).toBe(1);
+        expect(handle.complete).toBe(false);
+
+        emit({
+          stream: "log",
+          phase: "live",
+          id: 602,
+          type: AGENTIC_EVENT_PAYLOAD_KIND,
+          payload: invocation(
+            "invocation.completed",
+            handle.invocationId,
+            { result: { paused: true } },
+            { transportCallId: handle.transportCallId }
+          ),
+          senderId: "agent-1",
+          ts: Date.now(),
+        });
+
+        await expect(handle.result).resolves.toEqual({ content: { paused: true } });
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(attempts).toBe(1);
+      } finally {
+        client.close();
+        vi.useRealTimers();
+      }
+    });
+
+    it("rejects a method start that the channel definitively refuses", async () => {
+      const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+      mockRpc.call.mockClear();
+
+      const refusal = Object.assign(new Error("caller is not authorized"), {
+        errorKind: "access",
+      });
+      mockRpc.call.mockRejectedValue(refusal);
+
+      const handle = client.callMethod("agent-1", "pause", {});
+      await expect(handle.result).rejects.toMatchObject({
+        code: "connection-error",
+        cause: refusal,
+      });
+      expect(mockRpc.call.mock.calls.filter((call) => call[1] === "callMethod")).toHaveLength(1);
 
       client.close();
     });

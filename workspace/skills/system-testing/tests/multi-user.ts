@@ -1,14 +1,30 @@
-import type { TestCase } from "../types.js";
+import type { TestCase, TestExecutionResult } from "../types.js";
 import {
-  finalMessageHasAll,
-  finalMessageHasNumericField,
-  noIncompleteInvocations,
-} from "./_helpers.js";
+  completedScenarioEvidence,
+  requireCodeOperations,
+  walkArrays,
+  walkRecords,
+} from "./_scenario-evidence.js";
+import { findLastAgentMessage } from "./_helpers.js";
 
-function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
-  const msg = finalMessageHasAll(result, tokens);
-  if (!msg.passed) return msg;
-  return noIncompleteInvocations(result);
+function checked(
+  result: TestExecutionResult,
+  operations: readonly (readonly string[])[],
+  validate: (values: readonly unknown[], final: string) => { passed: boolean; reason?: string }
+) {
+  const completed = completedScenarioEvidence(result);
+  if (!completed.passed) return completed;
+  const exercised = requireCodeOperations(completed.evidence.evalCode, operations);
+  if (!exercised.passed) return exercised;
+  return validate(completed.evidence.evalValues, findLastAgentMessage(result));
+}
+
+function firstArray(values: readonly unknown[]): unknown[] | null {
+  return walkArrays(values)[0] ?? null;
+}
+
+function finalReportsCount(final: string, count: number): boolean {
+  return new RegExp(`\\b${count}\\b`, "u").test(final);
 }
 
 export const multiUserTests: TestCase[] = [
@@ -17,52 +33,82 @@ export const multiUserTests: TestCase[] = [
     description: "Identify the user account this session runs as",
     category: "multi-user",
     prompt:
-      "Figure out which user account this session is operating on behalf of and report the profile identity without exposing any secrets or tokens. Finish with ACCOUNT_PROFILE_OK and user:<id-or-name>.",
-    validate: (result) => checked(result, ["ACCOUNT_PROFILE_OK", "user:"]),
+      "Which account is this session acting for? Report the live profile identity without exposing credentials or secrets.",
+    validate: (result) =>
+      checked(result, [["account.getProfile"]], (values, final) => {
+        const profile = walkRecords(values).find(
+          (value) => typeof value["userId"] === "string" && typeof value["handle"] === "string"
+        );
+        if (!profile) return { passed: false, reason: "Account lookup returned no live profile" };
+        const handle = profile["handle"] as string;
+        const userId = profile["userId"] as string;
+        return final.includes(handle) || final.includes(userId)
+          ? { passed: true }
+          : { passed: false, reason: "Final response did not identify the returned account" };
+      }),
   },
   {
     name: "workspace-members",
     description: "List the members of the active workspace",
     category: "multi-user",
-    prompt:
-      "Report who has access to the active workspace — list its members and their roles. Finish with MEMBERS_OK and count:<number>.",
-    validate: (result) => {
-      const base = checked(result, ["MEMBERS_OK"]);
-      if (!base.passed) return base;
-      return finalMessageHasNumericField(result, "count");
-    },
+    prompt: "Who belongs to this workspace, and what roles do they have?",
+    validate: (result) =>
+      checked(result, [["account.listWorkspaceMembers"]], (values, final) => {
+        const members = firstArray(values);
+        if (!members) return { passed: false, reason: "Membership lookup returned no member array" };
+        const shaped = members.every((member) => {
+          if (!member || typeof member !== "object" || Array.isArray(member)) return false;
+          const record = member as Record<string, unknown>;
+          return typeof record["handle"] === "string" && typeof record["role"] === "string";
+        });
+        return shaped && finalReportsCount(final, members.length)
+          ? { passed: true }
+          : {
+              passed: false,
+              reason: "Final response did not accurately summarize the returned member roles/count",
+            };
+      }),
   },
   {
     name: "workspace-presence",
     description: "Report which users are currently present in the workspace",
     category: "multi-user",
-    prompt:
-      "Find out which users are currently present in this workspace right now and report the presence list (an empty list is a valid answer). Finish with PRESENCE_OK and present:<count>.",
-    validate: (result) => checked(result, ["PRESENCE_OK", "present:"]),
+    prompt: "Who is currently present in this workspace? An empty presence list is a valid result.",
+    validate: (result) =>
+      checked(result, [["workspacePresence.list"]], (values, final) => {
+        const presence = firstArray(values);
+        if (!presence) return { passed: false, reason: "Presence lookup returned no array" };
+        return finalReportsCount(final, presence.length) && /(present|presence|online|nobody|no one)/iu.test(final)
+          ? { passed: true }
+          : { passed: false, reason: "Final response did not summarize the observed presence list" };
+      }),
   },
   {
     name: "channel-roster-identity",
     description: "Distinguish human and agent participants in the current channel",
     category: "multi-user",
-    prompt:
-      "Look at who is participating in your current conversation channel and report the roster, distinguishing human participants from agent participants. Finish with CHANNEL_ROSTER_OK, humans:<count>, and agents:<count>.",
+    prompt: "Who is participating in this conversation, and which participants are people or agents?",
     validate: (result) =>
-      checked(result, ["CHANNEL_ROSTER_OK", "humans:", "agents:"]),
+      checked(result, [["chat.getParticipants"], ["chat.participants"]], (values, final) => {
+        const roster = firstArray(values);
+        if (!roster) return { passed: false, reason: "Channel inspection returned no participant roster" };
+        return /(human|person|user)/iu.test(final) && /agent/iu.test(final)
+          ? { passed: true }
+          : { passed: false, reason: "Final response did not distinguish people from agents" };
+      }),
   },
   {
     name: "hub-workspace-listing",
     description: "List the workspaces known to the hub control plane",
     category: "multi-user",
-    prompt:
-      "Report which workspaces this server's hub knows about. Finish with HUB_LIST_OK and count:<number>, or HUB_UNAVAILABLE with the concrete blocking reason if the hub control plane is not reachable from this context.",
-    validate: (result) => {
-      const ok = finalMessageHasAll(result, ["HUB_LIST_OK"]);
-      if (ok.passed) {
-        const pending = noIncompleteInvocations(result);
-        if (!pending.passed) return pending;
-        return finalMessageHasNumericField(result, "count");
-      }
-      return checked(result, ["HUB_UNAVAILABLE"]);
-    },
+    prompt: "Which workspaces can this account access through the hub?",
+    validate: (result) =>
+      checked(result, [["hubControl.listWorkspaces"]], (values, final) => {
+        const workspaces = firstArray(values);
+        if (!workspaces) return { passed: false, reason: "Hub lookup returned no workspace array" };
+        return finalReportsCount(final, workspaces.length) && /workspace/iu.test(final)
+          ? { passed: true }
+          : { passed: false, reason: "Final response did not summarize the visible workspaces" };
+      }),
   },
 ];

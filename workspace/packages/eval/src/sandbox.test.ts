@@ -79,6 +79,57 @@ describe("executeSandbox", () => {
     expect(result.returnValue).toBe(3);
   });
 
+  it("settles synchronous loops at an explicit cooperative deadline", async () => {
+    const timeoutMs = 5;
+    const result = await executeSandbox("while (true) {}", {
+      syntax: "typescript",
+      deadline: { atMs: Date.now() + timeoutMs, timeoutMs },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: `eval timed out after ${timeoutMs}ms`,
+    });
+  });
+
+  it("settles synchronous recursion at an explicit cooperative deadline", async () => {
+    const timeoutMs = 5;
+    const result = await executeSandbox(
+      "function recurse() { return recurse(); } return recurse();",
+      {
+        syntax: "typescript",
+        deadline: { atMs: Date.now(), timeoutMs },
+      }
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: `eval timed out after ${timeoutMs}ms`,
+    });
+  });
+
+  it("does not instrument synchronous code when no deadline is supplied", async () => {
+    const result = await executeSandbox(
+      "let n = 0; while (n < 3) n += 1; const f = (x) => x + 1; return f(n);",
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({ success: true, returnValue: 4 });
+  });
+
+  it("deactivates checkpoints captured by functions that outlive a bounded run", async () => {
+    const holder: { fn?: () => number } = {};
+    const result = await executeSandbox("holder.fn = () => 42; return 'stored';", {
+      syntax: "typescript",
+      bindings: { holder },
+      deadline: { atMs: Date.now() + 50, timeoutMs: 50 },
+    });
+    expect(result).toMatchObject({ success: true, returnValue: "stored" });
+
+    await new Promise((resolve) => setTimeout(resolve, 55));
+    expect(holder.fn?.()).toBe(42);
+  });
+
   it("awaits a trailing async IIFE as the eval result", async () => {
     const result = await executeSandbox(
       "(async () => { await Promise.resolve(); return 42; })();",

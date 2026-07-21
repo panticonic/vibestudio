@@ -1099,6 +1099,7 @@ function semanticComparison(
   return {
     target,
     sourceEventId,
+    resolution: { complete: changes.length === 0, remainingChangeCount: changes.length },
     counts: {
       shared: 0,
       alreadySatisfied: 0,
@@ -1216,6 +1217,23 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
       runId: ids.invocationEffect("inv-reset"),
       reset: true,
       code: "return Object.keys(scope)",
+    });
+  });
+
+  it("threads an explicit eval deadline into the deferred eval start", async () => {
+    const probe = await makeGateProbe();
+    probe.getRunStatus = { status: "pending" };
+
+    await expect(
+      probe.callGate(CHANNEL, "inv-timeout", {
+        code: "await new Promise(() => {})",
+        timeoutMs: 250,
+      })
+    ).resolves.toEqual({ deferred: true });
+
+    expect(probe.rpcCalls.find((call) => call.method === "eval.startRun")?.args[0]).toMatchObject({
+      runId: ids.invocationEffect("inv-timeout"),
+      timeoutMs: 250,
     });
   });
 

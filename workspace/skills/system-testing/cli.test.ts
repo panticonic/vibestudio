@@ -151,6 +151,24 @@ describe("system-testing CLI-neutral API", () => {
     });
   });
 
+  it("treats an explicit default-model selection as a Spark-only run", async () => {
+    configureHealthyDoctorModels([
+      { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
+      { ref: SYSTEM_TEST_FALLBACK_MODEL, availability: { state: "unavailable" } },
+    ]);
+
+    const result = await systemTestDoctor(SYSTEM_TEST_AGENT_MODEL);
+
+    expect(result.ok).toBe(true);
+    expect(result.checks.find((check) => check.name === "model")).toMatchObject({
+      ok: true,
+      data: {
+        primary: { model: SYSTEM_TEST_AGENT_MODEL, availability: "ready" },
+        usageLimitFallback: null,
+      },
+    });
+  });
+
   it("doctors both models in the default usage-limit fallback route", async () => {
     configureHealthyDoctorModels([
       { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },

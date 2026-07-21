@@ -9,6 +9,7 @@ import type {
 } from "@vibestudio/service-schemas/vcs";
 import {
   resolveToolFile,
+  resolveToolRepository,
   resolveToolWorkingState,
   toVcsPath,
   toolCommandId,
@@ -17,21 +18,26 @@ import {
   type ToolMutationContext,
 } from "./tool-vcs.js";
 
-const evidenceSchema = Type.Union([
+const agentEvidenceSchema = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("file-content"),
-      fileId: Type.String(),
-      contentHash: Type.String(),
+      path: Type.String({
+        minLength: 1,
+        description:
+          "Workspace file path whose exact current file identity and content hash are evidence.",
+      }),
     },
     { additionalProperties: false }
   ),
   Type.Object(
     {
       kind: Type.Literal("file-placement"),
-      fileId: Type.String(),
-      repositoryId: Type.String(),
-      path: Type.String(),
+      path: Type.String({
+        minLength: 1,
+        description:
+          "Workspace file path whose exact current file identity, repository, and placement are evidence.",
+      }),
     },
     { additionalProperties: false }
   ),
@@ -42,8 +48,11 @@ const evidenceSchema = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("repository-present"),
-      repositoryId: Type.String(),
-      repoPath: Type.String(),
+      path: Type.String({
+        minLength: 1,
+        description:
+          "Workspace repository path whose exact current identity and placement are evidence.",
+      }),
     },
     { additionalProperties: false }
   ),
@@ -96,7 +105,12 @@ const workspaceVcsSchema = Type.Union([
               minItems: 1,
               maxItems: 200,
             }),
-            evidence: Type.Array(evidenceSchema, { minItems: 1, maxItems: 200 }),
+            evidence: Type.Array(agentEvidenceSchema, {
+              minItems: 1,
+              maxItems: 200,
+              description:
+                "Exact target-state evidence. Prefer path-based file-content, file-placement, or repository-present entries; the tool resolves their stable identities at the current working state.",
+            }),
             rationale: Type.String({ minLength: 1 }),
           },
           { additionalProperties: false }
@@ -130,8 +144,20 @@ const workspaceVcsSchema = Type.Union([
     {
       operation: Type.Literal("blame"),
       path: Type.String({ minLength: 1 }),
-      start: Type.Optional(Type.Integer({ minimum: 0 })),
-      end: Type.Optional(Type.Integer({ minimum: 0 })),
+      start: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          description:
+            "Zero-based UTF-16 content offset (byte offset for binary); omit start and end to blame the full file. This is not a line number.",
+        })
+      ),
+      end: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          description:
+            "Exclusive zero-based UTF-16 content offset (byte offset for binary); omit start and end to blame the full file. This is not a line number.",
+        })
+      ),
       after: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
     },
@@ -153,7 +179,7 @@ export type WorkspaceVcsToolInput =
   | {
       operation: "integrate";
       sourceEventId: string;
-      decision: VcsIntegrationDecisionInput;
+      decision: AgentIntegrationDecisionInput;
       intentSummary?: string;
     }
   | { operation: "revert"; changeIds: string[]; intentSummary?: string }
@@ -189,9 +215,12 @@ export type ToolWorkflowVcs = Pick<
 function compareText(result: VcsCompareResult): string {
   const counts = result.counts;
   const lines = [
+    result.resolution.complete
+      ? "Integration resolution is complete; no source changes still require a decision."
+      : `Integration resolution is incomplete; ${result.resolution.remainingChangeCount} source change${result.resolution.remainingChangeCount === 1 ? "" : "s"} still require a decision.`,
     `Compared ${result.sourceEventId} with the current working state: ` +
       `${counts.actionable} actionable (${counts.conflicting} conflicting, ${counts.blocked} blocked), ` +
-      `${counts.accounted} accounted, ${counts.shared} shared, ` +
+      `${counts.accounted} resolved by decision, ${counts.shared} shared, ` +
       `${counts.alreadySatisfied} already satisfied, ${counts.historical} historical.`,
   ];
   for (const change of result.changes) {
@@ -269,12 +298,18 @@ export function createWorkspaceVcsTool(
 
       if (command.operation === "integrate") {
         const expectedWorkingHead = await resolveToolWorkingState(vcs, context);
+        const decision = await resolveAgentIntegrationDecision(
+          vcs,
+          expectedWorkingHead,
+          cwd,
+          command.decision
+        );
         const result = await vcs.integrate({
           contextId,
           expectedWorkingHead,
           commandId: toolCommandId(context),
           sourceEventId: command.sourceEventId,
-          decision: command.decision,
+          decision,
           ...(command.intentSummary ? { intentSummary: command.intentSummary } : {}),
         });
         return resultOf(
@@ -338,10 +373,11 @@ export function createWorkspaceVcsTool(
         });
         const lines = result.spans.map(
           (span) =>
-            `${span.start}..${span.end} · ${span.stop} · change ${span.changeId ?? "unknown"} · ` +
-            `work ${span.workUnitId ?? "unknown"} · command ${span.commandId ?? "unknown"}` +
-            (span.stop === "import-boundary" && span.changeId && span.workUnitId
-              ? ` · inspect terminal change ${span.changeId}, then owning import work unit ${span.workUnitId} for the exact external snapshot; earlier coordinate authorship is unknown`
+            `${span.start}..${span.end} · ${span.stop} · ` +
+            `change ${JSON.stringify(span.change)} · applied change ${JSON.stringify(span.appliedChange)} · ` +
+            `work ${JSON.stringify(span.workUnit)} · command ${JSON.stringify(span.command)}` +
+            (span.stop === "import-boundary"
+              ? ` · pass these typed roots unchanged to provenance: inspect terminal change ${JSON.stringify(span.change)}, then owning import work unit ${JSON.stringify(span.workUnit)} for the exact external snapshot; earlier coordinate authorship is unknown`
               : "")
         );
         if (result.nextCursor)
@@ -353,6 +389,9 @@ export function createWorkspaceVcsTool(
         );
       }
 
+      if (command.operation !== "push") {
+        throw new Error("Unsupported vcs operation");
+      }
       const status = await vcs.status({ contextId });
       if (status.committed.kind !== "event") throw new Error("Committed state is not an event");
       const result = await vcs.push({
@@ -371,6 +410,62 @@ export function createWorkspaceVcsTool(
 }
 
 type VcsIntegrationDecisionInput = Parameters<ToolVcs["integrate"]>[0]["decision"];
+
+type AgentIntegrationEvidence =
+  | { kind: "file-content"; path: string }
+  | { kind: "file-placement"; path: string }
+  | { kind: "file-absent"; fileId: string }
+  | { kind: "repository-present"; path: string }
+  | { kind: "repository-absent"; repositoryId: string };
+
+type AgentIntegrationDecisionInput =
+  | Extract<VcsIntegrationDecisionInput, { kind: "adopted" | "declined" }>
+  | {
+      kind: "reconciled";
+      sourceChangeIds: string[];
+      evidence: AgentIntegrationEvidence[];
+      rationale: string;
+    };
+
+async function resolveAgentIntegrationDecision(
+  vcs: Pick<ToolVcs, "resolveRepository" | "readFile">,
+  state: Parameters<typeof resolveToolFile>[1],
+  cwd: string,
+  decision: AgentIntegrationDecisionInput
+): Promise<VcsIntegrationDecisionInput> {
+  if (decision.kind !== "reconciled") return decision;
+  const evidence: Extract<VcsIntegrationDecisionInput, { kind: "reconciled" }>["evidence"] = [];
+  for (const item of decision.evidence) {
+    if (item.kind === "file-content" || item.kind === "file-placement") {
+      const path = toVcsPath(item.path, cwd);
+      const file = await resolveToolFile(vcs, state, path);
+      if (!file) throw new Error(`No managed file at ${item.path}`);
+      evidence.push(
+        item.kind === "file-content"
+          ? { kind: item.kind, fileId: file.fileId, contentHash: file.contentHash }
+          : {
+              kind: item.kind,
+              fileId: file.fileId,
+              repositoryId: file.repositoryId,
+              path: file.path,
+            }
+      );
+      continue;
+    }
+    if (item.kind === "repository-present") {
+      const repoPath = toVcsPath(item.path, cwd);
+      const repository = await resolveToolRepository(vcs, state, repoPath);
+      evidence.push({
+        kind: item.kind,
+        repositoryId: repository.repositoryId,
+        repoPath: repository.repoPath,
+      });
+      continue;
+    }
+    evidence.push(item);
+  }
+  return { ...decision, evidence };
+}
 
 function stateLabel(
   state: { kind: "event"; eventId: string } | { kind: "application"; applicationId: string }

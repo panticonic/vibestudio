@@ -94,6 +94,7 @@ const WATCH_FALLBACK_POLL_MS = 30 * 60 * 1000;
 const GMAIL_DO_SOURCE = "workers/gmail-agent";
 const GMAIL_DO_CLASS = "GmailAgentWorker";
 const GMAIL_PUSH_ROUTER_KEY = "gmail-push-router";
+const GMAIL_AGENT_SCHEMA_BASELINE = 7;
 
 type GmailTool = AgentTool;
 
@@ -104,10 +105,16 @@ interface GmailPushTarget {
 }
 
 export class GmailAgentWorker extends AgentWorkerBase {
-  // This pre-release schema has one exact shape. Version changes reset the
-  // Gmail worker's local projection and setup state instead of translating
-  // historical layouts.
-  static override schemaVersion = AgentWorkerBase.schemaVersion + 6;
+  // Version 7 is the first supported production shape. Earlier experimental
+  // layouts have no proven lossless translation and are rejected intact.
+  static override schemaVersion = GMAIL_AGENT_SCHEMA_BASELINE;
+
+  protected override schemaProductionBaseline() {
+    return {
+      version: GMAIL_AGENT_SCHEMA_BASELINE,
+      name: "gmail-agent-v7",
+    } as const;
+  }
 
   private gmailClients = new Map<string, GmailClient>();
   private recoveredChannels = new Set<string>();
@@ -549,12 +556,8 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * server has already verified and decoded the Cloud Pub/Sub envelope; Gmail
    * interpretation and fanout stay here.
    */
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   async onWebhookDelivery(event: WebhookDeliveryEvent): Promise<{ synced: string[] }> {
-    const caller = this.caller;
-    if (caller && !["server"].includes(caller.callerKind)) {
-      throw new Error("onWebhookDelivery is only dispatched by webhookIngress");
-    }
     if (event.payload.type !== "cloud-pubsub") return { synced: [] };
     const data = record(event.payload.dataJson);
     const email = stringArg(data, "emailAddress")?.toLowerCase();
@@ -590,7 +593,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { synced: [...synced] };
   }
 
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   registerPushTarget(input: {
     emailAddress: string;
     source: string;
@@ -617,7 +620,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { registered: true };
   }
 
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   unregisterPushTarget(input: {
     emailAddress: string;
     source: string;
@@ -655,12 +658,13 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * Sync every channel bound to that address now; the follow-up alarm runs
    * the triage/wake pipeline.
    */
-  @rpc({ callers: ["server", "do"] })
+  @rpc({ principals: ["host", "code"], sensitivity: "write" })
   async onGmailPushNotification(payload: { emailAddress: string; historyId: string }): Promise<{
     synced: string[];
   }> {
     const caller = this.caller;
-    if (caller && !["do"].includes(caller.callerKind)) {
+    const expectedRouter = gmailPushRouterTarget();
+    if (!caller || caller.callerId !== expectedRouter) {
       throw new Error("onGmailPushNotification is only dispatched by the Gmail push router");
     }
     const email = String(payload?.emailAddress ?? "").toLowerCase();
@@ -798,28 +802,18 @@ export class GmailAgentWorker extends AgentWorkerBase {
     }
   }
 
-  private assertAttentionWriteAllowed(): void {
-    const caller = this.caller;
-    if (!caller) return;
-    if (["panel", "shell", "server"].includes(caller.callerKind)) return;
-    throw new Error(
-      "Gmail attention preference changes must be initiated from a user-facing panel"
-    );
-  }
-
-  @rpc({ callers: ["panel", "do"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async getAttentionPrefs(channelId: string): Promise<GmailAttentionPrefs> {
     this.assertSubscribedChannel(channelId);
     return this.handlers.getAttentionPrefs(channelId);
   }
 
-  @rpc({ callers: ["panel", "do"] })
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async setAttentionPrefs(
     channelId: string,
     args: unknown
   ): Promise<{ saved: true; preferences: GmailAttentionPrefs }> {
     this.assertSubscribedChannel(channelId);
-    this.assertAttentionWriteAllowed();
     const input = record(args);
     const result = await this.handlers.setAttention(channelId, {
       preferences: stringArg(input, "preferences") ?? stringArg(input, "preferencesText"),

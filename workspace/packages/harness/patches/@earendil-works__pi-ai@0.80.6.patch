@@ -1,8 +1,44 @@
+diff --git a/dist/api/openai-codex-responses.d.ts b/dist/api/openai-codex-responses.d.ts
+index a250d87fff31a6819b0e734c06ca007facb81346..6d1182916460e4870bd4f6522cf3ce30fbbfb51a 100644
+--- a/dist/api/openai-codex-responses.d.ts
++++ b/dist/api/openai-codex-responses.d.ts
+@@ -1,6 +1,11 @@
+ import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+ import type { SimpleStreamOptions, StreamFunction, StreamOptions } from "../types.ts";
+ export interface OpenAICodexResponsesOptions extends StreamOptions {
++    /**
++     * Renewable transport-liveness lease. Every raw WebSocket frame or SSE
++     * body chunk renews the lease; this does not limit total request time.
++     */
++    streamIdleTimeoutMs?: number;
+     reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+     reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
+     serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+@@ -27,4 +32,5 @@ export interface OpenAICodexWebSocketDebugStats {
+ export declare function getOpenAICodexWebSocketDebugStats(sessionId: string): OpenAICodexWebSocketDebugStats | undefined;
+ export declare function resetOpenAICodexWebSocketDebugStats(sessionId?: string): void;
+ export declare function closeOpenAICodexWebSocketSessions(sessionId?: string): void;
++export declare function releaseOpenAICodexWebSocketSession(sessionId?: string): void;
+ //# sourceMappingURL=openai-codex-responses.d.ts.map
 diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
-index 803c76a..204edec 100644
+index 803c76af791714b0a9a8246c5aaa1837585db7a3..29459d4e2da0d997ab9039d4bdce129de4b94f06 100644
 --- a/dist/api/openai-codex-responses.js
 +++ b/dist/api/openai-codex-responses.js
-@@ -160,9 +160,10 @@
+@@ -94,11 +94,11 @@ function sleep(ms, signal) {
+         });
+     });
+ }
+-function normalizeTimeoutMs(value) {
++function normalizeTimeoutMs(value, optionName = "timeoutMs") {
+     if (value === undefined)
+         return undefined;
+     if (!Number.isFinite(value) || value < 0) {
+-        throw new Error(`Invalid timeoutMs: ${String(value)}`);
++        throw new Error(`Invalid ${optionName}: ${String(value)}`);
+     }
+     return Math.floor(value);
+ }
+@@ -160,11 +160,13 @@ export const stream = (model, context, options) => {
              if (nextBody !== undefined) {
                  body = nextBody;
              }
@@ -15,8 +51,20 @@ index 803c76a..204edec 100644
 +            const websocketHeaders = buildWebSocketHeaders(model.headers, options?.headers, accountId, apiKey, transportSessionId, requestId);
              const bodyJson = JSON.stringify(body);
              const httpTimeoutMs = normalizeTimeoutMs(options?.timeoutMs);
++            const streamIdleTimeoutMs = normalizeTimeoutMs(options?.streamIdleTimeoutMs, "streamIdleTimeoutMs");
              const websocketConnectTimeoutMs = normalizeTimeoutMs(options?.websocketConnectTimeoutMs);
-@@ -265,6 +266,19 @@
+             const transport = options?.transport || "auto";
+             const websocketDisabledForSession = transport !== "sse" && isWebSocketSseFallbackActive(options?.sessionId);
+@@ -179,7 +181,7 @@ export const stream = (model, context, options) => {
+                     try {
+                         await processWebSocketStream(resolveCodexWebSocketUrl(model.baseUrl), body, websocketHeaders, output, stream, model, () => {
+                             websocketStarted = true;
+-                        }, httpTimeoutMs, websocketConnectTimeoutMs, options);
++                        }, streamIdleTimeoutMs, websocketConnectTimeoutMs, options);
+                         if (options?.signal?.aborted) {
+                             throw new Error("Request was aborted");
+                         }
+@@ -265,6 +267,19 @@ export const stream = (model, context, options) => {
                              : response.status === 429
                                  ? capRetryDelayMs(retryAfterDelayMs, options)
                                  : retryAfterDelayMs;
@@ -36,7 +84,7 @@ index 803c76a..204edec 100644
                          await sleep(delayMs, options?.signal);
                          continue;
                      }
-@@ -286,6 +300,20 @@
+@@ -286,6 +301,20 @@ export const stream = (model, context, options) => {
                      // Network errors are retryable
                      if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
                          const delayMs = BASE_DELAY_MS * 2 ** attempt;
@@ -57,7 +105,82 @@ index 803c76a..204edec 100644
                          await sleep(delayMs, options?.signal);
                          continue;
                      }
-@@ -699,6 +727,86 @@
+@@ -299,7 +328,7 @@ export const stream = (model, context, options) => {
+                 throw new Error("No response body");
+             }
+             stream.push({ type: "start", partial: output });
+-            await processStream(response, output, stream, model, options);
++            await processStream(response, output, stream, model, options, streamIdleTimeoutMs);
+             if (options?.signal?.aborted) {
+                 throw new Error("Request was aborted");
+             }
+@@ -419,8 +448,8 @@ function resolveCodexWebSocketUrl(baseUrl) {
+ // ============================================================================
+ // Response Processing
+ // ============================================================================
+-async function processStream(response, output, stream, model, options) {
+-    await processResponsesStream(mapCodexEvents(parseSSE(response, options?.signal)), output, stream, model, {
++async function processStream(response, output, stream, model, options, streamIdleTimeoutMs) {
++    await processResponsesStream(mapCodexEvents(parseSSE(response, options?.signal, streamIdleTimeoutMs)), output, stream, model, {
+         serviceTier: options?.serviceTier,
+         resolveServiceTier: resolveCodexServiceTier,
+         applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
+@@ -500,7 +529,31 @@ function normalizeCodexStatus(status) {
+ // ============================================================================
+ // SSE Parsing
+ // ============================================================================
+-async function* parseSSE(response, signal) {
++async function readSSEChunk(reader, signal, idleTimeoutMs) {
++    if (idleTimeoutMs === undefined || idleTimeoutMs <= 0) {
++        return reader.read();
++    }
++    let timeout;
++    try {
++        return await Promise.race([
++            reader.read(),
++            new Promise((_, reject) => {
++                timeout = setTimeout(() => {
++                    const error = new Error(`SSE stream idle timeout after ${idleTimeoutMs}ms`);
++                    reject(error);
++                    void reader.cancel(error).catch(() => { });
++                }, idleTimeoutMs);
++            }),
++        ]);
++    }
++    finally {
++        if (timeout)
++            clearTimeout(timeout);
++        if (signal?.aborted)
++            void reader.cancel(signal.reason).catch(() => { });
++    }
++}
++async function* parseSSE(response, signal, idleTimeoutMs) {
+     if (!response.body)
+         return;
+     const reader = response.body.getReader();
+@@ -515,7 +568,7 @@ async function* parseSSE(response, signal) {
+             if (signal?.aborted) {
+                 throw new Error("Request was aborted");
+             }
+-            const { done, value } = await reader.read();
++            const { done, value } = await readSSEChunk(reader, signal, idleTimeoutMs);
+             if (signal?.aborted) {
+                 throw new Error("Request was aborted");
+             }
+@@ -619,7 +672,11 @@ export function closeOpenAICodexWebSocketSessions(sessionId) {
+     }
+     websocketSessionCache.clear();
+ }
+-registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
++export function releaseOpenAICodexWebSocketSession(sessionId) {
++    closeOpenAICodexWebSocketSessions(sessionId);
++    resetOpenAICodexWebSocketDebugStats(sessionId);
++}
++registerSessionResourceCleanup(releaseOpenAICodexWebSocketSession);
+ function isWebSocketSseFallbackActive(sessionId) {
+     return sessionId ? websocketSseFallbackSessions.has(sessionId) : false;
+ }
+@@ -699,6 +756,86 @@ function closeWebSocketSilently(socket, code = 1000, reason = "done") {
      }
      catch { }
  }
@@ -144,7 +267,7 @@ index 803c76a..204edec 100644
  function scheduleSessionWebSocketExpiry(sessionId, entry) {
      if (entry.idleTimer) {
          clearTimeout(entry.idleTimer);
-@@ -713,16 +821,23 @@
+@@ -713,16 +850,23 @@ function scheduleSessionWebSocketExpiry(sessionId, entry) {
  async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS, env) {
      const WebSocketCtor = await getWebSocketConstructor(env);
      if (!WebSocketCtor) {
@@ -169,7 +292,7 @@ index 803c76a..204edec 100644
          }
          catch (error) {
              reject(error instanceof Error ? error : new Error(String(error)));
-@@ -779,7 +894,7 @@
+@@ -779,7 +923,7 @@ async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT
      });
  }
  async function acquireWebSocket(url, headers, sessionId, signal, connectTimeoutMs, env) {
@@ -178,7 +301,7 @@ index 803c76a..204edec 100644
          const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
          return {
              socket,
-@@ -1100,6 +1215,10 @@
+@@ -1100,6 +1244,10 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
          }
      }
      try {
@@ -189,7 +312,7 @@ index 803c76a..204edec 100644
          socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
          await processResponsesStream(startWebSocketOutputOnFirstEvent(mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs)), output, stream, onStart), output, stream, model, {
              serviceTier: options?.serviceTier,
-@@ -1198,18 +1317,16 @@
+@@ -1198,18 +1346,16 @@ function buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token)
      headers.set("User-Agent", userAgent);
      return headers;
  }
@@ -212,7 +335,7 @@ index 803c76a..204edec 100644
      const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
      headers.delete("accept");
      headers.delete("content-type");
-@@ -1217,7 +1334,7 @@
+@@ -1217,7 +1363,7 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
      headers.delete("openai-beta");
      headers.set("OpenAI-Beta", OPENAI_BETA_RESPONSES_WEBSOCKETS);
      headers.set("x-client-request-id", requestId);
@@ -220,6 +343,4 @@ index 803c76a..204edec 100644
 +    headers.set("session-id", sessionId);
      return headers;
  }
--//# sourceMappingURL=openai-codex-responses.js.map
-\ No newline at end of file
-+//# sourceMappingURL=openai-codex-responses.js.map
+ //# sourceMappingURL=openai-codex-responses.js.map

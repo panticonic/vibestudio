@@ -47,7 +47,7 @@ import {
   SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
 } from "./config.js";
 import { HeadlessRunner, SYSTEM_TEST_AGENT_PROMPT } from "./runner.js";
-import { CONTENT_WORKSPACE_REPO_FIXTURE } from "./types.js";
+import { CONTENT_WORKSPACE_REPO_FIXTURE, CREATED_PANEL_WORKSPACE_REPO_FIXTURE } from "./types.js";
 
 describe("HeadlessRunner", () => {
   beforeEach(() => {
@@ -159,6 +159,23 @@ describe("HeadlessRunner", () => {
     expect(config.extraConfig).toMatchObject({
       model: SYSTEM_TEST_FALLBACK_MODEL,
       thinkingLevel: SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
+    });
+  });
+
+  it("does not attach a fallback route to an explicit Spark override", async () => {
+    const runner = new HeadlessRunner("ctx-test", { model: SYSTEM_TEST_AGENT_MODEL });
+
+    await runner.spawn();
+
+    const config = mocks.createWithAgent.mock.calls[0]![0] as {
+      extraConfig: Record<string, unknown>;
+    };
+    expect(config.extraConfig).toMatchObject({ model: SYSTEM_TEST_AGENT_MODEL });
+    expect(config.extraConfig).not.toHaveProperty("fallbackModel");
+    expect(runner.modelPolicySnapshot()).toMatchObject({
+      primaryModel: SYSTEM_TEST_AGENT_MODEL,
+      activeModel: SYSTEM_TEST_AGENT_MODEL,
+      fallbackModel: null,
     });
   });
 
@@ -327,6 +344,63 @@ describe("HeadlessRunner", () => {
     expect(mocks.rpc.call).toHaveBeenNthCalledWith(1, "main", "runtime.createContext", [{}]);
     expect(mocks.rpc.call).toHaveBeenNthCalledWith(2, "main", "runtime.destroyContext", [
       { contextId: "ctx-fixture", recursive: true },
+    ]);
+  });
+
+  it("does not reserve or seed a basename for a task-created repository scope", async () => {
+    const runner = new HeadlessRunner("ctx-test").forTest("panel-create", {
+      workspaceRepoFixture: CREATED_PANEL_WORKSPACE_REPO_FIXTURE,
+    });
+    mocks.rpc.call
+      .mockResolvedValueOnce({ contextId: "ctx-created" })
+      .mockResolvedValueOnce(undefined);
+    mocks.vcs.status
+      .mockResolvedValueOnce({
+        contextId: "ctx-created",
+        committed: { kind: "event", eventId: "event:main" },
+        workingHead: { kind: "event", eventId: "event:main" },
+        clean: true,
+        mainEventId: "event:main",
+        mainRelation: "at",
+        workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      })
+      .mockResolvedValueOnce({
+        contextId: "ctx-created",
+        committed: { kind: "event", eventId: "event:main" },
+        workingHead: { kind: "event", eventId: "event:main" },
+        clean: true,
+        mainEventId: "event:main",
+        mainRelation: "at",
+        workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      });
+
+    const state = await runner.prepareWorkspaceRepoFixture();
+    await runner.spawn();
+
+    expect(runner.workspaceRepoName).toBeNull();
+    expect(state).toMatchObject({
+      kind: "created-repository",
+      section: "panels",
+      repoName: null,
+      repositoryId: null,
+      repoPath: null,
+    });
+    expect(mocks.vcs.importSnapshot).not.toHaveBeenCalled();
+    const config = mocks.createWithAgent.mock.calls[0]![0] as {
+      contextId?: string;
+      extraConfig: Record<string, unknown>;
+    };
+    expect(config.contextId).toBe("ctx-created");
+    expect(config.extraConfig["systemPrompt"]).toContain(
+      'owns exactly one repository that it creates under "panels/"'
+    );
+    expect(config.extraConfig["systemPrompt"]).not.toContain("system-test-panel-create-");
+
+    await expect(runner.cleanupWorkspaceRepoFixture(state)).rejects.toThrow(
+      "expected exactly one task-created repository in panels/, found 0"
+    );
+    expect(mocks.rpc.call).toHaveBeenLastCalledWith("main", "runtime.destroyContext", [
+      { contextId: "ctx-created", recursive: true },
     ]);
   });
 

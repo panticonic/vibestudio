@@ -46,6 +46,10 @@ describe("reduced VCS agentic catalog", () => {
       expect(test.prompt).not.toContain("outcome");
       expect(test.prompt).not.toContain("atom");
     }
+    for (const test of vcsAdvancedTests) {
+      expect(test.prompt).not.toMatch(/\bVCS_[A-Z_]+\b/u);
+      expect(test.prompt).not.toMatch(/\b(?:restored|original|counteraction|refusal|recovered):/u);
+    }
   });
 
   it("requires explicit move/copy tools plus a semantic adjacency walk", () => {
@@ -93,7 +97,7 @@ describe("reduced VCS agentic catalog", () => {
         {
           adjacency: [
             {
-              kind: "copies-content",
+              kind: "authored-copy-source",
               from: { kind: "change", changeId: "change:copy" },
               to: { kind: "file", ...copySource },
             },
@@ -128,8 +132,7 @@ describe("reduced VCS agentic catalog", () => {
         }
       ),
     ];
-    const final =
-      "VCS_TRANSFER_OK moved:same-identity copied:new-identity ancestry:walkable work-units:2";
+    const final = "The relocated file retained its identity; the duplicate has linked ancestry.";
     expect(test.validate(execution(final, calls))).toEqual({ passed: true, reason: undefined });
     expect(test.validate(execution(final, calls.slice(1))).passed).toBe(false);
 
@@ -143,24 +146,95 @@ describe("reduced VCS agentic catalog", () => {
 
   it("accepts a structured stale-basis refusal followed by a new command", () => {
     const test = vcsAdvancedTests.find(({ name }) => name === "vcs-stale-basis-recovery")!;
+    const beforeStale = {
+      contextId: "context:test",
+      committed: { kind: "event", eventId: "event:base" },
+      workingHead: { kind: "application", applicationId: "application:advanced" },
+      clean: false,
+      workingCounts: { applications: 2, workUnits: 2, changes: 2 },
+    };
+    const recoveredHead = { kind: "application", applicationId: "application:recovered" };
     const result = execution(
-      "VCS_STALE_OK refusal:RevisionChanged partial:none commands:distinct recovered:true",
+      "The stale attempt changed nothing, and the intended update succeeded from a fresh view.",
       [
         invocation(
           "recover",
           "eval",
           "await vcs.edit({ ...request, expectedWorkingHead: fresh, commandId: newCommand });",
           {
-            refusal: { code: "RevisionChanged" },
-            partialEffect: "none",
-            recovered: true,
-            oldCommand: "command:old",
-            newCommand: "command:new",
+            staleAttempt: {
+              commandId: "command:stale",
+              error: { code: "RevisionChanged" },
+            },
+            statusAfterAdvance: beforeStale,
+            statusAfterStale: structuredClone(beforeStale),
+            retry: {
+              commandId: "command:recovered",
+              contextId: "context:test",
+              workUnitId: "work:recovered",
+              applicationId: "application:recovered",
+              changeCount: 1,
+              changeIds: ["change:recovered"],
+              incorporatedChangeCount: 0,
+              incorporatedChangeIds: [],
+              decisionIds: [],
+              workingHead: recoveredHead,
+            },
+            statusAfterRetry: {
+              ...beforeStale,
+              workingHead: recoveredHead,
+              workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+            },
           }
         ),
       ]
     );
     expect(test.validate(result)).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("proves an identical uncertain command retry from canonical results", () => {
+    const test = vcsAdvancedTests.find(({ name }) => name === "vcs-command-idempotency")!;
+    const mutation = {
+      commandId: "command:one",
+      contextId: "context:test",
+      workUnitId: "work:one",
+      applicationId: "application:one",
+      changeCount: 1,
+      changeIds: ["change:one"],
+      incorporatedChangeCount: 0,
+      incorporatedChangeIds: [],
+      decisionIds: [],
+      workingHead: { kind: "application", applicationId: "application:one" },
+    };
+    const proof = {
+      first: mutation,
+      retry: structuredClone(mutation),
+      status: {
+        contextId: "context:test",
+        workingHead: { kind: "application", applicationId: "application:one" },
+        workingCounts: { applications: 1, workUnits: 1, changes: 1 },
+      },
+    };
+    const call = (returnValue: typeof proof) =>
+      invocation(
+        "idempotency",
+        "eval",
+        "const first = await vcs.edit(request); const retry = await vcs.edit(request);",
+        { details: { returnValue } }
+      );
+    const final = "The uncertain retry returned the same result and created no duplicate history.";
+
+    expect(test.validate(execution(final, [call(proof)]))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+
+    const duplicate = structuredClone(proof);
+    duplicate.retry.applicationId = "application:duplicate";
+    duplicate.retry.workingHead.applicationId = "application:duplicate";
+    duplicate.status.workingCounts = { applications: 2, workUnits: 2, changes: 2 };
+    expect(test.validate(execution(final, [call(duplicate)])).passed).toBe(false);
+    expect(test.validate(execution("", [call(proof)])).passed).toBe(false);
   });
 
   it("joins revert to its exact counteracted change and restored final content", () => {
@@ -260,8 +334,7 @@ describe("reduced VCS agentic catalog", () => {
       ),
     ];
     const final =
-      "VCS_REVERT_OK restored:true original:change:original " +
-      "counteraction:change:counteraction history:preserved";
+      "The file is restored and both the original edit and its reversal remain in history.";
     expect(test.validate(execution(final, calls))).toEqual({ passed: true, reason: undefined });
 
     const arbitrary = structuredClone(calls);
@@ -287,9 +360,9 @@ describe("reduced VCS agentic catalog", () => {
           {
             start: 0,
             end: 12,
-            changeId: "change:origin",
-            workUnitId: "work-unit:origin",
-            commandId: "command:origin",
+            change: { kind: "change", changeId: "change:origin" },
+            workUnit: { kind: "work-unit", workUnitId: "work-unit:origin" },
+            command: { kind: "command", commandId: "command:origin" },
             path: [],
             stop: "authored",
           },
@@ -403,12 +476,12 @@ describe("reduced VCS agentic catalog", () => {
       ],
     };
     const final =
-      "VCS_CAUSALITY_OK untouched:original command:command:origin invocation:invocation:causal turn:turn:causal message:exact sender:exact request:walkable intent:observable-private blame:exact edges:walkable";
+      "The untouched content traces to the recorded user request; private reasoning is not evidence.";
     const valid = execution(final, [
       invocation(
         "causality",
         "eval",
-        "await vcs.blame(input); await vcs.neighbors(walk); await vcs.inspect(invocation);",
+        "await vcs.edit(change); await vcs.commit(commit); await vcs.push(push); await vcs.blame(input); await vcs.neighbors(walk); await vcs.inspect(invocation);",
         resultValue
       ),
     ]);
@@ -422,7 +495,7 @@ describe("reduced VCS agentic catalog", () => {
           invocation(
             "causality-mismatch",
             "eval",
-            "await vcs.blame(input); await vcs.neighbors(walk); await vcs.inspect(invocation);",
+            "await vcs.edit(change); await vcs.commit(commit); await vcs.push(push); await vcs.blame(input); await vcs.neighbors(walk); await vcs.inspect(invocation);",
             mismatched
           ),
         ])
@@ -439,7 +512,7 @@ describe("reduced VCS agentic catalog", () => {
           invocation(
             "causality-wrong-prompt",
             "eval",
-            "await vcs.blame(input); await vcs.neighbors(walk); await vcs.inspect(invocation);",
+            "await vcs.edit(change); await vcs.commit(commit); await vcs.push(push); await vcs.blame(input); await vcs.neighbors(walk); await vcs.inspect(invocation);",
             unrelatedPrompt
           ),
         ])
@@ -450,7 +523,7 @@ describe("reduced VCS agentic catalog", () => {
   it("joins imported blame through its ordinary change, import work, and command", () => {
     const test = vcsAdvancedTests.find(({ name }) => name === "vcs-honest-import-boundary")!;
     expect(test.prompt).toBe(
-      "Who changed an untouched line in the disposable project, and what can we actually establish about why it is here? Finish with VCS_IMPORT_BOUNDARY_OK."
+      "Who changed an untouched line in the disposable project, and what can we actually establish about why it is here?"
     );
     expect(test.prompt).not.toMatch(
       /pre-import|unknown|source URI|revision|digest|work unit|command|blame|inspect|neighbors/iu
@@ -469,9 +542,9 @@ describe("reduced VCS agentic catalog", () => {
           {
             start: 0,
             end: 8,
-            changeId: "change:import",
-            workUnitId: "work:import",
-            commandId: "command:import",
+            change: { kind: "change", changeId: "change:import" },
+            workUnit: { kind: "work-unit", workUnitId: "work:import" },
+            command: { kind: "command", commandId: "command:import" },
             path: [],
             stop: "import-boundary",
           },
@@ -513,7 +586,8 @@ describe("reduced VCS agentic catalog", () => {
         },
       ],
     };
-    const final = `VCS_IMPORT_BOUNDARY_OK pre-import:unknown intent:${intentSummary} source:${snapshot.sourceUri} revision:${snapshot.snapshotRevision} digest:${snapshot.snapshotDigest}`;
+    const final =
+      "The line enters our knowledge at the imported snapshot; earlier authorship is not recorded here.";
     const evidenceCalls = (value: typeof evidence) => [
       invocation("boundary-blame", "vcs", { operation: "blame" }, value.blame),
       ...value.inspections.map((inspection, index) =>
@@ -531,7 +605,7 @@ describe("reduced VCS agentic catalog", () => {
     pseudoBarrier.inspections[0]!.node.value.kind = "import-barrier";
     expect(test.validate(execution(final, evidenceCalls(pseudoBarrier))).passed).toBe(false);
 
-    const fakeProse = `VCS_IMPORT_BOUNDARY_OK pre-import:unknown source:${snapshot.sourceUri} revision:${snapshot.snapshotRevision} digest:${snapshot.snapshotDigest}`;
+    const fakeProse = "The line was imported, but this answer has no canonical supporting walk.";
     expect(
       test.validate(
         execution(fakeProse, [
@@ -551,11 +625,9 @@ describe("reduced VCS agentic catalog", () => {
       ).passed
     ).toBe(false);
 
-    const missingIntent = `VCS_IMPORT_BOUNDARY_OK pre-import:unknown source:${snapshot.sourceUri} revision:${snapshot.snapshotRevision} digest:${snapshot.snapshotDigest}`;
-    expect(test.validate(execution(missingIntent, evidenceCalls(evidence))).passed).toBe(false);
-
-    const wrongFinal = `VCS_IMPORT_BOUNDARY_OK pre-import:unknown intent:${intentSummary} source:${snapshot.sourceUri} revision:${snapshot.snapshotRevision} digest:snapshot:${"b".repeat(64)}`;
-    expect(test.validate(execution(wrongFinal, evidenceCalls(evidence))).passed).toBe(false);
+    expect(
+      test.validate(execution("A concise explanation in ordinary prose.", evidenceCalls(evidence)))
+    ).toEqual({ passed: true, reason: undefined });
   });
 
   it("requires native intent and untouched import evidence to remain two exact joined origins", () => {
@@ -571,18 +643,18 @@ describe("reduced VCS agentic catalog", () => {
     const nativeSpan = {
       start: 0,
       end: 8,
-      changeId: "change:native",
-      workUnitId: "work:native",
-      commandId: "command:native",
+      change: { kind: "change", changeId: "change:native" },
+      workUnit: { kind: "work-unit", workUnitId: "work:native" },
+      command: { kind: "command", commandId: "command:native" },
       path: [],
       stop: "authored",
     };
     const importSpan = {
       start: 9,
       end: 18,
-      changeId: "change:import",
-      workUnitId: "work:import",
-      commandId: "command:import",
+      change: { kind: "change", changeId: "change:import" },
+      workUnit: { kind: "work-unit", workUnitId: "work:import" },
+      command: { kind: "command", commandId: "command:import" },
       path: [],
       stop: "import-boundary",
     };
@@ -756,8 +828,7 @@ describe("reduced VCS agentic catalog", () => {
       ),
     ];
     const final =
-      `VCS_MIXED_ORIGIN_OK edited:native untouched:import-boundary pre-import:unknown ` +
-      `intent:${importIntent} source:${snapshot.sourceUri} revision:${snapshot.snapshotRevision} digest:${snapshot.snapshotDigest}`;
+      "The edited line has native request history; the neighboring line is only known from the imported snapshot onward.";
     expect(test.validate(execution(final, calls))).toEqual({ passed: true, reason: undefined });
 
     const unjoinedNative = structuredClone(calls);

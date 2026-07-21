@@ -120,6 +120,7 @@ file-loaded meaning. For substantial multi-file work, prefer a real entry file.
 | `sourcePath` | string                                           | —       | Virtual context-relative filename for inline code and relative imports                          |
 | `syntax`     | `"javascript" \| "typescript" \| "jsx" \| "tsx"` | `"tsx"` | Source syntax                                                                                   |
 | `imports`    | `Record<string, string>`                         | —       | Packages to build on-demand (workspace or npm)                                                  |
+| `timeoutMs`  | positive integer                                 | —       | Optional wall-clock deadline in milliseconds; omitted means no deadline                          |
 
 ## Injected Variables
 
@@ -908,7 +909,42 @@ eval({ code: `
 
 ## Timeouts
 
-Eval runs are not bounded by a hidden wall-clock timeout; they finish on
-completion, error, or explicit interruption. Split long work into shorter runs
-and carry state in `scope` or `db` (both persisted in the EvalDO between runs,
-across turns, and across panel disconnects).
+Eval runs have no implicit wall-clock deadline. Pass a positive integer
+`timeoutMs` when one call must finish within a known bound, especially for a
+probe that may stall. At an explicit deadline, async work is cancelled normally;
+synchronous authored loops and functions are stopped by cooperative sandbox
+checkpoints and reported as a visible eval error rather than hanging the agent
+runtime. Split long work into shorter runs when useful and carry state in
+`scope` or `db` (both persist in the EvalDO between runs, across turns, and
+across panel disconnects).
+
+Match the failure mechanism to the task. For an ordinary error/recovery check,
+throw the intended error in one eval and follow it with a successful eval. Use
+`timeoutMs` only when the task actually calls for a deadline or potentially
+non-settling work; a timeout is not a generic substitute for a thrown error.
+
+For a timeout/recovery check, give non-settling asynchronous work a short
+explicit deadline, observe the failed tool result, and then make an ordinary
+successful eval call. The follow-up proves the timed-out invocation settled and
+the sandbox remains usable:
+
+```ts
+eval({
+  timeoutMs: 250,
+  code: `await new Promise(() => {});`,
+});
+// Expected tool error: eval timed out after 250ms
+
+eval({ code: `return "recovered";` });
+```
+
+Use a pending async operation for this probe, not an infinite synchronous loop:
+the async form exercises normal cancellation without deliberately starving the
+sandbox process.
+
+With an explicit deadline, eval also adds cooperative checks to loops and
+function entries compiled for that call, so ordinary synchronous loops and
+recursion settle inside their own sandbox. Function objects retained from an
+earlier unbounded eval and non-cooperative native/built-in calls cannot be
+retroactively instrumented; the host process watchdog remains the final safety
+boundary for those cases.

@@ -7,47 +7,63 @@ import { buildTests } from "./build.js";
 const npmTest = buildTests.find((test) => test.name === "build-npm-package")!;
 
 describe("build npm package validation", () => {
-  it("rejects a success marker when the npm eval failed", () => {
+  it("rejects confident prose when the npm eval failed", () => {
     const result = execution([
       evalInvocation("error", true),
-      finalAgentMessage("The npm install failed.\n\nBUILD_NPM_OK"),
+      finalAgentMessage("The dependency loaded correctly and returned a padded value."),
     ]);
 
-    expect(npmTest.validate(result)).toEqual({
+    expect(npmTest.validate(result)).toMatchObject({
       passed: false,
-      reason: "Expected a successful eval invocation with an npm import-map entry",
+      reason: "Unexpected failed tool calls: eval",
     });
   });
 
-  it("accepts a successful npm import eval", () => {
+  it("accepts a successful npm import and observable result with natural prose", () => {
     const result = execution([
-      evalInvocation("complete", false),
-      finalAgentMessage("left-pad executed successfully.\n\nBUILD_NPM_OK"),
+      evalInvocation("complete", false, "007"),
+      finalAgentMessage("The package loaded and padded 7 to three characters: 007."),
     ]);
 
     expect(npmTest.validate(result)).toEqual({ passed: true, reason: undefined });
   });
 
-  it("allows an initial tool failure when a later npm eval succeeds", () => {
+  it("rejects a recovered result when the trajectory still contains a failed tool call", () => {
     const result = execution([
       evalInvocation("error", true),
-      evalInvocation("complete", false),
-      finalAgentMessage("Recovered and executed left-pad.\n\nBUILD_NPM_OK"),
+      evalInvocation("complete", false, "007"),
+      finalAgentMessage("A later attempt worked and produced 007."),
     ]);
 
-    expect(npmTest.validate(result)).toEqual({ passed: true, reason: undefined });
+    expect(npmTest.validate(result)).toMatchObject({ passed: false });
+  });
+
+  it("rejects success prose without a canonical returned value", () => {
+    const result = execution([
+      evalInvocation("complete", false),
+      finalAgentMessage("The package definitely worked."),
+    ]);
+
+    expect(npmTest.validate(result)).toMatchObject({
+      passed: false,
+      reason: "The npm import produced no observable result",
+    });
   });
 });
 
-function evalInvocation(status: "complete" | "error", isError: boolean): ChatMessage {
+function evalInvocation(
+  status: "complete" | "error",
+  isError: boolean,
+  returnValue?: unknown
+): ChatMessage {
   return {
-    id: `eval-${status}-${isError}`,
+    id: `eval-${status}-${isError}-${String(returnValue)}`,
     kind: "message",
     senderId: "agent",
     complete: true,
     contentType: "invocation",
     content: JSON.stringify({
-      id: `call-eval-${status}-${isError}`,
+      id: `call-eval-${status}-${isError}-${String(returnValue)}`,
       name: "eval",
       arguments: {
         imports: { "left-pad": "npm:1.3.0" },
@@ -57,6 +73,7 @@ function evalInvocation(status: "complete" | "error", isError: boolean): ChatMes
         status,
         terminalOutcome: isError ? "tool_error" : "success",
         isError,
+        result: returnValue === undefined ? undefined : { details: { returnValue } },
       },
     }),
   };

@@ -45,6 +45,8 @@ import {
   type NewsChannelMode,
   type NewsChannelState,
 } from "./types.js";
+
+const NEWS_AGENT_SCHEMA_BASELINE = 8;
 import { NewsSyncEngine } from "./sync-engine.js";
 import {
   NEWS_MESSAGE_TYPES,
@@ -103,11 +105,16 @@ function nextBriefingRunAt(now: number, intervalMs: number, atMinutes?: number):
 }
 
 export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
-  // News tables are versioned by drop-and-recreate (dev mode: articles
-  // re-ingest from feeds; configuration is cheap to redo). Bump when the
-  // news_* schema changes (channel-mode, article source, feedback signals,
-  // sources-read, notify, saved, briefing-paused, and triage columns).
-  static override schemaVersion = AgentWorkerBase.schemaVersion + 7;
+  // Version 8 is the first supported production shape. Earlier experimental
+  // layouts have no proven lossless translation and are rejected intact.
+  static override schemaVersion = NEWS_AGENT_SCHEMA_BASELINE;
+
+  protected override schemaProductionBaseline() {
+    return {
+      version: NEWS_AGENT_SCHEMA_BASELINE,
+      name: "news-agent-v8",
+    } as const;
+  }
 
   private readonly syncEngine: NewsSyncEngine;
   private readonly scheduler: RecurringScheduler;
@@ -409,7 +416,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
 
   /** Seed a forked deep-dive channel's opening analyst turn. The panel calls
    *  this on the freshly-cloned agent after fork(); idempotent via steeringId. */
-  @rpc({ callers: ["panel"] })
+  @rpc({ principals: ["code"], sensitivity: "write" })
   async startDeepDive(
     channelId: string,
     args: Record<string, unknown>
@@ -475,7 +482,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   }
 
   /** Entry point for workspace-level `recurring:` jobs (vibestudio.yml). */
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   async runScheduledJob(args: unknown): Promise<{ ok: boolean }> {
     const input = record(args);
     const job = stringArg(input, "job") ?? "briefing";

@@ -450,7 +450,8 @@ describe("GmailAgentWorker", () => {
     });
   });
 
-  it("owns a schema epoch beyond the base vessel shape", () => {
+  it("owns the explicit v7 production schema baseline", () => {
+    expect(GmailAgentWorker.schemaVersion).toBe(7);
     expect(GmailAgentWorker.schemaVersion).toBeGreaterThan(AgentWorkerBase.schemaVersion);
   });
 

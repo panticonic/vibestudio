@@ -1,55 +1,289 @@
-import type { TestCase } from "../types.js";
-import { completedToolNames, finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "../types.js";
+import { getToolCalls } from "./_helpers.js";
+import {
+  completedScenarioEvidence,
+  hasNonEmptyStructuredResult,
+  invocationReturnValue,
+} from "./_scenario-evidence.js";
 
-function checked(result: Parameters<typeof finalMessageHasAll>[0], markers: string[]) {
-  const msg = finalMessageHasAll(result, markers);
-  if (!msg.passed) return msg;
-  return noIncompleteInvocations(result);
+type ToolCall = ReturnType<typeof getToolCalls>[number];
+
+function isFailure(call: ToolCall): boolean {
+  return (
+    call.execution?.isError === true ||
+    call.execution?.status === "error" ||
+    call.execution?.status === "failed"
+  );
+}
+
+function errorText(call: ToolCall): string {
+  return JSON.stringify({
+    status: call.execution?.status,
+    outcome: call.execution?.terminalOutcome,
+    result: call.execution?.result,
+    error: call.execution?.error,
+  });
+}
+
+function recoverySequence(
+  result: TestExecutionResult,
+  expected: (call: ToolCall) => boolean,
+  label: string,
+  sameTool = false
+) {
+  const base = completedScenarioEvidence(result, [], { allowFailed: expected });
+  if (!base.passed) return base;
+  const calls = getToolCalls(result);
+  const failures = calls
+    .map((call, index) => ({ call, index }))
+    .filter(({ call }) => isFailure(call) && expected(call));
+  if (failures.length !== 1) {
+    return {
+      passed: false,
+      reason: `Expected exactly one ${label} failure; observed ${failures.length}`,
+    };
+  }
+  const failed = failures[0]!;
+  const recovered = calls.slice(failed.index + 1).some((call) => {
+    if (
+      (sameTool && call.name !== failed.call.name) ||
+      call.execution?.status !== "complete" ||
+      call.execution.isError === true
+    ) {
+      return false;
+    }
+    if (call.name === "eval") {
+      const returned = invocationReturnValue(call);
+      return returned.present && hasNonEmptyStructuredResult([returned.value]);
+    }
+    return call.execution?.result !== undefined;
+  });
+  return recovered
+    ? { passed: true, reason: undefined }
+    : { passed: false, reason: `The ${label} failure had no observable later recovery` };
+}
+
+function thrownEval(call: ToolCall): boolean {
+  return (
+    call.name === "eval" &&
+    isFailure(call) &&
+    /throw/iu.test(String(call.arguments?.["code"] ?? "")) &&
+    /intentional|deliberate|recovery|thrown/iu.test(errorText(call))
+  );
+}
+
+function validateHugeReturn(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result);
+  if (!base.passed) return base;
+  const bounded = base.evidence.calls.some((call) => {
+    if (
+      call.name !== "eval" ||
+      call.execution?.status !== "complete" ||
+      call.execution.isError === true
+    ) {
+      return false;
+    }
+    const code = String(call.arguments?.["code"] ?? "");
+    const returned = invocationReturnValue(call);
+    if (!/Array|repeat|fill|map/iu.test(code) || !returned.present) return false;
+    try {
+      const original = JSON.stringify(returned.value);
+      const executionResult = call.execution?.result;
+      if (
+        original.length <= 100_000 ||
+        !executionResult ||
+        typeof executionResult !== "object" ||
+        Array.isArray(executionResult)
+      ) {
+        return false;
+      }
+      const protocolContent = (executionResult as Record<string, unknown>)["protocolContent"];
+      if (!Array.isArray(protocolContent)) return false;
+      const protocolText = protocolContent
+        .filter(
+          (item): item is Record<string, unknown> =>
+            Boolean(item) && typeof item === "object" && !Array.isArray(item)
+        )
+        .map((item) =>
+          item["type"] === "text" && typeof item["text"] === "string" ? item["text"] : ""
+        )
+        .join("\n");
+      return (
+        protocolText.length < original.length &&
+        /truncated/iu.test(protocolText) &&
+        /scope\.\$lastReturn/u.test(protocolText)
+      );
+    } catch {
+      return false;
+    }
+  });
+  return bounded
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason:
+          "No completed eval paired a huge return with bounded protocol output and recovery guidance",
+      };
+}
+
+function timedOutEval(call: ToolCall): boolean {
+  const timeoutMs = call.arguments?.["timeoutMs"];
+  return (
+    call.name === "eval" &&
+    typeof timeoutMs === "number" &&
+    Number.isInteger(timeoutMs) &&
+    timeoutMs > 0 &&
+    isFailure(call) &&
+    errorText(call).toLowerCase().includes(`timed out after ${timeoutMs}ms`)
+  );
+}
+
+function invalidToolArguments(call: ToolCall): boolean {
+  return (
+    ["docs_search", "eval", "vcs"].includes(call.name) &&
+    isFailure(call) &&
+    /invalid|schema validation/iu.test(errorText(call))
+  );
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function orchestrateFollowupTurn(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  const session = await context.runner.spawn();
+  let error: string | undefined;
+  try {
+    await context.sendAndWait(
+      session,
+      "Use a harmless read-only tool to inspect something small and summarize it.",
+      "initial tool-using turn"
+    );
+    await context.sendAndWait(
+      session,
+      "Now give me a fresh one-sentence recap of what you observed.",
+      "follow-up turn"
+    );
+  } catch (cause) {
+    error = formatError(cause);
+  }
+  const execution: TestExecutionResult = {
+    messages: [...session.messages],
+    duration: Date.now() - startedAt,
+    snapshot: session.snapshot(),
+    ...(error ? { error } : {}),
+  };
+  try {
+    await session.close();
+  } catch (cause) {
+    execution.cleanupErrors = [`close: ${formatError(cause)}`];
+  }
+  const cleanupErrors = session
+    .snapshot()
+    .cleanupErrors.map((entry) => `${entry.phase}: ${entry.message}`);
+  if (cleanupErrors.length > 0) {
+    execution.cleanupErrors = [...(execution.cleanupErrors ?? []), ...cleanupErrors];
+  }
+  return execution;
+}
+
+function validateFollowupTurn(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result, []);
+  if (!base.passed) return base;
+  if (result.error || (result.cleanupErrors?.length ?? 0) > 0) {
+    return { passed: false, reason: "The two-turn session or its cleanup failed" };
+  }
+  const userId = result.messages[0]?.senderId;
+  const isVisibleAgentMessage = (index: number) => {
+    const message = result.messages[index];
+    return Boolean(
+      message &&
+      message.senderId !== userId &&
+      message.kind === "message" &&
+      message.complete &&
+      message.contentType !== "invocation" &&
+      message.contentType !== "thinking" &&
+      message.content?.trim()
+    );
+  };
+  const toolIndex = result.messages.findIndex(
+    (message) =>
+      message.contentType === "invocation" &&
+      message.invocation?.execution?.status === "complete" &&
+      message.invocation.execution.isError !== true
+  );
+  const firstAnswer = result.messages.findIndex(
+    (_message, index) => index > toolIndex && isVisibleAgentMessage(index)
+  );
+  const followup = result.messages.findIndex(
+    (message, index) => index > firstAnswer && message.senderId === userId
+  );
+  const secondAnswer = result.messages.findIndex(
+    (_message, index) => index > followup && isVisibleAgentMessage(index)
+  );
+  return toolIndex >= 0 &&
+    firstAnswer > toolIndex &&
+    followup > firstAnswer &&
+    secondAnswer > followup
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason:
+          "The transcript did not prove a tool-backed first answer and a later fresh follow-up answer",
+      };
 }
 
 export const harnessResilienceTests: TestCase[] = [
   {
     name: "eval-thrown-error-then-continues",
-    description: "A failed eval surfaces an error and the same turn can still produce a final response",
+    description:
+      "A failed eval surfaces an error and the same turn can still produce a final response",
     category: "harness-resilience",
-    prompt: "Exercise recovery after an eval failure. Finish with HARNESS_THROW_OK, HARNESS_RECOVER_OK, and final-visible.",
-    expectedToolFailures: [{ name: "eval", errorIncludes: "HARNESS_INTENTIONAL_EVAL_FAILURE" }],
-    validate: (result) => {
-      const completed = completedToolNames(result);
-      if (!completed.has("eval")) {
-        return { passed: false, reason: `Expected at least one completed eval call; completed tools: ${[...completed].join(", ") || "(none)"}` };
-      }
-      return finalMessageHasAll(result, ["HARNESS_THROW_OK", "HARNESS_RECOVER_OK", "final-visible"]);
-    },
+    prompt:
+      "Show that a deliberate sandbox exception is visible and does not prevent a later successful evaluation.",
+    expectedToolFailures: [{ name: "eval" }],
+    validate: (result) => recoverySequence(result, thrownEval, "thrown-eval"),
   },
   {
     name: "eval-huge-return-bounded-terminal",
-    description: "A large eval return is bounded/terminal and does not silently stall the turn",
+    description: "A large eval return is bounded and does not silently stall the turn",
     category: "harness-resilience",
-    prompt: "Exercise a very large eval return. Finish with HUGE_RETURN_OK, bounded-summary, and final-visible.",
-    validate: (result) => checked(result, ["HUGE_RETURN_OK", "bounded-summary", "final-visible"]),
+    prompt:
+      "Check how the sandbox handles a return value far too large for a normal tool response.",
+    validate: validateHugeReturn,
   },
   {
     name: "eval-timeout-error-visible",
-    description: "A deliberately timed eval timeout/error is visible and does not leave a pending tool",
+    description: "An explicitly bounded eval timeout is visible and leaves no pending tool",
     category: "harness-resilience",
-    prompt: "Exercise visible timeout/error recovery. Finish with TIMEOUT_VISIBLE_OK, TIMEOUT_RECOVERY_OK, and no-pending-tool.",
-    expectedToolFailures: [{ name: "eval", errorIncludes: "timeout" }],
-    validate: (result) => checked(result, ["TIMEOUT_VISIBLE_OK", "TIMEOUT_RECOVERY_OK", "no-pending-tool"]),
+    prompt:
+      "Show that an explicitly bounded sandbox run can time out visibly and that the sandbox remains usable afterward.",
+    expectedToolFailures: [{ name: "eval", errorIncludes: "timed out" }],
+    validate: (result) => recoverySequence(result, timedOutEval, "timed-out eval"),
   },
   {
     name: "invalid-tool-args-visible-retry",
-    description: "Tool validation errors are visible and retry succeeds without poisoning the transcript",
+    description:
+      "Tool validation errors are visible and retry succeeds without poisoning the transcript",
     category: "harness-resilience",
-    prompt: "Exercise invalid tool arguments and recovery. Finish with INVALID_ARGS_VISIBLE_OK and INVALID_ARGS_RECOVER_OK.",
-    expectedToolFailures: [{ name: "docs_search", errorIncludes: "invalid" }],
-    validate: (result) => checked(result, ["INVALID_ARGS_VISIBLE_OK", "INVALID_ARGS_RECOVER_OK"]),
+    prompt:
+      "Show that a malformed tool request is visible and a corrected request of the same kind still works.",
+    expectedToolFailures: [
+      { name: "docs_search", errorIncludes: "invalid" },
+      { name: "eval", errorIncludes: "invalid" },
+      { name: "vcs", errorIncludes: "schema validation" },
+    ],
+    validate: (result) => recoverySequence(result, invalidToolArguments, "invalid-argument", true),
   },
   {
     name: "post-tool-followup-turn",
-    description: "A follow-up user-like instruction after tool use still gets a fresh assistant response",
+    description: "A follow-up instruction after tool use still gets a fresh assistant response",
     category: "harness-resilience",
-    prompt: "Exercise a follow-up response after tool use. Finish with FOLLOWUP_BASE_OK and FOLLOWUP_RESPONSE_OK.",
-    validate: (result) => checked(result, ["FOLLOWUP_BASE_OK", "FOLLOWUP_RESPONSE_OK"]),
+    prompt: "Use a harmless read-only tool to inspect something small and summarize it.",
+    orchestrate: orchestrateFollowupTurn,
+    validate: validateFollowupTurn,
   },
 ];

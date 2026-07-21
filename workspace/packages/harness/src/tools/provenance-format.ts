@@ -204,7 +204,7 @@ function provenanceCall(
 ): string {
   const input =
     continuation.kind === "root"
-      ? { root: continuation.root, ...(after ? { after } : {}) }
+      ? { target: continuation.root, ...(after ? { after } : {}) }
       : { target: continuation.target, ...(after ? { after } : {}) };
   return `provenance(${JSON.stringify(input)})`;
 }

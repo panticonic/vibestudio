@@ -59,7 +59,7 @@ export function createCommitTool(
       if (result.event.kind !== "event") throw new Error("commit returned a non-event state");
       const workspaceEventId = result.event.eventId;
       const lines = [
-        `committed workspace event ${workspaceEventId} with ${result.committedApplicationIds.length} application${result.committedApplicationIds.length === 1 ? "" : "s"}.`,
+        `Committed workspace event ${workspaceEventId} locally with ${result.committedApplicationIds.length} application${result.committedApplicationIds.length === 1 ? "" : "s"}. Protected main was not changed; publication is a separate vcs push operation.`,
       ];
 
       return {

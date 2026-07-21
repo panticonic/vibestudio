@@ -12,16 +12,15 @@ import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
-import {
-  DEFAULT_MAX_BYTES,
-  formatSize,
-  truncateHead,
-  type TruncationResult,
-} from "./truncate.js";
+import { DEFAULT_MAX_BYTES, formatSize, truncateHead, type TruncationResult } from "./truncate.js";
 
 const lsSchema = Type.Object({
-  path: Type.Optional(Type.String({ description: "Directory to list (default: current directory)" })),
-  limit: Type.Optional(Type.Number({ description: "Maximum number of entries to return (default: 500)" })),
+  path: Type.Optional(
+    Type.String({ description: "Directory to list (default: current directory)" })
+  ),
+  limit: Type.Optional(
+    Type.Number({ description: "Maximum number of entries to return (default: 500)" })
+  ),
 });
 
 export type LsToolInput = Static<typeof lsSchema>;
@@ -37,11 +36,12 @@ const DEFAULT_LIMIT = 500;
 
 export function createLsTool(
   cwd: string,
-  fs: RuntimeFs,
+  fs: RuntimeFs
 ): AgentTool<typeof lsSchema, LsToolDetails | undefined> {
   return {
     name: "ls",
     label: "ls",
+    executionMode: "parallel",
     description: `List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to ${DEFAULT_LIMIT} entries or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
     parameters: lsSchema,
     execute: async (_toolCallId, { path: rawPath, limit }, signal) => {
@@ -121,7 +121,7 @@ export function createLsTool(
 
       if (entryLimitReached) {
         notices.push(
-          `${effectiveLimit} entries limit reached. Use limit=${effectiveLimit * 2} for more`,
+          `${effectiveLimit} entries limit reached. Use limit=${effectiveLimit * 2} for more`
         );
         details.entryLimitReached = effectiveLimit;
       }

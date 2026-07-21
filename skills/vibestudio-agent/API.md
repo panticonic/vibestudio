@@ -19,7 +19,7 @@ is actually live. This is the selected workspace child's API. Server-wide
 workspace, device, and account mutation commands run over the client's separate
 stable hub session and intentionally do not appear as child services here.
 
-Some internal services (e.g. workerd) are not shell-callable and do not appear
+Some internal services (e.g. workerd) do not admit paired user authority and do not appear
 here. Create workers and DOs via `runtime.createEntity` (`kind: "worker"` /
 `"do"`), then dispatch to them with `--target` relay calls.
 
@@ -27,7 +27,7 @@ here. Create workers and DOs via `runtime.createEntity` (`kind: "worker"` /
 
 Read-only live account profiles for this workspace
 
-Allowed callers: `server`, `shell`, `app`, `panel`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -40,7 +40,7 @@ Allowed callers: `server`, `shell`, `app`, `panel`
 
 Audit log query access
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
+Authority principals: `code`, `entity`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -50,7 +50,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 Gateway authentication bootstrap routes
 
-Allowed callers: `server`, `shell`
+Authority principals: `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -61,7 +61,7 @@ Allowed callers: `server`, `shell`
 
 Per-workspace content-addressable blob storage
 
-Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -87,7 +87,7 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 
 Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)
 
-Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -110,7 +110,7 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
 
 URL-bound userland credential storage and egress
 
-Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -135,7 +135,7 @@ Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
 
 Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).
 
-Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `server`, `shell`, `agent`
+Authority principals: `code`, `entity`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -150,7 +150,7 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `server`, `shell`,
 
 Owner-scoped sandbox eval backed by a per-owner internal EvalDO
 
-Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `shell`, `server`, `agent`
+Authority principals: `code`, `entity`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -162,11 +162,21 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `shell`, `server`,
 | `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
 | `eval.cancel` | Cancel a single in-flight or pending run by runId (CAS to cancelled, then abort its outbound calls so a run wedged on an rpc.call unwinds). Other runs and the persistent scope are untouched. A no-op if the run is already terminal. |
 
+## `events`
+
+Event subscriptions
+
+Authority principals: `code`, `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `events.watch` | Open a response stream for named events. The response body owns the subscription and cancelling it is the only unsubscribe operation. |
+
 ## `externalOpen`
 
 Approval-gated system browser opens
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -176,7 +186,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 Filesystem operations. Context-bound callers are sandboxed to their context folder; the semantic workspace records managed reads and mutations before host projection, with structured move/copy preserving explicit provenance. Scratch-only adapters may access context-local paths outside reserved workspace source roots and fail closed for managed paths. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.
 
-Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`, `agent`
+Authority principals: `code`, `entity`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -214,7 +224,7 @@ Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`,
 
 Loopback panel-asset fetch bridge (remote shells)
 
-Allowed callers: `shell`, `app`, `panel`, `worker`, `do`
+Authority principals: `code`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -224,7 +234,7 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`
 
 External Git interop: declared remotes and remote project imports
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -251,7 +261,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 Host governance log — approval provenance + membership events (read-only)
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -261,7 +271,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 Host-process graceful shutdown for attached shells
 
-Allowed callers: `shell`, `server`
+Authority principals: `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -271,7 +281,7 @@ Allowed callers: `shell`, `server`
 
 Read-side of the context projector: `targets` returns a context's per-repo content-addressed states, `objects` streams the CAS tree content for a state in size-bounded pages. Powers `vibestudio context mirror`.
 
-Allowed callers: `shell`, `agent`, `do`, `server`, `panel`
+Authority principals: `code`, `entity`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -282,7 +292,7 @@ Allowed callers: `shell`, `agent`, `do`, `server`, `panel`
 
 Push notifications to the shell chrome area
 
-Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -294,7 +304,7 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 
 Approval-gated server CDP access for panel targets
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `agent`
+Authority principals: `code`, `entity`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -314,7 +324,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `agent`
 
 Forward panel console errors and lifecycle events into unit diagnostics
 
-Allowed callers: `shell`, `server`
+Authority principals: `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -324,7 +334,7 @@ Allowed callers: `shell`, `server`
 
 Panel runtime lease coordination
 
-Allowed callers: `shell`, `app`, `server`
+Authority principals: `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -339,7 +349,7 @@ Allowed callers: `shell`, `app`, `server`
 
 Server-mediated panel tree handles and control operations
 
-Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -352,7 +362,7 @@ Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
 | `panelTree.focus` | Focus a panel, loading its runtime first if it is not already loaded. |
 | `panelTree.getRuntimeLease` | Return the current runtime lease held on a panel (which host/connection owns it), or null if unleased. |
 | `panelTree.getStateArgs` | Return the validated state-args currently bound to a panel. |
-| `panelTree.setStateArgs` | Merge a patch into a panel's state-args (null removes a key); returns the full resulting validated state-args. |
+| `panelTree.setStateArgs` | Merge a patch into a panel's ordinary application state (null removes a key); returns the full resulting validated state. contextId is reserved for the panel's host-bound workspace branch and must be changed through explicit panel navigation, never state args. |
 | `panelTree.reload` | Reload a panel's view in place, keeping its current snapshot. |
 | `panelTree.close` | Close a panel, removing it (and its subtree) from the tree. |
 | `panelTree.archive` | Archive a panel, removing it from the active tree while preserving its history. |
@@ -367,7 +377,7 @@ Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
 | `panelTree.updatePanelState` | Update a panel's live navigation state (url, page title, loading/back/forward flags) from the rendering surface. |
 | `panelTree.snapshot` | Return a readable snapshot of one loaded panel, using its agent snapshot when available and accessibility-tree fallback otherwise. |
 | `panelTree.callAgent` | Invoke a panel's in-process agent method (e.g. _agent.snapshot/_agent.tree/_agent.setMode) with optional arguments. |
-| `panelTree.metadata` | Return the full Panel metadata for a panel id, or null if it does not exist. |
+| `panelTree.metadata` | Return lightweight runtime-handle metadata for a panel id, or null if it does not exist. |
 | `panelTree.getCollapsedIds` | Return the ids of panels that are currently collapsed in the tree UI. |
 | `panelTree.setCollapsed` | Set whether a panel is collapsed in the tree UI. |
 | `panelTree.expandIds` | Expand (un-collapse) a set of panels in the tree UI. |
@@ -376,7 +386,7 @@ Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
 
 Trusted review and revocation of durable permission grants
 
-Allowed callers: `shell`, `app`, `panel`, `server`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -387,7 +397,7 @@ Allowed callers: `shell`, `app`, `panel`, `server`
 
 Account-scoped proxy to phone capabilities on connected desktop clients
 
-Allowed callers: `agent`, `panel`, `app`, `shell`
+Authority principals: `code`, `entity`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -400,7 +410,7 @@ Allowed callers: `agent`, `panel`, `app`, `shell`
 
 Active shell/panel ownership
 
-Allowed callers: `server`, `shell`
+Authority principals: `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -412,7 +422,7 @@ Allowed callers: `server`, `shell`
 
 Runtime entity creation and retirement
 
-Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -431,7 +441,7 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
 
 Server host log inspection and live tailing
 
-Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`, `agent`
+Authority principals: `code`, `entity`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -439,11 +449,21 @@ Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`,
 | `serverLog.tail` | Return the last N server host log records (default 500) in ascending seq order — the starting snapshot for a live tail; then subscribe to the server-log:append event and dedupe by seq. |
 | `serverLog.stats` | Aggregate stats over the captured server host logs: buffer occupancy, total captured this boot, counts by level, and the top subsystem tags. |
 
+## `settings`
+
+Workspace settings and model roles
+
+Authority principals: `code`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `settings.getData` | Return the resolved settings snapshot, including the central-config model-role map (role → 'provider:model' string). |
+
 ## `shellApproval`
 
 Shell-owned consent approval queue
 
-Allowed callers: `shell`, `app`, `server`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -462,17 +482,17 @@ Allowed callers: `shell`, `app`, `server`
 
 Tracks active shell clients for push notification delivery decisions
 
-Allowed callers: `shell`, `app`, `server`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `shellPresence.heartbeat` |  |
+| `shellPresence.heartbeat` | Mark the calling shell active and return the current active-shell count. |
 
 ## `vcs`
 
 One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`, `agent`
+Authority principals: `code`, `entity`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -499,7 +519,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`,
 
 Generic public webhook ingress subscriptions
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -512,7 +532,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 Approval-gated workerd V8 inspector access for profiling workers and DOs
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -523,7 +543,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`
 
 Forward DO console output to the server terminal and the workspace-unit log stream
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -533,12 +553,12 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 Worker discovery and workspace service resolution
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
 | `workers.listSources` | List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers) |
-| `workers.listServices` | List workspace-authored services declared in the manifest |
+| `workers.listServices` | List product-owned and workspace-authored services available here |
 | `workers.resolveService` | Resolve a workspace service by name or protocol |
 | `workers.resolveDurableObject` | Resolve a Durable Object RPC target by source/class/key |
 
@@ -546,7 +566,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 Current-workspace configuration, units, and lifecycle
 
-Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -590,7 +610,7 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 
 Workspace slot/entity state (WorkspaceDO).
 
-Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -600,10 +620,8 @@ Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
 | `workspace-state.entity.resolveActive` | Resolve a single active entity record by id. |
 | `workspace-state.slot.resolveByEntity` | Resolve the OPEN slot id whose current entity is the given runtime-entity (nav) id, or null. Durable nav→slot mapping used to nest launches under the owning panel's tree slot. |
 | `workspace-state.slot.create` | Create a new slot row. |
-| `workspace-state.slot.appendHistory` | Append a history entry to a slot. |
-| `workspace-state.slot.setCurrent` | Move a slot's current pointer to an existing history entry. |
+| `workspace-state.slot.commitPreparedNavigation` | Atomically append, replace, or select history and swap current to a prepared panel incarnation. |
 | `workspace-state.slot.updateCurrentStateArgs` | Mutate the stateArgs for a slot's current history entry. |
-| `workspace-state.slot.replaceHistory` | Replace a slot's history with the given entries and cursor. |
 | `workspace-state.slot.setParent` | Reparent a slot. |
 | `workspace-state.slot.setPosition` | Update a slot's position rank. |
 | `workspace-state.slot.move` | Atomically update a slot's parent and position. |
@@ -618,7 +636,7 @@ Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
 
 Who is connected to this workspace (WP8 §4 host presence — session-derived, zero channel coupling)
 
-Allowed callers: `server`, `shell`, `app`, `panel`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|

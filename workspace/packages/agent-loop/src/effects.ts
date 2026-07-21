@@ -53,6 +53,10 @@ export interface LocalToolEffect extends EffectDescriptorBase {
   kind: "local_tool";
   invocationId: string;
   turnId: string;
+  /** Source order of invocation.started within the durable trajectory. */
+  invocationSeq: number;
+  /** Per-tool ordering contract captured when the invocation was journaled. */
+  executionMode: "sequential" | "parallel";
   tool: string;
   args: unknown;
 }
@@ -140,7 +144,14 @@ export function invocationEffect(
   };
   const transport = invocation.transport;
   if (transport.kind === "local") {
-    return { ...base, kind: "local_tool", tool: invocation.name, args: invocation.request };
+    return {
+      ...base,
+      kind: "local_tool",
+      invocationSeq: invocation.startedAtSeq,
+      executionMode: invocation.executionMode,
+      tool: invocation.name,
+      args: invocation.request,
+    };
   }
   if (transport.kind === "channel") {
     return {
@@ -381,7 +392,10 @@ export function outcomeEvents(
           envelopeId: ids.messageTerminal(descriptor.messageId),
           payloadKind: "message.failed",
           payload: modelFailurePayload(failure, outcome.recoverable),
-          causality: { messageId: descriptor.messageId as never },
+          causality: {
+            messageId: descriptor.messageId as never,
+            turnId: descriptor.turnId,
+          },
           publish: shouldPublishModelOutcome(descriptor.request, []),
         },
       ];
@@ -411,7 +425,10 @@ export function outcomeEvents(
           tier,
           ...(outcome.usage ? { usage: outcome.usage } : {}),
         },
-        causality: { messageId: descriptor.messageId as never },
+        causality: {
+          messageId: descriptor.messageId as never,
+          turnId: descriptor.turnId,
+        },
         publish,
       },
     ];

@@ -1,24 +1,43 @@
 import type { TestCase } from "../types.js";
-import {
-  completedToolNames,
-  finalMessageHasAll,
-  findLastAgentMessage,
-  getToolCalls,
-  noIncompleteInvocations,
-} from "./_helpers.js";
+import { findLastAgentMessage, getToolCalls, noIncompleteInvocations } from "./_helpers.js";
 
-function withNoPending(
-  result: ReturnType<typeof finalMessageHasAll>,
-  execution: Parameters<typeof noIncompleteInvocations>[0]
+function semanticEval(
+  result: Parameters<typeof noIncompleteInvocations>[0],
+  codePatterns: RegExp[],
+  finalPatterns: RegExp[],
+  evidencePatterns: RegExp[] = []
 ) {
-  if (!result.passed) return result;
-  const pending = noIncompleteInvocations(execution);
-  return pending.passed ? result : pending;
+  const calls = getToolCalls(result).filter(
+    (call) =>
+      call.name === "eval" &&
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true
+  );
+  const code = calls.map((call) => String(call.arguments?.["code"] ?? "")).join("\n");
+  if (calls.length === 0 || !codePatterns.every((pattern) => pattern.test(code))) {
+    return {
+      passed: false,
+      reason: "Canonical eval arguments did not exercise the required runtime capability",
+    };
+  }
+  const evidence = calls.map((call) => JSON.stringify(call.execution?.result ?? null)).join("\n");
+  if (!evidencePatterns.every((pattern) => pattern.test(evidence))) {
+    return {
+      passed: false,
+      reason: "Canonical eval results omitted the required runtime observation",
+    };
+  }
+  const final = findLastAgentMessage(result);
+  if (!finalPatterns.every((pattern) => pattern.test(final))) {
+    return {
+      passed: false,
+      reason: "Final response did not semantically report the observed runtime outcome",
+    };
+  }
+  return noIncompleteInvocations(result);
 }
 
 function channelInspectionIsBounded(result: Parameters<typeof findLastAgentMessage>[0]) {
-  const marker = finalMessageHasAll(result, ["CHANNEL_INSPECT_OK"]);
-  if (!marker.passed) return marker;
   const message = findLastAgentMessage(result);
   const boundedCall = getToolCalls(result).some((call) => {
     if (call.name !== "eval" || call.execution?.status !== "complete" || call.execution.isError) {
@@ -27,13 +46,22 @@ function channelInspectionIsBounded(result: Parameters<typeof findLastAgentMessa
     const code = typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : "";
     return /inspectChannelEnvelopes/.test(code) && /\blimit\s*:\s*[1-9]\d*\b/.test(code);
   });
-  if (!boundedCall && !/\bbounded\b|\blimit\b[^\d\n]{0,16}\d+\b/i.test(message)) {
+  if (!boundedCall) {
     return {
       passed: false,
-      reason: `Expected bounded inspection evidence ("bounded" or an explicit limit): ${message.slice(0, 400)}`,
+      reason: "Canonical eval arguments did not contain a positive channel-inspection limit",
     };
   }
-  return { passed: true };
+  if (
+    !/channel/iu.test(message) ||
+    !/(envelope|histor|message|none|empty|found|result)/iu.test(message)
+  ) {
+    return {
+      passed: false,
+      reason: "Final response did not report the bounded channel-inspection outcome",
+    };
+  }
+  return noIncompleteInvocations(result);
 }
 
 export const agenticRuntimeTests: TestCase[] = [
@@ -42,32 +70,47 @@ export const agenticRuntimeTests: TestCase[] = [
     description: "Panel state changes are immediately observable",
     category: "agentic-runtime",
     prompt:
-      "Exercise panel state changes from eval and verify they are immediately observable. Finish with STATE_ARGS_OK and state-args-ok.",
+      "Change a disposable panel's state and check whether the new state is observable immediately.",
     validate: (result) =>
-      withNoPending(finalMessageHasAll(result, ["STATE_ARGS_OK", "state-args-ok"]), result),
+      semanticEval(
+        result,
+        [/stateArgs/iu, /(?:set|update|change)/iu],
+        [/state/iu, /immediate|visible|observed/iu]
+      ),
   },
   {
     name: "runtime-vcs-client-helper",
     description: "Workspace VCS operations are usable from the runtime context",
     category: "agentic-runtime",
     prompt:
-      "Check whether the runtime vcs namespace is available from this runtime context. Finish with VCS_CLIENT_OK.",
-    validate: (result) => withNoPending(finalMessageHasAll(result, ["VCS_CLIENT_OK"]), result),
+      "Is the workspace version-control client available in this runtime context? Check and report what you observe.",
+    validate: (result) =>
+      semanticEval(
+        result,
+        [/\bvcs\b/iu],
+        [/version.control|\bvcs\b/iu, /available|usable|present|exposed/iu]
+      ),
   },
   {
     name: "gad-rawsql-positional-bindings",
     description: "GAD can run a small query",
     category: "agentic-runtime",
-    prompt: "Run a tiny parameterized GAD query. Finish with GAD_RAWSQL_OK.",
-    validate: (result) => withNoPending(finalMessageHasAll(result, ["GAD_RAWSQL_OK"]), result),
+    prompt:
+      "Run a tiny read-only parameterized query against the graph-and-data store and summarize the result.",
+    validate: (result) =>
+      semanticEval(
+        result,
+        [/gad\.rawSql/iu, /\bparams?\b|\[[^\]]*\]/u],
+        [/query/iu, /result|row|returned/iu]
+      ),
   },
   {
     name: "channel-envelope-inspection-bounded",
     description: "Channel history inspection stays usable",
     category: "agentic-runtime",
     prompt:
-      "Inspect channel history for a harmless fake channel id. Finish with CHANNEL_INSPECT_OK and bounded.",
-    validate: (result) => withNoPending(channelInspectionIsBounded(result), result),
+      "Check a harmless nonexistent channel's history without making an unbounded request, and tell me what is there.",
+    validate: channelInspectionIsBounded,
   },
   {
     name: "large-eval-result-terminal",
@@ -75,29 +118,26 @@ export const agenticRuntimeTests: TestCase[] = [
       "Large eval results complete visibly without leaving an invocation spinner pending",
     category: "agentic-runtime",
     prompt:
-      "Create a large temporary value and report only a summary. Finish with LARGE_EVAL_OK and 2000.",
-    validate: (result) => {
-      const completed = completedToolNames(result);
-      if (!completed.has("eval")) {
-        return {
-          passed: false,
-          reason: `Expected completed eval tool call; completed tools: ${[...completed].join(", ") || "(none)"}`,
-        };
-      }
-      return withNoPending(finalMessageHasAll(result, ["LARGE_EVAL_OK", "2000"]), result);
-    },
+      "Create a temporary value containing two thousand items, but report only a concise summary rather than dumping the value.",
+    validate: (result) =>
+      semanticEval(
+        result,
+        [/2000|2_000/u],
+        [/2000|two thousand/iu, /summar|items?|entries|values/iu]
+      ),
   },
   {
     name: "agent-debug-state-method",
     description: "Agent debug state is inspectable",
     category: "agentic-runtime",
     prompt:
-      "Check whether this chat agent exposes debug state. Finish with DEBUG_STATE_OK or DEBUG_STATE_UNAVAILABLE.",
-    validate: (result) => {
-      const ok = finalMessageHasAll(result, ["DEBUG_STATE_OK"]);
-      if (ok.passed) return withNoPending(ok, result);
-      return finalMessageHasAll(result, ["DEBUG_STATE_UNAVAILABLE"]);
-    },
+      "Check whether this chat agent exposes debug state and report either what is available or that the capability is unavailable.",
+    validate: (result) =>
+      semanticEval(
+        result,
+        [/(?:debugState|getDebugState|debug state)/iu],
+        [/debug/iu, /available|unavailable|exposed|not exposed/iu]
+      ),
   },
   {
     name: "turn-no-silent-stall-after-tool",
@@ -105,10 +145,19 @@ export const agenticRuntimeTests: TestCase[] = [
       "A normal tool-using turn ends with a visible assistant response and no pending invocation",
     category: "agentic-runtime",
     prompt:
-      "Use one tool, then produce a visible final response. Finish with NO_STALL_OK and final-response-visible.",
+      "Use an appropriate read-only tool for a trivial check, then give me a visible final response.",
     validate: (result) => {
-      const msg = finalMessageHasAll(result, ["NO_STALL_OK", "final-response-visible"]);
-      return withNoPending(msg, result);
+      const completed = getToolCalls(result).some(
+        (call) => call.execution?.status === "complete" && call.execution.isError !== true
+      );
+      if (!completed)
+        return {
+          passed: false,
+          reason: "No successful tool invocation preceded the final response",
+        };
+      if (findLastAgentMessage(result).trim().length < 8)
+        return { passed: false, reason: "No substantive visible final response" };
+      return noIncompleteInvocations(result);
     },
   },
   {
@@ -116,17 +165,13 @@ export const agenticRuntimeTests: TestCase[] = [
     description: "Agent runs workspace unit tests through the scoped test-runner extension",
     category: "agentic-runtime",
     prompt:
-      "Use the supported workspace test runner extension from eval, not shell commands, to run the test file extensions/test-runner/index.test.ts. Report the structured result summary, passed count, failed count, and context id. Finish with WORKSPACE_TEST_RUNNER_OK and test-runner-extension.",
-    validate: (result) => {
-      const completed = completedToolNames(result);
-      if (!completed.has("eval")) {
-        return {
-          passed: false,
-          reason: `Expected a completed eval tool call; completed tools: ${[...completed].join(", ") || "(none)"}`,
-        };
-      }
-      const msg = finalMessageHasAll(result, ["WORKSPACE_TEST_RUNNER_OK", "test-runner-extension"]);
-      return withNoPending(msg, result);
-    },
+      "Run extensions/test-runner/index.test.ts using the workspace's supported scoped test-running capability, without shelling out. Summarize how many tests passed and failed and identify the execution context.",
+    validate: (result) =>
+      semanticEval(
+        result,
+        [/test-runner|testRunner/iu, /extensions\/test-runner\/index\.test\.ts/u],
+        [/pass/iu, /fail/iu, /context/iu],
+        [/pass/iu, /fail/iu, /context/iu]
+      ),
   },
 ];

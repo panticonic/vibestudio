@@ -592,6 +592,10 @@ function expandToolCalls(
         invocationType: "tool",
         request: block.arguments,
         transport: transportForToolCall(state, block.name, invocationId),
+        executionMode:
+          state.config.localToolExecutionModes?.[block.name] === "parallel"
+            ? "parallel"
+            : "sequential",
         userVisible: true,
       },
       causality: {
@@ -925,7 +929,7 @@ function flushStep(state: AgentState, ctx: StepContext): StepOutput | null {
         return {
           append: [
             {
-              envelopeId: ids.systemEvent(state.openTurn.turnId, "interrupt"),
+              envelopeId: ids.interruptEvent(state.openTurn.turnId, "user_interrupted"),
               payloadKind: "system.event",
               payload: {
                 protocol: AGENTIC_PROTOCOL_VERSION,
@@ -1091,7 +1095,7 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
       const reason =
         command.kind === "abort" ? (command.reason ?? "work_failed") : "user_interrupted";
       const marker: AppendItem = {
-        envelopeId: ids.systemEvent(state.openTurn.turnId, "interrupt"),
+        envelopeId: ids.interruptEvent(state.openTurn.turnId, reason),
         payloadKind: "system.event",
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,

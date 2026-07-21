@@ -148,10 +148,12 @@ export function compileUserRegex(source: string, flags: string): RegexLike {
 }
 
 const grepSchema = Type.Object({
-  pattern: Type.Optional(Type.String({
-    description:
-      "Text to search for. Treated as a literal string by default; do not escape punctuation or set literal=false for code snippets like openPanel( unless you intentionally want a valid regex.",
-  })),
+  pattern: Type.Optional(
+    Type.String({
+      description:
+        "Text to search for. Treated as a literal string by default; do not escape punctuation or set literal=false for code snippets like openPanel( unless you intentionally want a valid regex.",
+    })
+  ),
   path: Type.Optional(
     Type.String({
       description:
@@ -245,6 +247,7 @@ export function createGrepTool(
   return {
     name: "grep",
     label: "grep",
+    executionMode: "parallel",
     description: `Search file contents. Literal search is the default and should be used for code snippets, identifiers, paths, and punctuation; set literal=false only for intentional valid regex. Returns matching lines with file paths and line numbers. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
     parameters: grepSchema,
     execute: async (_toolCallId, input, signal, onUpdate) => {
@@ -259,7 +262,12 @@ export function createGrepTool(
         typeof raw.pattern === "string" ? undefined : recall ? "recallKeywords" : undefined;
       if (typeof pattern !== "string") {
         return {
-          content: [{ type: "text", text: "No grep pattern supplied. Pass the text to search for in `pattern`." }],
+          content: [
+            {
+              type: "text",
+              text: "No grep pattern supplied. Pass the text to search for in `pattern`.",
+            },
+          ],
           details: undefined,
         };
       }
@@ -350,7 +358,9 @@ export function createGrepTool(
             );
             lines.push(`${match.file}:${match.lineNumber}: ${truncateLine(match.line).text}`);
             match.after.forEach((line, index) =>
-              lines.push(`${match.file}-${match.lineNumber + index + 1}- ${truncateLine(line).text}`)
+              lines.push(
+                `${match.file}-${match.lineNumber + index + 1}- ${truncateLine(line).text}`
+              )
             );
           }
           const text = lines.length > 0 ? lines.join("\n") : "No matches found";
@@ -516,9 +526,7 @@ export function createGrepTool(
       if (matchCount === 0) {
         return {
           content: [{ type: "text", text: "No matches found" }],
-          details: patternFallback
-            ? { engine: "runtime-fs" as const, patternFallback }
-            : undefined,
+          details: patternFallback ? { engine: "runtime-fs" as const, patternFallback } : undefined,
         };
       }
 

@@ -19,14 +19,15 @@ export const SYSTEM_TEST_FALLBACK_FAILURE_CODE = "usage_limit_terminal" as const
  * from the models a run can actually invoke.
  */
 export function systemTestModelRoute(
-  primaryModel = SYSTEM_TEST_AGENT_MODEL
+  primaryModel = SYSTEM_TEST_AGENT_MODEL,
+  options: { allowUsageLimitFallback?: boolean } = {}
 ): {
   primaryModel: string;
   fallbackModel: string | null;
   fallbackThinkingLevel: typeof SYSTEM_TEST_FALLBACK_THINKING_LEVEL | null;
   fallbackOn: typeof SYSTEM_TEST_FALLBACK_FAILURE_CODE | null;
 } {
-  const usesDefaultRoute = primaryModel === SYSTEM_TEST_AGENT_MODEL;
+  const usesDefaultRoute = options.allowUsageLimitFallback ?? true;
   return {
     primaryModel,
     fallbackModel: usesDefaultRoute ? SYSTEM_TEST_FALLBACK_MODEL : null,

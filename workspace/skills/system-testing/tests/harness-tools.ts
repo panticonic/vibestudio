@@ -1,16 +1,5 @@
 import type { TestCase } from "../types.js";
-import {
-  findLastAgentMessage,
-  finalMessageHasAll,
-  getToolCalls,
-  noIncompleteInvocations,
-} from "./_helpers.js";
-
-function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
-  const msg = finalMessageHasAll(result, tokens);
-  if (!msg.passed) return msg;
-  return noIncompleteInvocations(result);
-}
+import { findLastAgentMessage, getToolCalls, noIncompleteInvocations } from "./_helpers.js";
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -83,8 +72,8 @@ function rootKey(value: unknown): string | null {
   }
 }
 
-function requireProvenanceRoots(result: Parameters<typeof finalMessageHasAll>[0]) {
-  const roots = new Set<string>();
+function requireProvenanceRoots(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  let returnedRootCount = 0;
   let edgeCount = 0;
   for (const call of getToolCalls(result)) {
     if (
@@ -97,7 +86,7 @@ function requireProvenanceRoots(result: Parameters<typeof finalMessageHasAll>[0]
     const details = record(record(call.execution.result)?.["details"]);
     const returnedRoot = rootKey(details?.["root"]);
     if (!returnedRoot) continue;
-    roots.add(returnedRoot);
+    returnedRootCount++;
     const adjacency = details?.["adjacency"];
     if (!Array.isArray(adjacency)) continue;
     for (const rawEdge of adjacency) {
@@ -105,8 +94,6 @@ function requireProvenanceRoots(result: Parameters<typeof finalMessageHasAll>[0]
       const from = rootKey(edge?.["from"]);
       const to = rootKey(edge?.["to"]);
       if (!from || !to || typeof edge?.["kind"] !== "string") continue;
-      roots.add(from);
-      roots.add(to);
       edgeCount++;
     }
   }
@@ -116,15 +103,56 @@ function requireProvenanceRoots(result: Parameters<typeof finalMessageHasAll>[0]
       reason: "Completed provenance results contained no actual typed edge endpoints",
     };
   }
-  const reported = /\broots\s*[:=]\s*(\d+)\b/i.exec(findLastAgentMessage(result));
-  const reportedCount = reported ? Number(reported[1]) : NaN;
+  const final = findLastAgentMessage(result);
+  if (
+    !/(root|trajectory|turn|message|invocation)/iu.test(final) ||
+    !/(edge|caus|trigger|origin|context)/iu.test(final)
+  ) {
+    return {
+      passed: false,
+      reason: "Final response did not explain the observed provenance roots and relationships",
+    };
+  }
   return {
-    passed: reportedCount === roots.size,
+    passed: returnedRootCount > 0,
     reason:
-      reportedCount === roots.size
+      returnedRootCount > 0
         ? undefined
-        : `Agent reported roots:${Number.isFinite(reportedCount) ? reportedCount : "missing"}; completed provenance evidence contained ${roots.size} unique complete roots`,
+        : "Completed provenance results contained no reusable typed root",
   };
+}
+
+function requireMemoryRecall(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  const calls = getToolCalls(result).filter(
+    (call) =>
+      call.name === "memory_recall" &&
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true
+  );
+  if (calls.length === 0) {
+    return {
+      passed: false,
+      reason: "No completed workspace memory recall supplied canonical evidence",
+    };
+  }
+  if (
+    calls.some((call) => {
+      const limit = call.arguments?.["limit"];
+      return (
+        limit !== undefined && (!Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > 50)
+      );
+    })
+  ) {
+    return { passed: false, reason: "Workspace memory recall was not bounded" };
+  }
+  const final = findLastAgentMessage(result);
+  if (!/(build|failure)/iu.test(final) || !/(found|result|nothing|no prior|memory)/iu.test(final)) {
+    return {
+      passed: false,
+      reason: "Final response did not semantically report the memory-search outcome",
+    };
+  }
+  return noIncompleteInvocations(result);
 }
 
 export const harnessToolTests: TestCase[] = [
@@ -133,19 +161,15 @@ export const harnessToolTests: TestCase[] = [
     description: "Orient in the session using the provenance surface",
     category: "harness-tools",
     prompt:
-      "Orient yourself: find out where this session came from and what context it carries, using the workspace's provenance guidance. Report the reusable typed roots and immediate edges you actually observed. Count each unique complete root in the provenance result itself—its returned root and both endpoints of its observed edges—once. Finish with PROVENANCE_OK and roots:<count>.",
-    validate: (result) => {
-      const base = checked(result, ["PROVENANCE_OK", "roots:"]);
-      if (!base.passed) return base;
-      return requireProvenanceRoots(result);
-    },
+      "Orient me to this session: where did it come from, what context does it carry, and which reusable provenance roots support that explanation?",
+    validate: requireProvenanceRoots,
   },
   {
     name: "memory-search",
     description: "Search workspace memory with provenance before re-deriving knowledge",
     category: "harness-tools",
     prompt:
-      "A user asks whether this workspace has dealt with build failures before. Search the workspace's memory of past conversations and knowledge instead of re-deriving from scratch, and report what you found with provenance (finding nothing is a valid, reportable outcome). Finish with MEMORY_SEARCH_OK and results:<count>.",
-    validate: (result) => checked(result, ["MEMORY_SEARCH_OK", "results:"]),
+      "Has this workspace dealt with build failures before? Check its memory of prior conversations and committed knowledge, and tell me what you find with provenance. Finding nothing is a valid outcome.",
+    validate: requireMemoryRecall,
   },
 ];

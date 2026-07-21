@@ -406,7 +406,7 @@ describe("createProvenanceTool", () => {
         repositoryId: "repository:packages/foo",
         fileId: "file:bar",
       },
-      limit: 20,
+      limit: 100,
     });
     expect(result.details).toMatchObject({ target: "packages/foo/bar.ts", edges: 1 });
     expect(f.inspect).toHaveBeenCalledWith({
@@ -450,7 +450,23 @@ describe("createProvenanceTool", () => {
     await tool.execute("call:2", { target: "session" });
     expect(f.neighbors).toHaveBeenCalledWith({
       root: { kind: "trajectory", logId: "log:1", head: "head:1" },
-      limit: 20,
+      limit: 100,
+    });
+  });
+
+  it("accepts the canonical workspace-event identity returned by VCS status", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+
+    await expect(
+      tool.execute("call:workspace-event", {
+        target: "workspace-event:abc123",
+      })
+    ).rejects.toThrow("unused event inspection fixture");
+
+    expect(f.value.vcs.inspect).toHaveBeenCalledWith({
+      node: { kind: "event", eventId: "workspace-event:abc123" },
+      edgeLimit: 1,
     });
   });
 
@@ -460,12 +476,12 @@ describe("createProvenanceTool", () => {
     await tool.execute("call:3", { target: "change:42" });
     expect(f.neighbors).toHaveBeenCalledWith({
       root: { kind: "change", changeId: "change:42" },
-      limit: 20,
+      limit: 100,
     });
     await tool.execute("call:applied", { target: "applied-change:42" });
     expect(f.neighbors).toHaveBeenCalledWith({
       root: { kind: "applied-change", appliedChangeId: "applied-change:42" },
-      limit: 20,
+      limit: 100,
     });
   });
 
@@ -473,8 +489,8 @@ describe("createProvenanceTool", () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
     const root = { kind: "decision" as const, decisionId: "decision:1" };
-    await tool.execute("call:4", { root, after: "cursor:1" });
-    expect(f.neighbors).toHaveBeenCalledWith({ root, limit: 20, cursor: "cursor:1" });
+    await tool.execute("call:4", { target: root, after: "cursor:1" });
+    expect(f.neighbors).toHaveBeenCalledWith({ root, limit: 100, cursor: "cursor:1" });
   });
 
   it("renders work-unit intent before exact adjacency and retains its endpoints", async () => {
@@ -504,7 +520,7 @@ describe("createProvenanceTool", () => {
     const tool = createProvenanceTool("/", f.value);
     const command = await tool.execute("call:command", { target: "command:1" });
     const invocation = await tool.execute("call:invocation", {
-      root: {
+      target: {
         kind: "trajectory-invocation",
         logId: "log:1",
         head: "head:1",
@@ -545,7 +561,7 @@ describe("createProvenanceTool", () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
     const turn = await tool.execute("call:turn", {
-      root: {
+      target: {
         kind: "trajectory-turn",
         logId: "log:1",
         head: "head:1",
@@ -553,7 +569,7 @@ describe("createProvenanceTool", () => {
       },
     });
     const message = await tool.execute("call:message", {
-      root: {
+      target: {
         kind: "trajectory-message",
         logId: "log:1",
         head: "head:1",
@@ -593,5 +609,13 @@ describe("createProvenanceTool", () => {
     await expect(tool.execute("call:5", { target: "outcome:42" })).rejects.toThrow(
       "event/application/applied-change/work-unit/change/decision/command"
     );
+  });
+
+  it("directs trajectory labels to the exact typed-target contract", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    await expect(
+      tool.execute("call:trajectory-label", { target: "trajectory-message:message:prompt" })
+    ).rejects.toThrow("Trajectory nodes require the exact typed target with kind, logId, head");
   });
 });
