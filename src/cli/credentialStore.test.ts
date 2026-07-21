@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  assertCliProfileIsUnpaired,
   credentialPath,
   loadCliCredentials,
   saveCliCredentials,
@@ -128,5 +129,46 @@ describe("CLI persisted device credential", () => {
       })
     ).toThrow(/non-canonical CLI device credential/u);
     expect(fs.readFileSync(credentialPath())).toEqual(before);
+  });
+
+  it("never silently repoints an existing CLI profile to another server or device", () => {
+    saveCliCredentials(CURRENT);
+    const before = fs.readFileSync(credentialPath());
+
+    expect(() => saveCliCredentials({ ...CURRENT, serverId: `srv_${"x".repeat(24)}` })).toThrow(
+      /remote logout.*another server or device/u
+    );
+    expect(() => saveCliCredentials({ ...CURRENT, deviceId: `dev_${"x".repeat(24)}` })).toThrow(
+      /remote logout.*another server or device/u
+    );
+    expect(fs.readFileSync(credentialPath())).toEqual(before);
+  });
+
+  it("allows reach, workspace, and token rotation for the same paired device", () => {
+    saveCliCredentials(CURRENT);
+    const rotated = {
+      ...CURRENT,
+      workspaceId: "workspace-other",
+      workspaceName: "other",
+      refreshToken: "n".repeat(43),
+      url: "webrtc://room-other/_workspace/other",
+      workspacePairing: { ...CURRENT.workspacePairing, room: "room-other" },
+    };
+
+    saveCliCredentials(rotated);
+    expect(loadCliCredentials()).toEqual(rotated);
+  });
+
+  it("requires explicit logout before redeeming a new pairing invite", () => {
+    expect(() => assertCliProfileIsUnpaired()).not.toThrow();
+    saveCliCredentials(CURRENT);
+    expect(() => assertCliProfileIsUnpaired()).toThrow(/already paired.*remote logout/u);
+  });
+
+  it("refuses to overwrite corrupt credential state during a pairing or refresh", () => {
+    write("{truncated");
+    expect(() => assertCliProfileIsUnpaired()).toThrow(/Refusing to replace unreadable/u);
+    expect(() => saveCliCredentials(CURRENT)).toThrow(/Refusing to replace unreadable/u);
+    expect(fs.readFileSync(credentialPath(), "utf8")).toBe("{truncated");
   });
 });

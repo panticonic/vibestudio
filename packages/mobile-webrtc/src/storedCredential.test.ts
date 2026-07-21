@@ -112,7 +112,7 @@ describe("mobile stored shell credential", () => {
         pairing,
         123
       )
-    ).toThrow(/non-canonical WebRTC pairing/u);
+    ).toThrow(/control WebRTC pairing: has an unsupported protocol version/u);
     expect(() =>
       createStoredShellCredential(
         { deviceId: DEVICE_ID, refreshToken: REFRESH_TOKEN },
@@ -120,7 +120,7 @@ describe("mobile stored shell credential", () => {
         pairing,
         123
       )
-    ).toThrow(/non-canonical WebRTC pairing/u);
+    ).toThrow(/control WebRTC pairing: has an invalid ICE transport policy/u);
     expect(() =>
       createStoredShellCredential(
         { deviceId: DEVICE_ID, refreshToken: REFRESH_TOKEN },
@@ -128,6 +128,6 @@ describe("mobile stored shell credential", () => {
         pairing,
         123
       )
-    ).toThrow(/non-canonical WebRTC pairing/u);
+    ).toThrow(/control WebRTC pairing: contains unexpected field\(s\): retired/u);
   });
 });

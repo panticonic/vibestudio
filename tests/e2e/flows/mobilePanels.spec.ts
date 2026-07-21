@@ -14,6 +14,7 @@ import * as path from "node:path";
 import YAML from "yaml";
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
+  ensureHostedShellReady,
   clickPanelSelector,
   clickPanelText,
   createManagedTestWorkspace,
@@ -22,7 +23,8 @@ import {
   createPanel,
   getPanelTree,
   hasElectronDisplay,
-  isPanelLoaded,
+  isPanelContentReady,
+  isPanelReady,
   launchTestApp,
   removeManagedTestWorkspace,
   type TestApp,
@@ -67,7 +69,16 @@ async function launchMobileTestApp(
       launchTimeout: 240_000,
       env: { VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1" },
     });
-    await waitForHostedShellChrome(testApp.app);
+    const initialPanel = panels[0];
+    if (initialPanel) {
+      await waitForHostedShellChrome(testApp.app, initialPanel.source);
+    }
+    if (initialPanel) {
+      // Hosted chrome can render before its authenticated panel-tree read has
+      // seeded the server-authoritative init panels. The fixture is ready only
+      // when the panel declaration it wrote is present and loaded.
+      await waitForSourcePanel(testApp.app, initialPanel.source, 180_000);
+    }
     return {
       ...testApp,
       cleanup: async () => {
@@ -291,116 +302,11 @@ async function evaluateInHostedShell<T>(
   }, script);
 }
 
-async function waitForHostedShellChrome(app: ElectronApplication): Promise<void> {
-  let launchSessionId: string | null = null;
-  let lastProbe: Record<string, unknown> = {};
-  const deadline = Date.now() + 180_000;
-  while (Date.now() < deadline) {
-    const probe: Record<string, unknown> = {};
-    await clickRecoveryApproval(app).catch((error: unknown) => {
-      probe["recoveryClickError"] = error instanceof Error ? error.message : String(error);
-      return false;
-    });
-    const launchSession = launchSessionId
-      ? await rpcCall(app, "workspace", "hostTargets.getLaunchSession", [launchSessionId]).catch(
-          (error: unknown) => {
-            probe["launchSessionError"] = error instanceof Error ? error.message : String(error);
-            return null;
-          }
-        )
-      : await rpcCall(app, "workspace", "hostTargets.beginLaunch", ["electron"]).catch(
-          (error: unknown) => {
-            probe["launchSessionError"] = error instanceof Error ? error.message : String(error);
-            return null;
-          }
-        );
-    probe["launchSession"] = summarizeLaunchSession(launchSession);
-    if (
-      launchSession &&
-      typeof launchSession === "object" &&
-      "sessionId" in launchSession &&
-      typeof launchSession.sessionId === "string"
-    ) {
-      launchSessionId = launchSession.sessionId;
-      const approvals = Array.isArray((launchSession as { approvals?: unknown }).approvals)
-        ? (launchSession as { approvals: unknown[] }).approvals
-        : [];
-      if (approvals.length > 0) {
-        probe["resolvedSessionApprovals"] = approvals.length;
-        await rpcCall(app, "workspace", "hostTargets.resolveLaunchSessionApproval", [
-          launchSessionId,
-          "once",
-        ]).catch((error: unknown) => {
-          probe["resolveSessionApprovalError"] =
-            error instanceof Error ? error.message : String(error);
-          return null;
-        });
-      }
-    }
-    const pending = await listPendingApprovals(app).catch((error: unknown) => {
-      probe["pendingError"] = error instanceof Error ? error.message : String(error);
-      return [];
-    });
-    probe["pending"] = pending.map((approval) => ({
-      kind: approval.kind,
-      approvalId: approval.approvalId,
-      options: approval.options?.map((option) => option.value),
-    }));
-    for (const approval of pending) {
-      await resolveApproval(app, approval).catch((error: unknown) => {
-        probe["resolvePendingError"] = error instanceof Error ? error.message : String(error);
-      });
-    }
-    await clickShellButton(
-      app,
-      /^(Trust and (start|connect)|Approve and (start|connect)|Approve all|Approve|Continue|Run)$/i
-    ).catch(() => false);
-    const hasShell = Boolean(
-      await evaluateInHostedShell(
-        app,
-        `(() => Boolean(
-          document.querySelector(".titlebar-breadcrumb-scroll")
-            || document.querySelector('[aria-label="Menu"]')
-            || document.querySelector('[aria-label="Open panel tree"]')
-            || document.querySelector('[aria-label="Close panel tree"]')
-            || document.querySelector('[aria-label="Switch to tree navigation"]')
-            || document.querySelector('[aria-label="Switch to breadcrumb navigation"]')
-            || document.querySelector('[data-shell-top-chrome]')
-        ))()`
-      )
-    );
-    probe["hasShell"] = hasShell;
-    const panelTree = await getPanelTree(app).catch(() => []);
-    probe["panelCount"] = panelTree.length;
-    lastProbe = probe;
-    if (hasShell) return;
-    await delay(500);
-  }
-  throw new Error(`Timed out waiting for hosted shell chrome: ${JSON.stringify(lastProbe)}`);
-}
-
-function summarizeLaunchSession(session: unknown): unknown {
-  if (!session || typeof session !== "object") return session;
-  const record = session as Record<string, unknown>;
-  return {
-    sessionId: record["sessionId"],
-    status: record["status"],
-    currentPhase: record["currentPhase"],
-    message: record["message"],
-    detail: record["detail"],
-    settled: record["settled"],
-    approvals: Array.isArray(record["approvals"]) ? record["approvals"].length : undefined,
-    approvalViews: Array.isArray(record["approvalViews"])
-      ? record["approvalViews"].map((view) =>
-          view && typeof view === "object"
-            ? {
-                title: (view as Record<string, unknown>)["title"],
-                summary: (view as Record<string, unknown>)["summary"],
-              }
-            : view
-        )
-      : undefined,
-  };
+async function waitForHostedShellChrome(
+  app: ElectronApplication,
+  panelSource: string
+): Promise<void> {
+  await ensureHostedShellReady(app, { panelSource });
 }
 
 async function shellElementVisibleByLabel(
@@ -565,7 +471,11 @@ async function setMobileWindow(app: ElectronApplication): Promise<void> {
   }, MOBILE_BOUNDS);
 }
 
-async function waitForSourcePanel(app: ElectronApplication, source: string): Promise<string> {
+async function waitForDeclaredSourcePanel(
+  app: ElectronApplication,
+  source: string,
+  timeout = 60_000
+): Promise<string> {
   let panelId: string | null = null;
   await expect
     .poll(
@@ -588,18 +498,28 @@ async function waitForSourcePanel(app: ElectronApplication, source: string): Pro
           .catch(() => null);
         return panelId;
       },
-      { timeout: 60_000, intervals: [250, 500, 1000] }
+      { timeout, intervals: [250, 500, 1000] }
     )
     .not.toBeNull();
 
+  return panelId!;
+}
+
+async function waitForSourcePanel(
+  app: ElectronApplication,
+  source: string,
+  timeout = 60_000
+): Promise<string> {
+  const panelId = await waitForDeclaredSourcePanel(app, source, timeout);
+
   await expect
-    .poll(async () => (panelId ? isPanelLoaded(app, panelId).catch(() => false) : false), {
-      timeout: 60_000,
+    .poll(() => isPanelReady(app, panelId).catch(() => false), {
+      timeout,
       intervals: [250, 500, 1000],
     })
     .toBe(true);
 
-  return panelId!;
+  return panelId;
 }
 
 async function ensurePanelSource(
@@ -628,8 +548,9 @@ async function ensurePanelSource(
       if (!testApi) throw new Error("Test API not available");
       testApi.focusPanel(panelId);
     }, existingPanelId);
+    await approveShellPrompts(app);
     await expect
-      .poll(() => isPanelLoaded(app, existingPanelId).catch(() => false), {
+      .poll(() => isPanelReady(app, existingPanelId).catch(() => false), {
         timeout: 60_000,
         intervals: [250, 500, 1000],
       })
@@ -642,8 +563,9 @@ async function ensurePanelSource(
     focus: true,
     stateArgs: options?.stateArgs,
   });
+  await approveShellPrompts(app);
   await expect
-    .poll(() => isPanelLoaded(app, created.id).catch(() => false), {
+    .poll(() => isPanelReady(app, created.id).catch(() => false), {
       timeout: 60_000,
       intervals: [250, 500, 1000],
     })
@@ -796,9 +718,32 @@ async function approveShellPrompts(app: ElectronApplication): Promise<void> {
       app,
       /Trust and start|Approve and start|Approve all|Approve push|Approve|Dev session|Install and run|Allow|Run once|Allow for session|Use this session/i
     );
-    if (!clickedRecovery && pending.length === 0 && !clicked) return;
+    const hasApprovalSurface = Boolean(
+      await evaluateInHostedShell(
+        app,
+        `(() => Boolean(
+          document.querySelector('.approval-card, .approval-pill')
+            || document.querySelector('[data-bootstrap-launch-gate="true"]')
+        ))()`
+      )
+    );
+    if (!clickedRecovery && pending.length === 0 && !clicked && !hasApprovalSurface) return;
     await delay(500);
   }
+
+  const unresolved = await listPendingApprovals(app);
+  const hasApprovalSurface = Boolean(
+    await evaluateInHostedShell(
+      app,
+      `(() => Boolean(
+        document.querySelector('.approval-card, .approval-pill')
+          || document.querySelector('[data-bootstrap-launch-gate="true"]')
+      ))()`
+    )
+  );
+  throw new Error(
+    `Shell approvals did not settle: ${JSON.stringify({ unresolved, hasApprovalSurface })}`
+  );
 }
 
 test.describe("Mobile Panels", () => {
@@ -898,8 +843,20 @@ test.describe("Mobile Panels", () => {
     await setMobileWindow(testApp!.app);
     await ensureShellStackMode(testApp!.app);
     const parentId = await ensurePanelSource(testApp!.app, "about/new");
-    await createPanel(testApp!.app, parentId, "about/help", { focus: false });
-    await waitForSourcePanel(testApp!.app, "about/help");
+    const existingHelpPanel = (await getPanelTree(testApp!.app)).find(
+      (panel) => panel.snapshot?.source === "about/help"
+    );
+    const helpPanel =
+      existingHelpPanel ??
+      (await createPanel(testApp!.app, parentId, "about/help", {
+        focus: false,
+      }));
+    await expect
+      .poll(() => isPanelContentReady(testApp!.app, helpPanel.id).catch(() => false), {
+        timeout: 60_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(true);
 
     expect(await shellClickByLabels(testApp!.app, normalizeNavigationTreeOpenLabel())).toBe(true);
     await expect
@@ -909,6 +866,13 @@ test.describe("Mobile Panels", () => {
       })
       .toBe(true);
     expect(await shellClickByLabel(testApp!.app, "Select panel Help")).toBe(true);
+
+    await expect
+      .poll(() => isPanelReady(testApp!.app, helpPanel.id).catch(() => false), {
+        timeout: 60_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(true);
 
     await expect
       .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeOpenLabel()), {
@@ -936,6 +900,10 @@ test.describe("Mobile Panels", () => {
       .poll(
         async () => {
           await approveShellPrompts(testApp!.app);
+          // The panel can mount before the newly approved native shell
+          // extension finishes its first build. Exercise its user-facing
+          // recovery path once the approval/build race settles.
+          await clickPanelText(testApp!.app, panelId, "button", "Retry").catch(() => false);
           return getPanelText(testApp!.app, panelId);
         },
         {

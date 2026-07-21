@@ -155,13 +155,34 @@ function parseJsonOutput(stdout, label) {
 }
 
 async function runCliJson(args, env, timeoutMs, label) {
-  const { stdout } = await execFileAsync(process.execPath, [cliEntry, ...args], {
-    cwd: repoRoot,
-    env,
-    timeout: timeoutMs,
-    maxBuffer: 2 * 1024 * 1024,
-  });
-  return parseJsonOutput(stdout, label);
+  try {
+    const { stdout } = await execFileAsync(process.execPath, [cliEntry, ...args], {
+      cwd: repoRoot,
+      env,
+      timeout: timeoutMs,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    return parseJsonOutput(stdout, label);
+  } catch (error) {
+    const stdout = typeof error?.stdout === "string" ? error.stdout.trim() : "";
+    const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : "";
+    const processState = [
+      (typeof error?.code === "string" || typeof error?.code === "number") &&
+        `code=${error.code}`,
+      typeof error?.signal === "string" && `signal=${error.signal}`,
+      error?.killed === true && "killed=true",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const output = [
+      processState,
+      stdout && `stdout:\n${stdout}`,
+      stderr && `stderr:\n${stderr}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    throw new Error(`${label} failed${output ? `\n${output}` : ""}`, { cause: error });
+  }
 }
 
 function waitForChildExit(child, timeoutMs) {

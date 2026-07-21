@@ -152,10 +152,6 @@ async function rpc(connection, method, args = []) {
   return connection.rpc.call("main", method, args);
 }
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function closeBootstrapConnectionAfterFailure(connection, error) {
   if (!connection) return error;
   try {
@@ -170,35 +166,8 @@ async function closeBootstrapConnectionAfterFailure(connection, error) {
   }
 }
 
-function isTransientLaunchRpcError(error) {
-  const code = error?.code;
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return (
-    code === "PIPE_CLOSED" ||
-    code === "CONNECTION_LOST" ||
-    /timed out|pipe down|not connected|control channel not open/i.test(message)
-  );
-}
-
-function isBootstrapReadinessError(error) {
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return /MOBILE_APP_APPROVAL_REQUIRED|MOBILE_APP_UNAVAILABLE|approval|required|not ready|not available/i.test(
-    message
-  ) || error?.status === 503;
-}
-
-async function launchGateRpc(connection, method, args, deadline) {
-  let attempt = 0;
-  for (;;) {
-    try {
-      return await connection.rpc.call("main", method, args, { timeoutMs: 15000 });
-    } catch (error) {
-      if (!isTransientLaunchRpcError(error) || Date.now() >= deadline) throw error;
-      attempt += 1;
-      await connection.session?.ready?.().catch(() => {});
-      await delay(Math.min(5000, 500 * 2 ** Math.min(attempt, 4)));
-    }
-  }
+async function launchGateRpc(connection, method, args) {
+  return connection.rpc.call("main", method, args);
 }
 
 /**
@@ -232,7 +201,13 @@ function createLaunchReadinessEventClient(connection) {
     );
   }
   // The poll fallback covers an unavailable watch without inventing a retry loop.
-  void events.subscribeAll(eventNames).catch(() => {});
+  void events.subscribeAll(eventNames).catch((error) => {
+    console.warn(
+      `[MobileLaunchGate] readiness watch failed: ${
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      }`
+    );
+  });
   return Promise.resolve({
     waitForLaunchSessionChange(sessionId, timeoutMs) {
       if (lastSession?.sessionId === sessionId && revision !== observedRevision) {
@@ -359,28 +334,23 @@ function VibestudioMobileHostBootstrap() {
     setApprovals([]);
     setOpenApprovalIds(new Set());
     setLaunchGrant(grant);
-    const deadline = Date.now() + 120000;
     let eventClient = null;
+    let diagnosticSessionId = initialSession?.sessionId ?? null;
     try {
-      if (!initialSession) {
-        try {
-          setStatus("Workspace app approved. Activating bundle...");
-          await activateApprovedWorkspaceApp(grant);
-          if (!isCurrent()) return;
-          setStatus("Workspace app activated. Reloading...");
-          return;
-        } catch (error) {
-          if (!isBootstrapReadinessError(error)) throw error;
-        }
-      }
+      // Launch readiness is the authoritative lifecycle boundary. Do not
+      // speculatively fetch the bundle first: the bootstrap endpoint must wait
+      // for a ready build, while a streaming fetch must produce its response
+      // head promptly. Beginning the launch session first keeps build progress
+      // in the launch state machine and downloads only a known-ready artifact.
       let session =
         initialSession ??
-        (await launchGateRpc(
-          grant,
-          "workspace.hostTargets.beginLaunch",
-          ["react-native"],
-          deadline
-        ));
+        (await launchGateRpc(grant, "workspace.hostTargets.beginLaunch", ["react-native"]));
+      diagnosticSessionId = session?.sessionId ?? diagnosticSessionId;
+      console.log(
+        `[MobileLaunchGate] session=${diagnosticSessionId ?? "unknown"} status=${
+          session?.status ?? "unknown"
+        }`
+      );
       for (;;) {
         if (!isCurrent()) return;
         setLaunchSession(session);
@@ -413,33 +383,33 @@ function VibestudioMobileHostBootstrap() {
             eventClient = await createLaunchReadinessEventClient(grant).catch(() => null);
           }
           const observed = eventClient
-            ? await eventClient.waitForLaunchSessionChange(
-                session.sessionId,
-                Math.max(1, deadline - Date.now())
-              )
+            ? await eventClient.waitForLaunchSessionChange(session.sessionId, 2000)
             : null;
           if (!isCurrent()) return;
           if (observed) {
+            console.log(
+              `[MobileLaunchGate] session=${diagnosticSessionId ?? "unknown"} event-status=${
+                observed.status ?? "unknown"
+              }`
+            );
             session = observed;
             continue;
           }
-          const refreshed = await launchGateRpc(
-            grant,
-            "workspace.hostTargets.getLaunchSession",
-            [session.sessionId],
-            deadline
-          );
+          const refreshed = await launchGateRpc(grant, "workspace.hostTargets.getLaunchSession", [
+            session.sessionId,
+          ]);
           if (!isCurrent()) return;
           if (refreshed) {
             const unchanged =
               refreshed.status === previousStatus && refreshed.updatedAt === previousUpdatedAt;
             session = refreshed;
+            console.log(
+              `[MobileLaunchGate] session=${diagnosticSessionId ?? "unknown"} poll-status=${
+                session.status ?? "unknown"
+              }`
+            );
             if (unchanged) {
-              const remainingMs = deadline - Date.now();
-              if (remainingMs <= 0) {
-                throw new Error("Timed out waiting for the React Native workspace app to start");
-              }
-              await new Promise((resolve) => setTimeout(resolve, Math.min(750, remainingMs)));
+              await new Promise((resolve) => setTimeout(resolve, 750));
             }
             continue;
           }
@@ -448,6 +418,13 @@ function VibestudioMobileHostBootstrap() {
         setStatus(formatLaunchSessionStatus(session));
         return;
       }
+    } catch (error) {
+      console.error(
+        `[MobileLaunchGate] session=${diagnosticSessionId ?? "unknown"} failed: ${
+          error instanceof Error ? (error.stack ?? error.message) : String(error)
+        }`
+      );
+      throw error;
     } finally {
       eventClient?.close();
     }
@@ -493,7 +470,7 @@ function VibestudioMobileHostBootstrap() {
         return false;
       }
       smokePhase("embedded-deep-link-received");
-      setPendingConnect({ ...parsed, rawUrl });
+      setPendingConnect({ pairing: parsed, rawUrl });
       setStatus(`Pair this device with ${pairingLabel(parsed)}?`);
       setBusy(false);
       return true;
@@ -585,7 +562,7 @@ function VibestudioMobileHostBootstrap() {
       // Pair + connect over WebRTC: pin the server's DTLS fingerprint, redeem the
       // one-time code, persist the issued device credential. The signaling room
       // targets one workspace server, so we proceed straight to the launch gate.
-      connection = await pairViaWebRtc(pendingConnect);
+      connection = await pairViaWebRtc(pendingConnect.pairing);
       smokePhase("embedded-workspace-selected");
       if (pendingConnect.rawUrl) {
         await markConnectLinkConsumed(pendingConnect.rawUrl).catch(() => {});

@@ -412,7 +412,12 @@ export class RpcClient {
             {
               label: "local workspace client",
               close: async () => {
-                await (await local)?.close();
+                // A rejected lazy-open promise represents the operation's
+                // connection/routing failure, not a cleanup failure. There is
+                // no acquired client to close in that case, and rethrowing it
+                // here would mask the actionable error from the call itself.
+                const client = await local.catch(() => null);
+                await client?.close();
               },
             },
           ]

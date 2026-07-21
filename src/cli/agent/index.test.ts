@@ -442,13 +442,13 @@ describe("vibestudio agent commands", () => {
           {
             name: "runtime",
             description: "Runtime entity creation",
-            policy: { allowed: ["shell"] },
+            authority: { principals: ["user"] },
             methods: {},
           },
         ];
       }
       if (body.method === "docs.describeService") {
-        return { name: "runtime", policy: { allowed: ["shell"] }, methods: {} };
+        return { name: "runtime", authority: { principals: ["user"] }, methods: {} };
       }
       throw new Error(`unexpected method ${body.method}`);
     });
@@ -458,7 +458,7 @@ describe("vibestudio agent commands", () => {
       {
         name: "runtime",
         description: "Runtime entity creation",
-        policy: { allowed: ["shell"] },
+        authority: { principals: ["user"] },
         methods: {},
       },
     ]);

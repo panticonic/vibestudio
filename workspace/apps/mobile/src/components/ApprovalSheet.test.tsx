@@ -394,7 +394,7 @@ describe("ApprovalSheet", () => {
 
     expect(getByText("Act on Shell's context")).toBeTruthy();
     expect(
-      getByText("This can affect files or running work owned by another agent or panel.")
+      getByText("This can affect another workspace branch and the work running in it.")
     ).toBeTruthy();
     expect(getByTestId("approval-accent-stripe").props.style).toEqual(
       expect.arrayContaining([

@@ -77,7 +77,31 @@ export function saveCliCredentials(creds: CliCredentials): void {
     throw new Error("Refusing to persist a non-canonical CLI device credential");
   }
   const p = credentialPath();
+  if (fs.existsSync(p)) {
+    const existing = readCanonicalCredentialForWrite(p);
+    if (existing.serverId !== creds.serverId || existing.deviceId !== creds.deviceId) {
+      throw new Error(
+        "Refusing to replace the paired CLI device identity; run " +
+          "`vibestudio remote logout` before pairing another server or device"
+      );
+    }
+  }
   writeFileAtomicSync(p, JSON.stringify(creds, null, 2), { mode: 0o600 });
+}
+
+/**
+ * Pairing is an explicit identity transition, not an ordinary credential
+ * refresh. Call before redeeming a one-time invite so an existing profile is
+ * never silently repointed after the remote server has already created a new
+ * device.
+ */
+export function assertCliProfileIsUnpaired(): void {
+  const p = credentialPath();
+  if (!fs.existsSync(p)) return;
+  readCanonicalCredentialForWrite(p);
+  throw new Error(
+    "CLI is already paired; run `vibestudio remote logout` before pairing another server or device"
+  );
 }
 
 export function clearCliCredentials(): void {
@@ -125,6 +149,25 @@ function isStoredPairing(value: unknown): value is CliStoredPairing {
     pairing.v === PAIRING_PROTOCOL_VERSION &&
     (pairing.ice === "all" || pairing.ice === "relay")
   );
+}
+
+function readCanonicalCredentialForWrite(filePath: string): CliCredentials {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+  } catch {
+    throw new Error(
+      `Refusing to replace unreadable CLI credential state at ${filePath}; ` +
+        "restore it or run `vibestudio remote logout` first"
+    );
+  }
+  if (!isCliCredentials(parsed)) {
+    throw new Error(
+      `Refusing to replace non-canonical CLI credential state at ${filePath}; ` +
+        "restore it or run `vibestudio remote logout` first"
+    );
+  }
+  return parsed;
 }
 
 function isCliCredentials(value: unknown): value is CliCredentials {

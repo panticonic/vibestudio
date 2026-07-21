@@ -1,7 +1,8 @@
 import { mkdtemp, chmod, readFile, readdir, rm, stat, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getCentralDataPath, getUserDataPath, setUserDataPath } from "@vibestudio/env-paths";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialStore } from "./store.js";
 import type { Credential } from "./types.js";
 
@@ -26,14 +27,74 @@ function makeCredential(overrides: Partial<Credential> = {}): Credential {
 describe("CredentialStore", () => {
   let tempDir: string;
   let store: CredentialStore;
+  let originalUserDataPath: string;
 
   beforeEach(async () => {
+    originalUserDataPath = getUserDataPath();
     tempDir = await mkdtemp(path.join(tmpdir(), "vibestudio-credentials-store-"));
     store = new CredentialStore({ basePath: tempDir });
   });
 
   afterEach(async () => {
+    setUserDataPath(originalUserDataPath);
     await rm(tempDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  });
+
+  it("reuses the default central credential store after a workspace is deleted and replaced", async () => {
+    if (process.platform === "win32") {
+      vi.stubEnv("APPDATA", tempDir);
+    } else if (process.platform === "darwin") {
+      vi.stubEnv("HOME", tempDir);
+    } else {
+      vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+    }
+    const centralDataPath = getCentralDataPath();
+    const workspaceA = path.join(centralDataPath, "workspaces", "dev-a");
+    const workspaceB = path.join(centralDataPath, "workspaces", "dev-b");
+    await mkdir(path.join(workspaceA, "state"), { recursive: true });
+    setUserDataPath(path.join(workspaceA, "state"));
+
+    const credentialId = "model-openai-codex";
+    const credential: Credential & { id: string } = {
+      ...makeCredential({
+        providerId: "url-bound",
+        connectionId: credentialId,
+        connectionLabel: "ChatGPT Codex model credential",
+        accessToken: "central-model-token",
+      }),
+      id: credentialId,
+      label: "ChatGPT Codex model credential",
+      bindings: [
+        {
+          id: "fetch",
+          use: "fetch",
+          audience: [{ url: "https://chatgpt.com/backend-api", match: "path-prefix" }],
+          injection: {
+            type: "header",
+            name: "authorization",
+            valueTemplate: "Bearer {token}",
+          },
+        },
+      ],
+      metadata: { modelProviderId: "openai-codex" },
+    };
+
+    await new CredentialStore().saveUrlBound(credential);
+    const centralCredentialPath = path.join(
+      centralDataPath,
+      "credentials",
+      "url-bound",
+      `${credentialId}.json`
+    );
+    await expect(stat(centralCredentialPath).then((entry) => entry.isFile())).resolves.toBe(true);
+
+    await rm(workspaceA, { recursive: true, force: true });
+    await mkdir(path.join(workspaceB, "state"), { recursive: true });
+    setUserDataPath(path.join(workspaceB, "state"));
+
+    await expect(new CredentialStore().loadUrlBound(credentialId)).resolves.toEqual(credential);
+    await expect(stat(centralCredentialPath).then((entry) => entry.isFile())).resolves.toBe(true);
   });
 
   it("saves and loads a credential", async () => {
@@ -41,7 +102,9 @@ describe("CredentialStore", () => {
 
     await store.save(credential);
 
-    await expect(store.load(credential.providerId, credential.connectionId)).resolves.toEqual(credential);
+    await expect(store.load(credential.providerId, credential.connectionId)).resolves.toEqual(
+      credential
+    );
   });
 
   it("lists credentials across providers or for a single provider", async () => {
@@ -73,7 +136,11 @@ describe("CredentialStore", () => {
   it("writes through a temp file and leaves the credential file at 0o600", async () => {
     const credential = makeCredential();
     const updatedCredential = makeCredential({ connectionLabel: "Updated Label" });
-    const credentialPath = path.join(tempDir, credential.providerId, `${credential.connectionId}.json`);
+    const credentialPath = path.join(
+      tempDir,
+      credential.providerId,
+      `${credential.connectionId}.json`
+    );
 
     await store.save(credential);
     await chmod(credentialPath, 0o644);
@@ -96,9 +163,9 @@ describe("CredentialStore", () => {
     const fileBytes = await readFile(credentialPath, "utf8");
     expect(fileBytes).not.toContain(updatedCredential.accessToken);
 
-    await expect(store.load(updatedCredential.providerId, updatedCredential.connectionId)).resolves.toEqual(
-      updatedCredential,
-    );
+    await expect(
+      store.load(updatedCredential.providerId, updatedCredential.connectionId)
+    ).resolves.toEqual(updatedCredential);
   });
 
   it("rejects providerId / connectionId that do not match the strict identifier regex", async () => {
@@ -120,7 +187,9 @@ describe("CredentialStore", () => {
 
     await store.save(credential);
 
-    await expect(store.load(credential.providerId, credential.connectionId)).resolves.toEqual(credential);
+    await expect(store.load(credential.providerId, credential.connectionId)).resolves.toEqual(
+      credential
+    );
   });
 
   it("ignores legacy plaintext credential files", async () => {
@@ -142,7 +211,11 @@ describe("CredentialStore", () => {
     const providerDir = path.join(tempDir, credential.providerId);
     const credentialPath = path.join(providerDir, `${credential.connectionId}.json`);
     await mkdir(providerDir, { recursive: true });
-    await writeFile(credentialPath, JSON.stringify({ v: "v1-aesgcm", ct: Buffer.alloc(64).toString("base64") }), { mode: 0o600 });
+    await writeFile(
+      credentialPath,
+      JSON.stringify({ v: "v1-aesgcm", ct: Buffer.alloc(64).toString("base64") }),
+      { mode: 0o600 }
+    );
 
     await expect(store.load(credential.providerId, credential.connectionId)).resolves.toBeNull();
     await expect(store.list(credential.providerId)).resolves.toEqual([]);

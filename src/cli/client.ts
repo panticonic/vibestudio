@@ -8,6 +8,7 @@ import * as readline from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isSelectedWorkspaceUrl } from "@vibestudio/shared/connect";
 import {
+  assertCliProfileIsUnpaired,
   clearCliCredentials,
   loadCliCredentials,
   saveCliCredentials,
@@ -85,6 +86,7 @@ async function remotePair(inv: ParsedInvocation): Promise<number> {
         "pass a Vibestudio pairing link (https://vibestudio.app/pair#... or vibestudio://connect?...)"
       );
     }
+    assertCliProfileIsUnpaired();
     const creds = await pairRemoteServer({ link: positional, ...(label ? { label } : {}) });
     saveCliCredentials(creds);
     const result = { url: creds.url, credentialPath: credentialPath() };
@@ -403,6 +405,7 @@ async function terminalCredentials(
   const pairOptions = terminalPairOptions(inv);
   let creds: DeviceCredential;
   if (pairOptions) {
+    assertCliProfileIsUnpaired();
     creds = await pairRemoteServer(pairOptions);
     saveCliCredentials(creds);
     if (!json) console.log(`paired ${creds.url}`);

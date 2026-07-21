@@ -12,6 +12,7 @@ function makePanel(source: string): Panel {
   return {
     id: "panel-1",
     title: "Panel 1",
+    buildKey: "b".repeat(64),
     children: [],
     snapshot: {
       source,
@@ -106,7 +107,7 @@ describe("materializeMobilePanel", () => {
       panelId: "panel-1",
       // Mobile serves panels through the local asset façade (127.0.0.1:<port>) over
       // the WebRTC pipe, not the remote host directly.
-      url: "http://127.0.0.1:3000/_workspace/dev/panels/editor/?contextId=ctx-panel-1",
+      url: `http://127.0.0.1:3000/_workspace/dev/panels/editor/?contextId=ctx-panel-1&buildKey=${"b".repeat(64)}`,
       managed: true,
       panelInit: {
         entityId: "panel:nav-1",
