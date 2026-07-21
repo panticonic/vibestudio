@@ -8,6 +8,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./schema": "./src/schema.ts",
     "./test-utils": "./src/test-utils.ts"
   },
   "scripts": {

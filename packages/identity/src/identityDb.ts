@@ -20,12 +20,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
 import type { User, UserRole } from "./types.js";
-import {
-  assertCanonicalSqliteSchema,
-  initializeCanonicalSqliteSchema,
-  isTrulyEmptySqliteDatabase,
-} from "@vibestudio/sqlite";
-import { IDENTITY_DATABASE_SCHEMA } from "./identitySchema.js";
+import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
+import { IDENTITY_DATABASE_MIGRATION_PLAN } from "./identitySchema.js";
 
 /** A device credential row. Mirrors `DeviceRecord` plus the owning `userId`. */
 export interface DeviceRow {
@@ -156,18 +152,10 @@ export class IdentityDb {
         // is rejected by SQLite itself. The child never issues writes.
         this.db.exec("PRAGMA query_only = ON");
       }
-      if (isTrulyEmptySqliteDatabase(this.db)) {
-        if (options.readOnly) {
-          throw new Error(`Identity DB at ${options.path} is empty and cannot be initialized here`);
-        }
-        initializeCanonicalSqliteSchema(this.db, IDENTITY_DATABASE_SCHEMA);
-      } else {
-        assertCanonicalSqliteSchema(
-          this.db,
-          IDENTITY_DATABASE_SCHEMA,
-          `identity schema in ${options.path}`
-        );
-      }
+      openCanonicalSqliteDatabase(this.db, IDENTITY_DATABASE_MIGRATION_PLAN, {
+        description: `identity schema in ${options.path}`,
+        readOnly: options.readOnly,
+      });
       if (!options.readOnly) {
         // WAL mutates the file header and is intentionally after validation.
         this.db.exec("PRAGMA journal_mode = WAL");
