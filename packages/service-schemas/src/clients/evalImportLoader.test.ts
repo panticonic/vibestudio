@@ -137,10 +137,12 @@ describe("createEvalImportLoader", () => {
   it("rejects full builds for library imports", async () => {
     const call = vi.fn(async () => ({
       dir: "/tmp/build",
+      buildKey: "a".repeat(64),
       sourceStateHash: null,
       metadata: {
         kind: "package" as const,
         name: "@workspace/pkg",
+        buildKey: "a".repeat(64),
         ev: "ev-test",
         sourceStateHash: null,
         sourcemap: false,

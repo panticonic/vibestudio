@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import {
@@ -12,8 +12,8 @@ import { DigestSchema } from "./blobstore.js";
 /**
  * Public semantic VCS contract.
  *
- * This is intentionally a small, destructive pre-release epoch. Semantic
- * state is named only by committed events and local work applications. One
+ * This is intentionally a small semantic protocol surface. Semantic state is
+ * named only by committed events and local work applications. One
  * context working head, one integration flow, and causal command edges form
  * the complete public model.
  */
@@ -195,19 +195,33 @@ const vcsFileNodeRefSchema = z
   })
   .strict();
 
+export const vcsAppliedChangeNodeRefSchema = z
+  .object({
+    kind: z.literal("applied-change"),
+    appliedChangeId: id("Basis-specific applied change."),
+  })
+  .strict();
+
+export const vcsWorkUnitNodeRefSchema = z
+  .object({ kind: z.literal("work-unit"), workUnitId: id("Authored work unit.") })
+  .strict();
+
+export const vcsChangeNodeRefSchema = z
+  .object({ kind: z.literal("change"), changeId: id("Semantic change.") })
+  .strict();
+
+export const vcsCommandNodeRefSchema = z
+  .object({ kind: z.literal("command"), commandId: id("Semantic command.") })
+  .strict();
+
 const vcsSemanticNodeSchemas = [
   vcsEventNodeRefSchema,
   z.object({ kind: z.literal("application"), applicationId: id("Work application.") }).strict(),
-  z
-    .object({
-      kind: z.literal("applied-change"),
-      appliedChangeId: id("Basis-specific applied change."),
-    })
-    .strict(),
-  z.object({ kind: z.literal("work-unit"), workUnitId: id("Authored work unit.") }).strict(),
-  z.object({ kind: z.literal("change"), changeId: id("Semantic change.") }).strict(),
+  vcsAppliedChangeNodeRefSchema,
+  vcsWorkUnitNodeRefSchema,
+  vcsChangeNodeRefSchema,
   z.object({ kind: z.literal("decision"), decisionId: id("Integration decision.") }).strict(),
-  z.object({ kind: z.literal("command"), commandId: id("Semantic command.") }).strict(),
+  vcsCommandNodeRefSchema,
   vcsFileNodeRefSchema,
   z
     .object({
@@ -827,6 +841,7 @@ export type VcsPushInput = z.infer<typeof vcsPushInputSchema>;
 
 export const vcsWorkingMutationResultSchema = z
   .object({
+    commandId: id("Completed command identity."),
     contextId,
     workUnitId: id("Created work unit."),
     applicationId: id("Created local application."),
@@ -836,6 +851,7 @@ export const vcsWorkingMutationResultSchema = z
     incorporatedChangeIds: z
       .array(id("Bounded preview of incorporated existing changes."))
       .max(200),
+    decisionIds: z.array(id("Bounded preview of integration decisions authored here.")).max(200),
     workingHead: vcsStateNodeRefSchema,
   })
   .strict();
@@ -979,6 +995,18 @@ export const vcsCompareResultSchema = z
   .object({
     target: vcsStateNodeRefSchema,
     sourceEventId: id("Compared source event."),
+    resolution: z
+      .object({
+        complete: z
+          .boolean()
+          .describe("True when no effective source change still requires a decision."),
+        remainingChangeCount: z
+          .number()
+          .int()
+          .nonnegative()
+          .describe("Effective source changes still requiring adopt, reconcile, or decline."),
+      })
+      .strict(),
     counts: z
       .object({
         shared: z.number().int().nonnegative(),
@@ -986,14 +1014,27 @@ export const vcsCompareResultSchema = z
         actionable: z.number().int().nonnegative(),
         conflicting: z.number().int().nonnegative(),
         blocked: z.number().int().nonnegative(),
-        accounted: z.number().int().nonnegative(),
+        accounted: z
+          .number()
+          .int()
+          .nonnegative()
+          .describe("Source changes resolved by a reconciliation or decline decision."),
         historical: z.number().int().nonnegative(),
       })
       .strict(),
     changes: z.array(vcsComparedChangeSchema).max(500),
     nextCursor: cursor.nullable(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.resolution.complete !== (value.resolution.remainingChangeCount === 0)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["resolution", "complete"],
+        message: "Integration resolution is complete exactly when no changes remain",
+      });
+    }
+  });
 export type VcsCompareResult = z.infer<typeof vcsCompareResultSchema>;
 
 export const vcsSemanticCommandSchema = z
@@ -1383,14 +1424,15 @@ export const vcsBlameSpanSchema = z
   .object({
     start: z.number().int().nonnegative(),
     end: z.number().int().nonnegative(),
-    changeId: id("Terminal authored change.").nullable(),
-    appliedChangeId: id("Terminal applied change.").nullable(),
-    workUnitId: id("Original authored work unit.").nullable(),
-    commandId: id("Originating semantic command.").nullable(),
+    change: vcsChangeNodeRefSchema.describe("Terminal authored change root."),
+    appliedChange: vcsAppliedChangeNodeRefSchema.describe("Terminal applied change root."),
+    workUnit: vcsWorkUnitNodeRefSchema.describe("Original authored work unit root."),
+    command: vcsCommandNodeRefSchema.describe("Originating semantic command root."),
     path: z.array(vcsProvenanceEdgeSchema).max(200),
     stop: z.enum(["authored", "import-boundary"]),
   })
   .strict();
+export type VcsBlameSpan = z.infer<typeof vcsBlameSpanSchema>;
 
 export const vcsBlameResultSchema = z
   .object({

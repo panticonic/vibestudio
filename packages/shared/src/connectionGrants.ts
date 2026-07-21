@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { callerKindForPrincipalKind } from "./principalKinds.js";
+import { callerKindForPrincipalKind, isCodeIdentityCallerKind } from "./principalKinds.js";
 import type { EntityCache } from "./runtime/entityCache.js";
+import type { EntityRecord } from "./runtime/entitySpec.js";
 import type { CallerKind } from "./serviceDispatcher.js";
 
 export interface ConnectionGrant {
@@ -8,6 +9,8 @@ export interface ConnectionGrant {
   principalId: string;
   issuedBy: string;
   expiresAt: number;
+  /** Exact executable incarnation this credential was minted for. */
+  executionDigest?: string;
   redeemed?: boolean;
 }
 
@@ -17,14 +20,35 @@ export interface ConnectionGrantValidation {
   issuedBy: string;
 }
 
+function connectableExecutionDigest(record: EntityRecord): string | undefined {
+  if (!isCodeIdentityCallerKind(record.kind)) return undefined;
+  if (!record.activeBuildKey || !record.activeExecutionDigest || !record.activeAuthority) {
+    throw new Error(
+      `Cannot grant connection for executable principal without a sealed active incarnation: ${record.id}`
+    );
+  }
+  return record.activeExecutionDigest;
+}
+
+function grantMatchesActiveIncarnation(grant: ConnectionGrant, record: EntityRecord): boolean {
+  if (!isCodeIdentityCallerKind(record.kind)) return grant.executionDigest === undefined;
+  return (
+    record.activeAuthority !== undefined &&
+    record.activeBuildKey !== undefined &&
+    record.activeExecutionDigest !== undefined &&
+    grant.executionDigest === record.activeExecutionDigest
+  );
+}
+
 export class ConnectionGrantService {
   private readonly entityCache: EntityCache;
   private readonly grants = new Map<string, ConnectionGrant>();
   private readonly gcTimer: ReturnType<typeof setInterval>;
 
   /**
-   * A redeemed grant stays valid until its principal is revoked (the redemption
-   * TTL is only the deadline to PRESENT it) — but a long-lived, frequently
+   * A redeemed grant stays valid until its principal is revoked or its exact
+   * executable incarnation changes (the redemption TTL is only the deadline to
+   * PRESENT it) — but a long-lived, frequently
    * reconnecting principal mints + redeems a fresh grant on every reconnect, so
    * without a bound the redeemed grants for one principal accumulate without
    * limit. Keep at most this many redeemed grants per principal (newest wins);
@@ -44,12 +68,20 @@ export class ConnectionGrantService {
     issuedBy: string,
     ttlMs: number = 60_000
   ): { token: string; expiresAt: number } {
-    if (!this.entityCache.resolveActive(principalId)) {
+    const record = this.entityCache.resolveActive(principalId);
+    if (!record) {
       throw new Error(`Cannot grant connection for unregistered principal: ${principalId}`);
     }
+    const executionDigest = connectableExecutionDigest(record);
     const token = randomBytes(32).toString("hex");
     const expiresAt = Date.now() + ttlMs;
-    this.grants.set(token, { token, principalId, issuedBy, expiresAt });
+    this.grants.set(token, {
+      token,
+      principalId,
+      issuedBy,
+      expiresAt,
+      ...(executionDigest ? { executionDigest } : {}),
+    });
     return { token, expiresAt };
   }
 
@@ -62,7 +94,7 @@ export class ConnectionGrantService {
       return null;
     }
     const record = this.entityCache.resolveActive(grant.principalId);
-    if (!record) {
+    if (!record || !grantMatchesActiveIncarnation(grant, record)) {
       this.grants.delete(token);
       return null;
     }
@@ -89,8 +121,7 @@ export class ConnectionGrantService {
     for (const [token, grant] of this.grants) {
       if (grant.redeemed && grant.principalId === principalId) redeemedTokens.push(token);
     }
-    const excess =
-      redeemedTokens.length - ConnectionGrantService.MAX_REDEEMED_GRANTS_PER_PRINCIPAL;
+    const excess = redeemedTokens.length - ConnectionGrantService.MAX_REDEEMED_GRANTS_PER_PRINCIPAL;
     for (let i = 0; i < excess; i++) this.grants.delete(redeemedTokens[i]!);
   }
 
@@ -102,7 +133,7 @@ export class ConnectionGrantService {
       return null;
     }
     const record = this.entityCache.resolveActive(grant.principalId);
-    if (!record) {
+    if (!record || !grantMatchesActiveIncarnation(grant, record)) {
       this.grants.delete(token);
       return null;
     }

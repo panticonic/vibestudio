@@ -1,7 +1,51 @@
 import { describe, expect, it, vi } from "vitest";
-import { reconcileSingletons } from "./singletonReconciliation.js";
+import { reconcileSingletons, singletonEntityActivationInput } from "./singletonReconciliation.js";
 
 describe("reconcileSingletons", () => {
+  it("persists the singleton's concrete sealed build identity", () => {
+    expect(
+      singletonEntityActivationInput(
+        {
+          source: "workers/model-settings",
+          className: "ModelSettingsDO",
+          key: "workspace-model-settings",
+          contextId: "ctx-settings",
+        },
+        {
+          buildKey: "build-model-settings",
+          effectiveVersion: "ev-settings",
+          executionDigest: "a".repeat(64),
+          authorityRequests: [
+            {
+              capability: "service:credentials.listStoredCredentials",
+              resource: { kind: "exact", key: "workspace:test" },
+            },
+          ],
+          authorityDelegations: [],
+        },
+        "system"
+      )
+    ).toMatchObject({
+      kind: "do",
+      source: { repoPath: "workers/model-settings", effectiveVersion: "ev-settings" },
+      activeBuildKey: "build-model-settings",
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: {
+        requests: [
+          {
+            capability: "service:credentials.listStoredCredentials",
+            resource: { kind: "exact", key: "workspace:test" },
+          },
+        ],
+        delegations: [],
+      },
+      contextId: "ctx-settings",
+      className: "ModelSettingsDO",
+      key: "workspace-model-settings",
+      ownerUserId: "system",
+    });
+  });
+
   it("finishes every runtime preparation before any singleton activation", async () => {
     let releaseSecond!: () => void;
     const secondPrepared = new Promise<void>((resolve) => {

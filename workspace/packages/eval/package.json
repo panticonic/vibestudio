@@ -12,6 +12,7 @@
   "dependencies": {
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
+    "acorn": "^8.17.0",
     "sucrase": "^3.35.0"
   },
   "devDependencies": {

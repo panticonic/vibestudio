@@ -291,7 +291,7 @@ describe("approvalCopy", () => {
           "This stops a runtime entity in the existing context owned by Agent X. It does not delete source files.",
         resource: {
           type: "context",
-          label: "File context",
+          label: "Workspace branch",
           value: "Agent X",
         },
         details: [
@@ -302,7 +302,7 @@ describe("approvalCopy", () => {
       category: "Capability request",
       title: "Retire runtime entity in another context",
       summaryIncludes: "stops a runtime entity",
-      warning: "This can affect files or running work owned by another agent or panel.",
+      warning: "This can affect another workspace branch and the work running in it.",
     },
     {
       name: "context boundary create do",
@@ -313,20 +313,20 @@ describe("approvalCopy", () => {
         title: "Create do in another context",
         resource: {
           type: "context",
-          label: "File context",
+          label: "Workspace branch",
           value: "Agent X",
         },
         operation: {
           kind: "runtime",
           verb: "Create do",
-          object: { type: "context", label: "File context", value: "Agent X" },
+          object: { type: "context", label: "Workspace branch", value: "Agent X" },
         },
         details: [{ label: "Owner", value: "Agent X" }],
       },
       category: "Capability request",
-      title: "Launch background process with different file access",
-      summaryIncludes: "files or running work owned by another agent or panel",
-      warning: "This can affect files or running work owned by another agent or panel.",
+      title: "Launch background process in another workspace branch",
+      summaryIncludes: "repository state and running work",
+      warning: "This can affect another workspace branch and the work running in it.",
     },
     {
       name: "userland",

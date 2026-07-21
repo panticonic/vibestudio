@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { parseCanonicalKey } from "@vibestudio/shared/canonicalKey";
 import { UserlandApprovalGrantStore, keyFor } from "./userlandApprovalGrantStore.js";
 
@@ -53,6 +53,7 @@ describe("UserlandApprovalGrantStore", () => {
     const raw = JSON.parse(
       fs.readFileSync(path.join(statePath, "userland-approval-grants.json"), "utf8")
     );
+    expect(raw.schemaVersion).toBe(1);
     expect(raw.grants[0].principal).toMatchObject({
       callerId: "panel-one",
       repoPath: "panels/one",
@@ -156,14 +157,44 @@ describe("UserlandApprovalGrantStore", () => {
     ]);
   });
 
-  it("tolerates malformed files by starting empty and warning", () => {
+  it("fails closed on malformed JSON without overwriting it", () => {
     const statePath = tempDir();
-    fs.writeFileSync(path.join(statePath, "userland-approval-grants.json"), "{nope", "utf8");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const filePath = path.join(statePath, "userland-approval-grants.json");
+    fs.writeFileSync(filePath, "{nope", "utf8");
+
+    expect(() => new UserlandApprovalGrantStore({ statePath })).toThrow(/malformed JSON/);
+    expect(fs.readFileSync(filePath, "utf8")).toBe("{nope");
+  });
+
+  it("atomically migrates the recognized unversioned grant file", () => {
+    const statePath = tempDir();
+    const filePath = path.join(statePath, "userland-approval-grants.json");
+    const grant = {
+      principal: workerAlpha,
+      subject: { id: "team-x:foo", label: "Foo" },
+      choice: "allow",
+      grantedAt: 10,
+      scope: "version",
+    };
+    fs.writeFileSync(filePath, JSON.stringify({ grants: [grant] }));
+
     const store = new UserlandApprovalGrantStore({ statePath });
 
-    expect(store.list(workerAlpha)).toEqual([]);
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    expect(store.lookup(workerAlpha, "team-x:foo")).toMatchObject(grant);
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({
+      schemaVersion: 1,
+      grants: [grant],
+    });
+  });
+
+  it("rejects future and invalid legacy schemas without modifying them", () => {
+    for (const persisted of [{ schemaVersion: 2, grants: [] }, { grants: [{ choice: "allow" }] }]) {
+      const statePath = tempDir();
+      const filePath = path.join(statePath, "userland-approval-grants.json");
+      fs.writeFileSync(filePath, JSON.stringify(persisted));
+
+      expect(() => new UserlandApprovalGrantStore({ statePath })).toThrow();
+      expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual(persisted);
+    }
   });
 });

@@ -30,7 +30,7 @@ describe("wireVcsDurability", () => {
       { name: "vcsAttach", dependencies: ["doDispatch", "workerdManager"] },
       {
         name: "semanticWorkspace",
-        dependencies: ["vcsAttach", "workerdWorkspace"],
+        dependencies: ["vcsAttach"],
       },
       { name: "vcsGcScheduler", dependencies: ["semanticWorkspace"] },
     ]);
@@ -43,7 +43,11 @@ describe("wireVcsDurability", () => {
     const manager = {
       ensureDurableObjectEntity: vi.fn(async () => ({
         targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
-        effectiveVersion: "sealed:build",
+        effectiveVersion: "a".repeat(64),
+        buildKey: "c".repeat(64),
+        executionDigest: "b".repeat(64),
+        authorityRequests: [],
+        authorityDelegations: [],
       })),
     } as unknown as WorkerdManager;
     let gadClient:
@@ -83,7 +87,11 @@ describe("wireVcsDurability", () => {
     expect(registerControlPlanePrincipal).toHaveBeenCalledWith({
       ...gadRef,
       targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
-      effectiveVersion: "sealed:build",
+      effectiveVersion: "a".repeat(64),
+      buildKey: "c".repeat(64),
+      executionDigest: "b".repeat(64),
+      authorityRequests: [],
+      authorityDelegations: [],
     });
     expect(workspaceVcs.attachGad).toHaveBeenCalledOnce();
 

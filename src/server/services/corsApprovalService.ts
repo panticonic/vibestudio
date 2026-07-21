@@ -92,7 +92,7 @@ export function createCorsApprovalService(deps: {
   return {
     name: SERVICE_NAME,
     description: "Approval-gated CORS response header relaxation",
-    policy: { allowed: ["panel", "app", "worker", "do"] },
+    authority: { principals: ["code"] },
     methods: corsApprovalMethods,
     handler: defineServiceHandler(SERVICE_NAME, corsApprovalMethods, {
       authorize: (ctx, [request]) => authorize(ctx, request),

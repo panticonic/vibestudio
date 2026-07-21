@@ -71,12 +71,13 @@ export function createAuditService(auditLog: AuditLog): ServiceDefinition {
   const methods = {
     query: {
       args: z.tuple([auditQuerySchema.optional()]),
+      access: { sensitivity: "read" as const },
     },
   };
   return {
     name: "audit",
     description: "Audit log query access",
-    policy: { allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"] },
+    authority: { principals: ["user", "host", "code", "entity"] },
     methods,
     handler: defineServiceHandler("audit", methods, {
       query: async (_ctx, [query]) => {

@@ -112,7 +112,7 @@ async function loadWithMocks(): Promise<{
       ...actual,
       buildUnit: vi.fn(
         async (
-          node: { name: string; kind: string },
+          node: { name: string; kind: string; relativePath: string },
           ev: string,
           _graph: unknown,
           _root: string,
@@ -142,9 +142,12 @@ async function loadWithMocks(): Promise<{
             {
               kind: node.kind as never,
               name: node.name,
+              buildKey: key,
+              sourcePath: node.relativePath,
               ev,
               sourceStateHash: stateRef,
               sourcemap: false,
+              authority: { requests: [], delegations: [] },
               details: { kind: "generic" as const },
               builtAt: new Date().toISOString(),
             }

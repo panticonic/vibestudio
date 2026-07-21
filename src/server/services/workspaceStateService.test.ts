@@ -42,17 +42,23 @@ describe("workspaceStateService — title mirror hooks", () => {
   it("allows approved shell apps to read and write workspace slot state", () => {
     const { svc } = makeService({});
 
-    expect(svc.policy.allowed).toContain("app");
-    expect(svc.methods["slot.list"]?.policy?.allowed).toContain("app");
-    expect(svc.methods["slot.create"]?.policy?.allowed).toContain("app");
+    expect(svc.authority.principals).toContain("code");
+    expect(svc.methods["slot.list"]?.authority).toEqual({
+      principals: expect.arrayContaining(["host", "user", "code"]),
+    });
+    expect(svc.methods["slot.create"]?.authority).toEqual({
+      principals: expect.arrayContaining(["host", "user", "code"]),
+    });
   });
 
   it("exposes lifecycle lease methods to DO callers", async () => {
     const { svc, calls } = makeService({});
     const key = { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" };
 
-    expect(svc.methods["lifecycleLeaseUpsert"]?.policy?.allowed).toContain("do");
-    expect(svc.methods["lifecycleLeaseClear"]?.policy?.allowed).toContain("do");
+    expect(svc.methods["lifecycleLeaseUpsert"]?.authority).toEqual({
+      principals: ["host", "code"],
+    });
+    expect(svc.methods["lifecycleLeaseClear"]?.authority).toEqual({ principals: ["host", "code"] });
 
     await svc.handler(makeCtx() as never, "lifecycleLeaseUpsert", [{ ...key, detail: "turn" }]);
     await svc.handler(makeCtx() as never, "lifecycleLeaseClear", [key]);
@@ -162,12 +168,24 @@ describe("workspaceStateService — slot-state change hook", () => {
   const mutating: Array<[method: string, args: unknown[]]> = [
     ["slot.create", [{ slotId: "s1", parentSlotId: null, positionId: "p1" }]],
     [
-      "slot.appendHistory",
-      ["s1", { entryKey: "e1", entityId: "entity-1", source: "panels/test", contextId: "ctx-1" }],
+      "slot.commitPreparedNavigation",
+      [
+        {
+          slotId: "s1",
+          expectedCurrentEntityId: "entity-0",
+          mutation: {
+            kind: "append",
+            entry: {
+              entryKey: "e1",
+              entityId: "entity-1",
+              source: "panels/test",
+              contextId: "ctx-1",
+            },
+          },
+        },
+      ],
     ],
-    ["slot.setCurrent", ["s1", "e1"]],
     ["slot.updateCurrentStateArgs", ["s1", {}]],
-    ["slot.replaceHistory", ["s1", [], 0]],
     ["slot.setParent", ["s1", null]],
     ["slot.setPosition", ["s1", "p1"]],
     ["slot.move", ["s1", null, "p1"]],

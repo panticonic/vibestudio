@@ -46,6 +46,15 @@ describe("buildUnit app builds", () => {
         version: "0.1.0",
         private: true,
         vibestudio: {
+          authority: {
+            requests: [
+              {
+                capability: "app.getInfo",
+                resource: { kind: "exact", key: "global" },
+              },
+            ],
+            delegations: [],
+          },
           app: {
             target: "electron",
             renderer: "index.ts",
@@ -78,7 +87,7 @@ describe("buildUnit app builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-apps/shell"),
-      "ev-shell",
+      "a".repeat(64),
       graph,
       workspaceRoot,
       "state:test"
@@ -101,6 +110,16 @@ describe("buildUnit app builds", () => {
         }),
       ])
     );
+    expect(result.buildKey).toBe(result.metadata.buildKey);
+    expect(result.metadata.authority).toEqual({
+      requests: [
+        {
+          capability: "app.getInfo",
+          resource: { kind: "exact", key: "global" },
+        },
+      ],
+      delegations: [],
+    });
   });
 
   it("bundles terminal app targets as node entry artifacts", async () => {
@@ -178,7 +197,7 @@ describe("buildUnit app builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-apps/remote-cli"),
-      "ev-cli",
+      "b".repeat(64),
       graph,
       workspaceRoot,
       "state:test"
@@ -258,7 +277,7 @@ describe("buildUnit app builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-apps/mobile"),
-      "ev-mobile",
+      "c".repeat(64),
       graph,
       workspaceRoot,
       "state:test"
@@ -290,7 +309,7 @@ describe("buildUnit app builds", () => {
         encoding: "base64",
         platform: "ios",
         integrity: expect.stringMatching(/^sha256-[0-9a-f]{64}$/),
-        content: Buffer.from("bundle:@workspace-apps/mobile:ev-mobile").toString("base64"),
+        content: Buffer.from(`bundle:@workspace-apps/mobile:${"c".repeat(64)}`).toString("base64"),
       }),
     ]);
   });
@@ -363,7 +382,7 @@ describe("buildUnit app builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-panels/fs-panel"),
-      "ev-panel",
+      "d".repeat(64),
       graph,
       workspaceRoot,
       "state:test"
@@ -412,7 +431,7 @@ describe("buildUnit app builds", () => {
     await expect(
       buildUnit(
         graph.get("@workspace-apps/prebuilt"),
-        "ev-dist",
+        "e".repeat(64),
         graph,
         workspaceRoot,
         "state:test"

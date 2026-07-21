@@ -1,6 +1,5 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   permissionsMethods,
@@ -17,33 +16,19 @@ import {
 } from "./credentialUseGrantStore.js";
 
 const SERVICE = "permissions";
-const TRUSTED_PAGE = "about/permissions";
 
 export function createPermissionsService(deps: {
   capabilityGrants: CapabilityGrantStore;
   userlandGrants: UserlandApprovalGrantStore;
   credentialUseGrants: CredentialUseGrantStoreLike;
 }): ServiceDefinition {
-  const assertCanManagePermissions = (ctx: ServiceContext, method: string): void => {
-    const privileged = ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server";
-    if (!privileged && ctx.caller.code?.repoPath !== TRUSTED_PAGE) {
-      throw new ServiceError(
-        SERVICE,
-        method,
-        "Only the trusted Permissions page may inspect grants",
-        "EACCES"
-      );
-    }
-  };
-
   return {
     name: SERVICE,
     description: "Trusted review and revocation of durable permission grants",
-    policy: { allowed: ["shell", "app", "panel", "server"] },
+    authority: { principals: ["user", "host", "code"] },
     methods: permissionsMethods,
     handler: defineServiceHandler(SERVICE, permissionsMethods, {
-      list: (ctx) => {
-        assertCanManagePermissions(ctx, "list");
+      list: () => {
         const capability: SavedPermissionGrant[] = deps.capabilityGrants
           .listPersistent()
           .map((grant) => ({
@@ -116,8 +101,7 @@ export function createPermissionsService(deps: {
           (a, b) => (b.grantedAt ?? 0) - (a.grantedAt ?? 0)
         );
       },
-      revoke: async (ctx, [{ kind, id }]) => {
-        assertCanManagePermissions(ctx, "revoke");
+      revoke: async (_ctx, [{ kind, id }]) => {
         const removed =
           kind === "capability"
             ? deps.capabilityGrants.revokePersistent(id) || deps.capabilityGrants.revokeSession(id)

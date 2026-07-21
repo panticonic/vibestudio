@@ -1,7 +1,7 @@
 import * as esbuild from "esbuild";
 import * as fs from "fs";
 import * as path from "path";
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { builtinModules, createRequire } from "node:module";
 import { collectWorkersFromDependencies, workersToArray } from "./scripts/collectWorkers.mjs";
 import { SERVER_ESM_BANNER } from "./scripts/build-artifact-contracts.mjs";
@@ -13,6 +13,25 @@ import {
 } from "./scripts/host-build-fingerprint.mjs";
 
 const isDev = process.env.NODE_ENV === "development";
+
+function verifyDerivedAuthority() {
+  // Authority requests are reviewed source contracts. Builds must never turn
+  // inferred use into a request by rewriting package manifests, even in local
+  // development. The explicit generation command may propose/apply changes;
+  // every normal build only proves that the reviewed sources are current.
+  const checkArgs = ["--check"];
+  console.log("Checking explicit authority manifests and derived audit artifacts...");
+  execFileSync(process.execPath, ["scripts/generate-unit-authority-manifests.mjs", ...checkArgs], {
+    stdio: "inherit",
+  });
+  execFileSync(
+    process.execPath,
+    ["scripts/generate-runtime-foundation-ledgers.mjs", ...checkArgs],
+    {
+      stdio: "inherit",
+    }
+  );
+}
 
 const logOverride = {
   "suspicious-logical-operator": "silent",
@@ -427,6 +446,7 @@ async function buildDependencyWorkers() {
  */
 async function build() {
   try {
+    verifyDerivedAuthority();
     fs.mkdirSync("dist", { recursive: true });
 
     // Raw-node support scripts import this generated, dependency-free artifact.
@@ -536,6 +556,7 @@ async function buildInternalDoOnly() {
 
 async function buildSourceServerPrerequisites() {
   try {
+    verifyDerivedAuthority();
     // Source-mode servers import infrastructure packages through their public
     // dist exports, and auto-spawn the compiled headless host. Rebuilding only
     // the internal DO bundle can therefore combine live server source with

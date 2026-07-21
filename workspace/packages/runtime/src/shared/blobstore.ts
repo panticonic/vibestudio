@@ -5,10 +5,11 @@
  * This is the curated client behind `services.blobstore` / `import { blobstore }
  * from "@workspace/runtime"`. Most methods are thin typed wrappers over the
  * `blobstore` RPC service (`@vibestudio/service-schemas/blobstore`). The
- * runtime adds two portable conveniences: `putBytes` losslessly encodes bytes,
- * and `materializeTree` composes read-only CAS calls with the caller-scoped
- * RuntimeFs. The raw host materializer remains admin-only because it accepts an
- * absolute host path; userland never receives that authority.
+ * runtime adds byte conveniences (`putBytes`/`getBytes`) that losslessly bridge
+ * the wire's base64 representation, and `materializeTree` composes read-only
+ * CAS calls with the caller-scoped RuntimeFs. The raw host materializer remains
+ * admin-only because it accepts an absolute host path; userland never receives
+ * that authority.
  *
  * Read/write methods (`putText`/`putBase64`/`putBytes`/`getText`/`getRange`/`grep`/…) admit
  * `panel`/`worker`/`do` callers (BLOBSTORE_READ_POLICY), so persisting a
@@ -33,6 +34,7 @@ type PutBlobResult = Awaited<ReturnType<BlobstoreServiceClient["putBase64"]>>;
 export type BlobstoreBytes = Uint8Array | ArrayBuffer;
 
 type ReadText = (digest: string) => Promise<string | null>;
+type GetBytes = (digest: string) => Promise<Uint8Array | null>;
 
 type MaterializeTree = (
   treeRef: string,
@@ -43,6 +45,8 @@ type MaterializeTree = (
 export type BlobstoreClient = Omit<BlobstoreServiceClient, "materializeTree"> & {
   /** Runtime-only byte convenience; the wire service remains base64-only. */
   putBytes(bytes: BlobstoreBytes): Promise<PutBlobResult>;
+  /** Runtime-only byte convenience; decodes the wire service's base64 representation. */
+  getBytes: GetBytes;
   /** Readable alias for `getText`, available uniformly in panel, worker, and eval. */
   readText: ReadText;
   /** Copy a CAS tree into this runtime's context-scoped filesystem. */
@@ -74,6 +78,10 @@ export function createBlobstoreClient(rpc: RpcCaller, fs?: RuntimeFs): Blobstore
   };
 
   const readText: ReadText = (digest) => serviceClient.getText(digest);
+  const getBytes: GetBytes = async (digest) => {
+    const base64 = await serviceClient.getBase64(digest);
+    return base64 === null ? null : new Uint8Array(Buffer.from(base64, "base64"));
+  };
 
   const materializeTree: MaterializeTree = async (treeRef, outDir, opts) => {
     if (!fs) {
@@ -161,7 +169,12 @@ export function createBlobstoreClient(rpc: RpcCaller, fs?: RuntimeFs): Blobstore
     return { written, unchanged };
   };
 
-  return Object.assign(serviceClient, { putBytes, readText, materializeTree }) as BlobstoreClient;
+  return Object.assign(serviceClient, {
+    putBytes,
+    getBytes,
+    readText,
+    materializeTree,
+  }) as BlobstoreClient;
 }
 
 function safeMaterializedPath(root: string, relativePath: string): string {

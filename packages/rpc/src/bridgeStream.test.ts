@@ -204,11 +204,21 @@ describe("createBridgeStreamRelay", () => {
     await vi.waitFor(() => expect(sent.at(-1)?.kind).toBe("end"));
   });
 
-  it("rejects a stream-open without a bodyId (upload-only hop)", () => {
-    const { relay } = makeRelay({});
-    expect(() =>
-      relay.open({ opId: "op-1", envelope: streamRequestEnvelope(), bodyId: "" })
-    ).toThrow(/bodyId/);
+  it("opens body-less streams on the same first-class response plane", async () => {
+    const openStream = vi.fn(async (_env, _signal, body) => {
+      expect(body).toBeNull();
+      return decodedResponse(bytes(4, 5));
+    });
+    const { relay, sent } = makeRelay({ openStream });
+
+    relay.open({ opId: "op-1", envelope: streamRequestEnvelope() });
+
+    await vi.waitFor(() => expect(sent.at(-1)?.kind).toBe("end"));
+    expect(openStream).toHaveBeenCalledOnce();
+    expect(sent.find((message) => message.kind === "chunk")).toMatchObject({
+      kind: "chunk",
+      chunk: bytes(4, 5),
+    });
   });
 
   it("rejects a non-stream-request envelope", () => {
@@ -318,7 +328,10 @@ describe("openBridgeUploadStream ↔ relay (in-memory bridge)", () => {
     let panelHandler: ((msg: BridgeStreamMessage) => void) | null = null;
     const relay = createBridgeStreamRelay({
       chunkFormat: "base64",
-      openStream,
+      openStream: (envelope, signal, body) => {
+        if (!body) throw new Error("expected upload body");
+        return openStream(envelope, signal, body);
+      },
       // Round-trip through JSON like the RN injection channel does.
       sendToPanel: (msg) => panelHandler?.(JSON.parse(JSON.stringify(msg))),
     });

@@ -86,6 +86,17 @@ describe("snapshotBrowserPanelFromCdpBridge", () => {
 async function createSinglePanelBridge(options?: {
   callTarget?: ReturnType<typeof vi.fn>;
   ensureDefaultCdpHostForSlot?: ReturnType<typeof vi.fn>;
+  activeExecution?: {
+    buildKey: string;
+    digest: string;
+    authority: {
+      requests: Array<{
+        capability: string;
+        resource: { kind: "exact"; key: string };
+      }>;
+      delegations: [];
+    };
+  };
 }) {
   const now = Date.now();
   const slot = {
@@ -112,6 +123,13 @@ async function createSinglePanelBridge(options?: {
     id: slot.current_entity_id,
     kind: "panel",
     source: { repoPath: "panels/target", effectiveVersion: "ev-target" },
+    ...(options?.activeExecution
+      ? {
+          activeBuildKey: options.activeExecution.buildKey,
+          activeExecutionDigest: options.activeExecution.digest,
+          activeAuthority: options.activeExecution.authority,
+        }
+      : {}),
     contextId: "ctx-target",
     key: "entry-a",
     createdAt: now,
@@ -166,10 +184,61 @@ async function createSinglePanelBridge(options?: {
     },
     eventService: { emit: vi.fn() },
   } as never);
-  return { bridge, callTarget, cdpBridge, ensureDefaultCdpHostForSlot, slot };
+  return { bridge, callTarget, cdpBridge, ensureDefaultCdpHostForSlot, slot, dispatch };
 }
 
 describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
+  it("hydrates panel authority from the durable runtime incarnation", async () => {
+    const activeExecution = {
+      buildKey: "b".repeat(64),
+      digest: "a".repeat(64),
+      authority: {
+        requests: [
+          {
+            capability: "service:panel.getInfo",
+            resource: { kind: "exact" as const, key: "panel:getInfo" },
+          },
+        ],
+        delegations: [] as [],
+      },
+    };
+    const { bridge } = await createSinglePanelBridge({ activeExecution });
+
+    await expect(
+      bridge({ callerId: "server", callerKind: "server", method: "list", args: [] })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        buildKey: activeExecution.buildKey,
+        executionDigest: activeExecution.digest,
+        authorityRequests: activeExecution.authority.requests,
+        authorityDelegations: [],
+      }),
+    ]);
+  });
+
+  it("publishes corrupt panels with incomplete execution identity as unavailable", async () => {
+    const { bridge } = await createSinglePanelBridge();
+
+    await expect(
+      bridge({ callerId: "server", callerKind: "server", method: "getTreeSnapshot", args: [] })
+    ).resolves.toMatchObject({
+      forest: [
+        {
+          rootPanels: [
+            {
+              buildKey: null,
+              executionDigest: null,
+              artifacts: {
+                buildState: "error",
+                error: expect.stringContaining("incompatible or corrupt"),
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("loads a panel before reporting focus", async () => {
     const { bridge, ensureDefaultCdpHostForSlot, slot } = await createSinglePanelBridge();
 
@@ -862,6 +931,14 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
     expect(runtimeCreate?.[0].caller).toMatchObject({
       runtime: { id: parentEntityId, kind: "server" },
       subject: { userId: "usr_alice", handle: "alice" },
+    });
+    const slotCreate = dispatch.mock.calls.find(
+      ([, service, method]) => service === "workspace-state" && method === "slot.create"
+    );
+    expect(slotCreate?.[0].caller).toMatchObject({
+      runtime: { id: parentEntityId, kind: "server" },
+      subject: { userId: "usr_alice", handle: "alice" },
+      hostOriginated: true,
     });
   });
 });

@@ -82,8 +82,8 @@ describe("panel error diagnostic chat launcher", () => {
       expect.objectContaining({
         parentId: "spectrolite",
         focus: true,
+        contextId: "ctx-vault",
         stateArgs: expect.objectContaining({
-          contextId: "ctx-vault",
           initialPrompt: expect.stringContaining("Maximum update depth exceeded"),
         }),
       }),

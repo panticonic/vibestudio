@@ -8,7 +8,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { JsonObjectSchema, JsonValueSchema } from "@vibestudio/shared/wireValues";
 import type {
@@ -23,6 +23,8 @@ import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspace
 import type { WorkspaceNode } from "@vibestudio/shared/types";
 import { APP_CAPABILITIES_BY_TARGET } from "@vibestudio/shared/unitManifest";
 import { pendingUnitBatchApprovalSchema } from "./shellApproval.js";
+import { CapabilityScopeSchema } from "./build.js";
+import { EvalAuthorityDelegationSchema } from "./authority/evalDelegation.js";
 
 // ─── Access descriptors ───────────────────────────────────────────────────────
 // Mirrors the blobstore idiom of a shared `*_ACCESS` constant for the pure-read
@@ -128,6 +130,9 @@ export const HostTargetLaunchResultSchema = z.discriminatedUnion("status", [
       artifactRoute: z.string().optional(),
       capabilities: z.array(AppCapabilitySchema).optional(),
       effectiveVersion: z.string().nullable().optional(),
+      executionDigest: z.string().regex(/^[0-9a-f]{64}$/),
+      authorityRequests: z.array(CapabilityScopeSchema).readonly(),
+      authorityDelegations: z.array(EvalAuthorityDelegationSchema).readonly(),
       adoptionPolicy: z.enum(["immediate", "prompt", "artifact-only"]).optional(),
     })
     .strict(),
@@ -480,9 +485,9 @@ export const workspaceMethods = defineServiceMethods({
     returns: z.object({
       path: z.string().describe("Absolute path to the workspace source tree."),
       statePath: z.string().describe("Absolute path to the workspace's persisted state directory."),
-      contextProjectionsPath: z.string().describe(
-        "Absolute path to the workspace's current-epoch disposable context projections."
-      ),
+      contextProjectionsPath: z
+        .string()
+        .describe("Absolute path to the workspace's current-epoch disposable context projections."),
       config: WorkspaceConfigSchema.describe(
         "The resolved workspace config (meta/vibestudio.yml)."
       ),
@@ -518,7 +523,7 @@ export const workspaceMethods = defineServiceMethods({
         .describe("Ordered list of init-panel descriptors."),
     ]),
     returns: z.void(),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: [[{ source: "panels/chat" }]] }],
   },
@@ -532,7 +537,7 @@ export const workspaceMethods = defineServiceMethods({
       z.unknown().describe("New value for the field."),
     ]),
     returns: z.void(),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["title", "My Workspace"] }],
   },
@@ -552,13 +557,9 @@ export const workspaceMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.array(SkillEntrySchema),
     access: READ_ACCESS,
-    // `agent` (linked external sessions): the channel-host bridge serves the
-    // workspace skill catalog to Claude Code as MCP resources. Read-only
-    // widening on the skill-discovery hot path (docs/architecture/
-    // rpc-and-services.md, "Agent callers and the eval escape hatch").
-    policy: {
-      allowed: ["shell", "app", "panel", "worker", "do", "extension", "server", "agent"],
-    },
+    // Linked external sessions receive the workspace skill catalog through
+    // their exact entity principal; runtime kinds are not authorization.
+    authority: { principals: ["host", "user", "code", "entity"] },
   },
   readSkill: {
     description:
@@ -566,10 +567,8 @@ export const workspaceMethods = defineServiceMethods({
     args: z.tuple([z.string().describe("Canonical workspace repo path containing SKILL.md.")]),
     returns: z.string(),
     access: READ_ACCESS,
-    // Read-only widening for agent callers (see listSkills).
-    policy: {
-      allowed: ["shell", "app", "panel", "worker", "do", "extension", "server", "agent"],
-    },
+    // Read-only entity-principal access mirrors listSkills.
+    authority: { principals: ["host", "user", "code", "entity"] },
     examples: [{ args: ["skills/code-review"] }, { args: ["packages/foo"] }, { args: ["meta"] }],
   },
   sourceTree: {
@@ -588,7 +587,7 @@ export const workspaceMethods = defineServiceMethods({
     // Launch orchestration is an extension concern; panels/workers/DO drive it
     // too (e.g. opening a context terminal). Narrower than the service default
     // (drops `app`, which never places terminal sessions).
-    policy: { allowed: ["shell", "panel", "worker", "do", "extension", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["ctx-abc"] }],
   },
@@ -689,7 +688,7 @@ export const workspaceMethods = defineServiceMethods({
         .optional(),
     ]),
     returns: JsonObjectSchema,
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "write" },
   },
   "recurring.list": {
@@ -697,14 +696,14 @@ export const workspaceMethods = defineServiceMethods({
       "List declarative scheduled jobs from meta/vibestudio.yml with their durable run state (next/last run, failures, backoff).",
     args: z.tuple([]),
     returns: z.array(WorkspaceRecurringJobStatusSchema),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: READ_ACCESS,
   },
   "heartbeats.list": {
     description: "List registered heartbeats with their schedule, channel binding, and run state.",
     args: z.tuple([]),
     returns: z.array(WorkspaceHeartbeatStatusSchema),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: READ_ACCESS,
   },
   "heartbeats.runNow": {
@@ -713,7 +712,7 @@ export const workspaceMethods = defineServiceMethods({
       WorkspaceHeartbeatSelectorSchema.describe("Heartbeat name or a selector object."),
     ]),
     returns: HeartbeatTickResultSchema,
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["news-briefing"] }],
   },
@@ -723,7 +722,7 @@ export const workspaceMethods = defineServiceMethods({
       WorkspaceHeartbeatSelectorSchema.describe("Heartbeat name or a selector object."),
     ]),
     returns: z.object({ ok: z.literal(true) }),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["news-briefing"] }],
   },
@@ -733,7 +732,7 @@ export const workspaceMethods = defineServiceMethods({
       WorkspaceHeartbeatSelectorSchema.describe("Heartbeat name or a selector object."),
     ]),
     returns: z.object({ ok: z.literal(true) }),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["news-briefing"] }],
   },
@@ -741,7 +740,7 @@ export const workspaceMethods = defineServiceMethods({
     description: "List app candidates selectable as the active app for a host target.",
     args: z.tuple([HostTargetSchema.describe("Host target to list candidates for.")]),
     returns: z.array(HostTargetCandidateSchema),
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: READ_ACCESS,
     examples: [{ args: ["electron"] }],
   },
@@ -750,7 +749,7 @@ export const workspaceMethods = defineServiceMethods({
       "Read the active per-workspace selection for a host target along with whether it is still valid.",
     args: z.tuple([HostTargetSchema.describe("Host target to read the selection for.")]),
     returns: HostTargetSelectionStatusSchema,
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: READ_ACCESS,
     examples: [{ args: ["electron"] }],
   },
@@ -761,7 +760,7 @@ export const workspaceMethods = defineServiceMethods({
       HostTargetSelectionInputSchema.describe("Selection input (source, mode, ref/buildKey)."),
     ]),
     returns: HostTargetSelectionSchema,
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["electron", { source: "apps/shell" }] }],
   },
@@ -769,7 +768,7 @@ export const workspaceMethods = defineServiceMethods({
     description: "Clear the persisted per-workspace app selection for a host target.",
     args: z.tuple([HostTargetSchema.describe("Host target to clear the selection for.")]),
     returns: z.void(),
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["electron"] }],
   },
@@ -780,7 +779,7 @@ export const workspaceMethods = defineServiceMethods({
       z.string().describe("Candidate app source or name."),
     ]),
     returns: WorkspaceAppVersionsSchema,
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: READ_ACCESS,
     examples: [{ args: ["electron", "apps/shell"] }],
   },
@@ -798,7 +797,7 @@ export const workspaceMethods = defineServiceMethods({
       appId: z.string(),
       source: z.string(),
     }),
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "write" },
   },
   "hostTargets.launch": {
@@ -806,7 +805,7 @@ export const workspaceMethods = defineServiceMethods({
       "Launch or reload the selected target app in this host, returning a ready/preparing/approval-required/unavailable status.",
     args: z.tuple([HostTargetSchema.describe("Host target to launch.")]),
     returns: HostTargetLaunchResultSchema,
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["electron"] }],
   },
@@ -815,7 +814,7 @@ export const workspaceMethods = defineServiceMethods({
       "Begin an asynchronous launch session for a host target, returning the initial session snapshot.",
     args: z.tuple([HostTargetSchema.describe("Host target to begin launching.")]),
     returns: HostTargetLaunchSessionSnapshotSchema,
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["electron"] }],
   },
@@ -823,7 +822,7 @@ export const workspaceMethods = defineServiceMethods({
     description: "Fetch the current snapshot of a launch session by id, or null if it is unknown.",
     args: z.tuple([z.string().describe("Launch session id.")]),
     returns: HostTargetLaunchSessionSnapshotSchema.nullable(),
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: READ_ACCESS,
   },
   "hostTargets.resolveLaunchSessionApproval": {
@@ -834,7 +833,7 @@ export const workspaceMethods = defineServiceMethods({
       z.enum(["once", "deny"]).describe("Approval decision for the pending launch."),
     ]),
     returns: HostTargetLaunchSessionSnapshotSchema,
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: {
       sensitivity: "write",
     },
@@ -844,7 +843,7 @@ export const workspaceMethods = defineServiceMethods({
     description: "Cancel an in-flight launch session by id.",
     args: z.tuple([z.string().describe("Launch session id to cancel.")]),
     returns: z.void(),
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
   },
 });

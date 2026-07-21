@@ -204,6 +204,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       for (const digest of tree.treeDigests) reachable.add(digest);
       for (const digest of tree.contentDigests) reachable.add(digest);
     }
+    // Workspace/context views are immutable CAS compositions, not semantic
+    // history nodes. They are nevertheless live build inputs while retained
+    // by WorkspaceRepositories, so their scaffold nodes must participate in
+    // the same reachability snapshot as semantic repository roots. Omitting
+    // them leaves a cached state pointer whose interior directory manifests
+    // have been swept, and the next exact build fails while walking the tree.
+    const cachedViews = await this.repositories.collectCachedReachableDigests();
+    for (const digest of cachedViews.treeDigests) reachable.add(digest);
+    for (const digest of cachedViews.contentDigests) reachable.add(digest);
     return sweepUnreachableBlobs(this.deps.blobsDir, reachable, options.minAgeMs);
   }
 

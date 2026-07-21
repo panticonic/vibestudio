@@ -3,7 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { Gateway } from "../gateway.js";
 import { RouteRegistry } from "../routeRegistry.js";
 import {
@@ -29,6 +30,8 @@ function makePanelRecord(id: string): EntityRecord {
     id,
     kind: "panel",
     source: { repoPath: "", effectiveVersion: "" },
+    activeExecutionDigest: "a".repeat(64),
+    activeAuthority: { requests: [], delegations: [] },
     contextId: "",
     key: id,
     createdAt: Date.now(),
@@ -286,8 +289,8 @@ describe("auth service connection grants", () => {
         callerId === "app:apps/mobile:device-1" && capability === "panel-hosting",
     });
 
-    expect(service.definition.methods?.["grantConnection"]?.policy).toEqual({
-      allowed: ["server", "shell", "app"],
+    expect(service.definition.methods?.["grantConnection"]?.authority).toEqual({
+      principals: ["host", "user", "code"],
     });
 
     const granted = (await service.definition.handler(
@@ -436,7 +439,7 @@ async function postLocal<T>(
 
 describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () => {
   const makeDispatcher = () => {
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     const tokenManager = new TokenManager();
     const authStore = makeAuthStore();
     const records = new Map<string, EntityRecord>();
@@ -513,18 +516,30 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
     ).rejects.toThrow(/does not own target entity/);
   });
 
-  it("denies non-extension, non-server callers at the service policy", async () => {
-    const { dispatcher } = makeDispatcher();
-    for (const kind of ["shell", "agent", "panel"] as const) {
+  it("denies non-code principals before lookup and non-owning code after lookup", async () => {
+    const { dispatcher, records } = makeDispatcher();
+    records.set(
+      "session:owned",
+      makeSessionRecord("session:owned", { parentId: "extension:owner" })
+    );
+    for (const kind of ["shell", "agent"] as const) {
       await expect(
         dispatcher.dispatch(
           { caller: createVerifiedCaller(`${kind}:x`, kind) },
           "auth",
           "mintAgentCredential",
-          [{ entityId: "e" }]
+          [{ entityId: "session:owned" }]
         )
-      ).rejects.toThrow(/not accessible/i);
+      ).rejects.toThrow(/no authority branch admits/i);
     }
+    await expect(
+      dispatcher.dispatch(
+        { caller: createVerifiedCaller("panel:x", "panel") },
+        "auth",
+        "mintAgentCredential",
+        [{ entityId: "session:owned" }]
+      )
+    ).rejects.toThrow(/does not own target entity/i);
   });
 });
 

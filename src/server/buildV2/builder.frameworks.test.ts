@@ -175,7 +175,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-panels/hello-vanilla"),
-      "ev-hello-vanilla",
+      "a".repeat(64),
       graph,
       workspaceRoot,
       "state:test"
@@ -224,7 +224,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-panels/hello-svelte"),
-      "ev-hello-svelte",
+      "b".repeat(64),
       graph,
       workspaceRoot,
       "state:test"

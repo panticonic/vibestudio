@@ -6,8 +6,8 @@
  * lifecycle columns (status, retired_at, cleanup_complete). Slot rows hold
  * the panel-tree position; slot_history holds the navigation history.
  *
- * This pre-release store has one exact current schema. DurableObjectBase
- * replaces any older schema epoch wholesale before activating it.
+ * This pre-release store has one exact current schema. Older workspace state
+ * is reset by the workspace lifecycle instead of being translated here.
  */
 
 import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
@@ -15,10 +15,14 @@ import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import {
   IdentityCollisionError,
   canonicalEntityId,
+  type EntityActivationInput,
   type EntityKind,
   type EntityRecord,
-  type RuntimeAgentBinding,
 } from "../../../packages/shared/src/runtime/entitySpec.js";
+import {
+  parseUnitAuthorityManifest,
+  type UnitAuthorityManifest,
+} from "../../../packages/shared/src/authorityManifest.js";
 import type {
   IndexablePanel,
   PanelSearchResult,
@@ -29,6 +33,9 @@ interface DbEntityRow {
   kind: EntityKind;
   source_repo_path: string;
   source_effective_version: string;
+  active_build_key: string | null;
+  active_execution_digest: string | null;
+  active_authority: string | null;
   context_id: string;
   class_name: string | null;
   key: string;
@@ -121,24 +128,7 @@ export interface LifecycleOp extends LifecycleKey {
   updatedAt: number;
 }
 
-export interface EntityActivateInput {
-  kind: EntityKind;
-  source: { repoPath: string; effectiveVersion: string };
-  contextId: string;
-  className?: string;
-  key: string;
-  stateArgs?: unknown;
-  agentBinding?: RuntimeAgentBinding;
-  /** Launch parent (verified caller id) — see EntityRecord.parentId. */
-  parentId?: string;
-  /**
-   * Owning-user id — the creating caller's `subject.userId` (WP0 §6). Stamped
-   * write-once onto `entities.owner_user_id` so an agent/worker/DO attributes to
-   * the human whose subject launched its lineage. Absent for bootstrap-created
-   * entities that have no subject (WP0 §5.4).
-   */
-  ownerUserId?: string;
-}
+export type EntityActivateInput = EntityActivationInput;
 
 export interface SlotCreateInput {
   slotId: string;
@@ -167,6 +157,22 @@ export interface SlotHistoryEntryInput {
   stateArgs?: unknown;
   /** Per-entry navigation options (env/ref) so any client/host reconstructs them. */
   options?: unknown;
+}
+
+export interface SlotCommitPreparedNavigationInput {
+  slotId: string;
+  expectedCurrentEntityId: string;
+  mutation:
+    | { kind: "append"; entry: SlotHistoryEntryInput }
+    | { kind: "replace"; entry: SlotHistoryEntryInput }
+    | { kind: "select"; entryKey: string };
+}
+
+export interface SlotCommitPreparedNavigationResult {
+  previousEntityId: string;
+  currentEntityId: string;
+  currentEntryKey: string;
+  cursor: number;
 }
 
 export interface GcOptions {
@@ -292,22 +298,46 @@ function rowToHeartbeatRegistry(row: Record<string, unknown>): HeartbeatRegistry
   };
 }
 
+function serializeActiveAuthority(authority: UnitAuthorityManifest | undefined): string | null {
+  if (authority === undefined) return null;
+  // Parse at the durable boundary so records can only contain the canonical,
+  // closed authority shape regardless of which host writer supplied it.
+  return JSON.stringify(parseUnitAuthorityManifest(authority, "entity activeAuthority"));
+}
+
+function validateActiveExecutionDigest(digest: string | undefined): string | null {
+  if (digest === undefined) return null;
+  if (!/^[0-9a-f]{64}$/.test(digest)) {
+    throw new Error("entity activeExecutionDigest must be a lowercase SHA-256 digest");
+  }
+  return digest;
+}
+
+function validateActiveBuildKey(buildKey: string | undefined): string | null {
+  if (buildKey === undefined) return null;
+  if (!/^[0-9a-f]{64}$/.test(buildKey)) {
+    throw new Error("entity activeBuildKey must be a lowercase SHA-256 build key");
+  }
+  return buildKey;
+}
+
 export class WorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 20;
+  static override schemaVersion = 24;
+
+  protected override schemaProductionBaseline() {
+    return { version: 24, name: "workspace-state-v24" } as const;
+  }
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
     this.ensureReady();
+    this.repairLifecycleInvariants();
   }
 
   /**
-   * Receiver-side authorization (Layer A). WorkspaceDO is server-internal: it is
-   * reached ONLY through the `workspace-state` service, which dispatches as
-   * callerKind "server" (doDispatch stamps `{ callerId: "main", callerKind:
-   * "server" }`) and enforces its own read/write policy. Refuse any direct relay
-   * caller (panel/worker/do/…) so the open relay cannot bypass that policy by
-   * addressing the DO by objectKey. Events are owner-scoped push notifications —
-   * accept them.
+   * WorkspaceDO is the server's storage implementation, not a public service.
+   * Preserve the legacy receiver guard so direct DO relay calls cannot bypass
+   * workspace-state policy while the new `@rpc` metadata is being introduced.
    */
   protected override assertInboundAllowed(
     caller: AuthenticatedCaller | null,
@@ -332,6 +362,9 @@ export class WorkspaceDO extends DurableObjectBase {
         kind TEXT NOT NULL,
         source_repo_path TEXT NOT NULL,
         source_effective_version TEXT NOT NULL,
+        active_build_key TEXT,
+        active_execution_digest TEXT,
+        active_authority TEXT,
         context_id TEXT NOT NULL,
         class_name TEXT,
         key TEXT NOT NULL,
@@ -497,6 +530,26 @@ export class WorkspaceDO extends DurableObjectBase {
     return WORKSPACE_REQUIRED_TABLES;
   }
 
+  protected override validateSchema(): void {
+    super.validateSchema();
+    const entityColumns = this.sql.exec(`PRAGMA table_info(entities)`).toArray();
+    if (!entityColumns.some((column) => column["name"] === "active_execution_digest")) {
+      throw new Error(
+        `${this.constructor.name} schema validation failed: entities.active_execution_digest is missing`
+      );
+    }
+    if (!entityColumns.some((column) => column["name"] === "active_authority")) {
+      throw new Error(
+        `${this.constructor.name} schema validation failed: entities.active_authority is missing`
+      );
+    }
+    if (!entityColumns.some((column) => column["name"] === "active_build_key")) {
+      throw new Error(
+        `${this.constructor.name} schema validation failed: entities.active_build_key is missing`
+      );
+    }
+  }
+
   getWorkspaceId(): string {
     return this.objectKey;
   }
@@ -512,8 +565,17 @@ export class WorkspaceDO extends DurableObjectBase {
    * - Prior 'retired' row with identical identity → reactivate (flip status).
    * - Prior row with mismatched identity → throw IDENTITY_COLLISION.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   entityActivate(input: EntityActivateInput): EntityRecord {
+    const nextBuildKey = validateActiveBuildKey(input.activeBuildKey);
+    const nextExecutionDigest = validateActiveExecutionDigest(input.activeExecutionDigest);
+    const nextAuthority = serializeActiveAuthority(input.activeAuthority);
+    if (nextBuildKey !== null && nextExecutionDigest === null) {
+      throw new Error("entity activeBuildKey requires an activeExecutionDigest");
+    }
+    if (nextAuthority !== null && nextExecutionDigest === null) {
+      throw new Error("entity activeAuthority requires an activeExecutionDigest");
+    }
     return this.ctx.storage.transactionSync(() => {
       const id = canonicalEntityId({
         kind: input.kind,
@@ -525,6 +587,31 @@ export class WorkspaceDO extends DurableObjectBase {
       const existing = this.readEntityRow(id);
       if (existing) {
         this.assertIdentityMatches(id, existing, input);
+        if (existing.active_build_key && existing.active_build_key !== nextBuildKey) {
+          throw new IdentityCollisionError(id, {
+            field: "activeBuildKey",
+            existing: existing.active_build_key,
+            attempted: nextBuildKey,
+          });
+        }
+        if (
+          existing.active_build_key !== nextBuildKey ||
+          existing.active_execution_digest !== nextExecutionDigest ||
+          existing.active_authority !== nextAuthority
+        ) {
+          this.sql.exec(
+            `UPDATE entities
+                SET active_build_key = ?, active_execution_digest = ?, active_authority = ?
+              WHERE id = ?`,
+            nextBuildKey,
+            nextExecutionDigest,
+            nextAuthority,
+            id
+          );
+          existing.active_build_key = nextBuildKey;
+          existing.active_execution_digest = nextExecutionDigest;
+          existing.active_authority = nextAuthority;
+        }
         const nextAgentEntityId =
           input.agentBinding === undefined || input.agentBinding.entityId === id
             ? null
@@ -581,15 +668,20 @@ export class WorkspaceDO extends DurableObjectBase {
       const now = Date.now();
       this.sql.exec(
         `INSERT INTO entities (
-          id, kind, source_repo_path, source_effective_version,
+          id, kind, source_repo_path, source_effective_version, active_build_key,
+          active_execution_digest,
+          active_authority,
           context_id, class_name, key, state_args, agent_entity_id, agent_channel_id,
           parent_id, owner_user_id, created_at,
           status, retired_at, cleanup_complete, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
         id,
         input.kind,
         input.source.repoPath,
         input.source.effectiveVersion,
+        nextBuildKey,
+        nextExecutionDigest,
+        nextAuthority,
         input.contextId,
         input.className ?? null,
         input.key,
@@ -609,7 +701,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Mark a single entity as retired. Idempotent. Returns the retired record (or null if not found). */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "destructive" })
   entityRetire(id: string): EntityRecord | null {
     return this.ctx.storage.transactionSync(() => {
       const row = this.readEntityRow(id);
@@ -644,13 +736,13 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Mark cleanup_complete=1 after server-side hooks succeed. */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   entityCleanupComplete(id: string): void {
     this.sql.exec(`UPDATE entities SET cleanup_complete = 1 WHERE id = ?`, id);
   }
 
   /** Find rows whose cleanup hooks need retrying. */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   entityFindIncompleteCleanups(): EntityRecord[] {
     const rows = this.sql
       .exec(`SELECT * FROM entities WHERE retired_at IS NOT NULL AND cleanup_complete = 0`)
@@ -662,7 +754,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * Hard-delete retired rows older than the grace window and unreferenced by slot_history.
    * Never deletes active rows; never deletes history-referenced rows. Fires no hooks.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "destructive" })
   entityGc(opts: GcOptions = {}): string[] {
     const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
     const cutoff = Date.now() - graceMs;
@@ -703,20 +795,20 @@ export class WorkspaceDO extends DurableObjectBase {
 
   // ── Entity reads ──
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   entityResolve(id: string): EntityRecord | null {
     const row = this.readEntityRow(id);
     return row ? this.rowToEntity(row) : null;
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   entityResolveActive(id: string): EntityRecord | null {
     const row = this.readEntityRow(id);
     if (!row || row.status !== "active") return null;
     return this.rowToEntity(row);
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   entityResolveContext(id: string): string | null {
     const row = this.readEntityRow(id);
     return row ? row.context_id : null;
@@ -727,7 +819,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * `entityId`, or null. Backed by `idx_slots_current`. This is the authoritative,
    * lease-independent way to find the tree slot a panel's runtime entity belongs to.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   slotResolveByEntity(entityId: string): string | null {
     const row = this.sql
       .exec(`SELECT slot_id FROM slots WHERE current_entity_id = ? AND closed_at IS NULL`, entityId)
@@ -745,7 +837,7 @@ export class WorkspaceDO extends DurableObjectBase {
   // lifecycle.* operations
   // ─────────────────────────────────────────────────────────────
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   lifecycleLeaseUpsert(input: LifecycleLeaseInput): void {
     this.assertLifecycleKey(input);
     const now = Date.now();
@@ -765,7 +857,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   lifecycleLeaseClear(input: LifecycleKey): void {
     this.assertLifecycleKey(input);
     this.sql.exec(
@@ -781,7 +873,7 @@ export class WorkspaceDO extends DurableObjectBase {
   // ─────────────────────────────────────────────────────────────
 
   /** Register/replace a DO's wake time (absolute epoch ms). */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   alarmSet(input: LifecycleKey & { wakeAt: number }): void {
     this.assertLifecycleKey(input);
     this.ctx.storage.transactionSync(() => {
@@ -811,7 +903,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Clear a DO's pending alarm (no-op if none). */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   alarmClear(input: LifecycleKey): void {
     this.assertLifecycleKey(input);
     this.sql.exec(
@@ -823,7 +915,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Soonest pending wake time, or null when no alarms are scheduled. */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   alarmNextWakeAt(): number | null {
     const row = this.sql.exec(`SELECT MIN(wake_at) AS next FROM do_alarms`).toArray()[0] as
       | { next: number | null }
@@ -834,7 +926,7 @@ export class WorkspaceDO extends DurableObjectBase {
   /** Return alarms due at/before `now` without acknowledging them. The driver
    *  clears or replaces each row only after the handler outcome is durable, so
    *  a server crash or failed acknowledgement cannot lose the sole wake. */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   alarmListDue(now: number): Array<LifecycleKey & { wakeAt: number }> {
     const rows = this.sql
       .exec(
@@ -867,7 +959,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * deleted; jobs whose `specHash` is unchanged keep their durable
    * `next_run_at`; new or respecified jobs adopt `initialNextRunAt`.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   recurringSync(input: { jobs: RecurringJobRow[] }): void {
     this.ctx.storage.transactionSync(() => {
       const names = input.jobs.map((j) => j.name);
@@ -931,7 +1023,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Jobs due at/before `now`. Rows stay put; the registry marks each run. */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   recurringDue(now: number): RecurringJobRow[] {
     return (
       this.sql
@@ -946,7 +1038,7 @@ export class WorkspaceDO extends DurableObjectBase {
     ).map(rowToRecurringJob);
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   recurringMarkRun(input: { name: string; lastRunAt: number; nextRunAt: number }): void {
     this.sql.exec(
       `UPDATE recurring_jobs
@@ -959,7 +1051,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   recurringMarkSucceeded(input: { name: string; finishedAt: number; durationMs: number }): void {
     this.sql.exec(
       `UPDATE recurring_jobs
@@ -975,7 +1067,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   recurringMarkFailed(input: {
     name: string;
     failedAt: number;
@@ -1003,7 +1095,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   recurringNextWakeAt(): number | null {
     const row = this.sql
       .exec(`SELECT MIN(next_run_at) AS next FROM recurring_jobs`)
@@ -1011,7 +1103,7 @@ export class WorkspaceDO extends DurableObjectBase {
     return row && row.next !== null ? row.next : null;
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   recurringList(): RecurringJobRow[] {
     return (
       this.sql.exec(`SELECT * FROM recurring_jobs ORDER BY name`).toArray() as Array<
@@ -1020,7 +1112,7 @@ export class WorkspaceDO extends DurableObjectBase {
     ).map(rowToRecurringJob);
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   heartbeatRegister(input: HeartbeatRegistryRow): void {
     const now = Date.now();
     this.sql.exec(
@@ -1056,7 +1148,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   heartbeatRemove(input: {
     name: string;
     source?: string;
@@ -1077,7 +1169,7 @@ export class WorkspaceDO extends DurableObjectBase {
     this.sql.exec(`DELETE FROM heartbeat_registry WHERE name = ?`, input.name);
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   heartbeatList(): HeartbeatRegistryRow[] {
     return (
       this.sql.exec(`SELECT * FROM heartbeat_registry ORDER BY name`).toArray() as Array<
@@ -1086,7 +1178,7 @@ export class WorkspaceDO extends DurableObjectBase {
     ).map(rowToHeartbeatRegistry);
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   lifecycleListLeases(): LifecycleLease[] {
     const rows = this.sql
       .exec(
@@ -1112,7 +1204,7 @@ export class WorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   lifecycleOpenEpoch(input: LifecycleEpochInput): string {
     return this.ctx.storage.transactionSync(() => {
       const seqRow = this.sql
@@ -1142,7 +1234,7 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   lifecycleRecordOp(input: LifecycleOpInput): void {
     this.assertLifecycleKey(input.key);
     this.insertLifecycleOp(
@@ -1155,7 +1247,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   lifecycleListOps(epochId: string): LifecycleOp[] {
     const rows = this.sql
       .exec(
@@ -1187,12 +1279,12 @@ export class WorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   lifecycleCompleteEpoch(epochId: string): void {
     this.sql.exec(`UPDATE lifecycle_epochs SET status = 'completed' WHERE epoch_id = ?`, epochId);
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   lifecycleListResumeTargets(): LifecycleKey[] {
     const rows = this.sql
       .exec(
@@ -1211,7 +1303,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Return all active entities (used by restart revival to re-attach runtime). */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   entityListActive(): EntityRecord[] {
     const rows = this.sql
       .exec(`SELECT * FROM entities WHERE status = 'active' ORDER BY created_at`)
@@ -1220,7 +1312,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Return active entities of a given kind (used by singleton reconciliation). */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   entityListActiveByKind(kind: EntityKind): EntityRecord[] {
     const rows = this.sql
       .exec(`SELECT * FROM entities WHERE status = 'active' AND kind = ? ORDER BY created_at`, kind)
@@ -1237,7 +1329,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * (context_id, owner_context_id, kind); `created_at` is preserved on conflict,
    * `owner_entity_id` refreshed.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   contextEdgeUpsert(input: {
     contextId: string;
     ownerContextId: string;
@@ -1258,7 +1350,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** List edges owned BY a context (the owner side), optionally scoped to one kind. */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   contextEdgeListByOwner(input: {
     ownerContextId: string;
     kind?: "lifecycle" | "lineage";
@@ -1284,7 +1376,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** List edges INTO a context (the child side) — walk up for authz/teardown. */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   contextEdgeListByChild(contextId: string): Array<{
     ownerContextId: string;
     kind: "lifecycle" | "lineage";
@@ -1305,7 +1397,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Delete every inbound edge of a context (called on teardown). */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   contextEdgeDeleteByChild(contextId: string): void {
     this.sql.exec(`DELETE FROM context_edges WHERE context_id = ?`, contextId);
   }
@@ -1314,7 +1406,7 @@ export class WorkspaceDO extends DurableObjectBase {
   // slot.* operations
   // ─────────────────────────────────────────────────────────────
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   slotCreate(input: SlotCreateInput): void {
     this.ctx.storage.transactionSync(() => {
       const existing = this.sql
@@ -1341,49 +1433,112 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
-  slotAppendHistory(slotId: string, entry: SlotHistoryEntryInput): number {
+  /**
+   * Commit the durable half of panel navigation after runtime.createEntity has
+   * fully prepared and activated the destination incarnation. History and the
+   * slot pointer change in one transaction; the old incarnation remains active
+   * until the caller observes this commit and retires it.
+   */
+  @rpc({ principals: ["host"], sensitivity: "write" })
+  slotCommitPreparedNavigation(
+    input: SlotCommitPreparedNavigationInput
+  ): SlotCommitPreparedNavigationResult {
     return this.ctx.storage.transactionSync(() => {
-      this.requireSlot(slotId);
-      const lastRow = this.sql
+      const slot = this.requireSlot(input.slotId);
+      if (slot.closed_at !== null) {
+        throw new Error(`Cannot navigate closed slot: ${input.slotId}`);
+      }
+      if (
+        slot.current_entity_id !== input.expectedCurrentEntityId ||
+        slot.current_entry_key === null
+      ) {
+        throw new Error(
+          `Slot navigation conflict: ${input.slotId} current entity changed during preparation`
+        );
+      }
+
+      const previousEntityId = slot.current_entity_id;
+      const currentRow = this.sql
         .exec(
-          `SELECT cursor FROM slot_history WHERE slot_id = ? ORDER BY cursor DESC LIMIT 1`,
-          slotId
+          `SELECT cursor FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+          input.slotId,
+          slot.current_entry_key
         )
         .toArray()[0] as { cursor: number } | undefined;
-      const cursor = (lastRow?.cursor ?? -1) + 1;
-      this.appendHistoryRow(slotId, cursor, entry, Date.now());
-      return cursor;
-    });
-  }
-
-  @rpc
-  slotSetCurrent(slotId: string, entryKey: string): void {
-    this.ctx.storage.transactionSync(() => {
-      this.requireSlot(slotId);
-      const historyRow = this.sql
-        .exec(
-          `SELECT entity_id FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
-          slotId,
-          entryKey
-        )
-        .toArray()[0] as { entity_id: string } | undefined;
-      if (!historyRow) {
-        throw new Error(`History entry not found: slot=${slotId} entry=${entryKey}`);
+      if (!currentRow) {
+        throw new Error(
+          `Slot ${input.slotId} current entry is missing from history: ${slot.current_entry_key}`
+        );
       }
+
+      let target: SlotHistoryEntryInput;
+      let cursor: number;
+      if (input.mutation.kind === "select") {
+        const selected = this.sql
+          .exec(
+            `SELECT cursor, entry_key, entity_id, source, context_id, state_args, options
+               FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+            input.slotId,
+            input.mutation.entryKey
+          )
+          .toArray()[0] as DbSlotHistoryRow | undefined;
+        if (!selected) {
+          throw new Error(
+            `History entry not found: slot=${input.slotId} entry=${input.mutation.entryKey}`
+          );
+        }
+        cursor = selected.cursor;
+        target = {
+          entryKey: selected.entry_key,
+          entityId: selected.entity_id,
+          source: selected.source,
+          contextId: selected.context_id,
+          ...(selected.state_args === null
+            ? {}
+            : { stateArgs: this.parseJsonOrNull(selected.state_args) }),
+          ...(selected.options === null ? {} : { options: this.parseJsonOrNull(selected.options) }),
+        };
+      } else {
+        target = input.mutation.entry;
+        if (input.mutation.kind === "append") {
+          cursor = currentRow.cursor + 1;
+          // Browser-style navigation from a back-history position abandons the
+          // forward branch before appending the new destination.
+          this.sql.exec(
+            `DELETE FROM slot_history WHERE slot_id = ? AND cursor > ?`,
+            input.slotId,
+            currentRow.cursor
+          );
+          this.appendHistoryRow(input.slotId, cursor, target, Date.now());
+        } else {
+          cursor = currentRow.cursor;
+          this.sql.exec(
+            `DELETE FROM slot_history WHERE slot_id = ? AND cursor = ?`,
+            input.slotId,
+            cursor
+          );
+          this.appendHistoryRow(input.slotId, cursor, target, Date.now());
+        }
+      }
+
+      this.assertCompleteActivePanelIncarnation(target);
       this.sql.exec(
         `UPDATE slots SET current_entity_id = ?, current_entry_key = ? WHERE slot_id = ?`,
-        historyRow.entity_id,
-        entryKey,
-        slotId
+        target.entityId,
+        target.entryKey,
+        input.slotId
       );
-      // The slot now points at a different entity. Refresh the FTS
-      // denormalization so search hits the new entity's title.
-      this.refreshSlotSearchableTitle(slotId);
+      this.refreshSlotSearchableTitle(input.slotId);
+      return {
+        previousEntityId,
+        currentEntityId: target.entityId,
+        currentEntryKey: target.entryKey,
+        cursor,
+      };
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   slotUpdateCurrentStateArgs(slotId: string, stateArgs: unknown): void {
     this.ctx.storage.transactionSync(() => {
       const slot = this.requireSlot(slotId);
@@ -1407,43 +1562,13 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
-  slotReplaceHistory(slotId: string, entries: SlotHistoryEntryInput[], cursor: number): void {
-    this.ctx.storage.transactionSync(() => {
-      this.requireSlot(slotId);
-      this.sql.exec(`DELETE FROM slot_history WHERE slot_id = ?`, slotId);
-      const now = Date.now();
-      for (let i = 0; i < entries.length; i++) {
-        const entry = entries[i];
-        if (entry) {
-          this.appendHistoryRow(slotId, i, entry, now);
-        }
-      }
-      const current = entries[cursor];
-      if (current) {
-        this.sql.exec(
-          `UPDATE slots SET current_entity_id = ?, current_entry_key = ? WHERE slot_id = ?`,
-          current.entityId,
-          current.entryKey,
-          slotId
-        );
-      } else {
-        this.sql.exec(
-          `UPDATE slots SET current_entity_id = NULL, current_entry_key = NULL WHERE slot_id = ?`,
-          slotId
-        );
-      }
-      this.refreshSlotSearchableTitle(slotId);
-    });
-  }
-
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   slotSetParent(slotId: string, parentSlotId: string | null): void {
     this.requireSlot(slotId);
     this.sql.exec(`UPDATE slots SET parent_slot_id = ? WHERE slot_id = ?`, parentSlotId, slotId);
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   slotSetPosition(slotId: string, positionId: string): void {
     this.requireSlot(slotId);
     this.sql.exec(`UPDATE slots SET position_id = ? WHERE slot_id = ?`, positionId, slotId);
@@ -1458,7 +1583,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * or keeps its current owner when no mover subject is supplied. Authorization
    * is permissive (any member may restructure any tree); only attribution moves.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   slotMove(
     slotId: string,
     parentSlotId: string | null,
@@ -1544,7 +1669,7 @@ export class WorkspaceDO extends DurableObjectBase {
     return ids;
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   slotClose(slotId: string): void {
     this.ctx.storage.transactionSync(() => {
       this.requireSlot(slotId);
@@ -1557,7 +1682,7 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   slotGet(slotId: string): DbSlotRow | null {
     const row = this.sql
       .exec(
@@ -1578,7 +1703,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * tree for a "just my tree" view (backed by idx_slots_owner) but is NOT the
    * default.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   slotListOpen(filter?: { owner?: string }): DbSlotRow[] {
     if (filter?.owner !== undefined) {
       return this.sql
@@ -1603,7 +1728,7 @@ export class WorkspaceDO extends DurableObjectBase {
       .toArray() as unknown as DbSlotRow[];
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   slotHistory(slotId: string): DbSlotHistoryRow[] {
     return this.sql
       .exec(`SELECT * FROM slot_history WHERE slot_id = ? ORDER BY cursor`, slotId)
@@ -1620,7 +1745,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * Returns the slot's current entity id when one is bound, so callers (the
    * workspace-state RPC handler) can refresh their entity-keyed caches.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   panelIndex(input: IndexablePanel): string | null {
     const now = Date.now();
     let resolvedEntityId: string | null = null;
@@ -1701,7 +1826,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * the slot is empty / closed) so callers can mirror the change into their
    * entity-keyed caches without a second round-trip.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   panelUpdateTitle(slotId: string, title: string): string | null {
     const row = this.sql
       .exec(`SELECT current_entity_id FROM slots WHERE slot_id = ?`, slotId)
@@ -1712,7 +1837,7 @@ export class WorkspaceDO extends DurableObjectBase {
     return entityId;
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   panelIncrementAccess(entityId: string): void {
     this.sql.exec(
       `UPDATE panel_search_metadata SET access_count = access_count + 1 WHERE slot_id = ?`,
@@ -1731,7 +1856,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * FTS staging row's title alone in that case (rather than blanking it) so
    * the panel stays findable in search.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   entitySetDisplayTitle(entityId: string, title: string | null): void {
     const normalized = typeof title === "string" ? title.trim() : "";
     const stored = normalized.length > 0 ? normalized : null;
@@ -1761,7 +1886,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * lookups (e.g. when building a pending approval) don't have to round-trip
    * to the DO on the hot path.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   entityListDisplayTitles(): Array<{ id: string; title: string }> {
     return this.sql
       .exec(
@@ -1798,7 +1923,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   panelSearch(query: string, limit = 50): PanelSearchResult[] {
     const safeQuery = this.sanitizeSearchQuery(query);
     if (!safeQuery) return [];
@@ -1836,7 +1961,7 @@ export class WorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   panelRebuildIndex(): void {
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(`DELETE FROM panel_search_metadata`);
@@ -1961,19 +2086,6 @@ export class WorkspaceDO extends DurableObjectBase {
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_do_alarms_wake ON do_alarms(wake_at)`);
-    // Enforce the entity/alarm lifecycle invariant for rows left by a process
-    // crash between an older retirement write and cleanup.
-    this.sql.exec(`
-      DELETE FROM do_alarms
-       WHERE EXISTS (
-         SELECT 1 FROM entities
-          WHERE entities.kind = 'do'
-            AND entities.status = 'retired'
-            AND entities.source_repo_path = do_alarms.source
-            AND entities.class_name = do_alarms.class_name
-            AND entities.key = do_alarms.object_key
-       )
-    `);
     // Declarative recurring jobs from meta/vibestudio.yml `recurring:`. The
     // RecurringRegistry syncs declarations here and dispatches due jobs;
     // durable next_run_at survives restarts without re-running missed bursts.
@@ -2056,6 +2168,21 @@ export class WorkspaceDO extends DurableObjectBase {
     }
   }
 
+  /** Recover cross-table lifecycle invariants independently of schema setup. */
+  private repairLifecycleInvariants(): void {
+    this.sql.exec(`
+      DELETE FROM do_alarms
+       WHERE EXISTS (
+         SELECT 1 FROM entities
+          WHERE entities.kind = 'do'
+            AND entities.status = 'retired'
+            AND entities.source_repo_path = do_alarms.source
+            AND entities.class_name = do_alarms.class_name
+            AND entities.key = do_alarms.object_key
+       )
+    `);
+  }
+
   private insertLifecycleOp(
     epochId: string,
     key: LifecycleKey,
@@ -2133,6 +2260,18 @@ export class WorkspaceDO extends DurableObjectBase {
         repoPath: row.source_repo_path,
         effectiveVersion: row.source_effective_version,
       },
+      ...(row.active_build_key ? { activeBuildKey: row.active_build_key } : {}),
+      ...(row.active_execution_digest
+        ? { activeExecutionDigest: row.active_execution_digest }
+        : {}),
+      ...(row.active_authority
+        ? {
+            activeAuthority: parseUnitAuthorityManifest(
+              JSON.parse(row.active_authority),
+              `entity ${row.id} active authority`
+            ),
+          }
+        : {}),
       contextId: row.context_id,
       key: row.key,
       createdAt: row.created_at,
@@ -2204,6 +2343,30 @@ export class WorkspaceDO extends DurableObjectBase {
       entry.options === undefined ? null : JSON.stringify(entry.options),
       now
     );
+  }
+
+  private assertCompleteActivePanelIncarnation(entry: SlotHistoryEntryInput): void {
+    const entity = this.readEntityRow(entry.entityId);
+    if (
+      !entity ||
+      entity.kind !== "panel" ||
+      entity.status !== "active" ||
+      entity.retired_at !== null ||
+      entity.cleanup_complete !== 1 ||
+      entity.error !== null ||
+      entity.active_build_key === null ||
+      entity.active_execution_digest === null ||
+      entity.active_authority === null
+    ) {
+      throw new Error(`Prepared panel incarnation is not active and complete: ${entry.entityId}`);
+    }
+    if (
+      entity.key !== entry.entryKey ||
+      entity.source_repo_path !== entry.source ||
+      entity.context_id !== entry.contextId
+    ) {
+      throw new Error(`Prepared panel incarnation does not match history entry: ${entry.entityId}`);
+    }
   }
 
   private requireSlot(slotId: string): DbSlotRow {

@@ -473,33 +473,46 @@ export function createUserlandApprovalService(deps: {
   }
 
   const methods = {
-    request: { args: z.tuple([userlandApprovalRequestSchema]) },
-    requestSecretInput: { args: z.tuple([secretInputRequestSchema]) },
+    request: {
+      args: z.tuple([userlandApprovalRequestSchema]),
+      access: { sensitivity: "write" as const },
+    },
+    requestSecretInput: {
+      args: z.tuple([secretInputRequestSchema]),
+      access: { sensitivity: "write" as const },
+    },
     requestAs: {
       args: z.tuple([approvalPrincipalSchema, userlandApprovalRequestSchema]),
-      policy: { allowed: ["extension"] },
+      authority: { principals: ["code"] },
+      access: { sensitivity: "write" as const },
     },
     requestSecretInputAs: {
       args: z.tuple([approvalPrincipalSchema, secretInputRequestSchema]),
-      policy: { allowed: ["extension"] },
+      authority: { principals: ["code"] },
+      access: { sensitivity: "write" as const },
     },
     // External-agent relay: bound agent runtimes may be either DOs or workers.
     requestExternal: {
       args: z.tuple([externalAgentApprovalRequestSchema]),
-      policy: { allowed: ["do", "worker"] },
+      authority: { principals: ["code"] },
+      access: { sensitivity: "write" as const },
     },
     settleExternal: {
       args: z.tuple([externalAgentSettleSchema]),
-      policy: { allowed: ["do", "worker"] },
+      authority: { principals: ["code"] },
+      access: { sensitivity: "write" as const },
     },
-    revoke: { args: z.tuple([userlandApprovalSubjectIdSchema]) },
-    list: { args: z.tuple([]) },
+    revoke: {
+      args: z.tuple([userlandApprovalSubjectIdSchema]),
+      access: { sensitivity: "destructive" as const },
+    },
+    list: { args: z.tuple([]), access: { sensitivity: "read" as const } },
   } satisfies ServiceDefinition["methods"];
 
   return {
     name: SERVICE_NAME,
     description: "Userland-managed consent approvals",
-    policy: { allowed: ["panel", "app", "worker", "do", "extension"] },
+    authority: { principals: ["code"] },
     methods,
     handler: defineServiceHandler(SERVICE_NAME, methods, {
       request: (ctx, [requestArg]) => request(ctx, requestArg),

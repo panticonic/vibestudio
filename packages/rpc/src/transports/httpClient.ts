@@ -77,6 +77,16 @@ function rpcFetchError(url: string, error: unknown, attempts?: number): Error {
   return wrapped;
 }
 
+function abortError(signal: AbortSignal): Error {
+  // `AbortSignal.reason` is implemented by every runtime supported by the RPC
+  // package, but React Native's TypeScript library still exposes the older
+  // AbortSignal declaration. Keep that declaration gap at this transport
+  // boundary instead of weakening either the mobile compiler or cancellation
+  // semantics for every caller.
+  const reason = (signal as AbortSignal & { readonly reason?: unknown }).reason;
+  return reason instanceof Error ? reason : new Error("RPC call aborted");
+}
+
 export function httpClientTransport(config: HttpClientTransportConfig): ConnectionlessTransport {
   const listeners = new Set<(envelope: RpcEnvelope) => void>();
   // One-shot captures for inbound requests delivered via `respond()`: the core
@@ -88,7 +98,7 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
   const rpcUrl = `${config.serverUrl}/rpc`;
   const streamUrl = `${config.serverUrl}/rpc/stream`;
 
-  async function postEnvelope(envelope: RpcEnvelope): Promise<unknown> {
+  async function postEnvelope(envelope: RpcEnvelope, signal?: AbortSignal): Promise<unknown> {
     const maxRetries = 3;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       let response: Response;
@@ -101,8 +111,12 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
             [runtimeIdHeader]: config.selfId,
           },
           body: JSON.stringify(envelope),
+          signal: signal as RequestInit["signal"],
         });
       } catch (error) {
+        if (signal?.aborted) {
+          throw abortError(signal);
+        }
         if (attempt < maxRetries - 1) {
           await new Promise((resolve) => setTimeout(resolve, 100 * Math.pow(2, attempt)));
           continue;
@@ -130,7 +144,7 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
   }
 
   return {
-    async send(envelope): Promise<void> {
+    async send(envelope, signal): Promise<void> {
       // A response envelope whose requestId matches a pending inbound `respond`
       // is the answer to a request the server POSTed to us — resolve the capture
       // locally instead of POSTing it back to the server.
@@ -151,7 +165,7 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
         );
         return;
       }
-      const response = (await postEnvelope(envelope)) as unknown;
+      const response = (await postEnvelope(envelope, signal)) as unknown;
       const returnedEnvelope = response as RpcEnvelope | undefined;
       if (
         returnedEnvelope &&

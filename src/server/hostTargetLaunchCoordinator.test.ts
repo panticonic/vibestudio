@@ -4,6 +4,12 @@ import type { HostTargetLaunchResult } from "@vibestudio/shared/hostTargets";
 import { HostTargetLaunchCoordinator } from "./hostTargetLaunchCoordinator.js";
 import type { AppHost } from "./appHost.js";
 
+const SEALED_EXECUTION_AUTHORITY = {
+  executionDigest: "a".repeat(64),
+  authorityRequests: [],
+  authorityDelegations: [],
+} as const;
+
 const mobileApproval: PendingUnitBatchApproval = {
   approvalId: "approval-mobile",
   kind: "unit-batch",
@@ -37,12 +43,16 @@ function makeCoordinator(opts: {
   trustedUnits?: Array<{ kind: string; name: string; source: string; status: string }>;
   awaitStartupUnitReconcile?: () => Promise<void> | void;
   requiredExtensionSources?: string[];
+  publishPending?: (
+    trigger?: "startup" | "meta-change",
+    matches?: (entry: PendingUnitBatchApproval["units"][number]) => boolean
+  ) => Promise<void>;
   /** The app source the AppHost resolves for react-native (manifest-driven
    *  selection); null mimics a workspace with no declared/selectable app. */
   rnAppSource?: string | null;
 }) {
   const emit = vi.fn();
-  const publishPending = vi.fn();
+  const publishPending = vi.fn(opts.publishPending ?? (async () => undefined));
   let pending = opts.pending ?? [];
   const resolve = vi.fn((approvalId: string) => {
     pending = pending.filter((approval) => approval.approvalId !== approvalId);
@@ -127,6 +137,94 @@ describe("HostTargetLaunchCoordinator", () => {
     expect(result.status).toBe("approval-required");
     expect(publishPending).not.toHaveBeenCalled();
     expect(launchHostTarget).not.toHaveBeenCalled();
+  });
+
+  it("returns a synchronously published manual approval without awaiting its decision", async () => {
+    const pending: PendingUnitBatchApproval[] = [];
+    const neverSettles = new Promise<void>(() => {});
+    const { coordinator } = makeCoordinator({
+      pending,
+      publishPending: () => {
+        pending.push(mobileApproval);
+        return neverSettles;
+      },
+    });
+
+    await expect(coordinator.publishPendingStartupApprovals("react-native")).resolves.toEqual([
+      mobileApproval,
+    ]);
+  });
+
+  it("waits for an auto-approved unit activation when no manual approval is pending", async () => {
+    let releaseActivation!: () => void;
+    const activation = new Promise<void>((resolve) => {
+      releaseActivation = resolve;
+    });
+    const { coordinator } = makeCoordinator({
+      publishPending: () => activation,
+    });
+
+    let settled = false;
+    const publication = coordinator.publishPendingStartupApprovals("react-native").then((value) => {
+      settled = true;
+      return value;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseActivation();
+    await expect(publication).resolves.toEqual([]);
+  });
+
+  it("asks startup publication to settle only units required by the target", async () => {
+    const publishPending = vi.fn(
+      async (
+        _trigger?: "startup" | "meta-change",
+        _matches?: (entry: PendingUnitBatchApproval["units"][number]) => boolean
+      ) => undefined
+    );
+    const { coordinator } = makeCoordinator({
+      requiredExtensionSources: ["extensions/react-native"],
+      publishPending,
+    });
+
+    await coordinator.publishPendingStartupApprovals("react-native");
+
+    const selector = publishPending.mock.calls[0]?.[1];
+    expect(selector?.(mobileApproval.units[0]!)).toBe(true);
+    expect(
+      selector?.({
+        ...mobileApproval.units[0]!,
+        unitKind: "app",
+        unitName: "@workspace-apps/shell",
+        target: "electron",
+        source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
+      })
+    ).toBe(false);
+    expect(
+      selector?.({
+        ...mobileApproval.units[0]!,
+        unitKind: "extension",
+        unitName: "@workspace-extensions/react-native",
+        target: null,
+        source: {
+          kind: "workspace-repo",
+          repo: "extensions/react-native",
+          ref: "main",
+        },
+      })
+    ).toBe(true);
+  });
+
+  it("surfaces target activation failure instead of converting it into provider-not-ready", async () => {
+    const failure = new Error("react-native provider activation failed");
+    const { coordinator } = makeCoordinator({
+      publishPending: async () => {
+        throw failure;
+      },
+    });
+
+    await expect(coordinator.publishPendingStartupApprovals("react-native")).rejects.toBe(failure);
   });
 
   it("turns provider-inactive React Native startup into preparing while trusted units build without self-notifying", async () => {
@@ -240,6 +338,7 @@ describe("HostTargetLaunchCoordinator", () => {
         source: "apps/terminal",
         appId: "@workspace-apps/terminal",
         buildKey: "build-1",
+        ...SEALED_EXECUTION_AUTHORITY,
       },
     });
 
@@ -286,17 +385,18 @@ describe("HostTargetLaunchCoordinator", () => {
     launchHostTarget.mockImplementationOnce(async () => await launch);
     vi.useFakeTimers();
     try {
-      const pending = coordinator.beginLaunch("react-native");
-
-      await vi.advanceTimersByTimeAsync(300);
-      const session = await pending;
+      const session = await coordinator.beginLaunch("react-native");
 
       expect(session).toMatchObject({
         target: "react-native",
         status: "starting",
         settled: false,
       });
+      expect(launchHostTarget).not.toHaveBeenCalled();
       expect(emit).not.toHaveBeenCalled();
+
+      await vi.runAllTimersAsync();
+      expect(launchHostTarget).toHaveBeenCalledOnce();
 
       resolveLaunch({
         status: "ready",
@@ -305,6 +405,7 @@ describe("HostTargetLaunchCoordinator", () => {
         source: "apps/mobile",
         appId: "@workspace-apps/mobile",
         buildKey: "build-mobile",
+        ...SEALED_EXECUTION_AUTHORITY,
       });
       await vi.runAllTimersAsync();
 
@@ -354,16 +455,23 @@ describe("HostTargetLaunchCoordinator", () => {
 
     expect(session).toMatchObject({
       target: "react-native",
-      status: "approval-required",
-      currentPhase: "review-trust",
-      approvals: [mobileApproval],
-      approvalViews: [
-        expect.objectContaining({
-          approvalId: "approval-mobile",
-          title: expect.any(String),
-        }),
-      ],
+      status: "starting",
       settled: false,
+    });
+    await vi.waitFor(async () => {
+      expect(await coordinator.getLaunchSession(session.sessionId)).toMatchObject({
+        target: "react-native",
+        status: "approval-required",
+        currentPhase: "review-trust",
+        approvals: [mobileApproval],
+        approvalViews: [
+          expect.objectContaining({
+            approvalId: "approval-mobile",
+            title: expect.any(String),
+          }),
+        ],
+        settled: false,
+      });
     });
     expect(launchHostTarget).not.toHaveBeenCalled();
     expect(emit).toHaveBeenCalledWith(
@@ -397,22 +505,37 @@ describe("HostTargetLaunchCoordinator", () => {
         source: "apps/mobile",
         appId: "@workspace-apps/mobile",
         buildKey: "build-mobile",
+        ...SEALED_EXECUTION_AUTHORITY,
       },
     });
     const session = await coordinator.beginLaunch("react-native");
+    await vi.waitFor(async () => {
+      expect(await coordinator.getLaunchSession(session.sessionId)).toMatchObject({
+        status: "approval-required",
+        approvals: [mobileApproval],
+      });
+    });
 
-    const ready = await coordinator.resolveLaunchSessionApproval(session.sessionId, "once");
+    const preparing = await coordinator.resolveLaunchSessionApproval(session.sessionId, "once");
 
     expect(resolve).toHaveBeenCalledWith("approval-mobile", "once");
-    expect(ready).toMatchObject({
+    expect(preparing).toMatchObject({
       sessionId: session.sessionId,
-      status: "ready",
+      status: "preparing",
       approvalsResolved: 1,
-      settled: true,
-      launch: expect.objectContaining({
+      settled: false,
+    });
+    await vi.waitFor(async () => {
+      expect(await coordinator.getLaunchSession(session.sessionId)).toMatchObject({
+        sessionId: session.sessionId,
         status: "ready",
-        appId: "@workspace-apps/mobile",
-      }),
+        approvalsResolved: 1,
+        settled: true,
+        launch: expect.objectContaining({
+          status: "ready",
+          appId: "@workspace-apps/mobile",
+        }),
+      });
     });
   });
 });

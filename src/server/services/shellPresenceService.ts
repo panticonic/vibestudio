@@ -1,6 +1,6 @@
-import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { shellPresenceMethods } from "@vibestudio/service-schemas/shellPresence";
 
 export interface ShellPresenceInternal {
   isAnyShellActive(maxAgeMs?: number): boolean;
@@ -48,16 +48,12 @@ export function createShellPresenceService(
     },
   };
 
-  const methods = {
-    heartbeat: { args: z.tuple([]) },
-  };
-
   const definition: ServiceDefinition = {
     name: "shellPresence",
     description: "Tracks active shell clients for push notification delivery decisions",
-    policy: { allowed: ["shell", "app", "server"] },
-    methods,
-    handler: defineServiceHandler("shellPresence", methods, {
+    authority: { principals: ["user", "code", "host"] },
+    methods: shellPresenceMethods,
+    handler: defineServiceHandler("shellPresence", shellPresenceMethods, {
       heartbeat: (ctx) => {
         internal.markActive(ctx.caller.runtime.id);
         return { activeShellCount: internal.getActiveShellCount() };

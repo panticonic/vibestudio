@@ -50,6 +50,7 @@ function stampMessageFromId(message: RpcMessage, callerId: string): RpcMessage {
     case "stream-request":
     case "stream-frame":
     case "stream-cancel":
+    case "request-cancel":
       return { ...message, fromId: callerId };
     case "response":
       return message;

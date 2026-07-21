@@ -11,6 +11,14 @@ import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 
+const DEFAULT_EVAL_WATCHDOG_GRACE_MS = 1_000;
+
+interface EvalSandboxRecoveryInput {
+  runId: string;
+  timeoutMs: number;
+  evalDoRef: { source: string; className: string; objectKey: string };
+}
+
 /** Parse a `do:<source>:<className>:<objectKey>` runtime id into a DO ref (source may contain '/'). */
 function parseDoRef(
   runtimeId: string
@@ -32,7 +40,7 @@ function parseDoRef(
 /**
  * Hold the EvalDO's `executeRun` on a background Node task (no request-scoped limit), then push the
  * result to the owning agent DO (`onEvalComplete`, server-stamped). The held dispatch uses the
- * no-`headersTimeout` dispatcher (`dispatchHeld`). On failure (e.g. a server restart dropped the
+ * deliberately-held dispatch path (`dispatchHeld`). On failure (e.g. a server restart dropped the
  * connection) the EvalDO's boot reconciliation marks the run interrupted and the agent's `getRun`
  * poll backstop surfaces it — so this is fire-and-forget.
  */
@@ -70,10 +78,20 @@ async function runHeldAndDeliver(
   runId: string,
   agentRef: string | undefined,
   channelId: string | undefined,
-  agentInvocationId: string | undefined
+  agentInvocationId: string | undefined,
+  timeoutMs: number | undefined,
+  recoverUnresponsiveSandbox: ((input: EvalSandboxRecoveryInput) => Promise<void>) | undefined,
+  watchdogGraceMs: number
 ): Promise<void> {
   try {
-    const result = await doDispatch.dispatchHeld(evalDoRef, "executeRun", runId);
+    const result = await dispatchHeldEval(
+      doDispatch,
+      evalDoRef,
+      runId,
+      timeoutMs,
+      recoverUnresponsiveSandbox,
+      watchdogGraceMs
+    );
     await pushEvalComplete(doDispatch, agentRef, channelId, runId, agentInvocationId, result);
   } catch (err) {
     console.warn(`[eval] held run ${runId} failed:`, err instanceof Error ? err.message : err);
@@ -121,6 +139,57 @@ async function runHeldAndDeliver(
   }
 }
 
+/**
+ * EvalDO's in-isolate AbortSignal settles ordinary async timeouts. A synchronous
+ * CPU loop can prevent that timer from ever running, so the Node host keeps the
+ * same durable deadline outside workerd. Crossing the grace period means the
+ * sandbox process is unresponsive; recovery recycles that process boundary and
+ * boot reconciliation turns the orphaned run into a durable terminal result.
+ */
+async function dispatchHeldEval(
+  doDispatch: HeldDoDispatcher,
+  evalDoRef: { source: string; className: string; objectKey: string },
+  runId: string,
+  timeoutMs: number | undefined,
+  recoverUnresponsiveSandbox: ((input: EvalSandboxRecoveryInput) => Promise<void>) | undefined,
+  watchdogGraceMs: number
+): Promise<unknown> {
+  const held = doDispatch.dispatchHeld(evalDoRef, "executeRun", runId);
+  if (timeoutMs === undefined || recoverUnresponsiveSandbox === undefined) return held;
+
+  const timeoutError = new Error(
+    `eval run ${runId} exceeded its ${timeoutMs}ms sandbox deadline and required runtime recovery`
+  );
+  let recovery: Promise<void> | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const waitForRecovery = async (): Promise<never> => {
+    if (recovery) await recovery;
+    throw timeoutError;
+  };
+  const guardedHeld = held.then(
+    async (result) => (recovery ? waitForRecovery() : result),
+    async (error) => {
+      if (recovery) await recovery;
+      throw error;
+    }
+  );
+  const watchdog = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      recovery = recoverUnresponsiveSandbox({ runId, timeoutMs, evalDoRef });
+      void recovery.then(
+        () => reject(timeoutError),
+        (error) => reject(error)
+      );
+    }, timeoutMs + watchdogGraceMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([guardedHeld, watchdog]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 const EVAL_DO_CLASS = "EvalDO";
 /** Stable — EvalDO ships in the internal bundle, not build-versioned; keeps entity identity stable. */
 const EVAL_DO_EFFECTIVE_VERSION = "internal";
@@ -163,6 +232,10 @@ export function createEvalService(deps: {
    * background eval work is still running.
    */
   activity?: import("./activityRegistry.js").ActivityRegistry;
+  /** Host-process safety boundary for synchronous sandbox CPU starvation. */
+  recoverUnresponsiveSandbox?: (input: EvalSandboxRecoveryInput) => Promise<void>;
+  /** Test seam for the host watchdog's post-deadline scheduling grace. */
+  watchdogGraceMs?: number;
 }): ServiceDefinition {
   const store = deps.entityStore;
 
@@ -283,6 +356,7 @@ export function createEvalService(deps: {
   ): Promise<{ objectKey: string }> {
     const { ownerId, contextId } = owner;
     const objectKey = evalDoKey(ownerId, subKey);
+    const authorityDelegationPurpose = agentBinding ? "agentic-code-execution" : "tool-eval";
     // Fast path: the EvalDO entity is sticky (idle-eviction aborts the instance
     // but never retires the entity), so once it's active in the cache for the
     // right context there's nothing to do — re-activating every run is a wasted
@@ -291,10 +365,16 @@ export function createEvalService(deps: {
     // process (empty cache) re-activates; the cache IS the source of truth the
     // server's principal resolution reads.
     const active = store.cache.resolveActive(evalDoEntityId(objectKey));
+    const activeStateArgs =
+      active?.stateArgs && typeof active.stateArgs === "object" && !Array.isArray(active.stateArgs)
+        ? (active.stateArgs as Record<string, unknown>)
+        : null;
     if (
       active &&
       active.contextId === contextId &&
-      JSON.stringify(active.agentBinding ?? null) === JSON.stringify(agentBinding ?? null)
+      JSON.stringify(active.agentBinding ?? null) === JSON.stringify(agentBinding ?? null) &&
+      activeStateArgs?.["ownerPrincipalId"] === ownerId &&
+      activeStateArgs["authorityDelegationPurpose"] === authorityDelegationPurpose
     ) {
       return { objectKey };
     }
@@ -319,7 +399,7 @@ export function createEvalService(deps: {
       // bootstrap caller with no subject.
       ownerUserId,
       agentBinding,
-      stateArgs: { ownerPrincipalId: ownerId, subKey },
+      stateArgs: { ownerPrincipalId: ownerId, subKey, authorityDelegationPurpose },
     });
     return { objectKey };
   }
@@ -423,6 +503,7 @@ export function createEvalService(deps: {
       agentBinding
     );
     const isAgentDo = ctx.caller.runtime.kind === "do" && agentBinding !== undefined;
+    const timeoutMs = runArgs.timeoutMs;
     const chatBinding = isAgentDo ? { channelId: agentBinding.channelId, agentRef: ownerId } : {};
     const parent = (await resolveParentPanel(ownerId)) ?? undefined;
     return {
@@ -439,7 +520,7 @@ export function createEvalService(deps: {
         causalParent: ctx.causalParent,
         agentInvocationId: ctx.causalParent?.invocationId,
         parent,
-        timeoutMs: runArgs.timeoutMs,
+        timeoutMs,
         readOnly: runArgs.readOnly,
         ...chatBinding,
       },
@@ -451,7 +532,7 @@ export function createEvalService(deps: {
   return {
     name: "eval",
     description: "Owner-scoped sandbox eval backed by a per-owner internal EvalDO",
-    policy: { allowed: ["panel", "app", "worker", "do", "extension", "shell", "server", "agent"] },
+    authority: { principals: ["code", "user", "host", "entity"] },
     methods: evalMethods,
     handler: defineServiceHandler("eval", evalMethods, {
       run: async (ctx, [runArgs]) => {
@@ -491,7 +572,10 @@ export function createEvalService(deps: {
             runId,
             agentRef,
             channelId,
-            ctx.causalParent?.invocationId
+            ctx.causalParent?.invocationId,
+            typeof assembledArgs["timeoutMs"] === "number" ? assembledArgs["timeoutMs"] : undefined,
+            deps.recoverUnresponsiveSandbox,
+            deps.watchdogGraceMs ?? DEFAULT_EVAL_WATCHDOG_GRACE_MS
           ).finally(() => {
             deps.activity?.end(`eval:${runId}`);
           });

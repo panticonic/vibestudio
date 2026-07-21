@@ -1,4 +1,9 @@
-import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
+import {
+  DurableObjectBase,
+  rpc,
+  type DurableObjectContext,
+  type DurableObjectSchemaMigration,
+} from "@vibestudio/durable";
 import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import { BROWSER_DATA_SCHEMA } from "@vibestudio/browser-data";
 import type {
@@ -34,19 +39,9 @@ interface HistoryVisitWrite {
 }
 
 /**
- * Direct callers permitted at BrowserDataDO (Layer A). Shell + shell-side server
- * services, PLUS the manifest-declared browser-data broker extension — the
- * designated mediator panel/agent access goes through (it gates its own callers
- * to shell and runs in the server-managed extension host, so its
- * server-authenticated `callerId` is trustworthy). Every OTHER extension and
- * every other caller kind is refused (this DO holds user credentials).
- *
- * `brokerCallerId` is the package name of the extension declared in
- * `workspace/meta/vibestudio.yml` under `providers.browserData.extension` (the
- * server injects it as the `BROWSER_DATA_BROKER_ID` env binding). When no
- * broker is declared, NO extension is accepted — the host never falls back to
- * a hardcoded extension name. Exported so the policy is unit-testable without
- * the FTS5 schema the DO itself needs.
+ * Direct access to browser data is restricted to the trusted host and the one
+ * manifest-selected broker extension. The method-level `@rpc` declarations
+ * describe authority metadata; they do not replace this receiver-side guard.
  */
 export function isBrowserDataDirectCaller(
   caller: AuthenticatedCaller | null,
@@ -57,8 +52,33 @@ export function isBrowserDataDirectCaller(
   return brokerCallerId !== null && kind === "extension" && caller?.callerId === brokerCallerId;
 }
 
+type BrowserDataMigrationSql = Parameters<DurableObjectSchemaMigration["migrate"]>[0];
+
+function assertExactMigrationColumns(
+  sql: BrowserDataMigrationSql,
+  table: string,
+  expected: readonly string[]
+): void {
+  const actual = sql
+    .exec(`PRAGMA table_info(${table})`)
+    .toArray()
+    .map((column) => String(column["name"]));
+  if (
+    actual.length !== expected.length ||
+    actual.some((column, index) => column !== expected[index])
+  ) {
+    throw new Error(
+      `BrowserDataDO migration source table ${table} does not match its exact recognized shape`
+    );
+  }
+}
+
 export class BrowserDataDO extends DurableObjectBase {
   static override schemaVersion = 4;
+
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "browser-data-v1" } as const;
+  }
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -76,33 +96,20 @@ export class BrowserDataDO extends DurableObjectBase {
     return typeof value === "string" && value.length > 0 ? value : null;
   }
 
-  /**
-   * Receiver-side authorization (Layer A). BrowserDataDO holds user
-   * credentials/passwords/cookies/history. Direct callers are the Electron shell
-   * and shell-side server services, plus the manifest-declared browser-data
-   * broker extension — the designated mediator that panel/agent access goes
-   * through. That extension gates its OWN callers to shell and runs in the
-   * server-managed extension host (so its server-authenticated `callerId` is
-   * trustworthy), hence it is whitelisted by its declared id. Refuse every other
-   * caller kind — and every OTHER extension — so the open relay cannot read user
-   * secrets by addressing the DO directly. Events are owner-scoped push
-   * notifications — accept them.
-   */
   protected override assertInboundAllowed(
     caller: AuthenticatedCaller | null,
     kind: "call" | "event"
   ): void {
     if (kind === "event") return;
     const broker = this.brokerCallerId();
-    if (!isBrowserDataDirectCaller(caller, broker)) {
-      const detail =
-        caller?.callerKind === "extension" && broker === null
-          ? " (no browser-data broker extension is declared in meta/vibestudio.yml providers.browserData)"
-          : "";
-      throw new Error(
-        `browser-data: BrowserDataDO is shell/server-only (holds user credentials); refusing caller kind ${caller?.callerKind ?? "unknown"}${detail}`
-      );
-    }
+    if (isBrowserDataDirectCaller(caller, broker)) return;
+    const detail =
+      caller?.callerKind === "extension" && broker === null
+        ? " (no browser-data broker extension is declared in meta/vibestudio.yml providers.browserData)"
+        : "";
+    throw new Error(
+      `browser-data: BrowserDataDO is shell/server-only (holds user credentials); refusing caller kind ${caller?.callerKind ?? "unknown"}${detail}`
+    );
   }
 
   protected createTables(): void {
@@ -112,19 +119,305 @@ export class BrowserDataDO extends DurableObjectBase {
     }
   }
 
-  @rpc
+  protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [
+      {
+        version: 2,
+        name: "preserve-history-visit-provenance",
+        validateSource: (sql) => {
+          assertExactMigrationColumns(sql, "history", [
+            "id",
+            "url",
+            "title",
+            "visit_count",
+            "typed_count",
+            "first_visit",
+            "last_visit",
+            "favicon_id",
+          ]);
+          assertExactMigrationColumns(sql, "history_visits", [
+            "id",
+            "history_id",
+            "visit_time",
+            "transition",
+            "from_visit_id",
+          ]);
+        },
+        migrate: (sql) => {
+          // FTS5 owns shadow tables; migrate only the declared virtual table.
+          sql.exec(`DROP TRIGGER IF EXISTS history_ai`);
+          sql.exec(`DROP TRIGGER IF EXISTS history_ad`);
+          sql.exec(`DROP TRIGGER IF EXISTS history_au`);
+          sql.exec(`DROP TABLE IF EXISTS history_fts`);
+          sql.exec(`ALTER TABLE history_visits RENAME TO history_visits_v1`);
+          sql.exec(`
+            CREATE TABLE history_visits (
+              id INTEGER PRIMARY KEY,
+              history_id INTEGER NOT NULL REFERENCES history(id) ON DELETE CASCADE,
+              visit_time INTEGER NOT NULL,
+              transition TEXT DEFAULT 'link',
+              from_visit_id INTEGER REFERENCES history_visits(id),
+              source TEXT NOT NULL DEFAULT 'vibestudio',
+              source_browser TEXT NOT NULL DEFAULT '',
+              source_profile_path TEXT NOT NULL DEFAULT '',
+              panel_id TEXT NOT NULL DEFAULT '',
+              title TEXT,
+              typed INTEGER NOT NULL DEFAULT 0,
+              UNIQUE(history_id, visit_time, source, source_browser, source_profile_path, panel_id, transition)
+            )
+          `);
+          sql.exec(`
+            INSERT INTO history_visits (
+              id, history_id, visit_time, transition, from_visit_id, source,
+              source_browser, source_profile_path, panel_id, title, typed
+            )
+            SELECT v.id, v.history_id, v.visit_time, v.transition, v.from_visit_id,
+                   'vibestudio', '', '', 'legacy:' || v.id, h.title, 0
+              FROM history_visits_v1 v
+              JOIN history h ON h.id = v.history_id
+          `);
+          sql.exec(`DROP TABLE history_visits_v1`);
+          sql.exec(`CREATE INDEX idx_history_visits_history_id ON history_visits(history_id)`);
+          sql.exec(
+            `CREATE INDEX idx_history_visits_source ON history_visits(source, source_browser, source_profile_path)`
+          );
+          sql.exec(
+            `CREATE VIRTUAL TABLE history_fts USING fts5(url, title, content=history, content_rowid=id)`
+          );
+          sql.exec(`
+            CREATE TRIGGER history_ai AFTER INSERT ON history BEGIN
+              INSERT INTO history_fts(rowid, url, title) VALUES (new.id, new.url, new.title);
+            END
+          `);
+          sql.exec(`
+            CREATE TRIGGER history_ad AFTER DELETE ON history BEGIN
+              INSERT INTO history_fts(history_fts, rowid, url, title)
+              VALUES('delete', old.id, old.url, old.title);
+            END
+          `);
+          sql.exec(`
+            CREATE TRIGGER history_au AFTER UPDATE ON history BEGIN
+              INSERT INTO history_fts(history_fts, rowid, url, title)
+              VALUES('delete', old.id, old.url, old.title);
+              INSERT INTO history_fts(rowid, url, title) VALUES (new.id, new.url, new.title);
+            END
+          `);
+          sql.exec(`INSERT INTO history_fts(history_fts) VALUES('rebuild')`);
+        },
+      },
+      {
+        version: 3,
+        name: "preserve-import-source-identity",
+        validateSource: (sql) => {
+          assertExactMigrationColumns(sql, "bookmarks", [
+            "id",
+            "title",
+            "url",
+            "folder_path",
+            "date_added",
+            "date_modified",
+            "favicon_id",
+            "position",
+            "source_browser",
+            "tags",
+            "keyword",
+          ]);
+          assertExactMigrationColumns(sql, "autofill", [
+            "id",
+            "field_name",
+            "value",
+            "date_created",
+            "date_last_used",
+            "times_used",
+          ]);
+          assertExactMigrationColumns(sql, "search_engines", [
+            "id",
+            "name",
+            "keyword",
+            "search_url",
+            "suggest_url",
+            "favicon_url",
+            "is_default",
+          ]);
+        },
+        migrate: (sql) => {
+          sql.exec(`ALTER TABLE bookmarks ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`);
+          sql.exec(`ALTER TABLE bookmarks ADD COLUMN import_key TEXT`);
+          sql.exec(
+            `CREATE UNIQUE INDEX idx_bookmarks_import_key ON bookmarks(import_key) WHERE import_key IS NOT NULL`
+          );
+          sql.exec(`ALTER TABLE autofill ADD COLUMN source_browser TEXT`);
+          sql.exec(`ALTER TABLE autofill ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`);
+          sql.exec(`ALTER TABLE search_engines ADD COLUMN source_browser TEXT NOT NULL DEFAULT ''`);
+          sql.exec(
+            `ALTER TABLE search_engines ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`
+          );
+          sql.exec(`ALTER TABLE search_engines ADD COLUMN import_key TEXT`);
+          sql.exec(
+            `CREATE UNIQUE INDEX idx_search_engines_import_key ON search_engines(import_key) WHERE import_key IS NOT NULL`
+          );
+        },
+      },
+      {
+        version: 4,
+        name: "preserve-import-runs-and-secret-metadata",
+        validateSource: (sql) => {
+          assertExactMigrationColumns(sql, "favicons", [
+            "id",
+            "url",
+            "data",
+            "mime_type",
+            "last_updated",
+          ]);
+          assertExactMigrationColumns(sql, "passwords", [
+            "id",
+            "origin_url",
+            "username_hash",
+            "username_encrypted",
+            "password_encrypted",
+            "action_url",
+            "realm",
+            "date_created",
+            "date_last_used",
+            "date_password_changed",
+            "times_used",
+          ]);
+          assertExactMigrationColumns(sql, "permissions", [
+            "id",
+            "origin",
+            "permission",
+            "setting",
+            "date_set",
+          ]);
+          assertExactMigrationColumns(sql, "import_log", [
+            "id",
+            "browser",
+            "profile_path",
+            "data_type",
+            "items_imported",
+            "items_skipped",
+            "imported_at",
+            "warnings",
+          ]);
+        },
+        migrate: (sql) => {
+          sql.exec(`ALTER TABLE favicons ADD COLUMN source_browser TEXT`);
+          sql.exec(`ALTER TABLE favicons ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`);
+          sql.exec(`ALTER TABLE passwords ADD COLUMN source_browser TEXT`);
+          sql.exec(`ALTER TABLE passwords ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`);
+          sql.exec(`ALTER TABLE permissions ADD COLUMN source_browser TEXT`);
+          sql.exec(
+            `ALTER TABLE permissions ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`
+          );
+          sql.exec(`
+            CREATE TABLE import_runs (
+              id INTEGER PRIMARY KEY,
+              browser TEXT NOT NULL,
+              profile_path TEXT NOT NULL,
+              mode TEXT NOT NULL DEFAULT 'import',
+              status TEXT NOT NULL DEFAULT 'success',
+              started_at INTEGER NOT NULL,
+              finished_at INTEGER NOT NULL,
+              data_types TEXT NOT NULL DEFAULT '[]',
+              warnings TEXT
+            )
+          `);
+          sql.exec(`CREATE INDEX idx_import_runs_finished ON import_runs(finished_at)`);
+          sql.exec(`
+            CREATE TABLE import_run_summaries (
+              id INTEGER PRIMARY KEY,
+              run_id INTEGER NOT NULL REFERENCES import_runs(id) ON DELETE CASCADE,
+              data_type TEXT NOT NULL,
+              scanned INTEGER NOT NULL DEFAULT 0,
+              added INTEGER NOT NULL DEFAULT 0,
+              changed INTEGER NOT NULL DEFAULT 0,
+              unchanged INTEGER NOT NULL DEFAULT 0,
+              skipped INTEGER NOT NULL DEFAULT 0,
+              errors INTEGER NOT NULL DEFAULT 0
+            )
+          `);
+          sql.exec(`CREATE INDEX idx_import_run_summaries_run ON import_run_summaries(run_id)`);
+          sql.exec(`
+            INSERT INTO import_runs (
+              id, browser, profile_path, mode, status, started_at, finished_at,
+              data_types, warnings
+            )
+            SELECT id, browser, profile_path, 'import', 'success', imported_at, imported_at,
+                   json_array(data_type), warnings
+              FROM import_log
+          `);
+          sql.exec(`
+            INSERT INTO import_run_summaries (
+              run_id, data_type, scanned, added, changed, unchanged, skipped, errors
+            )
+            SELECT id, data_type, items_imported + items_skipped, items_imported,
+                   0, 0, items_skipped, 0
+              FROM import_log
+          `);
+          sql.exec(`DROP TABLE import_log`);
+        },
+      },
+    ];
+  }
+
+  protected override requiredTables(): readonly string[] {
+    return [
+      "favicons",
+      "bookmarks",
+      "history",
+      "history_visits",
+      "history_fts",
+      "passwords",
+      "password_never_save",
+      "cookies",
+      "autofill",
+      "search_engines",
+      "permissions",
+      "import_runs",
+      "import_run_summaries",
+    ];
+  }
+
+  protected override validateSchema(): void {
+    super.validateSchema();
+    const requiredColumns: Readonly<Record<string, readonly string[]>> = {
+      history_visits: ["source", "source_profile_path", "panel_id", "title", "typed"],
+      bookmarks: ["source_profile_path", "import_key"],
+      autofill: ["source_browser", "source_profile_path"],
+      search_engines: ["source_browser", "source_profile_path", "import_key"],
+      favicons: ["source_browser", "source_profile_path"],
+      passwords: ["source_browser", "source_profile_path"],
+      permissions: ["source_browser", "source_profile_path"],
+    };
+    for (const [table, expected] of Object.entries(requiredColumns)) {
+      const actual = new Set(
+        this.sql
+          .exec(`PRAGMA table_info(${table})`)
+          .toArray()
+          .map((column) => String(column["name"]))
+      );
+      const missing = expected.filter((column) => !actual.has(column));
+      if (missing.length > 0) {
+        throw new Error(
+          `${this.constructor.name} schema validation failed: ${table} missing column(s): ${missing.join(", ")}`
+        );
+      }
+    }
+  }
+
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getBookmarks(folderPath = "/") {
     return this.sql
       .exec(`SELECT * FROM bookmarks WHERE folder_path = ? ORDER BY position`, folderPath)
       .toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getAllBookmarks() {
     return this.sql.exec(`SELECT * FROM bookmarks ORDER BY folder_path, position`).toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   addBookmark(bookmark: {
     title: string;
     url?: string;
@@ -150,7 +443,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return result.id;
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   updateBookmark(id: number, partial: Record<string, unknown>): void {
     this.updateByMap(
       "bookmarks",
@@ -169,12 +462,12 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deleteBookmark(id: number): void {
     this.sql.exec(`DELETE FROM bookmarks WHERE id = ?`, id);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   moveBookmark(id: number, folderPath: string, position: number): void {
     this.sql.exec(
       `UPDATE bookmarks SET folder_path = ?, position = ?, date_modified = ? WHERE id = ?`,
@@ -185,7 +478,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   searchBookmarks(query: string) {
     return this.sql
       .exec(
@@ -196,7 +489,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getHistory(query: {
     search?: string;
     startTime?: number;
@@ -225,7 +518,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   searchHistory(query: string, limit = 50) {
     return this.sql
       .exec(
@@ -240,7 +533,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   searchHistoryForAutocomplete(query: { query: string; limit?: number }) {
     const trimmed = query.query.trim();
     const limit = query.limit ?? 50;
@@ -300,7 +593,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .slice(0, limit);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   recordHistoryVisit(request: RecordHistoryVisitRequest): number {
     const visitTime = request.visitTime ?? Date.now();
     const historyId = this.ensureHistoryRow(request.url, request.title, visitTime);
@@ -316,7 +609,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return historyId;
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   updateHistoryTitle(request: UpdateHistoryTitleRequest): void {
     const title = request.title.trim();
     if (!title) return;
@@ -332,12 +625,12 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deleteHistoryEntry(id: number): void {
     this.sql.exec(`DELETE FROM history WHERE id = ?`, id);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deleteHistoryRange(start: number, end: number): number {
     let affectedCount = 0;
     this.ctx.storage.transactionSync(() => {
@@ -376,19 +669,19 @@ export class BrowserDataDO extends DurableObjectBase {
     return affectedCount;
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   clearAllHistory(): void {
     this.sql.exec(`DELETE FROM history_visits`);
     this.sql.exec(`DELETE FROM history`);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async getPasswords() {
     const rows = this.sql.exec(`SELECT * FROM passwords`).toArray();
     return Promise.all(rows.map((row) => this.passwordRow(row)));
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async getPasswordForSite(url: string) {
     const prefix = `${this.escapeLikePattern(url.replace(/\/+$/, ""))}/%`;
     const rows = this.sql
@@ -403,7 +696,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return Promise.all(rows.map((row) => this.passwordRow(row)));
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addPassword(password: ImportedPassword): Promise<number> {
     const encrypted = await this.encryptPasswordFields(password.username, password.password);
     const now = Date.now();
@@ -434,7 +727,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return result.id;
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async updatePassword(id: number, partial: Partial<ImportedPassword>): Promise<void> {
     const sets: string[] = [];
     const params: unknown[] = [];
@@ -462,12 +755,12 @@ export class BrowserDataDO extends DurableObjectBase {
     this.sql.exec(`UPDATE passwords SET ${sets.join(", ")} WHERE id = ?`, ...params);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deletePassword(id: number): void {
     this.sql.exec(`DELETE FROM passwords WHERE id = ?`, id);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getAutofillSuggestions(fieldName: string, prefix?: string) {
     const pattern = `${prefix ?? ""}%`;
     return this.sql
@@ -479,25 +772,25 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getSearchEngines() {
     return this.sql.exec(`SELECT * FROM search_engines ORDER BY is_default DESC, name`).toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   setDefaultEngine(id: number): void {
     this.sql.exec(`UPDATE search_engines SET is_default = 0`);
     this.sql.exec(`UPDATE search_engines SET is_default = 1 WHERE id = ?`, id);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getPermissions(origin?: string) {
     return origin
       ? this.sql.exec(`SELECT * FROM permissions WHERE origin = ?`, origin).toArray()
       : this.sql.exec(`SELECT * FROM permissions`).toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   setPermission(origin: string, permission: string, setting: string): void {
     this.sql.exec(
       `INSERT INTO permissions (origin, permission, setting, date_set)
@@ -513,7 +806,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getCookies(domain?: string) {
     return domain
       ? this.sql
@@ -526,12 +819,12 @@ export class BrowserDataDO extends DurableObjectBase {
       : this.sql.exec(`SELECT * FROM cookies ORDER BY created_at DESC`).toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   deleteCookie(id: number): void {
     this.sql.exec(`DELETE FROM cookies WHERE id = ?`, id);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   clearCookies(domain?: string): number {
     if (domain) {
       this.sql.exec(`DELETE FROM cookies WHERE domain = ? OR domain = ?`, domain, `.${domain}`);
@@ -541,7 +834,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return this.changes();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addBookmarksBatch(
     bookmarks: ImportedBookmark[],
     meta: ImportBatchMeta = {}
@@ -590,7 +883,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addHistoryBatch(
     entries: ImportedHistoryEntry[],
     meta: ImportHistoryBatchMeta = {}
@@ -614,7 +907,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addCookiesBatch(cookies: ImportedCookie[], meta: ImportBatchMeta = {}): Promise<number> {
     const now = Date.now();
     const sourceBrowser = meta.browser ?? null;
@@ -659,7 +952,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addPasswordsBatch(
     passwords: ImportedPassword[],
     meta: ImportBatchMeta = {}
@@ -821,7 +1114,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addAutofillBatch(
     entries: ImportedAutofillEntry[],
     meta: ImportBatchMeta = {}
@@ -859,7 +1152,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addSearchEnginesBatch(
     engines: ImportedSearchEngine[],
     meta: ImportBatchMeta = {}
@@ -901,7 +1194,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addPermissionsBatch(
     permissions: ImportedPermission[],
     meta: ImportBatchMeta = {}
@@ -929,7 +1222,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   async addFaviconsBatch(favicons: ImportedFavicon[], meta: ImportBatchMeta = {}): Promise<number> {
     const sourceBrowser = meta.browser ?? null;
     const sourceProfilePath = meta.profilePath ?? "";
@@ -956,7 +1249,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   addNeverSave(origin: string): void {
     this.sql.exec(
       `INSERT INTO password_never_save (origin, date_added) VALUES (?, ?)
@@ -966,7 +1259,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   isNeverSave(origin: string): boolean {
     const row = this.sql
       .exec(`SELECT 1 AS present FROM password_never_save WHERE origin = ?`, origin)
@@ -974,7 +1267,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return row !== undefined;
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getNeverSaveOrigins(): string[] {
     return (
       this.sql.exec(`SELECT origin FROM password_never_save ORDER BY origin`).toArray() as Array<{
@@ -983,12 +1276,12 @@ export class BrowserDataDO extends DurableObjectBase {
     ).map((row) => row.origin);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "destructive" })
   removeNeverSave(origin: string): void {
     this.sql.exec(`DELETE FROM password_never_save WHERE origin = ?`, origin);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   updateLastUsed(id: number): void {
     this.sql.exec(
       `UPDATE passwords SET date_last_used = ?, times_used = times_used + 1 WHERE id = ?`,
@@ -997,7 +1290,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
   recordImportRun(run: {
     browser: string;
     profilePath: string;
@@ -1049,7 +1342,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return runId;
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getImportHistory() {
     const runs = this.sql
       .exec(`SELECT * FROM import_runs ORDER BY finished_at DESC`)
@@ -1062,7 +1355,7 @@ export class BrowserDataDO extends DurableObjectBase {
     }));
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getProfileImportState(query: { browser: string; profilePath: string }): {
     lastRun: Record<string, unknown> | null;
     runs: Array<Record<string, unknown>>;
@@ -1085,7 +1378,7 @@ export class BrowserDataDO extends DurableObjectBase {
 
   // ---- Secret-free "view" aggregates (Tier-1: no raw values leave the store) ----
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getCookieDomains() {
     return this.sql
       .exec(
@@ -1101,7 +1394,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getPasswordOrigins(): Array<{ origin: string; count: number }> {
     const rows = this.sql.exec(`SELECT origin_url FROM passwords`).toArray() as Array<{
       origin_url: string;
@@ -1116,7 +1409,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .sort((a, b) => b.count - a.count);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getAutofillFieldNames() {
     return this.sql
       .exec(
@@ -1126,7 +1419,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getHistoryDomains(
     limit = 2000
   ): Array<{ domain: string; visits: number; typed: number; pages: number; lastVisit: number }> {
@@ -1158,7 +1451,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return [...byHost.values()].sort((a, b) => b.lastVisit - a.lastVisit);
   }
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   getDomainReadiness(domain: string): {
     domain: string;
     cookies: number;
@@ -1222,7 +1515,7 @@ export class BrowserDataDO extends DurableObjectBase {
 
   // ---- Dry-run classifier: compares candidate import items against the store ----
 
-  @rpc
+  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
   async classifyAgainstStore(
     dataType: string,
     items: Array<Record<string, unknown>>,

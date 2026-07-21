@@ -6,7 +6,26 @@
     "title": "Permissions",
     "description": "Review and revoke saved app and agent permissions",
     "hiddenInLauncher": false,
-    "autoArchiveWhenEmpty": true
+    "autoArchiveWhenEmpty": true,
+    "authority": {
+      "requests": [
+        {
+          "capability": "service:permissions.list",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:permissions.revoke",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        }
+      ],
+      "delegations": []
+    }
   },
   "dependencies": {
     "@workspace/runtime": "workspace:*",

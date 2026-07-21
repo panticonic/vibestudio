@@ -6,7 +6,11 @@
   "vibestudio": {
     "title": "Hello Svelte",
     "entry": "index.ts",
-    "template": "svelte"
+    "template": "svelte",
+    "authority": {
+      "requests": [],
+      "delegations": []
+    }
   },
   "dependencies": {
     "@workspace/runtime": "workspace:*",

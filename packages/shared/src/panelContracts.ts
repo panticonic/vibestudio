@@ -160,6 +160,14 @@ export const PanelSchema: z.ZodType<Panel> = z.lazy(() =>
     title: z.string(),
     runtimeEntityId: z.string().nullable().optional(),
     effectiveVersion: z.string().nullable().optional(),
+    buildKey: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
+    executionDigest: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
+    authorityRequests: z
+      .array(z.custom<import("@vibestudio/rpc").CapabilityScope>())
+      .optional(),
+    authorityDelegations: z
+      .array(z.custom<import("./authorityManifest.js").EvalAuthorityDelegation>())
+      .optional(),
     owner: z.string().optional(),
     children: z.array(PanelSchema),
     positionId: z.string().optional(),

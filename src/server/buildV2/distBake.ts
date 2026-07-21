@@ -3,8 +3,10 @@ import * as path from "node:path";
 import { normalizeUnitRepoPath } from "@vibestudio/unit-host";
 import type { BuildArtifactManifestEntry, BuildMetadata, BuildResult } from "./buildStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import { parseSha256 } from "@vibestudio/shared/execution/identity";
 
-export const APP_DIST_BAKE_VERSION = 1;
+export const APP_DIST_BAKE_VERSION = 2;
 
 export interface ApprovedAppDistEntry {
   name: string;
@@ -35,6 +37,10 @@ export interface AppDistBakeManifest {
     integrity: string | null;
     rnHostAbi: string | null;
     provider: Extract<BuildMetadata["details"], { kind: "app" }>["provider"];
+    executionDigest: string;
+    execution: NonNullable<BuildMetadata["execution"]>;
+    authorityRequests: NonNullable<BuildMetadata["authority"]>["requests"];
+    authorityDelegations: NonNullable<BuildMetadata["authority"]>["delegations"];
   };
   artifacts: BuildArtifactManifestEntry[];
 }
@@ -63,6 +69,19 @@ export function createAppDistBakeManifest(opts: {
   if (opts.build.metadata.ev !== opts.entry.activeEv) {
     throw new Error(`App ${opts.entry.name} active build EV does not match the registry`);
   }
+  const execution = opts.build.metadata.execution;
+  const executionDigest = parseSha256(
+    execution?.executionDigest ?? "",
+    `App ${opts.entry.name} execution digest`
+  );
+  const source = normalizeUnitRepoPath(opts.entry.source.repo);
+  if (execution?.source.repoPath !== source) {
+    throw new Error(`App ${opts.entry.name} execution identity does not match its source`);
+  }
+  const authority = parseUnitAuthorityManifest(
+    opts.build.metadata.authority,
+    `App ${opts.entry.name} sealed build authority`
+  );
   const artifacts = opts.build.artifacts.map(({ content: _content, ...artifact }) => artifact);
   validateDistArtifacts(opts.entry.name, details, artifacts);
 
@@ -71,7 +90,7 @@ export function createAppDistBakeManifest(opts: {
     generatedAt: opts.generatedAt ?? new Date().toISOString(),
     app: {
       name: opts.entry.name,
-      source: normalizeUnitRepoPath(opts.entry.source.repo),
+      source,
       ref: opts.entry.source.ref,
       target: opts.entry.target,
       capabilities: [...opts.entry.capabilities],
@@ -84,6 +103,10 @@ export function createAppDistBakeManifest(opts: {
       integrity: details.integrity ?? null,
       rnHostAbi: details.rnHostAbi ?? null,
       provider: details.provider ?? null,
+      executionDigest,
+      execution,
+      authorityRequests: authority.requests,
+      authorityDelegations: authority.delegations,
     },
     artifacts,
   };
@@ -107,11 +130,11 @@ export function writeAppDistBake(opts: {
     }
     const targetPath = path.join(tmpDir, "artifacts", artifact.path);
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    const content =
-      manifest.app.target === "electron" && artifact.role === "html"
-        ? standaloneElectronHtml(artifact.content)
-        : artifact.content;
-    fs.writeFileSync(targetPath, content, artifact.encoding === "base64" ? "base64" : "utf8");
+    fs.writeFileSync(
+      targetPath,
+      artifact.content,
+      artifact.encoding === "base64" ? "base64" : "utf8"
+    );
   }
 
   fs.writeFileSync(path.join(tmpDir, "manifest.json"), JSON.stringify(manifest, null, 2));
@@ -134,6 +157,13 @@ function validateDistArtifacts(
 ): void {
   if (artifacts.length === 0) {
     throw new Error(`App ${appName} build has no artifacts to bake`);
+  }
+  for (const artifact of artifacts) {
+    if (!/^sha256-[0-9a-f]{64}$/.test(artifact.integrity ?? "")) {
+      throw new Error(
+        `App ${appName} artifact ${artifact.path} is missing canonical content integrity`
+      );
+    }
   }
   if (details.target === "electron") {
     if (!artifacts.some((artifact) => artifact.role === "html")) {
@@ -163,13 +193,4 @@ function validateDistArtifacts(
       );
     }
   }
-}
-
-function standaloneElectronHtml(html: string): string {
-  return html
-    .replace(/<base\b[^>]*>\s*/i, "")
-    .replace(
-      /<script\b[^>]*\bsrc\s*=\s*["']\/__loader\.js["'][^>]*><\/script>/i,
-      '<script type="module" src="./bundle.js"></script>'
-    );
 }

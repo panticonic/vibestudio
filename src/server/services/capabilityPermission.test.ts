@@ -184,41 +184,28 @@ describe("capabilityPermission", () => {
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);
   });
 
-  it("destructively resets legacy internal version grants without a caller identity", () => {
+  it("rejects legacy internal version grants without a caller identity unchanged", () => {
     const statePath = tempStatePath();
-    fs.writeFileSync(
-      path.join(statePath, "capability-grants.json"),
-      JSON.stringify({
-        grants: [
-          {
-            capability: "external-browser-open",
-            resourceKey: "https://example.com",
-            scope: "version",
-            repoPath: "vibestudio/internal",
-            effectiveVersion: "internal",
-            grantedAt: 1,
-          },
-        ],
-      })
-    );
+    const filePath = path.join(statePath, "capability-grants.json");
+    const persisted = {
+      grants: [
+        {
+          capability: "external-browser-open",
+          resourceKey: "https://example.com",
+          scope: "version",
+          repoPath: "vibestudio/internal",
+          effectiveVersion: "internal",
+          grantedAt: 1,
+        },
+      ],
+    };
+    fs.writeFileSync(filePath, JSON.stringify(persisted));
 
-    const grantStore = new CapabilityGrantStore({ statePath });
-
-    expect(
-      grantStore.hasGrant("external-browser-open", "https://example.com", {
-        callerId: "do:vibestudio/internal:EvalDO:one",
-        repoPath: "vibestudio/internal",
-        effectiveVersion: "internal",
-      })
-    ).toBe(false);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(statePath, "capability-grants.json"), "utf8"))
-    ).toEqual({
-      grants: [],
-    });
+    expect(() => new CapabilityGrantStore({ statePath })).toThrow(/without risking data loss/);
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual(persisted);
   });
 
-  it("destructively resets retired repository-scoped grants", () => {
+  it("rejects retired repository-scoped grants unchanged", () => {
     const statePath = tempStatePath();
     const filePath = path.join(statePath, "capability-grants.json");
     fs.writeFileSync(
@@ -237,19 +224,48 @@ describe("capabilityPermission", () => {
       })
     );
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const grantStore = new CapabilityGrantStore({ statePath });
+    const original = fs.readFileSync(filePath, "utf8");
+    expect(() => new CapabilityGrantStore({ statePath })).toThrow(/without risking data loss/);
+    expect(fs.readFileSync(filePath, "utf8")).toBe(original);
+  });
+
+  it("atomically migrates recognized unversioned version grants", () => {
+    const statePath = tempStatePath();
+    const filePath = path.join(statePath, "capability-grants.json");
+    const grant = {
+      capability: "external-browser-open",
+      resourceKey: "https://example.com",
+      resourceScope: { kind: "exact", key: "https://example.com" },
+      scope: "version",
+      repoPath: "workers/source",
+      effectiveVersion: "version-1",
+      grantedAt: 1,
+    };
+    fs.writeFileSync(filePath, JSON.stringify({ grants: [grant] }));
+
+    const store = new CapabilityGrantStore({ statePath });
 
     expect(
-      grantStore.hasGrant("external-browser-open", "https://example.com", {
+      store.hasGrant("external-browser-open", "https://example.com", {
         callerId: "worker:source",
         repoPath: "workers/source",
         effectiveVersion: "version-1",
       })
-    ).toBe(false);
-    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({ grants: [] });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Resetting invalid grant store"));
-    warn.mockRestore();
+    ).toBe(true);
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({
+      schemaVersion: 1,
+      grants: [grant],
+    });
+  });
+
+  it("rejects future capability grant schemas unchanged", () => {
+    const statePath = tempStatePath();
+    const filePath = path.join(statePath, "capability-grants.json");
+    const persisted = { schemaVersion: 2, grants: [] };
+    fs.writeFileSync(filePath, JSON.stringify(persisted));
+
+    expect(() => new CapabilityGrantStore({ statePath })).toThrow(/schema version 2/);
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual(persisted);
   });
 
   it("keys session-scoped capability grants to the concrete caller identity", async () => {

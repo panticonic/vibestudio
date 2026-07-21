@@ -212,7 +212,8 @@ function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
       (key) =>
         key.startsWith(`${contextId}/`) && `file:${key.slice(contextId.length + 1)}` === fileId
     );
-  const mutationResult = (contextId: string, kind: string) => ({
+  const mutationResult = (contextId: string, commandId: string, kind: string) => ({
+    commandId,
     contextId,
     workUnitId: `work:${kind}:${heads.get(contextId) ?? 0}`,
     applicationId: `application:${kind}:${heads.get(contextId) ?? 0}`,
@@ -220,6 +221,7 @@ function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
     changeIds: [`change:${kind}:${heads.get(contextId) ?? 0}`],
     incorporatedChangeCount: 0,
     incorporatedChangeIds: [],
+    decisionIds: [],
     workingHead: advance(contextId),
   });
   const isScratch = (rel: string) =>
@@ -374,7 +376,7 @@ function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
           });
         }
       }
-      return mutationResult(input.contextId, "edit");
+      return mutationResult(input.contextId, input.commandId, "edit");
     },
     move: async (input) => {
       moveCalls.push(input);
@@ -390,7 +392,7 @@ function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
           content
         );
       }
-      return mutationResult(input.contextId, "move");
+      return mutationResult(input.contextId, input.commandId, "move");
     },
     copy: async (input) => {
       copyCalls.push(input);
@@ -403,7 +405,7 @@ function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
           files.get(sourceKey)!
         );
       }
-      return mutationResult(input.contextId, "copy");
+      return mutationResult(input.contextId, input.commandId, "copy");
     },
   };
   return { bridge, applyCalls, moveCalls, copyCalls, readCalls, files };

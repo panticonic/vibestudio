@@ -13,9 +13,8 @@ import { getCentralDataPath } from "@vibestudio/env-paths";
 import { z } from "zod";
 
 import {
-  assertCanonicalSqliteSchema,
-  initializeCanonicalSqliteSchema,
-  isTrulyEmptySqliteDatabase,
+  openCanonicalSqliteDatabase,
+  type CanonicalSqliteMigrationPlan,
   type CanonicalSqliteSchema,
 } from "@vibestudio/sqlite";
 import {
@@ -149,6 +148,12 @@ const GOVERNANCE_SCHEMA: CanonicalSqliteSchema = {
   ],
 };
 
+/** Version 1 is the first production baseline; future changes append migrations here. */
+const GOVERNANCE_MIGRATION_PLAN: CanonicalSqliteMigrationPlan = {
+  current: GOVERNANCE_SCHEMA,
+  migrations: [],
+};
+
 export interface GovernanceQueryFilter {
   recordKind?: "approval" | "membership";
   userId?: string;
@@ -217,15 +222,9 @@ export class GovernanceLog {
     this.db = new DatabaseSync(databasePath);
     this.db.exec("PRAGMA busy_timeout = 5000");
     try {
-      if (isTrulyEmptySqliteDatabase(this.db)) {
-        initializeCanonicalSqliteSchema(this.db, GOVERNANCE_SCHEMA);
-      } else {
-        assertCanonicalSqliteSchema(
-          this.db,
-          GOVERNANCE_SCHEMA,
-          `governance database ${databasePath}`
-        );
-      }
+      openCanonicalSqliteDatabase(this.db, GOVERNANCE_MIGRATION_PLAN, {
+        description: `governance database ${databasePath}`,
+      });
       this.db.exec("PRAGMA journal_mode = WAL");
       this.db.exec("PRAGMA synchronous = FULL");
     } catch (error) {

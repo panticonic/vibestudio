@@ -15,7 +15,11 @@
  */
 
 import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
-import { RemoteRpcError, type RpcErrorKind } from "@vibestudio/rpc";
+import {
+  RemoteRpcError,
+  type DirectAuthorityAttestation,
+  type RpcErrorKind,
+} from "@vibestudio/rpc";
 import type {
   AlarmDoDispatcher,
   DoAlarmDispatchResult,
@@ -28,7 +32,7 @@ import type {
 } from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
-import { HELD_CONNECTION_DISPATCHER } from "./workerdRpcRelay.js";
+import { WORKERD_CONNECTION_DISPATCHER } from "./workerdRpcRelay.js";
 
 /** Canonical string key for a DORef, used for maps and logging. */
 export function doRefKey(ref: DORef): string {
@@ -67,9 +71,6 @@ export interface PostToDOWithTokenDeps {
   tokenManager: TokenManager;
   workerdUrl: string;
   workerdGatewayToken: string;
-  /** Held-connection call (EvalDO `executeRun`): no-`headersTimeout` dispatcher so the held fetch
-   *  isn't reaped at undici's ~300s while the DO holds the response for a long run. */
-  heldConnection?: boolean;
   /**
    * Per-process dispatch secret stamped onto internal `/_w/` dispatches as
    * the `X-Vibestudio-Dispatch-Secret` header. The auto-generated workerd router
@@ -93,6 +94,8 @@ export interface DOCallerEnvelope {
    * code identity, WP0 §6). Absent for server-originated and bootstrap dispatches.
    */
   userId?: string;
+  /** Fresh host mediation bound to this exact method and DO object. */
+  authorization?: DirectAuthorityAttestation;
 }
 
 /**
@@ -108,7 +111,8 @@ export async function postToDOWithToken(
   args: unknown[],
   deps: PostToDOWithTokenDeps,
   callerId?: string,
-  caller?: DOCallerEnvelope
+  caller?: DOCallerEnvelope,
+  signal?: AbortSignal
 ): Promise<unknown> {
   // 1. Build the instance ID for this DO: "do:{source}:{className}:{objectKey}"
   const instanceId = `do:${ref.source}:${ref.className}:${ref.objectKey}`;
@@ -141,7 +145,11 @@ export async function postToDOWithToken(
     method: "POST",
     headers,
     body: JSON.stringify(envelope),
-    ...(deps.heldConnection ? { dispatcher: HELD_CONNECTION_DISPATCHER } : {}),
+    signal,
+    // The method's owner defines its semantic lifetime. In particular,
+    // `__alarm` may legitimately await an agent model effect, so Undici's
+    // response-header/body defaults must never become a hidden deadline.
+    dispatcher: WORKERD_CONNECTION_DISPATCHER,
   } as RequestInit);
 
   if (!res.ok) {
@@ -267,6 +275,8 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   private getWorkerdUrl: (() => string) | null = null;
   private getDispatchSecret: (() => string) | null = null;
   private getWorkerdGatewayToken: (() => string) | null = null;
+  private authorityAttester: ((ref: DORef, method: string) => DirectAuthorityAttestation) | null =
+    null;
 
   /**
    * Set the TokenManager for per-instance identity tokens.
@@ -303,6 +313,21 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     this.getWorkerdGatewayToken = fn;
   }
 
+  setAuthorityAttester(fn: (ref: DORef, method: string) => DirectAuthorityAttestation): void {
+    this.authorityAttester = fn;
+  }
+
+  private serverCaller(ref: DORef, method: string): DOCallerEnvelope {
+    if (!this.authorityAttester) {
+      throw new Error("DODispatch requires a host authority attester");
+    }
+    return {
+      callerId: "main",
+      callerKind: "server",
+      authorization: this.authorityAttester(ref, method),
+    };
+  }
+
   /**
    * Dispatch a method call to a DO via HTTP POST.
    * Returns the parsed JSON response (type depends on the DO method).
@@ -318,9 +343,10 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   }
 
   /**
-   * Like `dispatch`, but for a HELD long-running handler (the EvalDO's `executeRun`): the server→DO
-   * fetch uses a no-`headersTimeout` dispatcher so it isn't reaped at undici's ~300s while the DO
-   * holds the response. Pair with the DO disabling its own `respond` reaper (`respondTimeoutMs`).
+   * Like `dispatch`, but labels a deliberately long-running handler (the
+   * EvalDO's `executeRun`) so slow-call reporting is informational and coarse.
+   * All process-local DO dispatches leave semantic lifetime to their owner;
+   * this method expresses observability intent, not a separate transport path.
    */
   async dispatchHeld(ref: DORef, method: string, ...args: unknown[]): Promise<unknown> {
     // A held call is INTENTIONALLY long (the eval runs for its whole duration),
@@ -328,7 +354,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     // reserved for calls whose duration is actually anomalous.
     return this.withSlowWarning(
       `${doRefKey(ref)}.${method} (held)`,
-      () => this.dispatchImpl(ref, method, args, true),
+      () => this.dispatchImpl(ref, method, args),
       300_000,
       console.info
     );
@@ -359,12 +385,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     }
   }
 
-  private async dispatchImpl(
-    ref: DORef,
-    method: string,
-    args: unknown[],
-    held = false
-  ): Promise<unknown> {
+  private async dispatchImpl(ref: DORef, method: string, args: unknown[]): Promise<unknown> {
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
@@ -378,9 +399,8 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       workerdUrl: assertPresent(this.getWorkerdUrl)(),
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
-      ...(held ? { heldConnection: true } : {}),
     });
-    const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
+    const serverCaller = this.serverCaller(ref, method);
     return await postToDOWithToken(ref, method, args, buildDeps(), "main", serverCaller);
   }
 
@@ -415,7 +435,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
     });
-    const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
+    const serverCaller = this.serverCaller(ref, lifecycleMethod);
     return await postToDOWithToken(ref, lifecycleMethod, [arg], buildDeps(), "main", serverCaller);
   }
 
@@ -423,11 +443,16 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
    * Fire a server-driven `__alarm` on a DO. Mirrors `dispatchLifecycle`'s
    * server-caller envelope so the DO can gate `__alarm` to the server.
    */
-  async dispatchAlarm(ref: DORef): Promise<DoAlarmDispatchResult> {
-    return this.withSlowWarning(`${doRefKey(ref)}.__alarm`, () => this.dispatchAlarmImpl(ref));
+  async dispatchAlarm(ref: DORef, signal?: AbortSignal): Promise<DoAlarmDispatchResult> {
+    return this.withSlowWarning(`${doRefKey(ref)}.__alarm`, () =>
+      this.dispatchAlarmImpl(ref, signal)
+    );
   }
 
-  private async dispatchAlarmImpl(ref: DORef): Promise<DoAlarmDispatchResult> {
+  private async dispatchAlarmImpl(
+    ref: DORef,
+    signal?: AbortSignal
+  ): Promise<DoAlarmDispatchResult> {
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
@@ -437,14 +462,15 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
     });
-    const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
+    const serverCaller = this.serverCaller(ref, "__alarm");
     return (await postToDOWithToken(
       ref,
       "__alarm",
       [],
       buildDeps(),
       "main",
-      serverCaller
+      serverCaller,
+      signal
     )) as DoAlarmDispatchResult;
   }
 }

@@ -1,8 +1,11 @@
-import * as fs from "node:fs";
 import { stateLayout } from "../stateLayout.js";
 
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
-import { writeJsonFileAtomic } from "../hostCore/atomicFile.js";
+import {
+  loadVersionedJsonFile,
+  saveVersionedJsonFile,
+  type VersionedJsonCodec,
+} from "../hostCore/versionedJsonStore.js";
 import type {
   ApprovalPrincipal,
   UserlandApprovalGrantScope,
@@ -14,6 +17,43 @@ import type {
 interface UserlandApprovalGrantFile {
   grants: UserlandApprovalGrant[];
 }
+
+const USERLAND_APPROVAL_GRANT_SCHEMA_VERSION = 1;
+
+const USERLAND_APPROVAL_GRANT_CODEC: VersionedJsonCodec<UserlandApprovalGrantFile> = {
+  schemaName: "Userland approval grant store",
+  currentVersion: USERLAND_APPROVAL_GRANT_SCHEMA_VERSION,
+  decodeCurrent(value) {
+    const record = value as Record<string, unknown>;
+    if (
+      Object.keys(record).some((key) => key !== "schemaVersion" && key !== "grants") ||
+      !Array.isArray(record["grants"]) ||
+      !record["grants"].every(isGrant)
+    ) {
+      throw new Error("versioned grant store contains invalid data");
+    }
+    return { grants: record["grants"] };
+  },
+  unversionedMigration: {
+    version: 1,
+    name: "recognize-pre-versioning-userland-approval-grants",
+    migrate(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("legacy grant store is not an object");
+      }
+      const record = value as Record<string, unknown>;
+      if (
+        Object.keys(record).length !== 1 ||
+        !Array.isArray(record["grants"]) ||
+        !record["grants"].every(isGrant)
+      ) {
+        throw new Error("legacy grant store does not match the recognized { grants } schema");
+      }
+      return { grants: record["grants"] };
+    },
+  },
+  encode: (value) => ({ grants: value.grants }),
+};
 
 function defaultIssuer(principal: UserlandApprovalGrant["principal"]): UserlandApprovalIssuer {
   return { kind: principal.callerKind, id: principal.callerId };
@@ -149,23 +189,13 @@ export class UserlandApprovalGrantStore {
   }
 
   private load(): void {
-    try {
-      const parsed = JSON.parse(
-        fs.readFileSync(this.filePath, "utf8")
-      ) as UserlandApprovalGrantFile;
-      this.persistent = {
-        grants: Array.isArray(parsed.grants) ? parsed.grants.filter(isGrant) : [],
-      };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.warn("[UserlandApprovalGrantStore] Failed to load grants; starting empty:", err);
-      }
-      this.persistent = { grants: [] };
-    }
+    this.persistent = loadVersionedJsonFile(this.filePath, USERLAND_APPROVAL_GRANT_CODEC) ?? {
+      grants: [],
+    };
   }
 
   private save(): void {
-    writeJsonFileAtomic(this.filePath, this.persistent);
+    saveVersionedJsonFile(this.filePath, this.persistent, USERLAND_APPROVAL_GRANT_CODEC);
   }
 }
 
@@ -233,13 +263,24 @@ function issuerMatches(
 }
 
 function isGrant(value: unknown): value is UserlandApprovalGrant {
-  if (!value || typeof value !== "object") return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const grant = value as Partial<UserlandApprovalGrant>;
+  if (
+    Object.keys(grant).some(
+      (key) => !["principal", "issuer", "subject", "choice", "grantedAt", "scope"].includes(key)
+    )
+  ) {
+    return false;
+  }
   if (
     grant.issuer !== undefined &&
     (typeof grant.issuer !== "object" ||
       grant.issuer === null ||
+      Array.isArray(grant.issuer) ||
+      Object.keys(grant.issuer).some((key) => !["kind", "id", "label"].includes(key)) ||
       typeof (grant.issuer as UserlandApprovalIssuer).id !== "string" ||
+      ((grant.issuer as UserlandApprovalIssuer).label !== undefined &&
+        typeof (grant.issuer as UserlandApprovalIssuer).label !== "string") ||
       !["panel", "app", "worker", "do", "extension"].includes(
         (grant.issuer as UserlandApprovalIssuer).kind
       ))
@@ -250,16 +291,26 @@ function isGrant(value: unknown): value is UserlandApprovalGrant {
     typeof grant.choice === "string" &&
     typeof grant.grantedAt === "number" &&
     !!grant.principal &&
+    !Array.isArray(grant.principal) &&
+    Object.keys(grant.principal).every((key) =>
+      ["callerId", "callerKind", "repoPath", "effectiveVersion"].includes(key)
+    ) &&
     typeof grant.principal.callerId === "string" &&
     (grant.principal.callerKind === "panel" ||
       grant.principal.callerKind === "app" ||
       grant.principal.callerKind === "worker" ||
-      grant.principal.callerKind === "do") &&
+      grant.principal.callerKind === "do" ||
+      grant.principal.callerKind === "extension") &&
+    (grant.principal.repoPath === undefined || typeof grant.principal.repoPath === "string") &&
+    (grant.principal.effectiveVersion === undefined ||
+      typeof grant.principal.effectiveVersion === "string") &&
     (grant.scope === undefined ||
       grant.scope === "caller" ||
       grant.scope === "session" ||
       grant.scope === "version") &&
     !!grant.subject &&
+    !Array.isArray(grant.subject) &&
+    Object.keys(grant.subject).every((key) => ["id", "label"].includes(key)) &&
     typeof grant.subject.id === "string" &&
     (grant.subject.label === undefined || typeof grant.subject.label === "string")
   );

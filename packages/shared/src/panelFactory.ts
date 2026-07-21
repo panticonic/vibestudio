@@ -34,6 +34,7 @@ export interface BuildBootstrapConfigOpts {
   contextId: string;
   source: string;
   effectiveVersion?: string | null;
+  buildKey?: string | null;
   parentId: PanelSlotId | null;
   parentEntityId?: PanelEntityId | null;
   theme: "light" | "dark";
@@ -50,6 +51,8 @@ export interface BuildBootstrapConfigOpts {
 export interface BuildPanelUrlOpts {
   source: string;
   contextId: string;
+  /** Exact immutable artifact selected by runtime activation. */
+  buildKey?: string | null;
   ref?: string;
   gatewayPort: number;
   basePath?: string;
@@ -92,12 +95,14 @@ export function buildBootstrapConfig(opts: BuildBootstrapConfigOpts): unknown {
     theme: opts.theme,
     sourceRepo: opts.source,
     effectiveVersion: opts.effectiveVersion ?? null,
+    buildKey: opts.buildKey ?? null,
     gatewayConfig: opts.gatewayConfig,
     env: {
       ...opts.env,
       PARENT_ID: opts.parentId ?? "",
       __VIBESTUDIO_SOURCE_REPO: opts.source,
       __VIBESTUDIO_EFFECTIVE_VERSION: opts.effectiveVersion ?? "",
+      __VIBESTUDIO_BUILD_KEY: opts.buildKey ?? "",
       __VIBESTUDIO_GATEWAY_CONFIG: JSON.stringify(opts.gatewayConfig),
     },
     stateArgs: opts.stateArgs ?? {},
@@ -115,6 +120,10 @@ export function buildPanelUrl(opts: BuildPanelUrlOpts): string {
 
   const params = new URLSearchParams();
   params.set("contextId", opts.contextId);
+  if (!opts.buildKey || !/^[0-9a-f]{64}$/.test(opts.buildKey)) {
+    throw new Error(`Workspace panel ${opts.source} has no immutable BuildV2 build key`);
+  }
+  params.set("buildKey", opts.buildKey);
   if (opts.ref) params.set("ref", opts.ref);
   const encodedPath = encodeURIComponent(opts.source).replace(/%2F/g, "/");
   const basePath = opts.basePath?.replace(/\/+$/, "") ?? "";

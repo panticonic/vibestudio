@@ -1,0 +1,801 @@
+{
+  "adblock": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "addCustomList": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "addToWhitelist": {
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getConfig": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getPanelUrl": {
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getStats": {
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getStatsForPanel": {
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "isActive": {
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "isEnabledForPanel": {
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "rebuildEngine": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "removeCustomList": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "removeFromWhitelist": {
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "resetStats": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "resetStatsForPanel": {
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setEnabled": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setEnabledForPanel": {
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setListEnabled": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "app": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "applyUpdate": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "clearBuildCache": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getInfo": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getShellPages": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getSystemTheme": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listPendingUpdates": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "openDevTools": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "openExternal": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "openWorkspacePath": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setThemeMode": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "desktopEvents": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "watch": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "hubControl": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "addWorkspaceMember": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "createWorkspace": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "deleteWorkspace": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "ensureEphemeralWorkspace": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "getProfile": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "inviteUser": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "listDevices": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listUserPresence": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listWorkspaceMembers": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listWorkspaces": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "pairDevice": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "removeWorkspaceMember": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "revokeDevice": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "revokeUser": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "routeWorkspace": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setRole": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "updateProfile": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "menu": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "showContext": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "showHamburger": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "showPanelContext": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "palette": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "list": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "register": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "run": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "unregister": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "panel": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "ensureLoaded": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "forceReloadView": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getAddressOptions": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getBrowserAddressOptions": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getChromeState": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getFocusedPanelId": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getThemeConfig": {
+        "authority": {
+          "principals": ["user", "code"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getTreeSnapshot": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listPinnedPanelIds": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "markBrowserNavigationIntent": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "reloadView": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "takeOver": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "togglePin": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "updateTheme": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "updateThemeConfig": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "remoteCred": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "clear": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "getCurrent": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "pair": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "reconnectNow": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "relaunch": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      }
+    }
+  },
+  "view": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "bindNativePanelSlot": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "browserForceReload": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "browserGoBack": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "browserGoForward": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "browserNavigate": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "browserReload": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "browserStop": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "clearNativePanelSlot": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "forwardMouseClick": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hideContentOverlay": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hideNativeShellOverlay": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setBounds": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setHostedShellReady": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setShellOverlay": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setThemeCss": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setVisible": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "showContentOverlay": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "showNativeShellOverlay": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "updateContentOverlay": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "updateNativePanelSlot": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "updateNativeShellOverlay": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  }
+}

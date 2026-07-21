@@ -10,24 +10,28 @@ export type EventSnapshotProviders = {
   [E in EventName]?: () => EventPayloads[E] | undefined;
 };
 
+export interface EventsServiceDefinitionOptions {
+  /** Explicit RPC endpoint name for this event domain. */
+  serviceName?: string;
+  snapshots?: EventSnapshotProviders;
+  onWatchOpened?: (
+    events: readonly EventName[],
+    context: ServiceContext
+  ) => (() => void) | undefined;
+}
+
 /** Bind the events wire contract to an existing in-process event service. */
 export function createEventsServiceDefinition(
   eventService: EventService,
-  opts: {
-    snapshots?: EventSnapshotProviders;
-    onWatchOpened?: (
-      events: readonly EventName[],
-      context: ServiceContext
-    ) => (() => void) | undefined;
-  } = {}
+  opts: EventsServiceDefinitionOptions = {}
 ): ServiceDefinition {
+  const serviceName = opts.serviceName ?? "events";
   return {
-    name: "events",
-    hostRouting: { panel: "session" },
+    name: serviceName,
     description: "Event subscriptions",
-    policy: { allowed: ["shell", "app", "panel", "server", "worker", "do", "extension"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: eventsMethods,
-    handler: defineServiceHandler("events", eventsMethods, {
+    handler: defineServiceHandler(serviceName, eventsMethods, {
       watch: (ctx, [requestedEvents, watchId]) => {
         const events = requestedEvents.map((eventName) => {
           if (!isValidEventName(eventName)) throw new Error(`Unknown event: ${eventName}`);

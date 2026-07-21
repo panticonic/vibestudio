@@ -7,6 +7,7 @@ import { Readable, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 
 import { ExtensionHost } from "./service.js";
 import type { ExtensionHostDeps } from "./service.js";
@@ -81,6 +82,7 @@ function makeHost(
     installed?: boolean;
     status?: "running" | "stopped" | "building" | "error" | "pending-approval";
     activeBundleKey?: string | null;
+    sealedBuildIdentity?: boolean;
   } = {}
 ) {
   const statePath = tempDir();
@@ -160,10 +162,20 @@ function makeHost(
       metadata: {
         ev: "ev-candidate",
         sourceStateHash: "state:test",
+        execution: { executionDigest: "c".repeat(64) },
+        authority: {
+          requests: [
+            {
+              capability: "service:extensions.ready",
+              resource: { kind: "prefix" as const, prefix: "" },
+            },
+          ],
+          delegations: [],
+        },
         details: {
           kind: "extension",
           runtimeDepsKey: "runtime-candidate",
-          runtimeAbi: "3",
+          runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
           providerContracts:
             overrides.candidateProviderContracts ?? overrides.sourceProviderContracts ?? {},
           externalDeps: {},
@@ -178,10 +190,26 @@ function makeHost(
             metadata: {
               ev: key === "candidate-key" ? "ev-candidate" : (overrides.activeEv ?? "ev-current"),
               sourceStateHash: "state:test",
+              ...(overrides.sealedBuildIdentity === false
+                ? {}
+                : {
+                    execution: {
+                      executionDigest: (key === "candidate-key" ? "c" : "a").repeat(64),
+                    },
+                    authority: {
+                      requests: [
+                        {
+                          capability: "service:extensions.ready",
+                          resource: { kind: "prefix" as const, prefix: "" },
+                        },
+                      ],
+                      delegations: [],
+                    },
+                  }),
               details: {
                 kind: "extension",
                 runtimeDepsKey: key === "candidate-key" ? "runtime-candidate" : "runtime-key",
-                runtimeAbi: "3",
+                runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
                 providerContracts:
                   key === "candidate-key"
                     ? (overrides.candidateProviderContracts ??
@@ -256,6 +284,28 @@ function makeHost(
 }
 
 describe("ExtensionHost invocation attribution", () => {
+  it("attributes an extension to its exact active sealed build authority", () => {
+    const { host, extensionNode } = makeHost();
+
+    expect(host.resolveCodeIdentity(extensionNode.name)).toEqual({
+      callerId: extensionNode.name,
+      callerKind: "extension",
+      repoPath: "extensions/git-tools",
+      effectiveVersion: "ev-current",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:extensions.ready", resource: { kind: "prefix", prefix: "" } },
+      ],
+      delegations: [],
+    });
+  });
+
+  it("does not invent extension code identity without sealed build authority", () => {
+    const { host, extensionNode } = makeHost({ sealedBuildIdentity: false });
+
+    expect(host.resolveCodeIdentity(extensionNode.name)).toBeNull();
+  });
+
   it("lists canonical and short extension identifiers", async () => {
     const { host, extensionNode } = makeHost();
     const service = host.createServiceDefinition();
@@ -291,13 +341,15 @@ describe("ExtensionHost invocation attribution", () => {
     expect(extensionTransport.call).toHaveBeenCalledWith(
       extensionNode.name,
       "extension.invokeProvider",
-      "gitInterop",
-      "upstreamStatus",
-      [[]],
-      expect.objectContaining({
-        extensionName: extensionNode.name,
-        method: "providers.gitInterop.upstreamStatus",
-      })
+      [
+        "gitInterop",
+        "upstreamStatus",
+        [[]],
+        expect.objectContaining({
+          extensionName: extensionNode.name,
+          method: "providers.gitInterop.upstreamStatus",
+        }),
+      ]
     );
   });
 
@@ -398,20 +450,49 @@ describe("ExtensionHost invocation attribution", () => {
       1,
       "@workspace-extensions/git-tools",
       "extension.invokeProvider",
-      "claudeCode",
-      "prepare",
-      [],
-      expect.objectContaining({ method: "providers.claudeCode.prepare" })
+      [
+        "claudeCode",
+        "prepare",
+        [],
+        expect.objectContaining({ method: "providers.claudeCode.prepare" }),
+      ]
     );
     expect(extensionTransport.call).toHaveBeenNthCalledWith(
       2,
       "@workspace-extensions/git-tools",
       "extension.invokeProvider",
-      "claudeCode",
-      "publishRepo",
-      [],
-      expect.objectContaining({ method: "providers.claudeCode.publishRepo" })
+      [
+        "claudeCode",
+        "publishRepo",
+        [],
+        expect.objectContaining({ method: "providers.claudeCode.publishRepo" }),
+      ]
     );
+  });
+
+  it("represents command-style extension results as JSON null at the RPC boundary", async () => {
+    const extensionTransport = { call: vi.fn(async () => undefined) };
+    const { host } = makeHost({
+      extensionTransport,
+      resolveProviderExtensionName: (provider) =>
+        provider === "claudeCode" ? "@workspace-extensions/git-tools" : null,
+      activeProviderContracts: {
+        claudeCode: { methods: ["prepare"] },
+      },
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    const service = host.createServiceDefinition();
+
+    await expect(
+      service.handler(panelCtx("panel-1"), "invoke", [
+        "@workspace-extensions/git-tools",
+        "command",
+        [],
+      ])
+    ).resolves.toBeNull();
+    await expect(
+      service.handler(panelCtx("panel-1"), "invokeProvider", ["claudeCode", "prepare", []])
+    ).resolves.toBeNull();
   });
 
   it("allows an unrelated extension to expose a public method with a provider-contract name", async () => {
@@ -429,9 +510,7 @@ describe("ExtensionHost invocation attribution", () => {
     expect(extensionTransport.call).toHaveBeenCalledWith(
       "@workspace-extensions/git-tools",
       "extension.invoke",
-      "publishRepo",
-      [],
-      expect.objectContaining({ method: "publishRepo" })
+      ["publishRepo", [], expect.objectContaining({ method: "publishRepo" })]
     );
   });
 
@@ -452,18 +531,43 @@ describe("ExtensionHost invocation attribution", () => {
     expect(extensionTransport.call).toHaveBeenCalledWith(
       "@workspace-extensions/git-tools",
       "extension.invoke",
-      "ping",
-      [],
-      expect.objectContaining({
-        caller: expect.objectContaining({
-          callerId: "panel-1",
-          contextId: "ctx-panel",
+      [
+        "ping",
+        [],
+        expect.objectContaining({
+          caller: expect.objectContaining({
+            callerId: "panel-1",
+            contextId: "ctx-panel",
+          }),
+          chainCaller: expect.objectContaining({
+            callerId: "panel-1",
+            contextId: "ctx-panel",
+          }),
         }),
-        chainCaller: expect.objectContaining({
-          callerId: "panel-1",
-          contextId: "ctx-panel",
-        }),
-      })
+      ]
+    );
+  });
+
+  it("threads inbound cancellation through the extension transport", async () => {
+    const extensionTransport = { call: vi.fn(async () => "ok") };
+    const { host, extensionNode } = makeHost({ extensionTransport });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    const controller = new AbortController();
+
+    await expect(
+      host.invoke(
+        { ...panelCtx("panel-1"), signal: controller.signal },
+        extensionNode.name,
+        "blame",
+        []
+      )
+    ).resolves.toBe("ok");
+
+    expect(extensionTransport.call).toHaveBeenCalledWith(
+      extensionNode.name,
+      "extension.invoke",
+      ["blame", [], expect.objectContaining({ method: "blame" })],
+      { signal: controller.signal }
     );
   });
 });
@@ -698,8 +802,8 @@ describe("ExtensionHost reconcileDeclared", () => {
 
   it("does not block active extension invocation behind pending re-approval", async () => {
     const extensionTransport = {
-      call: vi.fn(async (_name: string, _method: string, apiMethod: string) => {
-        return `called:${apiMethod}`;
+      call: vi.fn(async (_name: string, _method: string, args: unknown[]) => {
+        return `called:${String(args[0])}`;
       }),
     };
     const { host, approvalQueue, extensionNode } = makeHost({
@@ -731,13 +835,11 @@ describe("ExtensionHost reconcileDeclared", () => {
       })
     );
     expect(host.registry.get(extensionNode.name)).toMatchObject({ activeBundleKey: "bundle-key" });
-    expect(extensionTransport.call).toHaveBeenCalledWith(
-      extensionNode.name,
-      "extension.invoke",
+    expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
       "blame",
       [],
-      expect.objectContaining({ extensionName: extensionNode.name })
-    );
+      expect.objectContaining({ extensionName: extensionNode.name }),
+    ]);
   });
 
   it("starts an already-approved declared extension without prompting", async () => {
@@ -922,17 +1024,18 @@ describe("ExtensionHost activation", () => {
       { target: "react-native" }
     );
     await expect(response.text()).resolves.toBe("bundle");
-    expect(extensionTransport.call).toHaveBeenCalledWith(
-      extensionNode.name,
-      "extension.invoke",
+    expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
       "build",
       [expect.objectContaining({ target: "react-native" })],
       expect.objectContaining({
         extensionName: extensionNode.name,
         method: "build",
-        caller: expect.objectContaining({ callerId: "server:build-system", callerKind: "server" }),
-      })
-    );
+        caller: expect.objectContaining({
+          callerId: "server:build-system",
+          callerKind: "server",
+        }),
+      }),
+    ]);
     expect(extensionTransport.streamCallTarget).toHaveBeenCalledWith(
       extensionNode.name,
       "extension.invokeStream",
@@ -994,13 +1097,8 @@ describe("ExtensionHost activation", () => {
     let hostRef: ExtensionHost;
     const extensionTransport = {
       call: vi.fn(
-        async (
-          name: string,
-          _method: string,
-          _apiMethod: string,
-          _args: unknown[],
-          invocation: { requestId: string }
-        ) => {
+        async (name: string, _method: string, args: [string, unknown[], { requestId: string }]) => {
+          const invocation = args[2];
           expect(invocation.requestId).toEqual(expect.any(String));
           expect(invocation).not.toHaveProperty("causalParent");
           expect(hostRef.resolveActiveInvocation(name, invocation.requestId)).toEqual(
@@ -1022,18 +1120,16 @@ describe("ExtensionHost activation", () => {
       host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"])
     ).resolves.toBe("transport-result");
 
-    expect(extensionTransport.call).toHaveBeenCalledWith(
-      extensionNode.name,
-      "extension.invoke",
+    expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
       "blame",
       ["README.md"],
       expect.objectContaining({
         extensionName: extensionNode.name,
         method: "blame",
         requestId: expect.any(String),
-      })
-    );
-    const invocation = extensionTransport.call.mock.calls[0]![4] as { requestId: string };
+      }),
+    ]);
+    const invocation = extensionTransport.call.mock.calls[0]![2]![2] as { requestId: string };
     expect(host.resolveActiveInvocation(extensionNode.name, invocation.requestId)).toBeNull();
   });
 
@@ -1047,13 +1143,8 @@ describe("ExtensionHost activation", () => {
     let hostRef: ExtensionHost;
     const extensionTransport = {
       call: vi.fn(
-        async (
-          name: string,
-          _method: string,
-          _apiMethod: string,
-          _args: unknown[],
-          invocation: { requestId: string }
-        ) => {
+        async (name: string, _method: string, args: [string, unknown[], { requestId: string }]) => {
+          const invocation = args[2];
           expect(invocation).not.toHaveProperty("causalParent");
           expect(hostRef.resolveActiveInvocation(name, invocation.requestId)).toEqual(
             expect.objectContaining({ causalParent })
@@ -1070,7 +1161,7 @@ describe("ExtensionHost activation", () => {
       host.invoke({ ...doCtx(), causalParent }, extensionNode.name, "blame", ["README.md"])
     ).resolves.toBe("transport-result");
 
-    const invocation = extensionTransport.call.mock.calls[0]![4] as { requestId: string };
+    const invocation = extensionTransport.call.mock.calls[0]![2]![2] as { requestId: string };
     expect(host.resolveActiveInvocation(extensionNode.name, invocation.requestId)).toBeNull();
   });
 
@@ -1083,13 +1174,11 @@ describe("ExtensionHost activation", () => {
       host.invoke(panelCtx("panel-1"), `workspace/${extensionNode.relativePath}`, "blame", [])
     ).resolves.toBe("transport-result");
 
-    expect(extensionTransport.call).toHaveBeenCalledWith(
-      extensionNode.name,
-      "extension.invoke",
+    expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
       "blame",
       [],
-      expect.objectContaining({ extensionName: extensionNode.name })
-    );
+      expect.objectContaining({ extensionName: extensionNode.name }),
+    ]);
   });
 
   it("accepts the shortName advertised by extensions.list on invocation", async () => {
@@ -1101,13 +1190,11 @@ describe("ExtensionHost activation", () => {
       "transport-result"
     );
 
-    expect(extensionTransport.call).toHaveBeenCalledWith(
-      extensionNode.name,
-      "extension.invoke",
+    expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
       "blame",
       [],
-      expect.objectContaining({ extensionName: extensionNode.name })
-    );
+      expect.objectContaining({ extensionName: extensionNode.name }),
+    ]);
   });
 
   it("records extension invocation failures with stack context", async () => {
@@ -1185,8 +1272,9 @@ describe("ExtensionHost activation", () => {
     const capturedChunks: Buffer[] = [];
     let service: ReturnType<ExtensionHost["createServiceDefinition"]>;
     const extensionTransport = {
-      call: vi.fn(async (_name: string, method: string, request: unknown) => {
+      call: vi.fn(async (_name: string, method: string, args: unknown[]) => {
         expect(method).toBe("extension.fetch");
+        const request = args[0];
         const body = (request as { body?: { __stream?: true; id?: string } }).body;
         expect(body).toMatchObject({ __stream: true });
         expect(typeof body?.id).toBe("string");
@@ -1234,14 +1322,12 @@ describe("ExtensionHost activation", () => {
       panelCtx("panel-1").caller
     );
 
-    expect(extensionTransport.call).toHaveBeenCalledWith(
-      extensionNode.name,
-      "extension.fetch",
+    expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.fetch", [
       expect.objectContaining({
         body: expect.objectContaining({ __stream: true }),
       }),
-      expect.objectContaining({ method: "fetch" })
-    );
+      expect.objectContaining({ method: "fetch" }),
+    ]);
     expect(Buffer.concat(capturedChunks)).toEqual(requestBody);
     expect(res.statusCode).toBe(201);
     expect(res.body).toEqual(responseBody);
@@ -1321,7 +1407,7 @@ describe("ExtensionHost activation", () => {
     expect(extensionTransport.call).toHaveBeenCalledWith(
       extensionNode.name,
       "extension.fetchResponseBodyChunk",
-      "response-stream-1"
+      ["response-stream-1"]
     );
   });
 
@@ -1395,6 +1481,6 @@ describe("ExtensionHost activation", () => {
 
   it("allows server callers to invoke extension providers through the dispatcher", () => {
     const { host } = makeHost();
-    expect(host.createServiceDefinition().policy?.allowed).toContain("server");
+    expect(host.createServiceDefinition().authority.principals).toContain("host");
   });
 });

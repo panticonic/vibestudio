@@ -1,4 +1,12 @@
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
+import type {
+  AuthenticatedCaller,
+  AuthorizationContext,
+  AuthorityGrant,
+  DirectAuthorityAttestation,
+  Principal,
+  PrincipalKind,
+} from "@vibestudio/rpc";
 
 type BindParams = Parameters<Database["run"]>[1];
 
@@ -52,10 +60,13 @@ interface TestDOResult<T> {
    * Throws on non-2xx responses (with the error message from the response body).
    */
   call: <R = unknown>(method: string, ...args: unknown[]) => Promise<R>;
-  /** Like `call`, but attributes the dispatch as a specific caller kind, so a
-   *  test can exercise the DO's `@rpc({ callers })` policy from the right role
-   *  (e.g. `callAs("do", ...)` to simulate an agent/channel DO). */
-  callAs: <R = unknown>(caller: string, method: string, ...args: unknown[]) => Promise<R>;
+  /** Like `call`, but constructs the exact attested principal for a runtime
+   *  role (e.g. `callAs("do", ...)` to simulate an agent/channel DO). */
+  callAs: <R = unknown>(
+    caller: AuthenticatedCaller["callerKind"],
+    method: string,
+    ...args: unknown[]
+  ) => Promise<R>;
 }
 
 /** Shared sql.js initialization (cached after first call) */
@@ -134,6 +145,81 @@ const AGENTIC_ENV_DEFAULTS: Record<string, string> = {
   WORKERD_SESSION_ID: "test-session",
   WORKERD_BOOT_GENERATION: "1",
 };
+
+function principalKindForTestCaller(callerKind: AuthenticatedCaller["callerKind"]): PrincipalKind {
+  if (callerKind === "server") return "host";
+  if (callerKind === "shell") return "user";
+  if (callerKind === "agent") return "entity";
+  return "code";
+}
+
+/**
+ * Mint the same exact-target, exact-method authority shape that the host relay
+ * supplies in production. Tests may override individual fields to exercise
+ * stale, wrong-target, missing-grant, and read-only rejection without weakening
+ * the receiver or teaching fixtures to trust runtime kinds.
+ */
+export function createTestDirectAuthority(input: {
+  callerKind: AuthenticatedCaller["callerKind"];
+  method: string;
+  source?: string;
+  className?: string;
+  objectKey?: string;
+  now?: number;
+  overrides?: Partial<DirectAuthorityAttestation>;
+}): DirectAuthorityAttestation {
+  const source = input.source ?? AGENTIC_ENV_DEFAULTS["WORKER_SOURCE"]!;
+  const className = input.className ?? AGENTIC_ENV_DEFAULTS["WORKER_CLASS_NAME"]!;
+  const objectKey = input.objectKey ?? "test-key";
+  const audience = `do:${source}:${className}:${objectKey}`;
+  const capability = `rpc:${input.method}`;
+  const now = input.now ?? Date.now();
+  const kind = principalKindForTestCaller(input.callerKind);
+  const subject = (kind === "code" ? `code:test@${"a".repeat(64)}` : `${kind}:test`) as Principal;
+  const actingUser = kind === "host" ? null : ("user:test" as Principal);
+  const entity = kind === "entity" ? subject : null;
+  const requested = [{ capability, resource: { kind: "exact" as const, key: audience } }];
+  const context: AuthorizationContext = {
+    authorizingOrigin: { kind, principal: subject } as AuthorizationContext["authorizingOrigin"],
+    host: kind === "host" ? subject : null,
+    actingUser,
+    device: null,
+    entity,
+    incarnation: null,
+    codeAuthority: {
+      executor: kind === "code" ? { principal: subject, requested } : null,
+      execution: null,
+      initiator: null,
+      delegations: [],
+    },
+    deviceOwnership: null,
+    ownerChain: actingUser ? [actingUser] : [],
+    agentBinding:
+      entity === null ? null : { entity, contextId: "ctx:test", channelId: "channel:test" },
+    workspace: { workspaceId: "test", member: true, role: null, revision: "test" },
+    session: { id: "test-session", audience, version: "1.0.0", expiresAt: now + 5_000 },
+  };
+  const grant: AuthorityGrant = {
+    subject,
+    capability,
+    resource: { kind: "exact", key: audience },
+    effect: "allow",
+    issuedBy: "host:test",
+    createdAt: now,
+    binding: { kind: "principal" },
+    provenance: "durable-test-host-attestation",
+  };
+  return {
+    audience,
+    method: input.method,
+    resourceKey: audience,
+    issuedAt: now,
+    expiresAt: now + 5_000,
+    context,
+    grants: [grant],
+    ...input.overrides,
+  };
+}
 
 /**
  * Create a test DO instance backed by in-memory SQLite (sql.js / WASM).
@@ -218,7 +304,7 @@ export async function createTestDO<T>(
   // call() dispatches through fetch(), matching the production DO invocation path:
   // URL /{objectKey}/{method} → ensureReady() → ensureBootstrapped() → method dispatch
   const dispatch = async <R = unknown>(
-    caller: string,
+    caller: AuthenticatedCaller["callerKind"],
     method: string,
     args: unknown[]
   ): Promise<R> => {
@@ -234,7 +320,19 @@ export async function createTestDO<T>(
     const envelope = {
       from: "main",
       target: `do:test:${objectKey}`,
-      delivery: { caller: { callerId: "main", callerKind: caller } },
+      delivery: {
+        caller: {
+          callerId: "main",
+          callerKind: caller,
+          authorization: createTestDirectAuthority({
+            callerKind: caller,
+            method,
+            source: String(mergedEnv["WORKER_SOURCE"]),
+            className: String(mergedEnv["WORKER_CLASS_NAME"]),
+            objectKey,
+          }),
+        } satisfies AuthenticatedCaller,
+      },
       provenance: [],
       message: { type: "request", requestId: crypto.randomUUID(), fromId: "main", method, args },
     };
@@ -257,12 +355,15 @@ export async function createTestDO<T>(
     return (msg && "result" in msg ? msg.result : undefined) as R;
   };
 
-  // Default test caller is the server (the trusted relay). `callAs` lets a test
-  // exercise a specific caller kind against the workspace-realm caller policies.
+  // Default test caller is the host relay. `callAs` changes the authenticated
+  // origin and mints the matching exact-target attestation.
   const call = <R = unknown>(method: string, ...args: unknown[]): Promise<R> =>
     dispatch<R>("server", method, args);
-  const callAs = <R = unknown>(caller: string, method: string, ...args: unknown[]): Promise<R> =>
-    dispatch<R>(caller, method, args);
+  const callAs = <R = unknown>(
+    caller: AuthenticatedCaller["callerKind"],
+    method: string,
+    ...args: unknown[]
+  ): Promise<R> => dispatch<R>(caller, method, args);
 
   return { instance, sql: sqlProxy, db, alarms, acceptedWebSockets, call, callAs };
 }

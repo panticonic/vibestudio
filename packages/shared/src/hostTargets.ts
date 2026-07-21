@@ -1,6 +1,8 @@
 import type { WorkspaceAppTarget } from "./unitManifest.js";
 import type { AppCapability } from "./unitManifest.js";
 import type { PendingUnitBatchApproval } from "./approvals.js";
+import type { CapabilityScope } from "@vibestudio/rpc";
+import type { EvalAuthorityDelegation } from "./authorityManifest.js";
 
 export type HostTarget = WorkspaceAppTarget;
 export type HostTargetSelectionMode = "follow-ref" | "pinned-build" | "pinned-ref";
@@ -66,6 +68,9 @@ export type HostTargetLaunchResult =
       artifactRoute?: string;
       capabilities?: AppCapability[];
       effectiveVersion?: string | null;
+      executionDigest: string;
+      authorityRequests: readonly CapabilityScope[];
+      authorityDelegations: readonly EvalAuthorityDelegation[];
       adoptionPolicy?: "immediate" | "prompt" | "artifact-only";
     }
   | {

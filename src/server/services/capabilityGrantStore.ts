@@ -1,8 +1,11 @@
-import * as fs from "node:fs";
 import { stateLayout } from "../stateLayout.js";
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import type { ApprovalResourceScope } from "@vibestudio/shared/approvals";
-import { writeJsonFileAtomic } from "../hostCore/atomicFile.js";
+import {
+  loadVersionedJsonFile,
+  saveVersionedJsonFile,
+  type VersionedJsonCodec,
+} from "../hostCore/versionedJsonStore.js";
 
 export type CapabilityGrantDecision = "session" | "version";
 
@@ -27,6 +30,35 @@ export interface CapabilityGrant {
 interface CapabilityGrantFile {
   grants: CapabilityGrant[];
 }
+
+const CAPABILITY_GRANT_SCHEMA_VERSION = 1;
+
+const CAPABILITY_GRANT_CODEC: VersionedJsonCodec<CapabilityGrantFile> = {
+  schemaName: "Capability grant store",
+  currentVersion: CAPABILITY_GRANT_SCHEMA_VERSION,
+  decodeCurrent(value) {
+    const record = value as Record<string, unknown>;
+    if (
+      Object.keys(record).some((key) => key !== "schemaVersion" && key !== "grants") ||
+      !Array.isArray(record["grants"]) ||
+      !record["grants"].every(isPersistentCapabilityGrant)
+    ) {
+      throw new Error("versioned grant store contains invalid data");
+    }
+    return { grants: record["grants"] };
+  },
+  unversionedMigration: {
+    version: 1,
+    name: "recognize-pre-versioning-capability-grants",
+    migrate(value) {
+      if (!isCapabilityGrantFile(value)) {
+        throw new Error("legacy grant store does not match the recognized { grants } schema");
+      }
+      return { grants: value.grants };
+    },
+  },
+  encode: (value) => ({ grants: value.grants }),
+};
 
 export class CapabilityGrantStore {
   private readonly sessionGrants = new Map<string, CapabilityGrant>();
@@ -164,25 +196,21 @@ export class CapabilityGrantStore {
 
   private load(): void {
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as unknown;
-      if (!isCapabilityGrantFile(parsed)) {
-        throw new Error("expected the current exact { grants } schema");
-      }
-      this.persistent = parsed;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
-      console.warn(
-        `[CapabilityGrantStore] Resetting invalid grant store ${this.filePath}: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+      this.persistent = loadVersionedJsonFile(this.filePath, CAPABILITY_GRANT_CODEC) ?? {
+        grants: [],
+      };
+    } catch (error) {
+      throw new Error(
+        `Capability grant store ${this.filePath} cannot be loaded without risking data loss: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error }
       );
-      this.persistent = { grants: [] };
-      this.save();
     }
   }
 
   private save(): void {
-    writeJsonFileAtomic(this.filePath, this.persistent);
+    saveVersionedJsonFile(this.filePath, this.persistent, CAPABILITY_GRANT_CODEC);
   }
 }
 

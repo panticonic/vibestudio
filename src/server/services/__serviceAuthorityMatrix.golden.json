@@ -1,0 +1,3295 @@
+{
+  "account": {
+    "service": {
+      "principals": ["host", "user", "code"]
+    },
+    "methods": {
+      "getProfile": {
+        "authority": {
+          "principals": ["host", "user", "code", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "isMember": {
+        "authority": {
+          "principals": ["host", "user", "code", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listWorkspaceMembers": {
+        "authority": {
+          "principals": ["host", "user", "code", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "resolveProfiles": {
+        "authority": {
+          "principals": ["host", "user", "code", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "audit": {
+    "service": {
+      "principals": ["user", "host", "code", "entity"]
+    },
+    "methods": {
+      "query": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "auth": {
+    "service": {
+      "principals": ["host", "user"]
+    },
+    "methods": {
+      "getConnectionInfo": {
+        "authority": {
+          "principals": ["host", "user", "code", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "grantConnection": {
+        "authority": {
+          "principals": ["host", "user", "code"]
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "mintAgentCredential": {
+        "authority": {
+          "principals": ["code", "host"]
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "revokeAgentCredential": {
+        "authority": {
+          "principals": ["code", "host"]
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      }
+    }
+  },
+  "blobstore": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "delete": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "diffTrees": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getBase64": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getRange": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getRangeBytes": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getText": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getTree": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "grep": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "has": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "list": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listTree": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "materializeTree": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "putBase64": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "putText": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "putTree": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "readFileAtTree": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "stat": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "build": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "doctorExtension": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "gc": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "getAboutPages": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getBuild": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getBuildMetadata": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getBuildNpm": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getBuildReport": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getEffectiveVersion": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getPanelMetadata": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "hasUnit": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "inspectBuildProvenance": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listRecentBuildEvents": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listSkills": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "recompute": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "corsApproval": {
+    "service": {
+      "principals": ["code"]
+    },
+    "methods": {
+      "authorize": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "capability": "cors-response-read",
+              "operation": {
+                "kind": "network",
+                "verb": "Read cross-origin response"
+              },
+              "grantScopes": ["once", "session", "version"],
+              "reason": "Reading CORS-protected responses from another origin requires user consent."
+            }
+          ]
+        }
+      }
+    }
+  },
+  "credentials": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "audit": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "cancelOAuth": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "completeCapture": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "configureClient": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin",
+          "approval": [
+            {
+              "when": "caller is a userland runtime (panel/app/worker/do)",
+              "operation": {
+                "kind": "credential",
+                "verb": "Configure client"
+              },
+              "reason": "Submitting OAuth client secrets requires the user to confirm the configuration."
+            }
+          ]
+        }
+      },
+      "connect": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "when": "interactive flow / userland runtime caller",
+              "operation": {
+                "kind": "credential",
+                "verb": "Connect credential"
+              },
+              "grantScopes": ["once", "session", "version"],
+              "reason": "Running an OAuth/browser sign-in flow and storing the result requires the user to authorize the connection."
+            }
+          ]
+        }
+      },
+      "deleteClientConfig": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive",
+          "approval": [
+            {
+              "when": "caller is a userland runtime (panel/app/worker/do)",
+              "capability": "client-config-delete",
+              "operation": {
+                "kind": "credential",
+                "verb": "Disable client configuration"
+              },
+              "reason": "Disabling a client config breaks new connections and refreshes for that provider."
+            }
+          ]
+        }
+      },
+      "forwardOAuthCallback": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getClientConfigStatus": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "inspectStoredCredentials": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listStoredCredentials": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "proxyFetch": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "proxyGitHttp": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "requestCredentialInput": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "operation": {
+                "kind": "credential",
+                "verb": "Enter credential"
+              },
+              "grantScopes": ["once", "session", "version"],
+              "reason": "Collecting a secret from the user and storing it requires explicit user input."
+            }
+          ]
+        }
+      },
+      "resolveCredential": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read",
+          "approval": [
+            {
+              "when": "caller is not already granted use of the matched credential",
+              "operation": {
+                "kind": "credential",
+                "verb": "Use credential"
+              },
+              "grantScopes": ["once", "session", "version"],
+              "reason": "Handing a stored credential to an agent for use requires the user to authorize it."
+            }
+          ]
+        }
+      },
+      "revokeCredential": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "storeCredential": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "when": "caller is a userland runtime (panel/app/worker/do)",
+              "operation": {
+                "kind": "credential",
+                "verb": "Store credential"
+              },
+              "grantScopes": ["once", "session", "version"],
+              "reason": "Persisting a credential the agent supplied requires the user to approve it."
+            }
+          ]
+        }
+      }
+    }
+  },
+  "docs": {
+    "service": {
+      "principals": ["code", "host", "user", "entity"]
+    },
+    "methods": {
+      "describe": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "describeService": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getSchema": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listServices": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listSurfaces": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "search": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "eval": {
+    "service": {
+      "principals": ["code", "user", "host", "entity"]
+    },
+    "methods": {
+      "cancel": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "deleteScopeValue": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getRun": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "readScopeTextPage": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "reset": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "run": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "startRun": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "events": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "watch": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "extensions": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "emit": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "fetchRequestBodyChunk": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "fetchRequestBodyClose": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "health": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "invoke": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "invokeProvider": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "invokeStream": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "list": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "log": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "ready": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "reload": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "streamingMethods": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "externalOpen": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "openExternal": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "when": "caller is panel/app/worker/do",
+              "capability": "external-browser-open",
+              "operation": {
+                "kind": "browser",
+                "verb": "Open external browser"
+              },
+              "grantScopes": ["once", "session", "version"],
+              "reason": "Opening URLs in the system browser from code requires user consent."
+            }
+          ]
+        }
+      }
+    }
+  },
+  "fs": {
+    "service": {
+      "principals": ["code", "host", "user", "entity"]
+    },
+    "methods": {
+      "access": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "appendFile": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "chmod": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "copyFile": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "ensureMaterialized": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "exists": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "glob": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "grep": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "handleClose": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "handleRead": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "handleStat": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "handleWrite": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "lstat": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "mkdir": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "mktemp": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "open": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "readdir": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "readFile": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "readlink": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "realpath": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "rename": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "rm": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "rmdir": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "stat": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "symlink": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "truncate": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "unlink": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "utimes": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "writeFile": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "gateway": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "fetch": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "gitInterop": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "commitMapping": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "completeWorkspaceDependencies": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "createDisposableRemote": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "detachUpstream": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "importProject": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "inspectDisposableRemote": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "publishRepo": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "publishToDisposableRemote": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "pullUpstream": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "pushDisposableRemote": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "pushUpstream": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "removeDisposableRemote": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "removeSharedRemote": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "removeUpstream": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setAutoPush": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setSharedRemote": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setUpstream": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "upstreamStatus": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "governance": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "list": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "hostLifecycle": {
+    "service": {
+      "principals": ["user", "host"]
+    },
+    "methods": {
+      "shutdown": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      }
+    }
+  },
+  "mirror": {
+    "service": {
+      "principals": ["user", "entity", "code", "host"]
+    },
+    "methods": {
+      "objects": {
+        "authority": {
+          "principals": ["user", "entity", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "targets": {
+        "authority": {
+          "principals": ["user", "entity", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "notification": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "dismiss": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "reportAction": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "show": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "signalUserInbox": {
+        "authority": {
+          "principals": ["code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "panelCdp": {
+    "service": {
+      "principals": ["user", "host", "code", "entity"]
+    },
+    "methods": {
+      "consoleHistory": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getCdpEndpoint": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "goBack": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "goForward": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hostProvider.close": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "hostProvider.open": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "hostProvider.send": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "navigate": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "reload": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "screenshot": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "stop": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "panelLog": {
+    "service": {
+      "principals": ["user", "host"]
+    },
+    "methods": {
+      "append": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "panelRuntime": {
+    "service": {
+      "principals": ["user", "host"],
+      "description": "Authenticated clients and the product host control runtime leases"
+    },
+    "methods": {
+      "acquire": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getSnapshot": {
+        "authority": {
+          "principals": ["user", "code", "entity", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "registerClient": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "release": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "takeOver": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "unregisterClient": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "panelTree": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "archive": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "archiveOwnedRoots": {
+        "authority": {
+          "principals": ["host"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "callAgent": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "close": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "create": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "ensureLoaded": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "expandIds": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "focus": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getCollapsedIds": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getFocusedPanelId": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getRuntimeLease": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getStateArgs": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getTreeSnapshot": {
+        "authority": {
+          "principals": ["code", "user", "host", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "list": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "metadata": {
+        "authority": {
+          "principals": ["code", "user", "host", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "movePanel": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "navigate": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.navigate"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.navigate"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.navigate"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.navigate"
+          },
+          "additional": [
+            {
+              "capability": "service:workspace-state.slot.commitPreparedNavigation",
+              "requirement": {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "service:workspace-state.slot.commitPreparedNavigation"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "user",
+                        "capability": "service:workspace-state.slot.commitPreparedNavigation"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "service:workspace-state.slot.commitPreparedNavigation"
+                  }
+                ]
+              },
+              "resource": {
+                "kind": "literal",
+                "key": "service:workspace-state.slot.commitPreparedNavigation"
+              },
+              "evalAcquisition": {
+                "kind": "baseline"
+              }
+            }
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "navigateHistory": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.navigateHistory"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.navigateHistory"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.navigateHistory"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.navigateHistory"
+          },
+          "additional": [
+            {
+              "capability": "service:workspace-state.slot.commitPreparedNavigation",
+              "requirement": {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "service:workspace-state.slot.commitPreparedNavigation"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "user",
+                        "capability": "service:workspace-state.slot.commitPreparedNavigation"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "service:workspace-state.slot.commitPreparedNavigation"
+                  }
+                ]
+              },
+              "resource": {
+                "kind": "literal",
+                "key": "service:workspace-state.slot.commitPreparedNavigation"
+              },
+              "evalAcquisition": {
+                "kind": "baseline"
+              }
+            }
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "openDevTools": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "rebuildAndReload": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "rebuildPanel": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "reload": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "roots": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "setCollapsed": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setStateArgs": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "snapshot": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "takeOver": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "unload": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "updatePanelState": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "permissions": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "list": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "revoke": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "phoneProvisioning": {
+    "service": {
+      "principals": ["entity", "code", "user"]
+    },
+    "methods": {
+      "devices": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "install": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "openPairing": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "providers": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "presence": {
+    "service": {
+      "principals": ["host", "user"]
+    },
+    "methods": {
+      "getPanelActiveOwner": {
+        "authority": {
+          "principals": ["host", "user", "code", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "markPanelActive": {
+        "authority": {
+          "inherits": true
+        },
+        "access": null
+      },
+      "markPanelsOwned": {
+        "authority": {
+          "inherits": true
+        },
+        "access": null
+      }
+    }
+  },
+  "runtime": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "cloneContext": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "when": "cloning another, already-existing context than the caller",
+              "capability": "context.boundary",
+              "operation": {
+                "kind": "runtime",
+                "verb": "Clone context"
+              },
+              "reason": "cloning another agent or panel's existing context state requires approval"
+            }
+          ]
+        }
+      },
+      "createContext": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "createEntity": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write",
+          "restrictedTo": [
+            {
+              "when": "spec.kind is 'app'",
+              "principals": ["host", "user"],
+              "reason": "app runtime entities are host-managed"
+            },
+            {
+              "when": "spec.kind is 'session'",
+              "principals": ["host", "user", "code"],
+              "reason": "session entities are host-managed, except a launch-orchestrator extension may create a source-tagged session"
+            }
+          ],
+          "approval": [
+            {
+              "when": "launching into another, already-existing context than the caller",
+              "capability": "context.boundary",
+              "operation": {
+                "kind": "runtime",
+                "verb": "Create runtime entity"
+              },
+              "reason": "launching code into another agent or panel's existing context requires approval"
+            }
+          ]
+        }
+      },
+      "createSubagentContext": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "destroyContext": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive",
+          "approval": [
+            {
+              "when": "destroying another agent or panel's existing context (not one you own)",
+              "capability": "context.boundary",
+              "operation": {
+                "kind": "runtime",
+                "verb": "Destroy context"
+              },
+              "reason": "destroying another agent or panel's existing context requires approval"
+            }
+          ]
+        }
+      },
+      "listEntities": {
+        "authority": {
+          "principals": ["code", "host", "user", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listOwnedContexts": {
+        "authority": {
+          "principals": ["code", "host", "user", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "recordContextEdge": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "resolveContext": {
+        "authority": {
+          "principals": ["code", "host", "user", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "retireEntity": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "setTitle": {
+        "authority": {
+          "principals": ["code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "serverLog": {
+    "service": {
+      "principals": ["user", "code", "host", "entity"]
+    },
+    "methods": {
+      "query": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "stats": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "tail": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "settings": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "getData": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "shellApproval": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "blockCapability": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "listPending": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "resolve": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "resolveBootstrap": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "resolveExternalAgent": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "resolveExternalAgentByRequest": {
+        "authority": {
+          "principals": ["code", "user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "resolveUserland": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "submitClientConfig": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "submitCredentialInput": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "submitSecretInput": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "shellPresence": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "heartbeat": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "userlandApproval": {
+    "service": {
+      "principals": ["code"]
+    },
+    "methods": {
+      "list": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "request": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "requestAs": {
+        "authority": {
+          "principals": ["code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "requestExternal": {
+        "authority": {
+          "principals": ["code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "requestSecretInput": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "requestSecretInputAs": {
+        "authority": {
+          "principals": ["code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "revoke": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "settleExternal": {
+        "authority": {
+          "principals": ["code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "vcs": {
+    "service": {
+      "principals": ["user", "code", "host", "entity"]
+    },
+    "methods": {
+      "blame": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "commit": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "compare": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "copy": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "discard": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "edit": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "history": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "importSnapshot": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "inspect": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "integrate": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "listFiles": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "move": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "neighbors": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "push": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "readFile": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "resolveRepository": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "revert": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "status": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "webhookIngress": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "createSubscription": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "listSubscriptions": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "revokeSubscription": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "rotateSecret": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "workerdInspector": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "getEndpoint": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "listTargets": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "workerLog": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "write": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "workers": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "listServices": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listSources": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "resolveDurableObject": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:workers.resolveDurableObject"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:workers.resolveDurableObject"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:workers.resolveDurableObject"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "entity",
+                    "capability": "service:workers.resolveDurableObject"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "agent-binding"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:workers.resolveDurableObject"
+          },
+          "prepared": {
+            "resolver": "workers.resolveDurableObject.target",
+            "leaves": [
+              {
+                "capability": "workspace-service:*",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["host", "user", "code", "entity"]
+                },
+                "evalAcquisition": {
+                  "kind": "baseline"
+                }
+              },
+              {
+                "capability": "service:workers.resolveDurableObject",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "evalAcquisition": {
+                  "kind": "baseline"
+                }
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "resolveService": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:workers.resolveService"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:workers.resolveService"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:workers.resolveService"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "entity",
+                    "capability": "service:workers.resolveService"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "agent-binding"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:workers.resolveService"
+          },
+          "prepared": {
+            "resolver": "workers.resolveService.workspace-service",
+            "leaves": [
+              {
+                "capability": "workspace-service:*",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["host", "user", "code", "entity"]
+                },
+                "evalAcquisition": {
+                  "kind": "baseline"
+                }
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "workspace": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "ensureContextFolder": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "findUnitForPath": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getActive": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getAgentsMd": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getConfig": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getInfo": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "heartbeats.list": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "heartbeats.pause": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "heartbeats.resume": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "heartbeats.runNow": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hostTargets.beginLaunch": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hostTargets.cancelLaunchSession": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hostTargets.clearSelection": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hostTargets.getLaunchSession": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "hostTargets.getSelection": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "hostTargets.launch": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hostTargets.list": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "hostTargets.preparePinnedRef": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hostTargets.resolveLaunchSessionApproval": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hostTargets.setSelection": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "hostTargets.versions": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listSkills": {
+        "authority": {
+          "principals": ["host", "user", "code", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "readSkill": {
+        "authority": {
+          "principals": ["host", "user", "code", "entity"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "recurring.list": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "setConfigField": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setInitPanels": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "sourceTree": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "units.bakeAppDist": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "units.diagnostics": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "units.inspector": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "units.list": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "units.logs": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "units.restart": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "units.rollback": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "units.versions": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "workspace-state": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "alarmClear": {
+        "authority": {
+          "principals": ["host", "code"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "alarmSet": {
+        "authority": {
+          "principals": ["host", "code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "entity.resolveActive": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "heartbeatRegister": {
+        "authority": {
+          "principals": ["host", "code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "heartbeatRemove": {
+        "authority": {
+          "principals": ["host", "code"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "lifecycleLeaseClear": {
+        "authority": {
+          "principals": ["host", "code"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "lifecycleLeaseUpsert": {
+        "authority": {
+          "principals": ["host", "code"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "panel.incrementAccess": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "panel.index": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "panel.rebuildIndex": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "panel.search": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "panel.updateTitle": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "slot.close": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "slot.commitPreparedNavigation": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "slot.create": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "slot.get": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "slot.history": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "slot.list": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "slot.move": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "slot.resolveByEntity": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "slot.setParent": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "slot.setPosition": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "slot.updateCurrentStateArgs": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "workspacePresence": {
+    "service": {
+      "principals": ["host", "user", "code"]
+    },
+    "methods": {
+      "list": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  }
+}

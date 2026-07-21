@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import type { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
-import { createWorkspaceConfigMainWriter } from "./workspaceConfigWriter.js";
+import {
+  createWorkspaceConfigMainWriter,
+  renderWorkspaceConfigYaml,
+} from "./workspaceConfigWriter.js";
+
+const WORKSPACE_ID = "ws_opaque_test";
 
 const mainState = { kind: "event" as const, eventId: "event:main" };
 const editedState = { kind: "application" as const, applicationId: "application:config" };
@@ -123,7 +128,7 @@ describe("workspaceConfigWriter", () => {
       semanticCausalCall,
       semanticPublishCall,
     } as unknown as WorkspaceVcs;
-    const writer = createWorkspaceConfigMainWriter({ workspacePath: "/workspace", vcs });
+    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
     const ctx = {
       caller: createVerifiedCaller("shell:dev", "shell"),
       requestId: "request:config",
@@ -136,6 +141,7 @@ describe("workspaceConfigWriter", () => {
     });
 
     expect(result).toMatchObject({ changed: true, nextConfig: { defaultRepo: "panels/new" } });
+    expect(result.nextConfig.id).toBe(WORKSPACE_ID);
     const contextId = vi.mocked(vcs.ensureContext).mock.calls[0]?.[0];
     expect(contextId).toMatch(/^system:workspace-config:/);
     expect(vcs.dropContext).toHaveBeenCalledWith(contextId);
@@ -184,7 +190,7 @@ describe("workspaceConfigWriter", () => {
       semanticCausalCall,
       semanticPublishCall: vi.fn(),
     } as unknown as WorkspaceVcs;
-    const writer = createWorkspaceConfigMainWriter({ workspacePath: "/workspace", vcs });
+    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
 
     await expect(writer.wouldMutate((config) => config)).resolves.toBe(false);
     expect(semanticCausalCall.mock.calls.map(([method]) => method)).toEqual([
@@ -195,5 +201,20 @@ describe("workspaceConfigWriter", () => {
       "vcsReadFile",
     ]);
     expect(vcs.dropContext).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the hub identity out of persisted manifest content", () => {
+    const rendered = renderWorkspaceConfigYaml(
+      `id: stale-checkout-name\nsystemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`,
+      {
+        id: WORKSPACE_ID,
+        systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        defaultRepo: "projects/new",
+      },
+      WORKSPACE_ID
+    );
+
+    expect(rendered).not.toMatch(/^id:/mu);
+    expect(rendered).toContain("defaultRepo: projects/new");
   });
 });

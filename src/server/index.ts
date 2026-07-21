@@ -19,7 +19,7 @@ import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller } from "@vibestudio/shared/serviceDispatcher";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
@@ -31,6 +31,7 @@ import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
 import { createGitInteropProviderInvoker } from "./gitInteropProviderInvoker.js";
 import { retireRoutedReach } from "./routedReachRetirement.js";
 import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
+import { declaredWorkspaceServiceActivationInput } from "./runtimeExecutionIdentity.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -316,8 +317,7 @@ async function main() {
   const { TokenManager } = await import("@vibestudio/shared/tokenManager");
   const { ServiceDispatcher } = await import("@vibestudio/shared/serviceDispatcher");
   const { EventService } = await import("@vibestudio/shared/eventsService");
-  const { createEventsServiceDefinition } =
-    await import("@vibestudio/service-schemas/bindings/eventsServiceDefinition");
+  const { createWorkspaceEventsService } = await import("./services/eventsService.js");
   const { getExistingAppNodeModulesRoots } = await import("@vibestudio/shared/runtimePaths");
   const eventService = new EventService();
   const { RpcServer, SYSTEM_SUBJECT } = await import("./rpcServer.js");
@@ -376,6 +376,10 @@ async function main() {
   if (!childWorkspaceId) {
     throw new Error("Workspace runtime requires its authoritative workspace id from the hub");
   }
+  // Process authority is hub-owned and immutable. The live manifest object is
+  // intentionally mutable, so it must never be consulted as an identity
+  // source after startup.
+  const workspaceId = childWorkspaceId;
 
   let workspace: import("@vibestudio/workspace-contracts/types").Workspace;
   let workspaceName: string;
@@ -393,7 +397,7 @@ async function main() {
     // name while retaining the hub catalog's opaque id.
     workspace = {
       ...startup.resolved.workspace,
-      config: { ...startup.resolved.workspace.config, id: childWorkspaceId },
+      config: { ...startup.resolved.workspace.config, id: workspaceId },
     };
     workspaceName = startup.resolved.name;
     workspaceIsEphemeral =
@@ -486,7 +490,7 @@ async function main() {
     // Parsed manifests derive an id from their managed directory. A child
     // runtime's identity is hub-owned, so reloads must preserve the opaque
     // catalog id just like initial load does.
-    const authoritativeNextConfig = { ...nextConfig, id: childWorkspaceId };
+    const authoritativeNextConfig = { ...nextConfig, id: workspaceId };
     const routeSources = new Set(workspaceDecls.routes.map((route) => route.source));
     const nextDecls = buildWorkspaceDeclarations(authoritativeNextConfig);
     const restartBoundChanges = restartBoundManifestChanges(
@@ -570,7 +574,7 @@ async function main() {
   ): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
     (entityStoreInstance ??= new WorkspaceEntityStore({
       doDispatch,
-      workspaceId: workspace.config.id,
+      workspaceId,
       entityCache,
     }));
   const connectionGrants = new ConnectionGrantService({ entityCache });
@@ -642,14 +646,22 @@ async function main() {
     isSystemRuntime,
   });
   let extensionHostForGateway: import("@vibestudio/extension-host").ExtensionHost | null = null;
-  // Fail closed: only the synthetic in-process server bypasses membership.
-  // Every shell/panel/app/agent must resolve to a live user and membership is
-  // re-evaluated on WebSocket admission and on every stateless HTTP request.
+  // One authoritative workspace-membership fact for both transport admission
+  // and method authority. The synthetic system subject represents workspace-
+  // local infrastructure (singletons/internal control plane), not an IdentityDb
+  // account, so it is a member by construction. Every human-backed runtime is
+  // re-evaluated against the shared membership store.
   const membershipEntryGate = (
     subject: import("@vibestudio/identity/types").UserSubject | undefined
   ): boolean => {
     if (subject?.userId === SYSTEM_SUBJECT.userId) return true;
     return subject !== undefined && membershipStore.has(subject.userId, entryWorkspaceId);
+  };
+  const workspaceRoleResolver = (
+    subject: import("@vibestudio/identity/types").UserSubject | undefined
+  ): import("@vibestudio/identity/types").UserRole | null => {
+    if (!subject || subject.userId === SYSTEM_SUBJECT.userId) return null;
+    return userStore.getUser(subject.userId)?.role ?? null;
   };
   const { createLiveCallerGate } = await import("./services/liveCallerGate.js");
   const liveCallerGate = createLiveCallerGate({
@@ -696,7 +708,7 @@ async function main() {
     workspaceRef: {
       source: ENTITY_TITLE_INTERNAL_DO_SOURCE,
       className: "WorkspaceDO",
-      objectKey: workspace.config.id,
+      objectKey: workspaceId,
     },
   });
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
@@ -884,7 +896,11 @@ async function main() {
         .reconcileDeclared(required, {
           trigger: "startup",
           removeUndeclared: false,
-          waitFor: "staged",
+          // Trusted provider dependencies have no approval publication to
+          // await, so their targeted reconcile is the settlement boundary.
+          // Approval-gated dependencies stage here and settle through the
+          // unit-selective publication below.
+          waitFor: "applied",
         })
         .then(() => {
           console.info(
@@ -953,7 +969,7 @@ async function main() {
     refs: protectedRefStore,
     // Public context bindings contain durable identities only. Reachability is
     // resolved from the caller's current hub/session credential.
-    workspaceId: workspace.config.id,
+    workspaceId,
     // Dev extraction gate (Phase-2 revision §3): project a push-to-`main` OUT to
     // the source dir only when there is a persistent dev source to extract to.
     // `devTemplateMirrorDir` is the existing signal (pnpm dev + a real
@@ -975,7 +991,7 @@ async function main() {
   };
   const { createRecurringMetaChangeProvider } = await import("./services/recurringRegistry.js");
   const recurringMetaChangeProvider = createRecurringMetaChangeProvider({
-    workspaceId: workspace.config.id,
+    workspaceId,
     getCurrentRecurring: () => workspaceConfig.recurring ?? [],
     getCurrentHeartbeats: () => workspaceConfig.heartbeats ?? [],
     readWorkspaceFileAtState,
@@ -1019,7 +1035,7 @@ async function main() {
   const loadWorkspaceConfigFromState = async (
     stateHash: string
   ): Promise<typeof workspaceConfig> => {
-    return readWorkspaceConfigFromState(workspaceVcs, workspacePath, stateHash);
+    return readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);
   };
   const reconcileDeclaredWorkspaceUnits = async (
     nextConfig: typeof workspaceConfig,
@@ -1055,7 +1071,11 @@ async function main() {
             .then(() => {
               const backgroundStartedAt = Date.now();
               return reconcileAll().then(() => {
-                unitApprovalCoordinator.publishPending("startup");
+                void unitApprovalCoordinator
+                  .publishPending("startup")
+                  .catch((err: unknown) =>
+                    console.warn("[Units] Failed to publish startup approvals:", err)
+                  );
                 console.info(
                   `[StartupBackground] Remaining extensions reconciled in ${Date.now() - backgroundStartedAt}ms`
                 );
@@ -1219,7 +1239,7 @@ async function main() {
   // Build system
   container.registerManaged({
     name: "buildSystem",
-    dependencies: ["vcsAttach"],
+    dependencies: ["semanticWorkspace"],
     async start() {
       const buildSystem = await initBuildSystemV2(
         workspacePath,
@@ -1344,15 +1364,11 @@ async function main() {
   // service (approvals, config writes, and provider invocation).
   const { createWorkspaceConfigMainWriter } = await import("./workspaceConfigWriter.js");
   const workspaceConfigWriter = createWorkspaceConfigMainWriter({
-    workspacePath,
+    workspaceId,
     vcs: workspaceVcs,
   });
-  const replaceLiveWorkspaceConfig = (next: typeof workspaceConfig): void => {
-    for (const key of Object.keys(workspaceConfig)) {
-      if (!(key in next)) Reflect.deleteProperty(workspaceConfig, key);
-    }
-    Object.assign(workspaceConfig, next);
-  };
+  const replaceLiveWorkspaceConfig = (next: typeof workspaceConfig): void =>
+    replaceWorkspaceConfig(workspaceConfig, { ...next, id: workspaceId });
   const invokeGitInteropProvider = createGitInteropProviderInvoker(() => extensionHostForGateway);
   const gitInteropDefinition = createGitInteropService({
     workspacePath,
@@ -1396,11 +1412,9 @@ async function main() {
         const repos = [...pendingGitUpstreamRepos];
         pendingGitUpstreamRepos.clear();
         try {
-          await invokeGitInteropProvider(
-            { caller: createVerifiedCaller("server", "server") },
-            "onMainAdvanced",
-            [repos]
-          );
+          await invokeGitInteropProvider({ caller: createHostCaller("server") }, "onMainAdvanced", [
+            repos,
+          ]);
           readinessAttempts = 0;
         } catch (err) {
           const code =
@@ -1431,7 +1445,7 @@ async function main() {
   const completeConfiguredWorkspaceDependenciesAtStartup = async (): Promise<void> => {
     try {
       const result = (await gitInteropDefinition.handler(
-        { caller: createVerifiedCaller("server", "server") },
+        { caller: createHostCaller("server") },
         "completeWorkspaceDependencies",
         []
       )) as {
@@ -1528,11 +1542,12 @@ async function main() {
   const runtimeDiagnostics = wireRuntimeObservability({
     container,
     statePath,
-    workspaceId: workspace.config.id,
+    workspaceId,
     eventService,
   });
   container.registerRpc(
-    createEventsServiceDefinition(eventService, {
+    createWorkspaceEventsService({
+      eventService,
       snapshots: {
         "shell-approval:pending-changed": () => ({ pending: approvalQueue.listPending() }),
         "apps:status": () => ({
@@ -1726,6 +1741,21 @@ async function main() {
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
   });
 
+  // Durable and session permission grants are owned by the workspace server.
+  // Register their trusted management surface beside the stores that back it;
+  // panels reach this service over their authenticated server session rather
+  // than through an Electron-only facade.
+  {
+    const { createPermissionsService } = await import("./services/permissionsService.js");
+    container.registerRpc(
+      createPermissionsService({
+        capabilityGrants: capabilityGrantStore,
+        userlandGrants: userlandApprovalGrantStore,
+        credentialUseGrants: credentialUseGrantStore,
+      })
+    );
+  }
+
   // ── serverLog service (host log inspection + live tail) ──
   {
     const { createServerLogService } = await import("./services/serverLogService.js");
@@ -1757,16 +1787,23 @@ async function main() {
       null;
     container.registerManaged({
       name: "eval",
-      dependencies: ["workerdWorkspace", "doDispatch"],
+      dependencies: ["workerdWorkspace", "workerdManager", "doDispatch"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        );
+        const workerdManager = assertPresent(
+          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
         );
         evalDefinition = createEvalService({
           doDispatch,
           entityStore: ensureEntityStore(doDispatch),
           tokenManager,
           activity: activityRegistry,
+          recoverUnresponsiveSandbox: ({ runId, timeoutMs }) =>
+            workerdManager.recoverUnresponsiveSandbox(
+              `eval ${runId} remained unresponsive after ${timeoutMs}ms`
+            ),
         });
       },
       getServiceDefinition() {
@@ -1827,7 +1864,7 @@ async function main() {
         void entityTitleService.hydrate();
         workspaceStateDefinition = createWorkspaceStateService({
           doDispatch,
-          workspaceId: workspace.config.id,
+          workspaceId,
           // The DO already writes display_title in the same transaction as
           // searchable_title (see workspaceDO.panelIndex / panelUpdateTitle),
           // so the callback only needs to mirror into the in-memory cache.
@@ -1883,6 +1920,28 @@ async function main() {
           if (source.startsWith("browser:")) return;
           panelHttpServer.primeBuild(source, ref, () => buildSystem.getBuild(source, ref));
         };
+        const resolveBuildExecution = async (source: string, ref: string | undefined) => {
+          const build = await buildSystem.getBuild(source, ref);
+          const authority = build.metadata.authority;
+          const executionDigest = build.metadata.execution?.executionDigest;
+          if (!authority) {
+            throw new Error(
+              `Build ${build.buildKey} for ${source} has no sealed authority envelope`
+            );
+          }
+          if (!executionDigest) {
+            throw new Error(
+              `Build ${build.buildKey} for ${source} has no sealed execution identity`
+            );
+          }
+          return {
+            effectiveVersion: build.metadata.ev,
+            buildKey: build.buildKey,
+            executionDigest,
+            authorityRequests: authority.requests,
+            authorityDelegations: authority.delegations,
+          };
+        };
         runtimeDefinition = createRuntimeService({
           entityStore: ensureEntityStore(doDispatch),
           contextFolders: contextFolderManager,
@@ -1908,15 +1967,45 @@ async function main() {
             destroyDurableStorage: async ({ source, className, key }) => {
               await workerdManager.destroyDO({ source, className, objectKey: key });
             },
-            preparePanel: async ({ source, ref }) => {
+            preparePanel: async ({ source, ref, buildKey }) => {
               if (source.startsWith("browser:")) return { effectiveVersion: "" };
-              primePanelRuntimeImage(source, ref);
-              return { effectiveVersion: buildSystem.getEffectiveVersion(source) ?? "" };
+              if (buildKey) {
+                const build = buildSystem.getBuildByKey(buildKey);
+                if (!build) {
+                  throw new Error(
+                    `Activated panel build ${buildKey} for ${source} is unavailable from the immutable build store`
+                  );
+                }
+                if (build.metadata.kind !== "panel" || build.metadata.sourcePath !== source) {
+                  throw new Error(
+                    `Activated panel build ${buildKey} does not belong to panel source ${source}`
+                  );
+                }
+                const authority = build.metadata.authority;
+                const executionDigest = build.metadata.execution?.executionDigest;
+                if (!authority || !executionDigest) {
+                  throw new Error(
+                    `Activated panel build ${buildKey} has incomplete sealed identity`
+                  );
+                }
+                return {
+                  effectiveVersion: build.metadata.ev,
+                  buildKey,
+                  executionDigest,
+                  authorityRequests: authority.requests,
+                  authorityDelegations: authority.delegations,
+                };
+              }
+              const binding = await buildSystem.bindRuntimeImage(source, ref);
+              return {
+                effectiveVersion: binding.effectiveVersion,
+                buildKey: binding.buildKey,
+                executionDigest: binding.executionDigest,
+                authorityRequests: binding.authorityRequests,
+                authorityDelegations: binding.authorityDelegations,
+              };
             },
-            resolveAppEffectiveVersion: async ({ source, ref }) => {
-              void ref;
-              return buildSystem.getEffectiveVersion(source) ?? "";
-            },
+            resolveAppExecution: ({ source, ref }) => resolveBuildExecution(source, ref),
             releaseEntity: async (record, input) => {
               if (record.kind !== "do") return { status: "ready" };
               if (!record.className) {
@@ -2021,7 +2110,7 @@ async function main() {
           },
           rpc: {
             call: (targetId, method, ...args) =>
-              rpcServer.server.callTarget(targetId, method, ...args),
+              rpcServer.server.callTarget(targetId, method, args),
           },
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
@@ -2029,7 +2118,7 @@ async function main() {
             await rpcServer.server.callTarget(
               `do:${target.source}:${target.className}:${target.objectKey}`,
               target.method,
-              event
+              [event]
             );
           },
         });
@@ -2146,6 +2235,8 @@ async function main() {
       const server = new RpcServer({
         tokenManager,
         dispatcher,
+        workspaceId: entryWorkspaceId,
+        capabilityGrantStore,
         eventService,
         egressProxy,
         fsService,
@@ -2156,6 +2247,7 @@ async function main() {
         // Membership entry gate (WP2 §4): refuse a non-member of this child's
         // workspace at auth time. Undefined (no-op) in local/dev/hub mode.
         membershipGate: membershipEntryGate,
+        workspaceRoleResolver,
         liveCallerGate,
         // RpcServer starts before workerd by design. Resolve the sealed semantic
         // control plane lazily at the first provenance-bearing ingress, then
@@ -2266,7 +2358,7 @@ async function main() {
             listActiveEntities: () => entityCache.listActive(),
             retireEntity: async (id) => {
               await dispatcher.dispatch(
-                { caller: createVerifiedCaller("server", "server") },
+                { caller: createHostCaller("server") },
                 "runtime",
                 "retireEntity",
                 [{ id, removeContext: true }]
@@ -2276,7 +2368,7 @@ async function main() {
           userId
         );
         const archived = (await dispatcher.dispatch(
-          { caller: createVerifiedCaller("server", "server") },
+          { caller: createHostCaller("server") },
           "panelTree",
           "archiveOwnedRoots",
           [userId]
@@ -2553,7 +2645,7 @@ async function main() {
       const host = new ExtensionHost({
         statePath,
         workspacePath,
-        workspaceId: workspace.config.id,
+        workspaceId,
         buildSystem: buildSystemInst,
         tokenManager: tokenManagerInst,
         eventService,
@@ -2584,10 +2676,10 @@ async function main() {
         onWorkspaceUnitsChanged: (reason) =>
           hostTargetLaunchCoordinator.notifyAllTargetsChanged(reason),
         extensionTransport: {
-          call(name, method, ...args) {
+          call(name, method, args, options) {
             const rpcServer = rpcServerForGateway;
             if (!rpcServer) throw new Error("RPC server is not initialized");
-            return rpcServer.callTarget(name, method, ...args);
+            return rpcServer.callTarget(name, method, args, options);
           },
           streamCallTarget(name, method, ...args) {
             const rpcServer = rpcServerForGateway;
@@ -2627,7 +2719,7 @@ async function main() {
       const host = new AppHost({
         statePath,
         workspacePath,
-        workspaceId: workspace.config.id,
+        workspaceId,
         buildSystem: buildSystemInst,
         eventService,
         approvalQueue,
@@ -2668,13 +2760,12 @@ async function main() {
       objectKey: string;
       contextId?: string;
       buildRef?: string;
-      ownerUserId?: string;
     }
   ): Promise<void> => {
     const { source, className, objectKey, buildRef } = ref;
     const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
     const active = entityCache.resolveActive(targetId);
-    if (active && (active.ownerUserId !== undefined || ref.ownerUserId === undefined)) {
+    if (active?.activeBuildKey && active.activeExecutionDigest && active.activeAuthority) {
       if (ref.contextId && active.contextId !== ref.contextId) {
         throw new Error(
           `Durable Object ${targetId} is already active in context ${active.contextId}; cannot resolve it from context ${ref.contextId}`
@@ -2686,7 +2777,7 @@ async function main() {
     const workspaceDORef: import("@vibestudio/shared/doDispatcher").DORef = {
       source: INTERNAL_DO_SOURCE,
       className: "WorkspaceDO",
-      objectKey: workspace.config.id,
+      objectKey: workspaceId,
     };
     const existing = (await doDispatch.dispatch(
       workspaceDORef,
@@ -2699,7 +2790,7 @@ async function main() {
           `Durable Object ${targetId} is already registered in context ${existing.contextId}; cannot resolve it from context ${ref.contextId}`
         );
       }
-      if (existing.ownerUserId !== undefined || ref.ownerUserId === undefined) {
+      if (existing.activeBuildKey && existing.activeExecutionDigest && existing.activeAuthority) {
         entityCache._onActivate(existing);
         return;
       }
@@ -2708,7 +2799,7 @@ async function main() {
       ref.contextId ??
       existing?.contextId ??
       createHash("sha256")
-        .update(`${workspace.config.id}\x00${source}\x00${className}\x00${objectKey}`)
+        .update(`${workspaceId}\x00${source}\x00${className}\x00${objectKey}`)
         .digest("hex");
     const prepared = await workerdManagerInst.ensureDurableObjectEntity({
       source,
@@ -2717,17 +2808,16 @@ async function main() {
       contextId,
       ref: buildRef,
     });
-    const record = (await doDispatch.dispatch(workspaceDORef, "entityActivate", {
-      kind: "do",
-      source: {
-        repoPath: source,
-        effectiveVersion: existing?.source.effectiveVersion ?? prepared.effectiveVersion,
-      },
-      contextId,
-      className,
-      key: objectKey,
-      ...(ref.ownerUserId ? { ownerUserId: ref.ownerUserId } : {}),
-    })) as EntityRecord;
+    const record = (await doDispatch.dispatch(
+      workspaceDORef,
+      "entityActivate",
+      declaredWorkspaceServiceActivationInput(
+        { source, className, key: objectKey, contextId },
+        prepared,
+        existing,
+        SYSTEM_SUBJECT.userId
+      )
+    )) as EntityRecord;
     entityCache._onActivate(record);
   };
 
@@ -2752,28 +2842,16 @@ async function main() {
           getCallerContextId: (callerId) => entityCache.resolveContext(callerId),
           loadContextDeclarations: async (contextId) => {
             const stateHash = await workspaceVcs.resolveContextState(contextId);
-            const config = await readWorkspaceConfigFromState(
-              workspaceVcs,
-              workspacePath,
-              stateHash
-            );
+            const config = await readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);
             return buildWorkspaceDeclarations(config);
           },
-          activateDurableObject: ({
-            source,
-            className,
-            objectKey,
-            contextId,
-            buildRef,
-            ownerUserId,
-          }) => {
+          activateDurableObject: ({ source, className, objectKey, contextId, buildRef }) => {
             return activateDurableObjectEntity(doDispatch, workerdManagerInst, {
               source,
               className,
               objectKey,
               ...(contextId ? { contextId } : {}),
               ...(buildRef ? { buildRef } : {}),
-              ...(ownerUserId ? { ownerUserId } : {}),
             });
           },
         });
@@ -2829,7 +2907,7 @@ async function main() {
     tokenManager,
     workspacePath,
     statePath,
-    workspaceId: workspace.config.id,
+    workspaceId,
     workspaceDeclarations: workspaceDecls,
     routeRegistry,
     egressProxy,
@@ -2858,11 +2936,21 @@ async function main() {
       className,
       objectKey,
       effectiveVersion,
+      buildKey,
+      executionDigest,
+      authorityRequests,
+      authorityDelegations,
     }) => {
       entityCache.registerControlPlane({
         id: targetId,
         source: { repoPath: source, effectiveVersion },
-        contextId: `control-plane:${workspace.config.id}`,
+        activeBuildKey: buildKey,
+        activeExecutionDigest: executionDigest,
+        activeAuthority: {
+          requests: authorityRequests,
+          delegations: authorityDelegations,
+        },
+        contextId: `control-plane:${workspaceId}`,
         className,
         key: objectKey,
       });
@@ -2871,7 +2959,7 @@ async function main() {
       const recovered = await vcs.recoverPendingSemanticEffects();
       if (recovered > 0) console.log(`[Vcs] Recovered ${recovered} pending semantic host effects`);
       const activated = await vcs.activateWorkspaceFromSource();
-      const config = await readWorkspaceConfigFromState(vcs, workspacePath, activated.stateHash);
+      const config = await readWorkspaceConfigFromState(vcs, workspaceId, activated.stateHash);
       applyWorkspaceConfigReload(config, { warnRestartBoundChanges: false });
       warnMissingWorkspaceTrust();
       console.log(
@@ -2891,7 +2979,7 @@ async function main() {
             resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
           ),
           doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
-          workspaceId: workspace.config.id,
+          workspaceId,
         });
         driver.start();
         return driver;
@@ -2910,14 +2998,14 @@ async function main() {
         const { AlarmDriver } = await import("./services/alarmDriver.js");
         const driver = new AlarmDriver({
           doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
-          workspaceId: workspace.config.id,
+          workspaceId,
         });
         alarmDriverInstance = driver;
         driver.start();
         return driver;
       },
       async stop(instance: import("./services/alarmDriver.js").AlarmDriver | null) {
-        instance?.stop();
+        await instance?.quiesce();
         alarmDriverInstance = null;
       },
     });
@@ -2931,7 +3019,7 @@ async function main() {
         const { RecurringRegistry } = await import("./services/recurringRegistry.js");
         const registry = new RecurringRegistry({
           doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
-          workspaceId: workspace.config.id,
+          workspaceId,
           loadRecurring: () => workspaceConfig.recurring ?? [],
         });
         recurringRegistryInstance = registry;
@@ -2953,7 +3041,7 @@ async function main() {
         const { HeartbeatDeclarationRegistry } = await import("./services/recurringRegistry.js");
         const registry = new HeartbeatDeclarationRegistry({
           doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
-          workspaceId: workspace.config.id,
+          workspaceId,
           loadHeartbeats: () => workspaceConfig.heartbeats ?? [],
         });
         heartbeatDeclarationRegistryInstance = registry;
@@ -3172,7 +3260,7 @@ async function main() {
           limit: opts?.limit,
         });
         return persisted.entries.map((entry) => ({
-          workspaceId: entry.workspaceId ?? workspace.config.id,
+          workspaceId: entry.workspaceId ?? workspaceId,
           unitName: source,
           kind: "worker" as const,
           timestamp: entry.timestamp,
@@ -3191,7 +3279,7 @@ async function main() {
           limit: opts?.limit,
         });
         return persisted.entries.map((entry) => ({
-          workspaceId: entry.workspaceId ?? workspace.config.id,
+          workspaceId: entry.workspaceId ?? workspaceId,
           unitName: node?.name ?? name,
           kind: "panel" as const,
           timestamp: entry.timestamp,
@@ -3230,7 +3318,7 @@ async function main() {
       const toLog = (
         entry: import("./runtimeDiagnosticsStore.js").RuntimeDiagnosticRecord
       ): import("./services/workspaceService.js").WorkspaceUnitLogRecord => ({
-        workspaceId: entry.workspaceId ?? workspace.config.id,
+        workspaceId: entry.workspaceId ?? workspaceId,
         unitName: entityId,
         kind,
         timestamp: entry.timestamp,
@@ -3275,7 +3363,7 @@ async function main() {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
       const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
       const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
+        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspaceId },
         "heartbeatList"
       )) as Array<{
         name: string;
@@ -3321,7 +3409,7 @@ async function main() {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
       const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
       const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
+        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspaceId },
         "heartbeatList"
       )) as Array<{
         name: string;
@@ -3352,7 +3440,7 @@ async function main() {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
       const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
       const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
+        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspaceId },
         "heartbeatList"
       )) as Array<{
         name: string;
@@ -3383,7 +3471,7 @@ async function main() {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
       const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
       const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
+        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspaceId },
         "heartbeatList"
       )) as Array<{
         name: string;
@@ -3508,9 +3596,8 @@ async function main() {
 
   {
     // Settings service for trusted remote hosts and mobile workspace apps.
-    const { createSettingsServiceStandalone } =
-      await import("./services/settingsServiceStandalone.js");
-    container.registerRpc(createSettingsServiceStandalone({ dispatcher }));
+    const { createSettingsService } = await import("./services/settingsService.js");
+    container.registerRpc(createSettingsService());
   }
 
   // ── Panel-asset loopback bridge (remote shells) ──
@@ -3551,7 +3638,7 @@ async function main() {
             },
           },
           getServerBootId: () => serverBootId,
-          getWorkspaceId: () => workspace.config.id,
+          getWorkspaceId: () => workspaceId,
           getConnectionInfo: () => {
             const gatewayPort = getResolvedGatewayPort("auth connection info");
             const protocol = gatewayProtocol();
@@ -3631,7 +3718,7 @@ async function main() {
         protocol: "http",
         serverId: deviceAuthStore.getServerId(),
         serverBootId,
-        workspaceId: workspace.config.id,
+        workspaceId,
         // In the base payload so attach-or-spawn can version-check without auth.
         version: serverVersion,
         pid: process.pid,
@@ -3844,6 +3931,19 @@ async function main() {
   rpcServerInstance.setWorkerInstanceResolver((targetId) =>
     workerdManager.resolveWorkerInstanceName(targetId)
   );
+  const { authorizeVerifiedCaller } = await import("./services/authorityRuntime.js");
+  dispatcher.setAuthorityResolver(({ ctx, caller, service, capability, resourceKey }) =>
+    authorizeVerifiedCaller(caller, {
+      workspaceId,
+      workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
+      workspaceRole: workspaceRoleResolver(caller.subject),
+      sessionId: ctx.connectionId ?? caller.runtime.id,
+      audience: `service:${service}`,
+      capability,
+      resourceKey,
+      grantStore: capabilityGrantStore,
+    })
+  );
   dispatcher.markInitialized();
 
   // ===========================================================================
@@ -3854,7 +3954,7 @@ async function main() {
   const workspaceDORefForBootstrap: import("@vibestudio/shared/doDispatcher").DORef = {
     source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
     className: "WorkspaceDO",
-    objectKey: workspace.config.id,
+    objectKey: workspaceId,
   };
   const dispatchWorkspaceDO = <T>(method: string, ...args: unknown[]) =>
     doDispatchForBootstrap.dispatch(workspaceDORefForBootstrap, method, ...args) as Promise<T>;
@@ -3899,13 +3999,14 @@ async function main() {
   // 4. Singleton reconciliation against vibestudio.yml.singletonObjects.
   // Preparing an image may restart workerd, so all preparations complete
   // before any activation request is admitted.
-  const { reconcileSingletons } = await import("./bootstrap/singletonReconciliation.js");
+  const { reconcileSingletons, singletonEntityActivationInput } =
+    await import("./bootstrap/singletonReconciliation.js");
   const singletonPlans = workspaceDecls.singletons.all().map((decl) => ({
     decl,
     contextId:
       decl.contextId ??
       createHash("sha256")
-        .update(`${workspace.config.id}\x00${decl.source}\x00${decl.className}\x00${decl.key}`)
+        .update(`${workspaceId}\x00${decl.source}\x00${decl.className}\x00${decl.key}`)
         .digest("hex"),
   }));
   await reconcileSingletons({
@@ -3918,15 +4019,21 @@ async function main() {
         contextId,
         ref: decl.contextId ? undefined : "main",
       }),
-    activate: ({ decl, contextId }, prepared) =>
-      dispatchWorkspaceDO<EntityRecord>("entityActivate", {
-        kind: "do",
-        source: { repoPath: decl.source, effectiveVersion: prepared.effectiveVersion },
-        contextId,
-        className: decl.className,
-        key: decl.key,
-        ownerUserId: SYSTEM_SUBJECT.userId,
-      }),
+    activate: ({ decl, contextId }, prepared) => {
+      return dispatchWorkspaceDO<EntityRecord>(
+        "entityActivate",
+        singletonEntityActivationInput(
+          {
+            source: decl.source,
+            className: decl.className,
+            key: decl.key,
+            contextId,
+          },
+          prepared,
+          SYSTEM_SUBJECT.userId
+        )
+      );
+    },
     onActivated: (record) => entityCache._onActivate(record),
   });
 
@@ -3953,7 +4060,9 @@ async function main() {
         await completeConfiguredWorkspaceDependenciesAtStartup();
         await reconcileDeclaredWorkspaceUnits(workspaceConfig, "startup");
       } while (pendingStartupMetaConfigReload);
-      unitApprovalCoordinator.publishPending("startup");
+      void unitApprovalCoordinator
+        .publishPending("startup")
+        .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
     } finally {
       initialWorkspaceUnitReconcileComplete = true;
       if (syncDeclaredRemotesAfterStartupReload) {
@@ -4061,7 +4170,7 @@ async function main() {
     if (args.readyFile) {
       const readyPayload = {
         workspaceName,
-        workspaceId: workspace.config.id,
+        workspaceId,
         workspaceDir: workspacePath,
         isEphemeral: workspaceIsEphemeral,
         gatewayUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}`,
@@ -4103,6 +4212,8 @@ async function main() {
 
     const lifecycleDriver =
       container.get<import("./services/lifecycleDriver.js").LifecycleDriver>("lifecycleDriver");
+    const alarmDriver =
+      container.get<import("./services/alarmDriver.js").AlarmDriver>("alarmDriver");
     const shutdownStartedAt = Date.now();
     const forceExit = setTimeout(() => {
       console.warn("[Server] Shutdown timeout — forcing exit");
@@ -4110,6 +4221,14 @@ async function main() {
     }, 8000);
 
     cleanupReaper.stop();
+
+    // Stop scheduling admission before asking activations to release. A
+    // scheduler-owned __alarm may be awaiting a long model/tool effect; cancel
+    // only that transport and preserve its durable wake row so lifecycle
+    // prepare can enter the activation and release its live resources.
+    await alarmDriver
+      .quiesce()
+      .catch((err) => console.warn("[Server] alarm scheduler quiesce failed:", err));
 
     await relayBackhaul
       ?.stop()

@@ -14,6 +14,7 @@ import {
 } from "./ownerPanelTreeBridge.js";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import {
+  createHostCaller,
   createVerifiedCaller,
   type CallerKind,
   type ServiceContext,
@@ -73,6 +74,27 @@ export function cdpDefaultHostAssignmentError(
     });
   }
   return null;
+}
+
+/**
+ * Resolve whether a CDP target still names an open authoritative panel slot.
+ *
+ * This is a product-host control-plane lookup, not a relayed userland call, so
+ * it must carry the host principal explicitly. Lookup failures deliberately
+ * propagate: only a successful null/closed result proves that a target is
+ * stale. Treating an authority or storage failure as "unknown" would tell the
+ * provider to permanently forget a live webContents target.
+ */
+export function createKnownPanelSlotResolver(
+  dispatcher: Pick<ServiceDispatcher, "dispatch">
+): (targetId: string) => Promise<boolean> {
+  const serverCtx: ServiceContext = { caller: createHostCaller("server") };
+  return async (targetId: string): Promise<boolean> => {
+    const slot = (await dispatcher.dispatch(serverCtx, "workspace-state", "slot.get", [
+      targetId,
+    ])) as SlotRow | null;
+    return Boolean(slot && slot.closed_at == null);
+  };
 }
 
 export interface CommonDeps {
@@ -223,17 +245,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     });
     return serverPanelTreeBridgePromise;
   };
-  const serverCtx: ServiceContext = { caller: createVerifiedCaller("server", "server") };
-  const isKnownPanelSlot = async (targetId: string): Promise<boolean> => {
-    try {
-      const slot = (await deps.dispatcher.dispatch(serverCtx, "workspace-state", "slot.get", [
-        targetId,
-      ])) as SlotRow | null;
-      return Boolean(slot && slot.closed_at == null);
-    } catch {
-      return false;
-    }
-  };
+  const isKnownPanelSlot = createKnownPanelSlotResolver(deps.dispatcher);
   const requestPanelMetadataForServices = async (
     panelId: string,
     caller: { id: string; kind: CallerKind } = { id: "server", kind: "server" }
@@ -637,6 +649,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
       panelHttpServer.setCallbacks({
         getBuild: (source, ref) => buildSystem.getBuild(source, ref),
+        getBuildByKey: (buildKey) => buildSystem.getBuildByKey(buildKey),
         onBuildComplete: (source, error) => {
           eventService.emit("build:complete", { source, ...(error ? { error } : {}) });
         },

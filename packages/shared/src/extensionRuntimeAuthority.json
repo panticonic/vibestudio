@@ -1,0 +1,3 @@
+{
+  "capabilities": ["service:extensions.health", "service:extensions.ready"]
+}

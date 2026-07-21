@@ -47,6 +47,10 @@ export interface PanelListItem {
   contextId: string;
   runtimeEntityId?: string | null;
   effectiveVersion?: string | null;
+  buildKey?: string | null;
+  executionDigest?: string | null;
+  authorityRequests?: Panel["authorityRequests"];
+  authorityDelegations?: Panel["authorityDelegations"];
 }
 
 export interface PanelRegistryOptions {
@@ -177,6 +181,10 @@ export class PanelRegistry implements PanelRelationshipProvider {
       contextId,
       runtimeEntityId: panel.runtimeEntityId ?? null,
       effectiveVersion: panel.effectiveVersion ?? null,
+      buildKey: panel.buildKey ?? null,
+      executionDigest: panel.executionDigest ?? null,
+      authorityRequests: panel.authorityRequests,
+      authorityDelegations: panel.authorityDelegations,
       ref: getPanelRef(panel),
       build: {
         effectiveVersion: panel.effectiveVersion ?? null,
@@ -198,6 +206,10 @@ export class PanelRegistry implements PanelRelationshipProvider {
       contextId: getPanelContextId(panel),
       runtimeEntityId: panel.runtimeEntityId ?? null,
       effectiveVersion: panel.effectiveVersion ?? null,
+      buildKey: panel.buildKey ?? null,
+      executionDigest: panel.executionDigest ?? null,
+      authorityRequests: panel.authorityRequests,
+      authorityDelegations: panel.authorityDelegations,
     }));
   }
 
@@ -216,6 +228,10 @@ export class PanelRegistry implements PanelRelationshipProvider {
       contextId: getPanelContextId(panel),
       runtimeEntityId: panel.runtimeEntityId ?? null,
       effectiveVersion: panel.effectiveVersion ?? null,
+      buildKey: panel.buildKey ?? null,
+      executionDigest: panel.executionDigest ?? null,
+      authorityRequests: panel.authorityRequests,
+      authorityDelegations: panel.authorityDelegations,
     }));
   }
 

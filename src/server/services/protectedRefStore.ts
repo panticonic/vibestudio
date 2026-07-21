@@ -11,8 +11,11 @@ import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import { canonicalJson, compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
-import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
-import { writeJsonFileAtomic } from "../hostCore/atomicFile.js";
+import {
+  loadVersionedJsonFile,
+  saveVersionedJsonFile,
+  type VersionedJsonCodec,
+} from "../hostCore/versionedJsonStore.js";
 
 export interface MainRefRecord {
   repoPath: string;
@@ -161,17 +164,36 @@ export function isRefConflictError(error: unknown): error is RefBatchConflictErr
 }
 
 const REF_VALUE_RE = /^state:[0-9a-f]{64}$/;
-const STORE_VERSION = 5;
+const STORE_VERSION = 6;
+/** Historical discriminator of the only production v5 shape. */
+const V5_WORKSPACE_SYSTEM_EPOCH = 56;
 const STORE_FILE_NAME = "protected-publication-state.json";
+const BASIS_DIGEST_RE = /^protected-ref-basis:[0-9a-f]{64}$/;
 
 interface StoredRefStore {
-  version: 5;
-  systemEpoch: typeof WORKSPACE_SYSTEM_EPOCH;
   headPublicationId: string | null;
   mainEventId: string | null;
   mains: MainRefRecord[];
   appliedPublications: AppliedPublication[];
 }
+
+const PROTECTED_REF_STORE_CODEC: VersionedJsonCodec<StoredRefStore> = {
+  schemaName: "Protected-main store",
+  versionKey: "version",
+  currentVersion: STORE_VERSION,
+  migrations: [
+    {
+      version: 6,
+      name: "decouple-protected-refs-from-workspace-system-epoch",
+      migrate(value) {
+        const v5 = decodeStoredRefStore(value, 5, V5_WORKSPACE_SYSTEM_EPOCH);
+        return encodeStoredRefStore(v5);
+      },
+    },
+  ],
+  decodeCurrent: (value) => decodeStoredRefStore(value, 6),
+  encode: encodeStoredRefStore,
+};
 
 function validateRepoPath(repoPath: string): void {
   let canonical: string;
@@ -194,9 +216,10 @@ function validateValue(label: string, value: unknown): asserts value is string {
 }
 
 function isMainRefRecord(value: unknown): value is MainRefRecord {
-  if (!value || typeof value !== "object") return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Partial<MainRefRecord>;
   return (
+    hasExactKeys(row, ["repoPath", "contentRoot", "updatedAt"]) &&
     typeof row.repoPath === "string" &&
     typeof row.contentRoot === "string" &&
     typeof row.updatedAt === "number" &&
@@ -206,9 +229,10 @@ function isMainRefRecord(value: unknown): value is MainRefRecord {
 }
 
 function isUpdateEntry(value: unknown): value is MainUpdateEntry {
-  if (!value || typeof value !== "object") return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Partial<MainUpdateEntry>;
   return (
+    hasExactKeys(row, ["repoPath", "expectedOld", "next"]) &&
     typeof row.repoPath === "string" &&
     (row.expectedOld === null || typeof row.expectedOld === "string") &&
     (row.next === null || typeof row.next === "string")
@@ -216,9 +240,20 @@ function isUpdateEntry(value: unknown): value is MainUpdateEntry {
 }
 
 function isAppliedPublication(value: unknown): value is AppliedPublication {
-  if (!value || typeof value !== "object") return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Partial<AppliedPublication>;
   return (
+    hasExactKeys(row, [
+      "publicationId",
+      "previousEventId",
+      "publishedEventId",
+      "hostRefsBasisDigest",
+      "resultHostRefsBasisDigest",
+      "entries",
+      "appliedAt",
+      "observersAppliedAt",
+      "semanticAcknowledgedAt",
+    ]) &&
     typeof row.publicationId === "string" &&
     row.publicationId.length > 0 &&
     typeof row.previousEventId === "string" &&
@@ -226,9 +261,9 @@ function isAppliedPublication(value: unknown): value is AppliedPublication {
     typeof row.publishedEventId === "string" &&
     row.publishedEventId.length > 0 &&
     typeof row.hostRefsBasisDigest === "string" &&
-    row.hostRefsBasisDigest.length > 0 &&
+    BASIS_DIGEST_RE.test(row.hostRefsBasisDigest) &&
     typeof row.resultHostRefsBasisDigest === "string" &&
-    row.resultHostRefsBasisDigest.length > 0 &&
+    BASIS_DIGEST_RE.test(row.resultHostRefsBasisDigest) &&
     Array.isArray(row.entries) &&
     row.entries.every(isUpdateEntry) &&
     typeof row.appliedAt === "number" &&
@@ -236,17 +271,17 @@ function isAppliedPublication(value: unknown): value is AppliedPublication {
     row.appliedAt >= 0 &&
     (row.observersAppliedAt === null ||
       (typeof row.observersAppliedAt === "number" &&
-        Number.isSafeInteger(row.observersAppliedAt))) &&
+        Number.isSafeInteger(row.observersAppliedAt) &&
+        row.observersAppliedAt >= 0)) &&
     (row.semanticAcknowledgedAt === null ||
       (typeof row.semanticAcknowledgedAt === "number" &&
-        Number.isSafeInteger(row.semanticAcknowledgedAt)))
+        Number.isSafeInteger(row.semanticAcknowledgedAt) &&
+        row.semanticAcknowledgedAt >= 0))
   );
 }
 
 function emptyStore(): StoredRefStore {
   return {
-    version: STORE_VERSION,
-    systemEpoch: WORKSPACE_SYSTEM_EPOCH,
     headPublicationId: null,
     mainEventId: null,
     mains: [],
@@ -255,84 +290,117 @@ function emptyStore(): StoredRefStore {
 }
 
 function loadStore(filePath: string): StoredRefStore {
-  let raw: string;
   try {
-    raw = fs.readFileSync(filePath, "utf8");
+    return loadVersionedJsonFile(filePath, PROTECTED_REF_STORE_CODEC) ?? emptyStore();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyStore();
-    throw error;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`Corrupt protected-main store at ${filePath}: ${(error as Error).message}`);
-  }
-  if (!parsed || typeof parsed !== "object")
-    throw new Error(`Corrupt protected-main store at ${filePath}`);
-  const store = parsed as Partial<StoredRefStore>;
-  if (store.version !== STORE_VERSION) {
-    throw new Error(`Unsupported or corrupt protected-main store at ${filePath}`);
-  }
-  if (store.systemEpoch !== WORKSPACE_SYSTEM_EPOCH) {
     throw new Error(
-      `Protected-main store epoch ${String(store.systemEpoch)} is incompatible with host epoch ${WORKSPACE_SYSTEM_EPOCH}; recreate this pre-release workspace`
+      `Protected-main store ${filePath} cannot be loaded without risking data loss: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error }
     );
   }
-  if (
-    (store.headPublicationId !== null && typeof store.headPublicationId !== "string") ||
-    (store.mainEventId !== null && typeof store.mainEventId !== "string") ||
-    !Array.isArray(store.mains) ||
-    !store.mains.every(isMainRefRecord) ||
-    !Array.isArray(store.appliedPublications) ||
-    !store.appliedPublications.every(isAppliedPublication)
-  ) {
-    throw new Error(`Unsupported or corrupt protected-main store at ${filePath}`);
+}
+
+function decodeStoredRefStore(
+  value: unknown,
+  version: number,
+  expectedSystemEpoch?: number
+): StoredRefStore {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("protected-main store is not an object");
   }
-  for (const main of store.mains) {
+  const store = value as Record<string, unknown>;
+  const expectedKeys = [
+    "version",
+    ...(expectedSystemEpoch === undefined ? [] : ["systemEpoch"]),
+    "headPublicationId",
+    "mainEventId",
+    "mains",
+    "appliedPublications",
+  ];
+  if (
+    !hasExactKeys(store, expectedKeys) ||
+    store["version"] !== version ||
+    (expectedSystemEpoch !== undefined && store["systemEpoch"] !== expectedSystemEpoch) ||
+    (store["headPublicationId"] !== null && typeof store["headPublicationId"] !== "string") ||
+    (store["mainEventId"] !== null && typeof store["mainEventId"] !== "string") ||
+    !Array.isArray(store["mains"]) ||
+    !store["mains"].every(isMainRefRecord) ||
+    !Array.isArray(store["appliedPublications"]) ||
+    !store["appliedPublications"].every(isAppliedPublication)
+  ) {
+    throw new Error(`protected-main store version ${version} violates its exact schema`);
+  }
+  const decoded = store as unknown as StoredRefStore;
+  for (const main of decoded.mains) {
     validateRepoPath(main.repoPath);
     validateValue("contentRoot", main.contentRoot);
   }
-  if (new Set(store.mains.map((main) => main.repoPath)).size !== store.mains.length) {
-    throw new Error(`Corrupt duplicate protected-main repository at ${filePath}`);
+  if (new Set(decoded.mains.map((main) => main.repoPath)).size !== decoded.mains.length) {
+    throw new Error("duplicate protected-main repository");
   }
-  for (const publication of store.appliedPublications) {
-    if (
-      !publication.publicationId ||
-      !publication.hostRefsBasisDigest ||
-      !publication.resultHostRefsBasisDigest
-    ) {
-      throw new Error(`Corrupt applied protected-main publication at ${filePath}`);
-    }
+  for (const publication of decoded.appliedPublications) {
     for (const entry of publication.entries) validateEntry(entry);
+    if (
+      new Set(publication.entries.map((entry) => entry.repoPath)).size !==
+      publication.entries.length
+    ) {
+      throw new Error(
+        `duplicate repository in protected-main publication ${publication.publicationId}`
+      );
+    }
   }
   if (
-    new Set(store.appliedPublications.map((publication) => publication.publicationId)).size !==
-    store.appliedPublications.length
+    new Set(decoded.appliedPublications.map((publication) => publication.publicationId)).size !==
+    decoded.appliedPublications.length
   ) {
-    throw new Error(`Corrupt duplicate protected-main publication at ${filePath}`);
+    throw new Error("duplicate protected-main publication");
   }
   if (
-    store.headPublicationId !== null &&
-    !store.appliedPublications.some(
-      (publication) => publication.publicationId === store.headPublicationId
+    decoded.headPublicationId !== null &&
+    !decoded.appliedPublications.some(
+      (publication) => publication.publicationId === decoded.headPublicationId
     )
   ) {
-    throw new Error(`Corrupt protected-main head publication at ${filePath}`);
+    throw new Error("unknown protected-main head publication");
   }
-  if ((store.headPublicationId === null) !== (store.mainEventId === null)) {
-    throw new Error(`Corrupt protected-main event/publication head at ${filePath}`);
+  if ((decoded.headPublicationId === null) !== (decoded.mainEventId === null)) {
+    throw new Error("protected-main event/publication head disagreement");
   }
-  if (store.headPublicationId !== null) {
-    const head = store.appliedPublications.find(
-      (publication) => publication.publicationId === store.headPublicationId
+  if (decoded.headPublicationId === null && decoded.mains.length > 0) {
+    throw new Error("protected-main refs exist without a publication head");
+  }
+  if (decoded.headPublicationId !== null) {
+    const head = decoded.appliedPublications.find(
+      (publication) => publication.publicationId === decoded.headPublicationId
     );
-    if (!head) throw new Error(`Corrupt protected-main head publication at ${filePath}`);
-    if (head.publishedEventId !== store.mainEventId) {
-      throw new Error(`Corrupt protected-main semantic event head at ${filePath}`);
+    if (!head) throw new Error("unknown protected-main head publication");
+    if (head.publishedEventId !== decoded.mainEventId) {
+      throw new Error("protected-main semantic event head disagreement");
+    }
+    const actualBasis = hostRefBasisDigest(
+      decoded.mains.map(({ repoPath, contentRoot }) => ({ repoPath, contentRoot }))
+    );
+    if (head.resultHostRefsBasisDigest !== actualBasis) {
+      throw new Error("protected-main head evidence does not match stored refs");
     }
   }
-  return store as StoredRefStore;
+  return decoded;
+}
+
+function encodeStoredRefStore(store: StoredRefStore): Record<string, unknown> {
+  return {
+    headPublicationId: store.headPublicationId,
+    mainEventId: store.mainEventId,
+    mains: store.mains,
+    appliedPublications: store.appliedPublications,
+  };
+}
+
+function hasExactKeys(value: object, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key) => keys.includes(key));
 }
 
 function validateEntry(entry: MainUpdateEntry): void {
@@ -376,16 +444,20 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
     nextMainEventId: string | null
   ) => {
     fs.mkdirSync(deps.statePath, { recursive: true, mode: 0o700 });
-    writeJsonFileAtomic(filePath, {
-      version: STORE_VERSION,
-      systemEpoch: WORKSPACE_SYSTEM_EPOCH,
-      headPublicationId: nextHeadPublicationId,
-      mainEventId: nextMainEventId,
-      mains: [...nextMains.values()].sort((a, b) => compareUtf16CodeUnits(a.repoPath, b.repoPath)),
-      appliedPublications: [...nextPublications.values()].sort((a, b) =>
-        compareUtf16CodeUnits(a.publicationId, b.publicationId)
-      ),
-    } satisfies StoredRefStore);
+    saveVersionedJsonFile(
+      filePath,
+      {
+        headPublicationId: nextHeadPublicationId,
+        mainEventId: nextMainEventId,
+        mains: [...nextMains.values()].sort((a, b) =>
+          compareUtf16CodeUnits(a.repoPath, b.repoPath)
+        ),
+        appliedPublications: [...nextPublications.values()].sort((a, b) =>
+          compareUtf16CodeUnits(a.publicationId, b.publicationId)
+        ),
+      } satisfies StoredRefStore,
+      PROTECTED_REF_STORE_CODEC
+    );
   };
 
   const service: ProtectedRefStore = {

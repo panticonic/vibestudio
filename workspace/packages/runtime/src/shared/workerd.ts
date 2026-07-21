@@ -73,6 +73,7 @@ export interface WorkerEntityInfo {
 }
 
 export type WorkspaceServiceInfo = {
+  origin: "product" | "workspace";
   name: string;
   title?: string;
   description?: string;
@@ -90,6 +91,7 @@ export type WorkspaceServiceInfo = {
     }
 );
 export type ResolvedWorkspaceService = {
+  origin: "product" | "workspace";
   name: string;
   title?: string;
   description?: string;
@@ -121,7 +123,7 @@ export interface WorkerdClient {
   list(): Promise<WorkerEntityInfo[]>;
   /** Retire a regular worker by handle or canonical entity id. */
   destroy(worker: string | Pick<WorkerEntityHandle, "id">): Promise<void>;
-  /** List workspace-authored services declared in the manifest. */
+  /** List product-owned and workspace-authored services available here. */
   listServices(): Promise<WorkspaceServiceInfo[]>;
   /** Resolve a workspace service by name or protocol. */
   resolveService(query: string, objectKey?: string | null): Promise<ResolvedWorkspaceService>;

@@ -1,10 +1,12 @@
-import {
-  GAD_WORKSPACE_SERVICE_PROTOCOL,
-  VCS_SERVICE_PROTOCOL,
-} from "@vibestudio/shared/workspaceServiceRpc";
+import { VCS_SERVICE_PROTOCOL } from "@vibestudio/shared/workspaceServiceRpc";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { DODispatch } from "../doDispatch.js";
-import { INTERNAL_DO_SOURCE } from "./internalDoLoader.js";
+import { findProductWorkspaceService } from "@vibestudio/shared/productWorkspaceServices.mjs";
+
+const semanticWorkspaceService = findProductWorkspaceService("gad.workspace");
+if (!semanticWorkspaceService) {
+  throw new Error("Product workspace service catalog is missing gad.workspace");
+}
 
 /**
  * Product-sealed identity of the workspace semantic control plane.
@@ -14,10 +16,10 @@ import { INTERNAL_DO_SOURCE } from "./internalDoLoader.js";
  * manifest, owns semantic history, or publishes protected main.
  */
 export const SEMANTIC_CONTROL_PLANE = Object.freeze({
-  source: INTERNAL_DO_SOURCE,
-  className: "GadWorkspaceDO",
-  objectKey: "workspace-semantic-control-plane",
-  protocols: Object.freeze([GAD_WORKSPACE_SERVICE_PROTOCOL, VCS_SERVICE_PROTOCOL]),
+  source: semanticWorkspaceService.source,
+  className: semanticWorkspaceService.durableObject.className,
+  objectKey: semanticWorkspaceService.durableObject.objectKey,
+  protocols: Object.freeze([...semanticWorkspaceService.protocols, VCS_SERVICE_PROTOCOL]),
 });
 
 /** One process-local call adapter to the existing sealed semantic workspace. */

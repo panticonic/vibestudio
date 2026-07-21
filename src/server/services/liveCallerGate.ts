@@ -39,6 +39,16 @@ export function createLiveCallerGate(deps: {
     return issuer?.ownerUserId === userId;
   };
   return (caller, authorizedBy) => {
+    const exactActiveCodeIncarnation = (): boolean => {
+      const code = caller.code;
+      if (!code) return false;
+      const entity = deps.entityCache.resolveActive(caller.runtime.id);
+      return (
+        entity?.activeAuthority !== undefined &&
+        entity.activeExecutionDigest === code.executionDigest &&
+        entity.source.repoPath === code.repoPath
+      );
+    };
     const liveAgentOwner = (): string | null => {
       const binding = caller.agentBinding;
       if (!binding || caller.runtime.id !== `agent:${binding.entityId}`) return null;
@@ -63,7 +73,20 @@ export function createLiveCallerGate(deps: {
         return deps.isLiveExtension(caller.runtime.id);
       }
       if (caller.runtime.kind === "app" && authorizedBy === "server") {
-        return deps.entityCache.resolveActive(caller.runtime.id)?.kind === "app";
+        return (
+          deps.entityCache.resolveActive(caller.runtime.id)?.kind === "app" &&
+          exactActiveCodeIncarnation()
+        );
+      }
+      if (
+        caller.runtime.kind === "panel" ||
+        caller.runtime.kind === "worker" ||
+        caller.runtime.kind === "do"
+      ) {
+        return (
+          exactActiveCodeIncarnation() &&
+          (deps.isLiveSystemRuntime?.(caller.runtime.id, caller.runtime.kind) ?? false)
+        );
       }
       return deps.isLiveSystemRuntime?.(caller.runtime.id, caller.runtime.kind) ?? false;
     }
@@ -92,11 +115,15 @@ export function createLiveCallerGate(deps: {
       const entity = deps.entityCache.resolveActive(caller.runtime.id) as {
         ownerUserId?: string;
       } | null;
-      return entity?.ownerUserId === user.id;
+      return entity?.ownerUserId === user.id && exactActiveCodeIncarnation();
     }
 
     if (caller.runtime.kind === "app") {
-      return typeof authorizedBy === "string" && issuerOwnsUser(authorizedBy, user.id);
+      return (
+        typeof authorizedBy === "string" &&
+        issuerOwnsUser(authorizedBy, user.id) &&
+        exactActiveCodeIncarnation()
+      );
     }
 
     return false;

@@ -618,10 +618,10 @@ describe("userlandApprovalService", () => {
     ).resolves.toEqual({ settled: false });
   });
 
-  it("gates requestExternal/settleExternal to do and worker callers via policy", () => {
+  it("gates requestExternal/settleExternal to code authority", () => {
     const { service } = createDeps();
-    expect(service.methods["requestExternal"]!.policy?.allowed).toEqual(["do", "worker"]);
-    expect(service.methods["settleExternal"]!.policy?.allowed).toEqual(["do", "worker"]);
+    expect(service.methods["requestExternal"]!.authority).toEqual({ principals: ["code"] });
+    expect(service.methods["settleExternal"]!.authority).toEqual({ principals: ["code"] });
   });
 
   it("throws ServiceError for unknown methods", async () => {

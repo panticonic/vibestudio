@@ -101,7 +101,7 @@ describe("buildUnit terminal worker builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-workers/terminal-min"),
-      "ev-terminal-min",
+      "a".repeat(64),
       graph,
       workspaceRoot,
       "state:test"
@@ -181,7 +181,7 @@ describe("buildUnit terminal worker builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-workers/stale-dist-worker"),
-      "ev-stale-dist-worker",
+      "b".repeat(64),
       graph,
       workspaceRoot,
       "state:test"

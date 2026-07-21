@@ -20,6 +20,7 @@ import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
+import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc";
 
 // Mock child_process to prevent actual workerd spawning
 vi.mock("child_process", () => ({
@@ -67,15 +68,30 @@ vi.mock("./hostCore/portUtils.js", () => ({
 function mockWorkerBuild(
   bundle = 'export default { fetch() { return new Response("ok"); } };'
 ): BuildResult {
+  const buildKey = "build:workers/runtime-fixture:abc123";
   return {
     dir: "/tmp/test-build",
+    buildKey,
     sourceStateHash: "state:test",
     metadata: {
       kind: "worker",
       name: "workers/runtime-fixture",
+      buildKey,
+      sourcePath: "workers/runtime-fixture",
       ev: "abc123",
       sourceStateHash: "state:test",
+      execution: {
+        version: 1,
+        source: {
+          repoPath: "workers/runtime-fixture",
+          effectiveVersion: "b".repeat(64) as never,
+        },
+        buildInputDigest: "c".repeat(64) as never,
+        artifactDigest: "d".repeat(64) as never,
+        executionDigest: "a".repeat(64) as never,
+      },
       sourcemap: false,
+      authority: { requests: [], delegations: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -117,6 +133,9 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
       stateHash: ref?.startsWith("state:") ? ref : "state:test",
       effectiveVersion: build.metadata.ev,
       buildKey: `build:${unitPath}:${ref ?? "main"}`,
+      executionDigest: "a".repeat(64),
+      authorityRequests: [],
+      authorityDelegations: [],
     })),
     getBuildByKey: vi.fn(() => build),
     getManifestRoutes: () => [],
@@ -404,6 +423,7 @@ describe("WorkerdManager", () => {
       });
 
       expect(prepared.effectiveVersion).toBe("abc123");
+      expect(prepared.buildKey).toBe("build:workers/new:ctx:ctx-agent");
       expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new", "ctx:ctx-agent");
       expect(statusOf(mgr, "new-worker")?.scopeRef).toBe("ctx:ctx-agent");
     });
@@ -538,6 +558,32 @@ describe("WorkerdManager", () => {
       await mgr.ensureDOClass("vibestudio/internal", "GadWorkspaceDO");
 
       expect(mgr.getStage()).toBe("control-plane");
+      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+    });
+
+    it("prepares the semantic authority from a host-baked sealed runtime image", async () => {
+      const deps = createMockDeps();
+      const mgr = new ProductWorkerdManager(deps);
+
+      const prepared = await mgr.ensureDurableObjectEntity({
+        source: "vibestudio/internal",
+        className: "GadWorkspaceDO",
+        key: "workspace-semantic-control-plane",
+        contextId: "control-plane:workspace-semantic-control-plane",
+      });
+
+      expect(prepared).toMatchObject({
+        targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+        effectiveVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
+        buildKey: expect.stringMatching(/^[0-9a-f]{64}$/),
+        executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        authorityRequests: [
+          expect.objectContaining({ capability: "service:notification.signalUserInbox" }),
+          expect.objectContaining({ capability: "service:workspace-state.alarmClear" }),
+          expect.objectContaining({ capability: "service:workspace-state.alarmSet" }),
+        ],
+        authorityDelegations: [],
+      });
       expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
     });
 
@@ -1024,6 +1070,62 @@ describe("WorkerdManager", () => {
       const nextMgr = new WorkerdManager(createMockDeps({ statePath }));
       expect(nextMgr.getBootGeneration()).toBe(2);
     });
+
+    it("replaces an unresponsive sandbox without a graceful begin RPC and reports crash recovery", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      const begin = vi.fn();
+      const ready = vi.fn();
+      mgr.onRestartBegin(begin);
+      mgr.onRestartReady(ready);
+
+      await mgr.startWorker(startArgs());
+      const initialGeneration = mgr.getBootGeneration();
+      await Promise.all([
+        mgr.recoverUnresponsiveSandbox("eval inv-loop exceeded its deadline"),
+        mgr.recoverUnresponsiveSandbox("eval inv-other observed the same stalled runtime"),
+      ]);
+
+      expect(begin).not.toHaveBeenCalled();
+      expect(ready).toHaveBeenCalledOnce();
+      expect(ready).toHaveBeenCalledWith(
+        expect.objectContaining({
+          generation: initialGeneration + 1,
+          previousGeneration: initialGeneration,
+          reason: "crash",
+        })
+      );
+      expect(mgr.getBootGeneration()).toBe(initialGeneration + 1);
+    });
+
+    it("closes restart admission before shutdown takes process ownership", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const spawnCountBeforeRestart = vi.mocked(spawn).mock.calls.length;
+      let releaseBegin!: () => void;
+      let markBeginEntered!: () => void;
+      const beginEntered = new Promise<void>((resolve) => {
+        markBeginEntered = resolve;
+      });
+      const holdBegin = new Promise<void>((resolve) => {
+        releaseBegin = resolve;
+      });
+      mgr.onRestartBegin(async () => {
+        markBeginEntered();
+        await holdBegin;
+      });
+
+      const restart = (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+      await beginEntered;
+      const shutdown = mgr.shutdown();
+      releaseBegin();
+
+      await Promise.all([restart, shutdown]);
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCountBeforeRestart);
+      expect(mgr.getPort()).toBeNull();
+      await expect(
+        (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd()
+      ).rejects.toThrow("WorkerdManager is shutting down");
+    });
   });
 
   describe("router generation", () => {
@@ -1031,6 +1133,7 @@ describe("WorkerdManager", () => {
       const mgr = new WorkerdManager(createMockDeps());
       const router = await loadCompiledRouter();
       const fetchedUrls: string[] = [];
+      const fetchedHeaders: Headers[] = [];
       const env = {
         WORKERD_GATEWAY_TOKEN: "mock-workerd-gateway-token",
         WORKERD_DISPATCH_SECRET: mgr.getDispatchSecret(),
@@ -1043,6 +1146,7 @@ describe("WorkerdManager", () => {
           get: vi.fn(() => ({
             fetch: vi.fn(async (request: Request) => {
               fetchedUrls.push(request.url);
+              fetchedHeaders.push(new Headers(request.headers));
               return new Response("ok");
             }),
           })),
@@ -1056,6 +1160,7 @@ describe("WorkerdManager", () => {
             headers: {
               Authorization: "Bearer mock-workerd-gateway-token",
               "X-Vibestudio-Dispatch-Secret": mgr.getDispatchSecret(),
+              [DIRECT_AUTHORITY_ACCEPTED_AT_HEADER]: "1",
             },
           }
         ),
@@ -1067,6 +1172,10 @@ describe("WorkerdManager", () => {
         "ctx/chat"
       );
       expect(fetchedUrls).toEqual(["http://router/ctx%2Fchat/appendEvents?x=1"]);
+      expect(fetchedHeaders[0]?.has("X-Vibestudio-Dispatch-Secret")).toBe(false);
+      expect(Number(fetchedHeaders[0]?.get(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER))).toBeGreaterThan(
+        1
+      );
     });
 
     it("rejects source-scoped DO requests without the dispatch secret", async () => {

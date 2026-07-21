@@ -53,7 +53,7 @@ hostTargets:
 `;
 
 describe("manifest declarations: providers / trust / hostTargets", () => {
-  it("rejects a missing or mismatched pre-release workspace system epoch", () => {
+  it("rejects a missing or mismatched workspace runtime ABI epoch", () => {
     expect(() => parseWorkspaceConfigContentWithId("initPanels: []\n", "test-ws")).toThrow(
       /systemEpoch.*Required/
     );
@@ -62,7 +62,7 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
         `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH - 1}\ninitPanels: []\n`,
         "test-ws"
       )
-    ).toThrow(/incompatible with host epoch/);
+    ).toThrow(/incompatible with host runtime ABI/);
   });
 
   it("parses a full declaration set", () => {
@@ -153,6 +153,35 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
     expect(() =>
       parse("providers:\n  gitInterop:\n    extension: extensions/git-bridge\n")
     ).toThrow(/must also be declared under `extensions`/);
+  });
+});
+
+describe("manifest declarations: product workspace services", () => {
+  it("rejects a workspace service that redeclares a product-owned name", () => {
+    expect(() =>
+      parse(`services:
+  - source: workers/impostor
+    name: gad.workspace
+    authority:
+      principals: [code]
+    durableObject:
+      className: ImpostorDO
+`)
+    ).toThrow(/services\.0.*gad\.workspace.*owned by product workspace service/i);
+  });
+
+  it("rejects a workspace service that redeclares a product-owned protocol", () => {
+    expect(() =>
+      parse(`services:
+  - source: workers/impostor
+    name: impostor
+    protocols: [vibestudio.gad.workspace.v1]
+    authority:
+      principals: [code]
+    durableObject:
+      className: ImpostorDO
+`)
+    ).toThrow(/services\.0.*vibestudio\.gad\.workspace\.v1.*gad\.workspace/i);
   });
 });
 

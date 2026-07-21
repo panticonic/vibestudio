@@ -36,6 +36,7 @@ The canary migrations all follow the same shape:
    - Remove any `ctx.<name>` exposure from `workspace/packages/runtime/`.
 
 3. **Codemod the consumers** — every `ctx.<name>.<method>(...)` (or `import { <name> } from "@workspace/runtime"`) becomes:
+
    ```ts
    import { extensions } from "@workspace/runtime";
    const svc = extensions.use<ApiType>("@workspace-extensions/<service>");
@@ -79,7 +80,7 @@ The canary migrations all follow the same shape:
 
 - Wraps a `BrowserDataDO` (a workerd Durable Object) for bookmarks/history/cookies.
 - The extension owns the public API and any shell-only enforcement; the DO still stores the data.
-- Pattern for "extension wraps a DO": `ctx.workers.resolveDurableObject(source, className, key)` grants the target, then `ctx.rpc.call(targetId, method, ...args)` dispatches into the DO through unified RPC, keeping all the data-residency benefits.
+- Pattern for "extension wraps a DO": declare a workspace service and use `ctx.workers.resolveService(protocol, key)`, then `ctx.rpc.call(targetId, method, ...args)` through unified RPC. Raw product-internal targets require an exact reviewed source/class/key catalog entry; exporting an internal DO class does not expose arbitrary instances.
 
 ## Migration checklist
 

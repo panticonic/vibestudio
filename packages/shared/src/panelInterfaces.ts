@@ -12,6 +12,17 @@
  */
 
 import type { AppCapability } from "./unitManifest.js";
+import type { CapabilityScope } from "@vibestudio/rpc";
+import type { EvalAuthorityDelegation } from "./authorityManifest.js";
+
+export interface HostedCodeIdentity {
+  source?: string;
+  effectiveVersion?: string | null;
+  buildKey?: string | null;
+  executionDigest?: string | null;
+  requested?: readonly CapabilityScope[];
+  delegations?: readonly EvalAuthorityDelegation[];
+}
 import type { PanelLifecycleResult } from "./types.js";
 
 /**
@@ -86,13 +97,13 @@ export interface PanelViewLike {
     url: string,
     contextId?: string,
     capabilities?: readonly AppCapability[],
-    identity?: { source?: string; effectiveVersion?: string | null }
+    identity?: HostedCodeIdentity
   ): Promise<void>;
   updateAppView?(
     appId: string,
     url: string,
     capabilities?: readonly AppCapability[],
-    identity?: { source?: string; effectiveVersion?: string | null }
+    identity?: HostedCodeIdentity
   ): Promise<void>;
   createViewForBrowser?(panelId: string, url: string, contextId: string): Promise<void>;
   hasView(panelId: string): boolean;
@@ -102,7 +113,7 @@ export interface PanelViewLike {
   getViewPartition(panelId: string): string | undefined | null;
   setViewVisible?(panelId: string, visible: boolean): void;
   destroyView(panelId: string): void;
-  reloadView(panelId: string): boolean;
+  reloadView(panelId: string): Promise<boolean>;
   navigateView(panelId: string, url: string): Promise<void>;
   getWebContents(panelId: string): unknown | null;
   findViewIdByWebContentsId(senderId: number): string | null;
@@ -113,7 +124,6 @@ export interface PanelViewLike {
  * HTTP panel server abstraction — optional in both modes.
  */
 export interface PanelHttpServerLike {
-  hasBuild(source: string, ref?: string): boolean;
   getBuildRevision?(source: string, ref?: string): number | undefined;
   invalidateBuild(source: string): void;
   getPort(): number;

@@ -3,6 +3,7 @@ import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { doRefKey, doRefUrl, encodeUniversalKey, DODispatch } from "./doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { WORKERD_CONNECTION_DISPATCHER } from "./workerdRpcRelay.js";
 
 /** Expected workerd path for a userland DO ref (UniversalDO facet host). */
 function userlandUrl(ref: DORef, methodPath: string): string {
@@ -74,6 +75,7 @@ describe("DODispatch", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     dispatch = new DODispatch();
+    dispatch.setAuthorityAttester(() => ({}) as never);
   });
 
   describe("dispatch without token-backed configuration", () => {
@@ -97,6 +99,58 @@ describe("DODispatch", () => {
   });
 
   describe("dispatch with token-backed workerd URL", () => {
+    it("does not impose Undici response deadlines on DO method lifetimes", async () => {
+      const tokenManager = new TokenManager();
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ nextAlarm: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+
+      vi.stubGlobal("fetch", fetchMock);
+      dispatch.setTokenManager(tokenManager);
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+
+      await expect(dispatch.dispatchAlarm(makeRef())).resolves.toEqual({ nextAlarm: null });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+        dispatcher: WORKERD_CONNECTION_DISPATCHER,
+      });
+    });
+
+    it("forwards scheduler cancellation to exactly the owned alarm transport", async () => {
+      const tokenManager = new TokenManager();
+      const controller = new AbortController();
+      const transportAborted = new Promise<never>((_resolve, reject) => {
+        controller.signal.addEventListener("abort", () => reject(controller.signal.reason), {
+          once: true,
+        });
+      });
+      const fetchMock = vi.fn((_url: string, init: RequestInit) => {
+        expect(init.signal).toBe(controller.signal);
+        return transportAborted;
+      });
+
+      vi.stubGlobal("fetch", fetchMock);
+      dispatch.setTokenManager(tokenManager);
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+
+      const pending = dispatch.dispatchAlarm(makeRef(), controller.signal);
+      const rejected = expect(pending).rejects.toBeInstanceOf(Error);
+      const reason = new Error("alarm scheduler quiesced");
+      controller.abort(reason);
+
+      await rejected;
+      await expect(pending).rejects.toBe(reason);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
     it("does not replay a semantic call after connection refusal", async () => {
       const tokenManager = new TokenManager();
       const getWorkerdUrl = vi.fn().mockReturnValue("http://127.0.0.1:10001");
@@ -168,7 +222,8 @@ describe("DODispatch", () => {
       expect(fetchMock.mock.calls[0]?.[0]).toBe(
         `http://127.0.0.1:10001${userlandUrl(ref, "__lifecycle/resume")}`
       );
-      expect(body["__caller"]).toEqual({ callerId: "main", callerKind: "server" });
+      expect(body["__caller"]).toMatchObject({ callerId: "main", callerKind: "server" });
+      expect((body["__caller"] as { authorization?: unknown }).authorization).toEqual({});
       expect(body["__parentId"]).toBe("main");
     });
 

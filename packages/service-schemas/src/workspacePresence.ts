@@ -20,7 +20,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import type { SchemaCoversType } from "@vibestudio/shared/schemaTypeGuard";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { WorkspacePresenceEntry } from "@vibestudio/shared/workspacePresence";

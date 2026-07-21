@@ -1,15 +1,28 @@
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
-import { rpc } from "@vibestudio/rpc";
+import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER, rpc } from "@vibestudio/rpc";
+import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import type { DoAlarmDispatchResult, DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import initSqlJs from "sql.js";
-import { DurableObjectBase } from "./durable-base.js";
-import { createTestDO } from "./durable-test-utils.js";
+import { DurableObjectBase, type DurableObjectSchemaMigration } from "./durable-base.js";
+import { createTestDO, createTestDirectAuthority } from "./durable-test-utils.js";
+
+function authenticatedTestCaller(
+  method: string,
+  callerKind: AuthenticatedCaller["callerKind"] = "server",
+  overrides?: Parameters<typeof createTestDirectAuthority>[0]["overrides"]
+) {
+  return {
+    callerId: callerKind === "server" ? "main" : `${callerKind}:test`,
+    callerKind,
+    authorization: createTestDirectAuthority({ callerKind, method, overrides }),
+  };
+}
 
 class EchoDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ callers: ["server", "panel", "do", "shell"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
   echo(...args: unknown[]): unknown[] {
     return args;
   }
@@ -18,7 +31,7 @@ class EchoDO extends DurableObjectBase {
 class StreamProbeDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ callers: ["panel"] })
+  @rpc({ principals: ["user", "code"], sensitivity: "write" })
   subscribe(): Response {
     return new Response("stream-owned", {
       headers: { "Content-Type": "application/x-ndjson" },
@@ -26,10 +39,19 @@ class StreamProbeDO extends DurableObjectBase {
   }
 }
 
+class AgentSubscriptionProbeDO extends DurableObjectBase {
+  protected createTables(): void {}
+
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
+  subscribeChannel(): { subscribed: true } {
+    return { subscribed: true };
+  }
+}
+
 class StructuredErrorDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"], sensitivity: "read" })
   fail(): never {
     const error = new Error("revision does not resolve") as Error & {
       errorData: Record<string, unknown>;
@@ -63,7 +85,7 @@ class LifecycleProbeDO extends DurableObjectBase {
     this.resumed = true;
   }
 
-  @rpc({ callers: ["server", "panel", "do", "shell"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
   callerKind(): string | null {
     return this.caller?.callerKind ?? null;
   }
@@ -73,14 +95,30 @@ class SchemaProbeDO extends DurableObjectBase {
   static override schemaVersion = 2;
 
   protected createTables(): void {
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS required_table (id TEXT PRIMARY KEY)`);
+    this.sql.exec(`CREATE TABLE required_table (id TEXT PRIMARY KEY, payload TEXT)`);
+  }
+
+  protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [
+      {
+        version: 2,
+        name: "add-required-table-payload",
+        validateSource: (sql) => {
+          const columns = sql.exec(`PRAGMA table_info(required_table)`).toArray();
+          if (columns.length !== 1 || columns[0]?.["name"] !== "id") {
+            throw new Error("required_table does not match the exact v1 shape");
+          }
+        },
+        migrate: (sql) => sql.exec(`ALTER TABLE required_table ADD COLUMN payload TEXT`),
+      },
+    ];
   }
 
   protected override requiredTables(): readonly string[] {
     return ["required_table"];
   }
 
-  @rpc({ callers: ["server", "panel", "do", "shell"] })
+  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
   hasRequiredTable(): boolean {
     return (
       this.sql
@@ -88,12 +126,16 @@ class SchemaProbeDO extends DurableObjectBase {
         .toArray().length === 1
     );
   }
+
+  initializeSchemaForTest(): void {
+    this.ensureReady();
+  }
 }
 
 class AlarmProbeDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   scheduleWake(wakeAt: number): string {
     this.setAlarmAt(wakeAt);
     return "scheduled";
@@ -105,7 +147,7 @@ class DerivedAlarmProbeDO extends DurableObjectBase {
 
   protected createTables(): void {}
 
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"], sensitivity: "write" })
   recordWake(wakeAt: number): string {
     this.wakeAt = wakeAt;
     return "recorded";
@@ -152,7 +194,7 @@ async function dispatchAlarm(instance: DurableObjectBase): Promise<{
         args: [],
         __instanceToken: "token",
         __instanceId: "do:test:AlarmProbeDO:test-key",
-        __caller: { callerId: "main", callerKind: "server" },
+        __caller: authenticatedTestCaller("__alarm"),
       }),
     })
   );
@@ -194,7 +236,7 @@ describe("DurableObjectBase request parsing", () => {
         body: JSON.stringify({
           from: "panel:nav-a",
           target: "do:workers/test:StreamProbeDO:test-key",
-          delivery: { caller: { callerId: "panel:nav-a", callerKind: "panel" } },
+          delivery: { caller: authenticatedTestCaller("subscribe", "panel") },
           provenance: [],
           message: {
             type: "stream-request",
@@ -222,7 +264,7 @@ describe("DurableObjectBase request parsing", () => {
           args: [["op-1"], "shell:owner"],
           __instanceToken: "token",
           __instanceId: "do:internal/WorkspaceDO:test-key",
-          __caller: { callerId: "main", callerKind: "server" },
+          __caller: authenticatedTestCaller("echo"),
         }),
       })
     );
@@ -238,6 +280,175 @@ describe("DurableObjectBase request parsing", () => {
     ]);
   });
 
+  it.each([
+    ["missing", undefined],
+    [
+      "stale",
+      authenticatedTestCaller("echo", "server", {
+        issuedAt: 1,
+        expiresAt: 2,
+      }),
+    ],
+    [
+      "wrong target",
+      authenticatedTestCaller("echo", "server", {
+        audience: "do:test:TestDO:another-key",
+      }),
+    ],
+  ])("rejects %s direct authority before method entry", async (_case, caller) => {
+    const { instance } = await createTestDO(EchoDO);
+    const response = await (
+      instance as unknown as { fetch(request: Request): Promise<Response> }
+    ).fetch(
+      new Request("http://test/test-key/echo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          args: ["never-returned"],
+          __instanceToken: "token",
+          __instanceId: "do:test:TestDO:test-key",
+          ...(caller ? { __caller: caller } : {}),
+        }),
+      })
+    );
+    expect(response.status).toBe(403);
+    const body = await response.text();
+    if (_case === "stale") {
+      expect(body).toContain("stale at trusted dispatch ingress");
+      expect(body).toContain("issuedAt=1 expiresAt=2");
+    } else if (_case === "wrong target") {
+      expect(body).toContain("bound to another invocation");
+      expect(body).toContain("expected audience=do:test:TestDO:test-key");
+      expect(body).toContain("received audience=do:test:TestDO:another-key");
+    }
+  });
+
+  it("accepts an agent subscribeChannel invocation that was fresh at router ingress before a cold load", async () => {
+    const source = "workers/agent-worker";
+    const className = "AiChatWorker";
+    const objectKey = "agent-1";
+    const target = `do:${source}:${className}:${objectKey}`;
+    const { instance } = await createTestDO(AgentSubscriptionProbeDO, {
+      WORKER_SOURCE: source,
+      WORKER_CLASS_NAME: className,
+      __objectKey: objectKey,
+    });
+    const authorization = createTestDirectAuthority({
+      callerKind: "panel",
+      method: "subscribeChannel",
+      source,
+      className,
+      objectKey,
+      now: 1_000,
+    });
+    const response = await (
+      instance as unknown as { fetch(request: Request): Promise<Response> }
+    ).fetch(
+      new Request(`http://test/${objectKey}/__rpc`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          [DIRECT_AUTHORITY_ACCEPTED_AT_HEADER]: "1500",
+        },
+        body: JSON.stringify({
+          from: "panel:chat",
+          target,
+          delivery: {
+            caller: { callerId: "panel:chat", callerKind: "panel", authorization },
+          },
+          provenance: [],
+          message: {
+            type: "request",
+            requestId: "agent-subscription-1",
+            fromId: "panel:chat",
+            method: "subscribeChannel",
+            args: ["channel-1"],
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      target: "panel:chat",
+      message: {
+        type: "response",
+        requestId: "agent-subscription-1",
+        result: { subscribed: true },
+      },
+    });
+  });
+
+  it("accepts a panel channel stream subscription that was fresh at router ingress before a cold load", async () => {
+    const source = "workers/pubsub-channel";
+    const className = "PubSubChannel";
+    const objectKey = "chat-a";
+    const target = `do:${source}:${className}:${objectKey}`;
+    const { instance } = await createTestDO(StreamProbeDO, {
+      WORKER_SOURCE: source,
+      WORKER_CLASS_NAME: className,
+      __objectKey: objectKey,
+    });
+    const authorization = createTestDirectAuthority({
+      callerKind: "panel",
+      method: "subscribe",
+      source,
+      className,
+      objectKey,
+      now: 1_000,
+    });
+    const response = await (
+      instance as unknown as { fetch(request: Request): Promise<Response> }
+    ).fetch(
+      new Request(`http://test/${objectKey}/__rpc`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          [DIRECT_AUTHORITY_ACCEPTED_AT_HEADER]: "1500",
+        },
+        body: JSON.stringify({
+          from: "panel:chat",
+          target,
+          delivery: {
+            caller: { callerId: "panel:chat", callerKind: "panel", authorization },
+          },
+          provenance: [],
+          message: {
+            type: "stream-request",
+            requestId: "panel-subscription-1",
+            fromId: "panel:chat",
+            method: "subscribe",
+            args: [],
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/x-ndjson");
+    await expect(response.text()).resolves.toBe("stream-owned");
+  });
+
+  it("rejects a read-only attestation for a write method", async () => {
+    const { instance } = await createTestDO(AlarmProbeDO);
+    const response = await (
+      instance as unknown as { fetch(request: Request): Promise<Response> }
+    ).fetch(
+      new Request("http://test/test-key/scheduleWake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          args: [123],
+          __instanceToken: "token",
+          __instanceId: "do:test:TestDO:test-key",
+          __caller: authenticatedTestCaller("scheduleWake", "server", { readOnly: true }),
+        }),
+      })
+    );
+    expect(response.status).toBe(403);
+    await expect(response.text()).resolves.toContain("EVAL_READ_ONLY");
+  });
+
   it("preserves structured application failures on method-path dispatch", async () => {
     const { instance } = await createTestDO(StructuredErrorDO);
     const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
@@ -249,7 +460,7 @@ describe("DurableObjectBase request parsing", () => {
           args: [],
           __instanceToken: "token",
           __instanceId: "do:internal/WorkspaceDO:test-key",
-          __caller: { callerId: "main", callerKind: "server" },
+          __caller: authenticatedTestCaller("fail"),
         }),
       })
     );
@@ -289,7 +500,7 @@ describe("DurableObjectBase lifecycle routing", () => {
           args: [{ epoch: "e1", mode: "suspend", reason: "test", deadlineMs: 1 }],
           __instanceToken: "token",
           __instanceId: "do:internal/WorkspaceDO:test-key",
-          __caller: { callerId: "main", callerKind: "server" },
+          __caller: authenticatedTestCaller("__lifecycle/prepare"),
         }),
       })
     );
@@ -311,7 +522,7 @@ describe("DurableObjectBase lifecycle routing", () => {
           ],
           __instanceToken: "token",
           __instanceId: "do:internal/WorkspaceDO:test-key",
-          __caller: { callerId: "main", callerKind: "server" },
+          __caller: authenticatedTestCaller("__lifecycle/resume"),
         }),
       })
     );
@@ -496,40 +707,39 @@ describe("DurableObjectBase server-driven alarm durability", () => {
 });
 
 describe("DurableObjectBase schema readiness", () => {
-  it("rebuilds idempotent tables for a current-version schema before serving calls", async () => {
+  it("rejects a malformed current-version schema instead of rebuilding it", async () => {
     const SQL = await initSqlJs();
     const db = new SQL.Database();
     db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     db.run(`INSERT INTO state (key, value) VALUES ('schema_version', ?)`, ["2"]);
 
-    const { call } = await createTestDO(SchemaProbeDO, undefined, { db });
+    const { instance } = await createTestDO(SchemaProbeDO, undefined, { db });
 
-    await expect(call("hasRequiredTable")).resolves.toBe(true);
+    expect(() => instance.initializeSchemaForTest()).toThrow(/missing table\(s\): required_table/);
   });
 
-  it("replaces an older epoch wholesale before stamping the current schema", async () => {
+  it("runs an explicit migration without deleting persisted or unrelated data", async () => {
     const SQL = await initSqlJs();
     const db = new SQL.Database();
     db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     db.run(`INSERT INTO state (key, value) VALUES ('schema_version', ?)`, ["1"]);
-    db.run(`INSERT INTO state (key, value) VALUES ('application-state', 'obsolete')`);
+    db.run(`INSERT INTO state (key, value) VALUES ('application-state', 'preserved')`);
     db.run(`CREATE TABLE required_table (id TEXT PRIMARY KEY)`);
     db.run(`INSERT INTO required_table (id) VALUES ('old-row')`);
-    db.run(`CREATE TABLE retired_table (id TEXT PRIMARY KEY)`);
-    db.run(`CREATE VIEW retired_view AS SELECT id FROM retired_table`);
+    db.run(`CREATE TABLE extension_owned_table (id TEXT PRIMARY KEY)`);
+    db.run(`INSERT INTO extension_owned_table (id) VALUES ('keep-me')`);
 
-    const { call, sql } = await createTestDO(SchemaProbeDO, undefined, { db });
+    const { instance, sql } = await createTestDO(SchemaProbeDO, undefined, { db });
 
-    await expect(call("hasRequiredTable")).resolves.toBe(true);
-    expect(sql.exec(`SELECT * FROM required_table`).toArray()).toEqual([]);
-    expect(
-      sql
-        .exec(`SELECT name FROM sqlite_master WHERE name IN ('retired_table', 'retired_view')`)
-        .toArray()
-    ).toEqual([]);
-    expect(sql.exec(`SELECT value FROM state WHERE key = 'application-state'`).toArray()).toEqual(
-      []
-    );
+    instance.initializeSchemaForTest();
+    expect(instance.hasRequiredTable()).toBe(true);
+    expect(sql.exec(`SELECT id, payload FROM required_table`).toArray()).toEqual([
+      { id: "old-row", payload: null },
+    ]);
+    expect(sql.exec(`SELECT * FROM extension_owned_table`).toArray()).toEqual([{ id: "keep-me" }]);
+    expect(sql.exec(`SELECT value FROM state WHERE key = 'application-state'`).one()).toEqual({
+      value: "preserved",
+    });
     expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
       value: "2",
     });

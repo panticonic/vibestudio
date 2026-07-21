@@ -15,7 +15,7 @@ import type { MethodSchema } from "@vibestudio/shared/typedServiceClient";
 export function serializeMethod(method: MethodSchema) {
   return {
     ...(method.description ? { description: method.description } : {}),
-    ...(method.policy ? { policy: method.policy } : {}),
+    ...(method.authority ? { authority: method.authority } : {}),
     ...(method.access ? { access: method.access } : {}),
     ...(method.examples ? { examples: method.examples } : {}),
     ...(method.errors ? { errors: method.errors } : {}),
@@ -38,7 +38,7 @@ export function serializeDef(def: ServiceDefinition) {
   return {
     name: def.name,
     ...(def.description ? { description: def.description } : {}),
-    policy: def.policy,
+    authority: def.authority,
     methods: Object.fromEntries(
       Object.entries(def.methods)
         .filter(([, method]) => method.agentFacing !== false)

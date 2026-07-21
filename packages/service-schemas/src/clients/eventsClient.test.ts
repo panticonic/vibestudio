@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RpcCaller } from "@vibestudio/rpc";
 import {
   encodeEventWatchRecord,
@@ -77,6 +77,64 @@ describe("EventsClient", () => {
     client = new EventsClient(fixture.rpc);
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("creates a cryptographic watch id when randomUUID is unavailable", async () => {
+    vi.stubGlobal("crypto", {
+      getRandomValues(bytes: Uint8Array) {
+        bytes.fill(0x2a);
+        return bytes;
+      },
+    });
+    const portableClient = new EventsClient(fixture.rpc);
+
+    await portableClient.subscribe("panel-tree-updated");
+
+    expect(fixture.stream.mock.calls.at(-1)?.[2]).toEqual([
+      ["panel-tree-updated"],
+      "2a".repeat(16),
+    ]);
+    await portableClient.unsubscribeAll();
+  });
+
+  it("reads the raw stream without constructing a React Native Response", async () => {
+    const stream = vi.fn();
+    const streamReadable = vi.fn(
+      async (
+        _target: string,
+        _method: string,
+        args: unknown[],
+        options?: { signal?: AbortSignal }
+      ) => ({
+        status: 200,
+        statusText: "OK",
+        headers: [] as [string, string][],
+        finalUrl: "",
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encodeEventWatchRecord({
+                kind: "watching",
+                events: args[0] as EventName[],
+                epoch: "mobile-epoch",
+              })
+            );
+            options?.signal?.addEventListener("abort", () => controller.close());
+          },
+        }),
+      })
+    );
+    const mobileClient = new EventsClient({ stream, streamReadable } as never);
+
+    await mobileClient.subscribe("panel-tree-updated");
+
+    expect(streamReadable).toHaveBeenCalledOnce();
+    expect(stream).not.toHaveBeenCalled();
+    await mobileClient.unsubscribeAll();
+  });
+
   it("opens one response-owned watch and dispatches its records", async () => {
     const listener = vi.fn();
     client.on("panel-tree-updated", listener);
@@ -97,6 +155,20 @@ describe("EventsClient", () => {
     });
     await vi.waitFor(() => expect(listener).toHaveBeenCalledWith({ revision: 1, forest: [] }));
     await client.unsubscribeAll();
+  });
+
+  it("can bind the same watch contract to an explicit event domain", async () => {
+    const desktopEvents = new EventsClient(fixture.rpc, undefined, "desktopEvents");
+
+    await desktopEvents.subscribe("system-theme-changed");
+
+    expect(fixture.stream).toHaveBeenCalledWith(
+      "main",
+      "desktopEvents.watch",
+      [["system-theme-changed"], expect.any(String)],
+      expect.anything()
+    );
+    await desktopEvents.unsubscribeAll();
   });
 
   it("replaces the exact response with the complete sorted topic set", async () => {

@@ -81,7 +81,7 @@ function hashStrings(parts: string[]): string {
     hash.update(part);
     hash.update("\0");
   }
-  return hash.digest("hex").slice(0, 16);
+  return hash.digest("hex");
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +177,7 @@ export function diffEvMaps(previous: EffectiveVersionMap, current: EffectiveVers
 // ---------------------------------------------------------------------------
 
 interface PersistedEvState {
+  version: 2;
   /** Workspace state hash the EV map was computed at. */
   stateHash: string;
   evMap: EffectiveVersionMap;
@@ -192,7 +193,13 @@ export function loadPersistedEvState(): PersistedEvState | null {
   try {
     if (fs.existsSync(p)) {
       const parsed = JSON.parse(fs.readFileSync(p, "utf-8")) as PersistedEvState;
-      if (parsed && typeof parsed.stateHash === "string" && parsed.evMap && parsed.contentHashes) {
+      if (
+        parsed?.version === 2 &&
+        typeof parsed.stateHash === "string" &&
+        parsed.evMap &&
+        Object.values(parsed.evMap).every((ev) => /^[0-9a-f]{64}$/.test(ev)) &&
+        parsed.contentHashes
+      ) {
         return parsed;
       }
     }
@@ -202,13 +209,13 @@ export function loadPersistedEvState(): PersistedEvState | null {
   return null;
 }
 
-export function persistEvState(state: PersistedEvState): void {
+export function persistEvState(state: Omit<PersistedEvState, "version">): void {
   const p = getEvStatePath();
   const dir = path.dirname(p);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(p, JSON.stringify(state));
+  fs.writeFileSync(p, JSON.stringify({ version: 2, ...state } satisfies PersistedEvState));
 }
 
 // ---------------------------------------------------------------------------
@@ -219,10 +226,10 @@ export function persistEvState(state: PersistedEvState): void {
  * Increment when build logic changes (plugins, esbuild options, shims) OR when
  * the build-key derivation itself changes, to invalidate all cached builds.
  *
- * "18": root-dependency fingerprint now includes the nested workspace package,
- * lock, workspace, and tsconfig files that participate in userland builds.
+ * "20": build inputs, EVs, and dependency fingerprints now retain the full
+ * SHA-256. Short cache identifiers must never leak into executable identity.
  */
-const BUILD_CACHE_VERSION = "18";
+const BUILD_CACHE_VERSION = "20";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the
@@ -249,7 +256,7 @@ export interface RootDependencyFingerprintFile {
   path: string;
   /** Whether the file existed and was readable at fingerprint time. */
   present: boolean;
-  /** Short content hash of the file, or null when absent. */
+  /** Full SHA-256 content hash of the file, or null when absent. */
   contentHash: string | null;
 }
 
@@ -259,7 +266,7 @@ export interface RootDependencyFingerprintInfo {
   root: string;
   /** How the app root was resolved (for diagnosing cwd-dependence). */
   rootSource: "env" | "injected" | "cwd";
-  /** The 16-char fingerprint folded into computeBuildKey. */
+  /** Full SHA-256 fingerprint folded into computeBuildKey. */
   value: string;
   /** Per-input observability (paths + presence + per-file content hash). */
   files: RootDependencyFingerprintFile[];
@@ -297,8 +304,8 @@ function resolveAppRoot(): { root: string; source: RootDependencyFingerprintInfo
   return { root: process.cwd(), source: "cwd" };
 }
 
-function shortHash(data: crypto.BinaryLike): string {
-  return crypto.createHash("sha256").update(data).digest("hex").slice(0, 16);
+function fullHash(data: crypto.BinaryLike): string {
+  return crypto.createHash("sha256").update(data).digest("hex");
 }
 
 function dependencyFingerprintInputs(root: string): Array<{ file: string; path: string }> {
@@ -340,7 +347,7 @@ function computeRootDependencyFingerprint(): RootDependencyFingerprintInfo {
     try {
       const contents = fs.readFileSync(filePath);
       present = true;
-      contentHash = shortHash(contents);
+      contentHash = fullHash(contents);
       // Explicit presence marker so an absent file and a present-empty file
       // never collide, and so the file set stays positionally unambiguous.
       hash.update("present\0");
@@ -355,7 +362,7 @@ function computeRootDependencyFingerprint(): RootDependencyFingerprintInfo {
   const info: RootDependencyFingerprintInfo = {
     root,
     rootSource: source,
-    value: hash.digest("hex").slice(0, 16),
+    value: hash.digest("hex"),
     files,
   };
 

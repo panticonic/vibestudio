@@ -35,9 +35,7 @@ export function createFsServiceDefinition(getFsService: () => FsService): Servic
     name: "fs",
     description:
       "Filesystem operations. Context-bound callers are sandboxed to their context folder; the semantic workspace records managed reads and mutations before host projection, with structured move/copy preserving explicit provenance. Scratch-only adapters may access context-local paths outside reserved workspace source roots and fail closed for managed paths. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.",
-    policy: {
-      allowed: ["panel", "app", "server", "worker", "do", "extension", "shell", "agent"],
-    },
+    authority: { principals: ["code", "host", "user", "entity"] },
     methods: fsMethods,
     handler: (ctx, method, serviceArgs) => handleFsCall(getFsService(), ctx, method, serviceArgs),
   };

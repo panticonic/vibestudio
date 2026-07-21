@@ -8,6 +8,7 @@ import {
 } from "../../../packages/shared/src/runtime/entitySpec.js";
 import { WorkspaceDO, type RecurringJobRow } from "./workspaceDO.js";
 import { WorkspaceDOTestable } from "./workspaceDO.testFixture.js";
+import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 
 const SOURCE = "panels/example";
 const VERSION = "v1";
@@ -24,6 +25,12 @@ const WORKSPACE_TABLES = [
   "recurring_jobs",
 ];
 const CURRENT_SCHEMA_VERSION = WorkspaceDO.schemaVersion;
+const ACTIVE_AUTHORITY: UnitAuthorityManifest = {
+  requests: [
+    { capability: "service:panel.getInfo", resource: { kind: "exact", key: "panel:getInfo" } },
+  ],
+  delegations: [],
+};
 
 async function createDbAtSchemaVersion(schemaVersion: number) {
   const SQL = await initSqlJs();
@@ -41,6 +48,15 @@ function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>
     key: "entry-1",
     ...overrides,
   };
+}
+
+function preparedPanelInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]> = {}) {
+  return panelInput({
+    activeBuildKey: "b".repeat(64),
+    activeExecutionDigest: "a".repeat(64),
+    activeAuthority: ACTIVE_AUTHORITY,
+    ...overrides,
+  });
 }
 
 function doInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]> = {}) {
@@ -67,41 +83,44 @@ function activateAlarmKey(
   );
 }
 
-describe("WorkspaceDO schema epoch", () => {
-  it("recreates the exact current schema after a destructive pre-release epoch cut", async () => {
+describe("WorkspaceDO exact pre-release schema", () => {
+  it("rejects older workspace state instead of translating partial identities", async () => {
     const db = await createDbAtSchemaVersion(CURRENT_SCHEMA_VERSION - 1);
     db.run(`INSERT INTO state (key, value) VALUES ('application-state', 'obsolete')`);
-    db.run(`CREATE TABLE retired_workspace_shape (id TEXT PRIMARY KEY)`);
-    const { sql } = await createTestDO(WorkspaceDOTestable, undefined, { db });
 
-    for (const table of WORKSPACE_TABLES) {
-      expect(
-        sql.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).one()
-      ).toEqual({ name: table });
-    }
-    expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
-      value: String(CURRENT_SCHEMA_VERSION),
-    });
-    expect(sql.exec(`SELECT value FROM state WHERE key = 'application-state'`).toArray()).toEqual(
-      []
+    await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
+      /predates production baseline 24/
     );
-    expect(
-      sql.exec(`SELECT name FROM sqlite_master WHERE name = 'retired_workspace_shape'`).toArray()
-    ).toEqual([]);
+    expect(db.exec(`SELECT value FROM state WHERE key = 'application-state'`)[0]!.values).toEqual([
+      ["obsolete"],
+    ]);
   });
 
-  it("repairs a stamped current schema that is missing required tables", async () => {
-    const db = await createDbAtSchemaVersion(CURRENT_SCHEMA_VERSION);
-    const { sql } = await createTestDO(WorkspaceDOTestable, undefined, { db });
-
+  it("creates one exact fresh schema containing the complete execution identity", async () => {
+    const { sql } = await createTestDO(WorkspaceDOTestable);
     for (const table of WORKSPACE_TABLES) {
       expect(
         sql.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).one()
       ).toEqual({ name: table });
     }
+    expect(
+      sql
+        .exec(`PRAGMA table_info(entities)`)
+        .toArray()
+        .map((column) => column["name"])
+    ).toEqual(
+      expect.arrayContaining(["active_build_key", "active_execution_digest", "active_authority"])
+    );
     expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
       value: String(CURRENT_SCHEMA_VERSION),
     });
+  });
+
+  it("rejects drift in a stamped current schema", async () => {
+    const db = await createDbAtSchemaVersion(CURRENT_SCHEMA_VERSION);
+    await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
+      /missing table/
+    );
   });
 });
 
@@ -130,6 +149,98 @@ describe("WorkspaceDO.entityActivate", () => {
     expect(b.id).toBe(a.id);
     expect(b.status).toBe("active");
     expect(b.createdAt).toBe(a.createdAt);
+  });
+
+  it("persists the validated authority envelope with the active incarnation", () => {
+    const rec = instance.entityActivate(
+      panelInput({
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+
+    expect(rec.activeAuthority).toEqual(ACTIVE_AUTHORITY);
+    expect(instance.entityResolve(rec.id)?.activeAuthority).toEqual(ACTIVE_AUTHORITY);
+  });
+
+  it("persists and exposes the immutable build key with the active incarnation", () => {
+    const rec = instance.entityActivate(
+      panelInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+
+    expect(rec.activeBuildKey).toBe("b".repeat(64));
+    expect(instance.entityResolve(rec.id)?.activeBuildKey).toBe("b".repeat(64));
+  });
+
+  it("restores the complete active executable incarnation after restart", async () => {
+    const first = await createTestDO(WorkspaceDOTestable);
+    const activated = first.instance.entityActivate(preparedPanelInput());
+
+    const restarted = await createTestDO(WorkspaceDOTestable, undefined, { db: first.db });
+    expect(restarted.instance.entityResolveActive(activated.id)).toMatchObject({
+      id: activated.id,
+      status: "active",
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+    });
+  });
+
+  it("rejects malformed or unbound immutable build keys at the durable boundary", () => {
+    expect(() =>
+      instance.entityActivate(
+        panelInput({ activeBuildKey: "not-a-build-key", activeExecutionDigest: "a".repeat(64) })
+      )
+    ).toThrow(/lowercase SHA-256 build key/);
+    expect(() => instance.entityActivate(panelInput({ activeBuildKey: "b".repeat(64) }))).toThrow(
+      /requires an activeExecutionDigest/
+    );
+  });
+
+  it("never rebinds an incarnation that already selected a different build key", () => {
+    instance.entityActivate(
+      panelInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+
+    expect(() =>
+      instance.entityActivate(
+        panelInput({
+          activeBuildKey: "c".repeat(64),
+          activeExecutionDigest: "d".repeat(64),
+          activeAuthority: ACTIVE_AUTHORITY,
+        })
+      )
+    ).toThrow(/activeBuildKey/);
+  });
+
+  it("rejects malformed active authority at the durable write boundary", () => {
+    expect(() =>
+      instance.entityActivate(
+        panelInput({
+          activeAuthority: { requests: [], delegations: [], extra: true } as never,
+        })
+      )
+    ).toThrow(/must contain exactly requests and delegations arrays/);
+  });
+
+  it("rejects non-canonical execution identity on new activations", () => {
+    expect(() =>
+      instance.entityActivate(panelInput({ activeExecutionDigest: "0123456789abcdef" }))
+    ).toThrow(/lowercase SHA-256 digest/);
+  });
+
+  it("rejects authority that is not bound to an exact execution identity", () => {
+    expect(() =>
+      instance.entityActivate(panelInput({ activeAuthority: ACTIVE_AUTHORITY }))
+    ).toThrow(/requires an activeExecutionDigest/);
   });
 
   it("treats a missing-to-bound owner transition as an identity collision", () => {
@@ -426,9 +537,10 @@ describe("WorkspaceDO slot operations", () => {
     ({ instance } = await createTestDO(WorkspaceDOTestable));
   });
 
-  it("round-trips slotCreate / slotAppendHistory / slotSetCurrent / slotHistory", () => {
-    const entryA = instance.entityActivate(panelInput({ key: "a" }));
-    const entryB = instance.entityActivate(panelInput({ key: "b" }));
+  it("atomically appends, selects, and replaces prepared panel incarnations", () => {
+    const entryA = instance.entityActivate(preparedPanelInput({ key: "a" }));
+    const entryB = instance.entityActivate(preparedPanelInput({ key: "b" }));
+    const entryC = instance.entityActivate(preparedPanelInput({ key: "c" }));
 
     instance.slotCreate({
       slotId: "slot-1",
@@ -441,28 +553,60 @@ describe("WorkspaceDO slot operations", () => {
         contextId: "ctx-1",
       },
     });
-    const cursor = instance.slotAppendHistory("slot-1", {
-      entryKey: entryB.key,
-      entityId: entryB.id,
-      source: SOURCE,
-      contextId: "ctx-1",
+    const appended = instance.slotCommitPreparedNavigation({
+      slotId: "slot-1",
+      expectedCurrentEntityId: entryA.id,
+      mutation: {
+        kind: "append",
+        entry: {
+          entryKey: entryB.key,
+          entityId: entryB.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+        },
+      },
     });
-    expect(cursor).toBe(1);
+    expect(appended).toEqual({
+      previousEntityId: entryA.id,
+      currentEntityId: entryB.id,
+      currentEntryKey: entryB.key,
+      cursor: 1,
+    });
 
-    instance.slotSetCurrent("slot-1", entryB.key);
+    const selected = instance.slotCommitPreparedNavigation({
+      slotId: "slot-1",
+      expectedCurrentEntityId: entryB.id,
+      mutation: { kind: "select", entryKey: entryA.key },
+    });
+    expect(selected.cursor).toBe(0);
+
+    const replaced = instance.slotCommitPreparedNavigation({
+      slotId: "slot-1",
+      expectedCurrentEntityId: entryA.id,
+      mutation: {
+        kind: "replace",
+        entry: {
+          entryKey: entryC.key,
+          entityId: entryC.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+        },
+      },
+    });
+    expect(replaced.cursor).toBe(0);
     const slot = instance.slotGet("slot-1");
-    expect(slot?.current_entry_key).toBe(entryB.key);
-    expect(slot?.current_entity_id).toBe(entryB.id);
+    expect(slot?.current_entry_key).toBe(entryC.key);
+    expect(slot?.current_entity_id).toBe(entryC.id);
 
     const history = instance.slotHistory("slot-1");
     expect(history.map((h) => h.cursor)).toEqual([0, 1]);
-    expect(history.map((h) => h.entry_key)).toEqual([entryA.key, entryB.key]);
+    expect(history.map((h) => h.entry_key)).toEqual([entryC.key, entryB.key]);
   });
 
-  it("slotReplaceHistory rewrites history and updates the cursor", () => {
-    const e1 = instance.entityActivate(panelInput({ key: "e1" }));
-    const e2 = instance.entityActivate(panelInput({ key: "e2" }));
-    const e3 = instance.entityActivate(panelInput({ key: "e3" }));
+  it("rejects stale or incomplete prepared swaps without changing history or current", () => {
+    const e1 = instance.entityActivate(preparedPanelInput({ key: "e1" }));
+    const incomplete = instance.entityActivate(panelInput({ key: "incomplete" }));
+    const staleCandidate = instance.entityActivate(preparedPanelInput({ key: "stale" }));
     instance.slotCreate({
       slotId: "slot-r",
       parentSlotId: null,
@@ -474,17 +618,42 @@ describe("WorkspaceDO slot operations", () => {
         contextId: "ctx-1",
       },
     });
-    instance.slotReplaceHistory(
-      "slot-r",
-      [
-        { entryKey: e2.key, entityId: e2.id, source: SOURCE, contextId: "ctx-1" },
-        { entryKey: e3.key, entityId: e3.id, source: SOURCE, contextId: "ctx-1" },
-      ],
-      1
-    );
-    const slot = instance.slotGet("slot-r");
-    expect(slot?.current_entry_key).toBe(e3.key);
-    expect(instance.slotHistory("slot-r").map((h) => h.entry_key)).toEqual([e2.key, e3.key]);
+    const beforeSlot = instance.slotGet("slot-r");
+    const beforeHistory = instance.slotHistory("slot-r");
+
+    expect(() =>
+      instance.slotCommitPreparedNavigation({
+        slotId: "slot-r",
+        expectedCurrentEntityId: e1.id,
+        mutation: {
+          kind: "append",
+          entry: {
+            entryKey: incomplete.key,
+            entityId: incomplete.id,
+            source: SOURCE,
+            contextId: "ctx-1",
+          },
+        },
+      })
+    ).toThrow(/not active and complete/);
+    expect(() =>
+      instance.slotCommitPreparedNavigation({
+        slotId: "slot-r",
+        expectedCurrentEntityId: staleCandidate.id,
+        mutation: {
+          kind: "append",
+          entry: {
+            entryKey: staleCandidate.key,
+            entityId: staleCandidate.id,
+            source: SOURCE,
+            contextId: "ctx-1",
+          },
+        },
+      })
+    ).toThrow(/changed during preparation/);
+
+    expect(instance.slotGet("slot-r")).toEqual(beforeSlot);
+    expect(instance.slotHistory("slot-r")).toEqual(beforeHistory);
   });
 
   it("slotUpdateCurrentStateArgs mutates the current history entry without changing entity id", () => {

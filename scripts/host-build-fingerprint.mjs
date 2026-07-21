@@ -36,6 +36,7 @@ const INPUT_FILES = [
 const IGNORED_DIRECTORIES = new Set([
   ".git",
   ".turbo",
+  ".wrangler",
   "coverage",
   "dist",
   "node_modules",

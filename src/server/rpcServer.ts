@@ -26,6 +26,8 @@ import {
   type RpcRequest,
   type RpcResponse,
   type RpcCausalParent,
+  type RpcCallOptions,
+  type DirectAuthorityAttestation,
 } from "@vibestudio/rpc";
 import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
 import {
@@ -50,6 +52,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import {
   authenticatedCallerOf,
   parseServiceMethod,
+  createHostCaller,
   createVerifiedCaller,
   ServiceDispatcher,
   type CallerKind,
@@ -61,7 +64,6 @@ import type { UserSubject } from "@vibestudio/identity/types";
 import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import { DeferralRegistry } from "./services/deferralRegistry.js";
-import { checkServiceAccess } from "@vibestudio/shared/servicePolicy";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
@@ -80,6 +82,7 @@ import {
 } from "./rpcServer/httpRpcHandler.js";
 import { StreamingRelay } from "./rpcServer/streamingRelay.js";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
+import { attestDirectRpc } from "./services/authorityRuntime.js";
 
 const log = createDevLogger("RpcServer");
 const RPC_RUNTIME_ID_HEADER = "x-vibestudio-runtime-id";
@@ -192,6 +195,7 @@ type RelayCallMeta = {
   idempotencyKey?: string;
   readOnly?: boolean;
   causalParent?: RpcCausalParent;
+  signal?: AbortSignal;
 };
 
 type RelayCallerScope = {
@@ -228,14 +232,15 @@ function resolvePositiveLimit(value: number | undefined, fallback: number, name:
   return value;
 }
 
-function relayCallOptions(
-  meta?: RelayCallMeta
-): { idempotencyKey?: string; readOnly?: boolean; causalParent?: RpcCausalParent } | undefined {
-  if (!meta?.idempotencyKey && !meta?.readOnly && !meta?.causalParent) return undefined;
+function relayCallOptions(meta?: RelayCallMeta): RpcCallOptions | undefined {
+  if (!meta?.idempotencyKey && !meta?.readOnly && !meta?.causalParent && !meta?.signal) {
+    return undefined;
+  }
   return {
     ...(meta.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
     ...(meta.readOnly ? { readOnly: true } : {}),
     ...(meta.causalParent ? { causalParent: meta.causalParent } : {}),
+    ...(meta.signal ? { signal: meta.signal } : {}),
   };
 }
 
@@ -327,7 +332,7 @@ export class RpcServer {
     deliver: async (callerId, requestId, result, isError) => {
       if (!this.isActiveDeferredRecipient(callerId)) return;
       try {
-        await this.callTarget(callerId, "onDeferredResult", { requestId, result, isError });
+        await this.callTarget(callerId, "onDeferredResult", [{ requestId, result, isError }]);
       } catch (error) {
         // Retirement may race the active check. That is successful disposal,
         // not a failed delivery and certainly not a reason to recreate/retry
@@ -387,6 +392,11 @@ export class RpcServer {
   >();
   /** Requests whose response still has to be queued before revocation may close the socket. */
   private readonly activeInboundRequests = new Map<WebSocket, number>();
+  /** Exact unary requests owned by each authenticated socket. */
+  private readonly inboundRequestControllers = new WeakMap<
+    WebSocket,
+    Map<string, AbortController>
+  >();
   /** Terminal caller teardown, shared by token revocation and explicit reach cleanup. */
   private readonly callerRetirements = new Map<
     string,
@@ -411,6 +421,8 @@ export class RpcServer {
     private deps: {
       tokenManager: TokenManager;
       dispatcher: ServiceDispatcher;
+      /** Required when direct DO relay is configured. */
+      workspaceId?: string;
       /** Called when an authenticated client disconnects (e.g., for fs handle cleanup) */
       onClientDisconnect?: (callerId: string, callerKind: CallerKind) => void;
       /** Called when a client successfully authenticates */
@@ -448,6 +460,10 @@ export class RpcServer {
        * Absent only in test or non-workspace hosts.
        */
       membershipGate?: (subject: UserSubject | undefined) => boolean;
+      /** Live workspace role used by declarative `workspace-role` requirements. */
+      workspaceRoleResolver?: (subject: UserSubject | undefined) => string | null;
+      /** Live user decisions augment the reviewed direct-RPC product catalog. */
+      capabilityGrantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
       /**
        * Live identity gate for persistent WS/WebRTC sessions. Authentication
        * stamps a caller once, but revocation and workspace membership are
@@ -540,13 +556,14 @@ export class RpcServer {
       maxBodyBytes: resolveRpcMaxBodyBytes(process.env["VIBESTUDIO_RPC_MAX_BODY_BYTES"]),
       authenticate: (req) => this.authenticateHttpRequest(req),
       handleStreamingRequest: (req, res) => this.streamingRelay.handleHttpRequest(req, res),
-      handleRequest: (caller, envelope, message) =>
+      handleRequest: (caller, envelope, message, signal) =>
         this.handleEnvelopeRequest(
           caller.callerId,
           caller.callerKind,
           caller.agentBinding,
           envelope,
-          message
+          message,
+          signal
         ),
       handleEvent: (caller, envelope, message) =>
         this.handleEnvelopeEvent(caller.callerId, caller.callerKind, envelope, message),
@@ -687,7 +704,16 @@ export class RpcServer {
       throw createRelayError("Invalid causal parent coordinate", "RPC_PROTOCOL_ERROR");
     }
     if (presented) {
-      const binding = caller.agentBinding;
+      // Agent credentials carry their binding directly. Agent vessels running
+      // as a worker/DO authenticate with their runtime principal instead, so
+      // their equally host-owned binding lives on the active entity record.
+      // Resolve both forms here at the transport boundary; downstream services
+      // must never have to reinterpret a valid causal coordinate as unbound.
+      const binding =
+        caller.agentBinding ??
+        (caller.runtime.kind === "worker" || caller.runtime.kind === "do"
+          ? this.deps.entityCache?.resolveActive(caller.runtime.id)?.agentBinding
+          : undefined);
       if (!binding) {
         throw createRelayError("Causal parent requires a host-bound agent trajectory", "EACCES");
       }
@@ -1446,11 +1472,31 @@ export class RpcServer {
     this.maybeCompleteCallerRetirement(callerId);
   }
 
-  private beginInboundRequest(client: WsClientState): void {
+  private beginInboundRequest(
+    client: WsClientState,
+    requestId: string,
+    controller: AbortController
+  ): void {
+    let requests = this.inboundRequestControllers.get(client.ws);
+    if (!requests) {
+      requests = new Map();
+      this.inboundRequestControllers.set(client.ws, requests);
+    }
+    const previous = requests.get(requestId);
+    if (previous) {
+      previous.abort(new Error("RPC request id reused on the same connection"));
+    }
+    requests.set(requestId, controller);
     this.activeInboundRequests.set(client.ws, (this.activeInboundRequests.get(client.ws) ?? 0) + 1);
   }
 
-  private finishInboundRequest(client: WsClientState): void {
+  private finishInboundRequest(
+    client: WsClientState,
+    requestId: string,
+    controller: AbortController
+  ): void {
+    const requests = this.inboundRequestControllers.get(client.ws);
+    if (requests?.get(requestId) === controller) requests.delete(requestId);
     const remaining = (this.activeInboundRequests.get(client.ws) ?? 1) - 1;
     if (remaining > 0) {
       this.activeInboundRequests.set(client.ws, remaining);
@@ -1605,6 +1651,13 @@ export class RpcServer {
       this.streamingRelay.cancel(client, message.requestId);
       return;
     }
+    if (message.type === "request-cancel") {
+      this.inboundRequestControllers
+        .get(client.ws)
+        ?.get(message.requestId)
+        ?.abort(new Error("RPC call aborted by caller"));
+      return;
+    }
     if (message.type === "stream-frame") {
       // Stream frames flow server→client during a streaming response.
       // A client sending one is malformed; ignore.
@@ -1630,26 +1683,12 @@ export class RpcServer {
 
     const { service, method } = parsed;
 
-    try {
-      checkServiceAccess(service, client.caller.runtime.kind, this.dispatcher, method);
-    } catch (error) {
-      this.sendToWs(client.ws, {
-        type: "ws:rpc",
-        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-          type: "response",
-          requestId: request.requestId,
-          error: error instanceof Error ? error.message : String(error),
-          errorKind: rpcErrorKindOf(error, "access"),
-        }),
-      });
-      return;
-    }
-
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
     const dispatcher = this.dispatcher;
 
-    this.beginInboundRequest(client);
+    const abort = new AbortController();
+    this.beginInboundRequest(client, request.requestId, abort);
     try {
       const causalParent = await this.resolveCausalParent(client.caller, request);
       const ctx = this.serviceContextForRpcMessage(client, request, {
@@ -1657,6 +1696,7 @@ export class RpcServer {
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
         ...(causalParent ? { causalParent } : {}),
+        signal: abort.signal,
       });
       const result = await dispatcher.dispatch(ctx, service, method, request.args);
       this.sendToWs(client.ws, {
@@ -1683,7 +1723,7 @@ export class RpcServer {
     } finally {
       // `sendToWs` above synchronously queues the response. A concurrent token
       // revocation may close this connection only after that ordering point.
-      this.finishInboundRequest(client);
+      this.finishInboundRequest(client, request.requestId, abort);
     }
   }
 
@@ -1703,8 +1743,23 @@ export class RpcServer {
     targetConnectionId: string | undefined,
     routeEnvelope: RpcEnvelope
   ): Promise<void> {
+    // A routed stream is still owned by the caller connection's canonical
+    // streaming relay. That relay performs target authorization, dispatches the
+    // connectionless DO stream, frames the response back to this exact socket,
+    // and owns cancellation. Letting stream messages continue through the
+    // ordinary unary route below silently drops them when the target is a DO
+    // (there is deliberately no target WebSocket to forward to).
+    if (message.type === "stream-request") {
+      await this.streamingRelay.handleWsRequest(client, message, routeEnvelope);
+      return;
+    }
+    if (message.type === "stream-cancel") {
+      this.streamingRelay.cancel(client, message.requestId);
+      return;
+    }
+
     if (
-      (message.type === "request" || message.type === "stream-request") &&
+      message.type === "request" &&
       (message.causalParent ||
         (client.caller.runtime.kind === "extension" && message.parentRequestId))
     ) {
@@ -1719,8 +1774,7 @@ export class RpcServer {
         return;
       }
     }
-    const method =
-      message.type === "request" || message.type === "stream-request" ? message.method : undefined;
+    const method = message.type === "request" ? message.method : undefined;
     const auth = this.checkRelayAuth(
       client.caller.runtime.id,
       client.caller.runtime.kind,
@@ -2038,6 +2092,10 @@ export class RpcServer {
     const wasReplaced = !removedActive;
 
     this.streamingRelay.abortConnection(client);
+    for (const controller of this.inboundRequestControllers.get(client.ws)?.values() ?? []) {
+      controller.abort(new Error("RPC connection closed"));
+    }
+    this.inboundRequestControllers.delete(client.ws);
 
     if (!wasReplaced && callerKind === "panel") {
       this.deps.runtimeCoordinator?.markDisconnected(callerId, client.connectionId);
@@ -2348,7 +2406,8 @@ export class RpcServer {
     callerKind: CallerKind,
     agentBinding: import("@vibestudio/identity/types").AgentBinding | undefined,
     envelope: RpcEnvelope,
-    message: RpcRequest
+    message: RpcRequest,
+    signal: AbortSignal
   ): Promise<unknown> {
     const targetId = envelope.target;
     const method = message.method;
@@ -2363,8 +2422,6 @@ export class RpcServer {
     if (targetId === "main") {
       const parsed = parseServiceMethod(method);
       if (!parsed) throw new Error(`Invalid method format: "${method}"`);
-
-      checkServiceAccess(parsed.service, callerKind, this.dispatcher, parsed.method);
 
       // A handler may complete out-of-band only when the caller explicitly opted
       // in (via callDeferred → `deferrable`), stamped a requestId, and can receive
@@ -2392,6 +2449,7 @@ export class RpcServer {
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(deferral ? { deferral } : {}),
           ...(readOnly ? { readOnly: true } : {}),
+          signal,
         },
         agentBinding
       );
@@ -2495,8 +2553,21 @@ export class RpcServer {
     );
   }
 
-  async callTarget<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T> {
-    return this.relayCall("main", "server", targetId, method, args) as Promise<T>;
+  async callTarget<T = unknown>(
+    targetId: string,
+    method: string,
+    args: unknown[] = [],
+    options?: RpcCallOptions
+  ): Promise<T> {
+    return this.relayCall(
+      "main",
+      "server",
+      targetId,
+      method,
+      args,
+      undefined,
+      options
+    ) as Promise<T>;
   }
 
   private isActiveDeferredRecipient(callerId: string): boolean {
@@ -2593,6 +2664,42 @@ export class RpcServer {
     throw createRelayError(`Unknown target kind: ${targetId}`, "UNKNOWN_TARGET_KIND");
   }
 
+  /**
+   * Mint the single host attestation used by every direct DO transport.
+   * Unary and streaming calls are the same semantic invocation boundary; only
+   * their response ownership differs, so their authority derivation must not.
+   */
+  private directDOAuthorization(input: {
+    caller: VerifiedCaller;
+    ref: { source: string; className: string; objectKey: string };
+    method: string;
+    sessionId: string;
+    readOnly?: boolean;
+  }): DirectAuthorityAttestation {
+    const workspaceId = this.deps.workspaceId;
+    if (!workspaceId) {
+      throw new Error("Direct DO relay requires an authority workspace identity");
+    }
+    return {
+      ...attestDirectRpc({
+        caller: input.caller,
+        source: input.ref.source,
+        className: input.ref.className,
+        objectKey: input.ref.objectKey,
+        method: input.method,
+        workspaceId,
+        workspaceMember:
+          input.caller.runtime.kind === "server" ||
+          !this.deps.membershipGate ||
+          this.deps.membershipGate(input.caller.subject),
+        workspaceRole: this.deps.workspaceRoleResolver?.(input.caller.subject) ?? null,
+        sessionId: input.sessionId,
+        grantStore: this.deps.capabilityGrantStore,
+      }),
+      ...(input.readOnly ? { readOnly: true as const } : {}),
+    };
+  }
+
   private async relayResponse(
     fromId: string,
     targetId: string,
@@ -2647,10 +2754,22 @@ export class RpcServer {
         callerKind === "panel"
           ? (this.deps.runtimeCoordinator?.getLease(callerId)?.slotId ?? undefined)
           : undefined;
-      const attributedCaller = relayCallerScope?.invocationCaller.subject
-        ? relayCallerScope.invocationCaller
-        : (relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind));
+      const transportCaller =
+        relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind);
+      const attributedCaller =
+        callerKind === "server"
+          ? createHostCaller(callerId, "server", SYSTEM_SUBJECT)
+          : relayCallerScope?.invocationCaller.subject
+            ? relayCallerScope.invocationCaller
+            : transportCaller;
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
+      const authorization = this.directDOAuthorization({
+        caller: attributedCaller,
+        ref,
+        method,
+        sessionId: meta?.requestId ?? `${callerId}:${method}`,
+        readOnly: meta?.readOnly,
+      });
       const result = await postToDurableObject(ref, method, args, {
         workerdUrl,
         workerdGatewayToken,
@@ -2659,6 +2778,7 @@ export class RpcServer {
         callerKind,
         ...(callerPanelId ? { callerPanelId } : {}),
         ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+        authorization,
         ...(meta?.requestId ? { requestId: meta.requestId } : {}),
         ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
         ...(meta?.readOnly ? { readOnly: true } : {}),
@@ -2706,6 +2826,13 @@ export class RpcServer {
       caller.runtime.kind === "panel"
         ? (this.deps.runtimeCoordinator?.getLease(caller.runtime.id)?.slotId ?? undefined)
         : undefined;
+    const authorization = this.directDOAuthorization({
+      caller,
+      ref,
+      method: request.method,
+      sessionId: request.requestId,
+      readOnly: envelope.delivery.readOnly,
+    });
     return streamFromDurableObject(
       ref,
       request.method,
@@ -2720,6 +2847,7 @@ export class RpcServer {
         callerKind: caller.runtime.kind,
         ...(callerPanelId ? { callerPanelId } : {}),
         ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+        authorization,
         requestId: request.requestId,
         ...(envelope.delivery.idempotencyKey
           ? { idempotencyKey: envelope.delivery.idempotencyKey }

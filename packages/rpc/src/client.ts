@@ -20,6 +20,7 @@ import type {
   RpcRequestContext,
   RpcResponse,
   RpcStreamCancel,
+  RpcRequestCancel,
   RpcStreamFrameMessage,
   RpcStreamOptions,
   RpcStreamRequest,
@@ -157,6 +158,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
     }
   >();
   const activeStreamingHandlers = new Map<string, AbortController>();
+  const activeRequestHandlers = new Map<string, AbortController>();
   const streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? 90_000;
 
   function makeEnvelope(
@@ -213,19 +215,19 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
   async function send(
     targetId: string,
     message: RpcMessage,
-    options?: { idempotencyKey?: string; readOnly?: boolean },
+    options?: { idempotencyKey?: string; readOnly?: boolean; signal?: AbortSignal },
     provenance?: AuthenticatedCaller[]
   ): Promise<void> {
     const envelope = makeEnvelope(targetId, message, options, provenance);
-    await deliverEnvelope(envelope);
+    await deliverEnvelope(envelope, options?.signal);
   }
 
-  async function deliverEnvelope(envelope: RpcEnvelope): Promise<void> {
+  async function deliverEnvelope(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void> {
     if (envelope.target === config.selfId) {
       queueMicrotask(() => handleEnvelope(envelope));
       return;
     }
-    await config.transport.send(envelope);
+    await config.transport.send(envelope, signal);
   }
 
   function clearPendingStream(requestId: string): void {
@@ -380,6 +382,10 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
     activeStreamingHandlers.get(cancel.requestId)?.abort();
   }
 
+  function handleRequestCancel(cancel: RpcRequestCancel): void {
+    activeRequestHandlers.get(cancel.requestId)?.abort();
+  }
+
   function handleRequest(envelope: RpcEnvelope, request: RpcRequest): void {
     const handler = exposedMethods.get(request.method);
     // A failed response send means the caller's awaiter will hang. We can't
@@ -404,6 +410,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
       return;
     }
     const abort = new AbortController();
+    activeRequestHandlers.set(request.requestId, abort);
     Promise.resolve()
       .then(() => handler(requestContext(envelope, request, abort.signal)))
       .then((result) =>
@@ -429,7 +436,12 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
             ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
           })
         ).catch(logResponseSendFailure)
-      );
+      )
+      .finally(() => {
+        if (activeRequestHandlers.get(request.requestId) === abort) {
+          activeRequestHandlers.delete(request.requestId);
+        }
+      });
   }
 
   function handleStreamRequest(envelope: RpcEnvelope, request: RpcStreamRequest): void {
@@ -518,6 +530,9 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
       case "stream-cancel":
         handleStreamCancel(message);
         return;
+      case "request-cancel":
+        handleRequestCancel(message);
+        return;
     }
   }
 
@@ -559,7 +574,15 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
         );
       }
       if (options?.signal) {
-        const onAbort = (): void => rejectPending(new Error("RPC call aborted by caller"));
+        const onAbort = (): void => {
+          void send(
+            targetId,
+            { type: "request-cancel", requestId, fromId: config.selfId },
+            undefined,
+            provenance
+          ).catch(() => {});
+          rejectPending(new Error("RPC call aborted by caller"));
+        };
         options.signal.addEventListener("abort", onAbort, { once: true });
         abortCleanup = () => options.signal?.removeEventListener("abort", onAbort);
       }
@@ -661,11 +684,20 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
     args: unknown[],
     options?: RpcStreamOptions
   ) {
-    // RN variant: returns the decoded head + raw ReadableStream body (no Response).
-    // Requires a duplex-streaming transport (the WebRTC session); there is no
-    // HTTP fallback because the only caller is the RN host on the pipe.
+    // Prefer a transport-native raw stream (notably React Native WebRTC, where
+    // whatwg-fetch Response cannot consume a ReadableStream body). Browser and
+    // Node transports can losslessly unwrap the ordinary Response path.
     if (!config.transport.streamReadable) {
-      throw new Error("This transport does not support streamReadable()");
+      return streamImpl(provenance, targetId, method, args, options).then((response) => {
+        if (!response.body) throw new Error("Streaming RPC response has no readable body");
+        return {
+          status: response.status,
+          statusText: response.statusText,
+          headers: [...response.headers.entries()],
+          finalUrl: response.url,
+          body: response.body,
+        };
+      });
     }
     const envelope = makeEnvelope(
       targetId,

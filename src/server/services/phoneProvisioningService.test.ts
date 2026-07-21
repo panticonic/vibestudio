@@ -36,7 +36,7 @@ describe("phoneProvisioning proxy", () => {
     await expect(definition.handler(context("alice"), "providers", [])).resolves.toEqual([
       expect.objectContaining({ providerId: "shell:alice", label: "alice laptop" }),
     ]);
-    expect(call).toHaveBeenCalledWith("shell:alice", "phoneProvisioning.providers", []);
+    expect(call).toHaveBeenCalledWith("shell:alice", "desktopPhoneProvider.providers", []);
   });
 
   it("requires an explicit provider when several desktops are connected", async () => {

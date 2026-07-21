@@ -559,9 +559,15 @@ export class CdpBridge {
       case "cdp:register": {
         if (typeof msg.targetId !== "string" || typeof msg.tabId !== "number") break;
         const targetId = msg.targetId;
+        // Provider identity can change while an asynchronous panel lookup is
+        // pending. Check on both sides of the await so a disconnected/replaced
+        // transport can neither trigger control-plane work nor publish a target.
+        if (!this.isActiveProvider(hostConnectionId, providerWs)) break;
         // Reject registrations for panels that don't exist (e.g. rolled back
         // after open-tab timeout, or stale mappings from a previous session)
-        if (!(await this.isPanelKnown(msg.targetId))) {
+        const panelKnown = await this.isPanelKnown(msg.targetId);
+        if (!this.isActiveProvider(hostConnectionId, providerWs)) break;
+        if (!panelKnown) {
           log.info(`Rejecting cdp:register for unknown panel: ${msg.targetId}`);
           if (providerWs.readyState === WebSocket.OPEN) {
             providerWs.send(
@@ -575,12 +581,10 @@ export class CdpBridge {
           }
           break;
         }
-        if (!this.isActiveProvider(hostConnectionId, providerWs)) {
-          break;
-        }
         let leaseHostId = this.resolveHostForTarget?.(msg.targetId);
         if (!leaseHostId && hostConnectionId && this.recoverHostLeaseForTarget) {
           leaseHostId = await this.recoverHostLeaseForTarget(msg.targetId, hostConnectionId);
+          if (!this.isActiveProvider(hostConnectionId, providerWs)) break;
         }
         if (this.resolveHostForTarget && !leaseHostId) {
           log.info(`Rejecting cdp:register for ${msg.targetId}: no active CDP-capable lease`);

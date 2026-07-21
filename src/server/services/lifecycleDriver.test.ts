@@ -50,6 +50,7 @@ function makeHarness(
         return epoch;
       }
       if (method === "lifecycleListLeases") return leases;
+      if (method === "lifecycleListResumeTargets") return leases;
       if (method === "lifecycleListOps") {
         return leases.map((lease) => ({
           ...lease,
@@ -116,6 +117,32 @@ describe("LifecycleDriver", () => {
         expect.objectContaining({ kind: "workspace", method: "lifecycleCompleteEpoch" }),
       ])
     );
+  });
+
+  it("recovers durable leases directly after an unresponsive-runtime crash restart", async () => {
+    const harness = makeHarness();
+
+    await harness.fireReady({
+      correlationId: "unprepared-crash",
+      generation: 8,
+      previousGeneration: 7,
+      reason: "crash",
+    });
+
+    expect(harness.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "workspace",
+          method: "lifecycleOpenEpoch",
+          arg: expect.objectContaining({ kind: "crash", reason: "crash" }),
+        }),
+        expect.objectContaining({ kind: "lifecycle", method: "resume" }),
+        expect.objectContaining({ kind: "workspace", method: "lifecycleCompleteEpoch" }),
+      ])
+    );
+    expect(
+      harness.calls.some((call) => call.kind === "lifecycle" && call.method === "prepare")
+    ).toBe(false);
   });
 
   it("records timed_out when a DO does not complete prepare before the deadline", async () => {

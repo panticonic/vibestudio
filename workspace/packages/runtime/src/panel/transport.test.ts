@@ -214,10 +214,7 @@ describe("createPanelTransport", () => {
     );
   });
 
-  // §1.6 upload hop: with the bridge stream surface present, the transport gains
-  // `streamBody` (bodies pump across the bridge); without it there is no hook and
-  // the RPC core throws its loud "uploads require the WebRTC transport" error.
-  describe("bridge upload surface", () => {
+  describe("bridge stream surface", () => {
     function makeStreamShell() {
       let streamHandler: ((msg: unknown) => void) | null = null;
       const sentBodyChunks: unknown[] = [];
@@ -291,6 +288,23 @@ describe("createPanelTransport", () => {
           envelope: expect.objectContaining({ target: "main" }),
         })
       );
+    });
+
+    it("routes body-less subscriptions through the host stream plane", async () => {
+      const { shell, sentBodyChunks } = makeStreamShell();
+      g.__vibestudioShell = shell as never;
+      const transport = createPanelTransport();
+
+      const response = await transport.stream!(streamRequestEnvelope(), null, null);
+
+      expect(response.status).toBe(200);
+      expect(sentBodyChunks).toEqual([]);
+      expect(
+        (shell as unknown as { streamOpen: ReturnType<typeof vi.fn> }).streamOpen
+      ).toHaveBeenCalledWith({
+        opId: expect.any(String),
+        envelope: expect.objectContaining({ target: "main" }),
+      });
     });
 
     it("leaves streamBody undefined when the bridge has no upload surface", () => {

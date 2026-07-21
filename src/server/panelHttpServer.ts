@@ -92,6 +92,9 @@ export interface PanelHttpCallbacks {
 
   /** Build trigger */
   getBuild(source: string, ref?: string): Promise<BuildResult>;
+
+  /** Resolve an already-built immutable artifact selected by runtime activation. */
+  getBuildByKey(buildKey: string): BuildResult | null;
 }
 
 /** Build output cached by source path (shared across panels) */
@@ -154,6 +157,9 @@ function isPanelAssetRequest(resource: string): boolean {
 export class PanelHttpServer {
   /** Serving cache: source/ref -> resolved build (for fast sub-resource serving within a page load) */
   private servingCache = new Map<string, CachedBuild>();
+
+  /** Immutable activated artifacts. Never invalidated by a later source build. */
+  private activatedBuildCache = new Map<string, CachedBuild>();
 
   /** Builds currently in flight (dedup concurrent requests) */
   private buildInFlight = new Map<string, Promise<void>>();
@@ -254,12 +260,14 @@ export class PanelHttpServer {
     }
 
     const revision = ++this.buildRevisionCounter;
-    this.servingCache.set(this.buildCacheKey(source, ref), {
+    const cachedBuild = {
       artifacts: buildResult.artifacts,
       htmlArtifact,
       metadata: buildResult.metadata,
       revision,
-    });
+    };
+    this.servingCache.set(this.buildCacheKey(source, ref), cachedBuild);
+    this.activatedBuildCache.set(buildResult.buildKey, cachedBuild);
 
     log.info(`Stored build: ${this.buildCacheKey(source, ref)}`);
 
@@ -382,8 +390,14 @@ export class PanelHttpServer {
       // `contextId` is panel/runtime identity, not necessarily a VCS head.
       // Only an explicit ref selects a non-main build.
       const ref = url.searchParams.get("ref") || this.refFromReferer(req) || undefined;
+      const buildKey =
+        url.searchParams.get("buildKey") || this.buildKeyFromReferer(req) || undefined;
       this.logPanelResourceRequest(req, res, parsed.source, parsed.resource, routeLabel);
-      await this.resolveAndServeBuild(res, parsed.source, routeLabel, parsed.resource, ref);
+      if (buildKey) {
+        this.resolveAndServeActivatedBuild(res, parsed.source, parsed.resource, buildKey);
+      } else {
+        await this.resolveAndServeBuild(res, parsed.source, routeLabel, parsed.resource, ref);
+      }
       return;
     }
 
@@ -539,6 +553,65 @@ export class PanelHttpServer {
     } catch {
       return null;
     }
+  }
+
+  private buildKeyFromReferer(req: import("http").IncomingMessage): string | null {
+    const referer = req.headers.referer;
+    if (typeof referer !== "string") return null;
+    try {
+      return new URL(referer).searchParams.get("buildKey");
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveAndServeActivatedBuild(
+    res: import("http").ServerResponse,
+    source: string,
+    resource: string,
+    buildKey: string
+  ): void {
+    if (!/^[0-9a-f]{64}$/.test(buildKey)) {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end("Invalid panel build key");
+      return;
+    }
+
+    let build = this.activatedBuildCache.get(buildKey);
+    if (!build) {
+      const result = this.callbacks?.getBuildByKey(buildKey) ?? null;
+      if (!result) {
+        res.writeHead(410, { "Content-Type": "text/plain" });
+        res.end(`Activated panel build is unavailable: ${buildKey}`);
+        return;
+      }
+      if (result.buildKey !== buildKey || result.metadata.buildKey !== buildKey) {
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Immutable panel build store returned a mismatched artifact");
+        return;
+      }
+      const htmlArtifact = result.artifacts.find((artifact) => artifact.role === "html");
+      const primaryArtifact = result.artifacts.find((artifact) => artifact.role === "primary");
+      if (!htmlArtifact || !primaryArtifact) {
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end(`Activated panel build ${buildKey} is incomplete`);
+        return;
+      }
+      build = {
+        artifacts: result.artifacts,
+        htmlArtifact,
+        metadata: result.metadata,
+        revision: ++this.buildRevisionCounter,
+      };
+      this.activatedBuildCache.set(buildKey, build);
+    }
+
+    if (build.metadata.kind !== "panel" || build.metadata.sourcePath !== source) {
+      res.writeHead(403, { "Content-Type": "text/plain" });
+      res.end(`Activated build ${buildKey} does not belong to panel ${source}`);
+      return;
+    }
+    this.servePanelResource(res, build, resource);
   }
 
   private contextIdFromReferer(req: import("http").IncomingMessage): string | null {

@@ -12,7 +12,7 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/pi-ai@0.80.6':
-    hash: 9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c
+    hash: 1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8
     path: workspace/packages/harness/patches/@earendil-works__pi-ai@0.80.6.patch
 
 importers:
@@ -30,7 +30,7 @@ importers:
         version: 3.2.2(react@19.0.0)
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@ghostery/adblocker':
         specifier: ^2.13.4
         version: 2.13.4
@@ -10097,7 +10097,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { stateLayout } from "./stateLayout.js";
@@ -172,8 +173,8 @@ export class RuntimeDiagnosticsStore {
   }
 
   private filePath(entityId: string): string {
-    const encoded = Buffer.from(entityId).toString("base64url");
-    return path.join(this.rootDir, `${encoded}.json`);
+    const digest = createHash("sha256").update(entityId).digest("hex");
+    return path.join(this.rootDir, `sha256-${digest}.json`);
   }
 }
 

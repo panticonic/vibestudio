@@ -11,6 +11,7 @@ export type {
   RpcStreamRequest,
   RpcStreamFrameMessage,
   RpcStreamCancel,
+  RpcRequestCancel,
   RpcMessage,
   RpcTransport,
   RpcCallOptions,
@@ -45,6 +46,22 @@ export type {
   RpcErrorData,
 } from "./types.js";
 export { RemoteRpcError, RpcBoundaryError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
+export type {
+  AuthorizationContext,
+  AuthorizationOrigin,
+  CodeAuthorityChain,
+  AuthorizationDecision,
+  AuthorityGrant,
+  AuthorityRequirement,
+  CapabilityScope,
+  DirectAuthorityAttestation,
+  LiveWorkspaceRelationship,
+  Principal,
+  PrincipalKind,
+  ResourceScope,
+  VerifiedDelegation,
+} from "./authority.js";
+export { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "./authority.js";
 
 export { isParentPortEnvelope } from "./types.js";
 export { createRpcClient, defineContract, withCausalParent } from "./client.js";
@@ -64,8 +81,8 @@ export {
   collectExposableMethods,
   rpc,
   rpcExposedMethodNames,
-  rpcMethodPolicy,
-  type RpcCallerPolicy,
+  rpcMethodAuthority,
+  type RpcAuthorityPolicy,
   type ConnectionlessRpcClient,
   type ConnectionlessRpcConfig,
 } from "./connectionless.js";
@@ -87,6 +104,7 @@ export {
   createBridgeBodyReassembler,
   createBridgeStreamRelay,
   decodeBridgeChunk,
+  openBridgeStream,
   openBridgeUploadStream,
   type BridgeBodyChunk,
   type BridgeBodyReassembler,

@@ -3,7 +3,7 @@ import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { normalizeStateRef, readWorkspaceConfigFromState } from "./workspaceConfigSource.js";
 
 const MANIFEST = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ninitPanels: []\n`;
-const WORKSPACE_PATH = "/tmp/vibestudio-test-workspace/source";
+const WORKSPACE_ID = "ws_opaque_test";
 
 function textFile(text: string) {
   return { content: { kind: "text" as const, text } };
@@ -18,9 +18,9 @@ describe("workspace config source", () => {
   it("reads workspace config from an already-prefixed state ref", async () => {
     const readFile = vi.fn(async () => textFile(MANIFEST));
 
-    const config = await readWorkspaceConfigFromState({ readFile }, WORKSPACE_PATH, "state:main");
+    const config = await readWorkspaceConfigFromState({ readFile }, WORKSPACE_ID, "state:main");
 
-    expect(config.id).toBe("/tmp/vibestudio-test-workspace");
+    expect(config.id).toBe(WORKSPACE_ID);
     expect(readFile).toHaveBeenCalledWith("state:main", "meta/vibestudio.yml");
   });
 });

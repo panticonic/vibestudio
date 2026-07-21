@@ -69,10 +69,11 @@ function lowerFirst(value: string): string {
 function contextDescription(
   ownerLabel: string | undefined,
   targetContextId: string,
-  focus: "file-access" | "existing-state"
+  _focus: "file-access" | "existing-state"
 ): string {
-  const label = focus === "file-access" ? "file context" : "existing context";
-  return ownerLabel ? `the ${label} owned by ${ownerLabel}` : `${label} ${targetContextId}`;
+  return ownerLabel
+    ? `the workspace branch owned by ${ownerLabel}`
+    : `workspace branch ${targetContextId}`;
 }
 
 function genericActionLabel(actionLabel: string): string {
@@ -98,16 +99,16 @@ function accessTitle(actionLabel: string): string | null {
   switch (actionLabel) {
     case "Create do":
     case "Create worker":
-      return "Launch background process with different file access";
+      return "Launch background process in another workspace branch";
     case "Create panel":
     case "Open panel":
-      return "Open panel with different file access";
+      return "Open panel in another workspace branch";
     case "Navigate panel":
-      return "Navigate panel with different file access";
+      return "Switch panel to another workspace branch";
     case "Create app":
-      return "Launch app with different file access";
+      return "Launch app in another workspace branch";
     case "Create session":
-      return "Start session with different file access";
+      return "Start session in another workspace branch";
     default:
       return null;
   }
@@ -117,16 +118,16 @@ function accessDescription(actionLabel: string, target: string): string | null {
   switch (actionLabel) {
     case "Create do":
     case "Create worker":
-      return `This lets the requester start a background process that can use files in ${target}. That file context belongs to another agent or panel.`;
+      return `This lets the requester start a background process in ${target}. It can read or modify the workspace state and running work in that branch.`;
     case "Create panel":
     case "Open panel":
-      return `This lets the requester open a panel that can use files in ${target}. That file context belongs to another agent or panel.`;
+      return `This lets the requester open a panel in ${target}. It can read or modify the workspace state and running work in that branch.`;
     case "Navigate panel":
-      return `This lets the requester navigate a panel so it can use files in ${target}. That file context belongs to another agent or panel.`;
+      return `This lets the requester switch a panel to ${target}. The panel will then read and modify that branch instead of its current workspace branch.`;
     case "Create app":
-      return `This lets the requester launch an app that can use files in ${target}. That file context belongs to another agent or panel.`;
+      return `This lets the requester launch an app in ${target}. It can read or modify the workspace state and running work in that branch.`;
     case "Create session":
-      return `This lets the requester start a session that can use files in ${target}. That file context belongs to another agent or panel.`;
+      return `This lets the requester start a session in ${target}. It can read or modify the workspace state and running work in that branch.`;
     default:
       return null;
   }
@@ -234,7 +235,7 @@ export async function requireContextBoundaryPermission(
 
   const details: NonNullable<PendingCapabilityApproval["details"]> = [];
   if (ownerLabel) details.push({ label: "Owner", value: ownerLabel });
-  details.push({ label: "File context", value: targetContextId });
+  details.push({ label: "Workspace branch", value: targetContextId });
   if (action.targetLabel) {
     details.push({
       label: action.targetLabelName ?? defaultTargetLabelName(action),
@@ -248,16 +249,16 @@ export async function requireContextBoundaryPermission(
     ...(action.severity ? { severity: action.severity } : {}),
     dedupKey: `context-boundary:${subjectId}:${targetContextId}`,
     ...(action.signal ? { signal: action.signal } : {}),
-    resource: { type: "context", label: "File context", value: target, key: resourceKey },
+    resource: { type: "context", label: "Workspace branch", value: target, key: resourceKey },
     operation: {
       kind: action.kind,
       verb: action.verb,
-      object: { type: "context", label: "File context", value: target },
+      object: { type: "context", label: "Workspace branch", value: target },
       ...(action.groupKey ? { groupKey: action.groupKey } : {}),
     },
     title: promptTitle(action),
     description: promptDescription(action, ownerLabel, targetContextId),
     details,
-    deniedReason: `${action.verb} denied: ${target} is another agent or panel's existing state`,
+    deniedReason: `${action.verb} denied: ${target} is another existing workspace branch`,
   });
 }

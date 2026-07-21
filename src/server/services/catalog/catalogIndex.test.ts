@@ -6,7 +6,7 @@ import { createCatalogIndex } from "./catalogIndex.js";
 const blobstore: ServiceDefinition = {
   name: "blobstore",
   description: "Content-addressable blob storage",
-  policy: { allowed: ["panel", "worker", "do", "server"] },
+  authority: { principals: ["code", "host"] },
   methods: {
     putText: {
       description: "Store a UTF-8 string and return its digest",
@@ -16,7 +16,7 @@ const blobstore: ServiceDefinition = {
     "admin.wipe": {
       description: "Delete everything",
       args: z.tuple([]),
-      policy: { allowed: ["server"] },
+      authority: { principals: ["host"] },
     },
   },
   handler: async () => undefined,
@@ -66,7 +66,7 @@ describe("createCatalogIndex", () => {
       {
         name: "demo2",
         description: "d",
-        policy: { allowed: ["server"] },
+        authority: { principals: ["host"] },
         methods: { ping: { args: z.tuple([]) } },
         handler: async () => undefined,
       },
@@ -92,7 +92,7 @@ describe("createCatalogIndex", () => {
           "admin.wipe": {
             description: "Delete everything, now panel-visible.",
             args: z.tuple([]),
-            policy: { allowed: ["panel", "server"] },
+            authority: { principals: ["code", "host"] },
           },
         },
       },

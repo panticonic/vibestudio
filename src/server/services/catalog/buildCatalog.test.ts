@@ -8,7 +8,7 @@ import { buildCatalog, isCatalogEntryVisible } from "./buildCatalog.js";
 const demo: ServiceDefinition = {
   name: "demo",
   description: "Demo service",
-  policy: { allowed: ["panel", "server"] },
+  authority: { principals: ["code", "host"] },
   methods: {
     get: {
       description: "Get a value.",
@@ -18,12 +18,12 @@ const demo: ServiceDefinition = {
     "admin.wipe": {
       description: "Destroy everything (server only).",
       args: z.tuple([]),
-      policy: { allowed: ["server"] },
+      authority: { principals: ["host"] },
     },
     probe: {
       description: "A probe method.",
       args: z.tuple([]),
-      policy: { allowed: ["do", "worker"] },
+      authority: { principals: ["code"] },
       access: { sensitivity: "read" },
     },
     internalTransport: {
@@ -74,7 +74,7 @@ describe("buildCatalog", () => {
     const transportOnly: ServiceDefinition = {
       name: "transportOnly",
       description: "Internal transport",
-      policy: { allowed: ["panel", "worker", "do"] },
+      authority: { principals: ["code"] },
       methods: {
         call: { args: z.tuple([]), agentFacing: false },
       },

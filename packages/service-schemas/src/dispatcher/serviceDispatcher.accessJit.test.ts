@@ -1,20 +1,21 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import {
-  ServiceDispatcher,
   createVerifiedCaller,
   type CallerKind,
+  type ServiceDispatcher,
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { blobstoreMethods } from "../blobstore.js";
 
 function makeDispatcher(): ServiceDispatcher {
-  const d = new ServiceDispatcher();
+  const d = createTestServiceDispatcher();
   const svc: ServiceDefinition = {
     name: "demo",
     description: "Demo",
-    policy: { allowed: ["panel", "server"] },
+    authority: { principals: ["code", "host"] },
     methods: {
       put: {
         description: "Store a value.",
@@ -24,8 +25,9 @@ function makeDispatcher(): ServiceDispatcher {
       restricted: {
         description: "Restricted op.",
         args: z.tuple([]),
+        authority: { principals: ["host"] },
         access: {
-          restrictedTo: [{ when: "kind is app", callers: ["server"], reason: "host-managed" }],
+          restrictedTo: [{ when: "kind is app", principals: ["host"], reason: "host-managed" }],
           approval: [
             {
               capability: "demo.cap",
@@ -38,7 +40,7 @@ function makeDispatcher(): ServiceDispatcher {
       workerOnly: {
         description: "Worker only.",
         args: z.tuple([]),
-        policy: { allowed: ["worker"] },
+        authority: { principals: ["code"] },
       },
       peek: {
         description: "Read-only peek.",
@@ -56,10 +58,11 @@ function makeDispatcher(): ServiceDispatcher {
 const ctx = (kind: CallerKind): ServiceContext => ({ caller: createVerifiedCaller("t", kind) });
 
 describe("dispatcher: access descriptor + JIT errors", () => {
-  it("getMethodPolicy returns the method-level policy", () => {
+  it("retains method-level authority on the canonical definition", () => {
     const d = makeDispatcher();
-    expect(d.getMethodPolicy("demo", "workerOnly")?.allowed).toEqual(["worker"]);
-    expect(d.getMethodPolicy("demo", "put")?.allowed).toBeUndefined(); // no method-level gate
+    const methods = d.getServiceDefinitions().find((entry) => entry.name === "demo")?.methods;
+    expect(methods?.["workerOnly"]?.authority).toEqual({ principals: ["code"] });
+    expect(methods?.["put"]?.authority).toBeUndefined();
   });
 
   it("enriches args-validation errors with description + example", async () => {
@@ -71,10 +74,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
   });
 
   it("teaches the byte-only one-argument putBase64 call on an arity error", async () => {
-    const d = new ServiceDispatcher();
+    const d = createTestServiceDispatcher();
     d.registerService({
       name: "blobstore",
-      policy: { allowed: ["panel"] },
+      authority: { principals: ["code"] },
       methods: { putBase64: blobstoreMethods.putBase64 },
       handler: async () => null,
     });
@@ -92,8 +95,8 @@ describe("dispatcher: access descriptor + JIT errors", () => {
 
   it("enriches access-denied errors with declared restrictions/approval", async () => {
     const d = makeDispatcher();
-    // Worker is outside the panel/server service policy, so the JIT access hint
-    // should surface the method's declared restrictions and approval metadata.
+    // The method requires a host principal, so a code-originated worker is
+    // denied while the declared restriction and acquisition hint stay visible.
     const p = d.dispatch(ctx("worker"), "demo", "restricted", []);
     await expect(p).rejects.toThrow(/host-managed/);
     await expect(d.dispatch(ctx("worker"), "demo", "restricted", [])).rejects.toThrow(
@@ -101,7 +104,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     );
   });
 
-  it("applies the DO userland inheritance rule through policy", async () => {
+  it("authorizes DO code through the declared code principal", async () => {
     const d = makeDispatcher();
     await expect(d.dispatch(ctx("do"), "demo", "workerOnly", [])).resolves.toBe("ok");
     await expect(d.dispatch(ctx("do"), "demo", "put", ["x"])).resolves.toBe("ok");

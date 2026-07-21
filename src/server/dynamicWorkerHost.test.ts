@@ -57,15 +57,20 @@ const WORKER_BUNDLE = `export default {
 };`;
 
 function workerBuild(bundle = WORKER_BUNDLE, ev = "ev-1"): BuildResult {
+  const buildKey = `build:workers/echo:${ev}`;
   return {
     dir: "/tmp/test-build",
+    buildKey,
     sourceStateHash: "state:test",
     metadata: {
       kind: "worker",
       name: "workers/echo",
+      buildKey,
+      sourcePath: "workers/echo",
       ev,
       sourceStateHash: "state:test",
       sourcemap: false,
+      authority: { requests: [], delegations: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -141,6 +146,9 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
       stateHash: ref?.startsWith("state:") ? ref : "state:test",
       effectiveVersion: currentBuild.value.metadata.ev,
       buildKey: `build:${unitPath}:${currentBuild.value.metadata.ev}`,
+      executionDigest: "a".repeat(64),
+      authorityRequests: [],
+      authorityDelegations: [],
     }),
     getBuildByKey: () => currentBuild.value,
     getManifestRoutes: () => [],

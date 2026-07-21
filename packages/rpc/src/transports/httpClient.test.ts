@@ -20,6 +20,35 @@ function requestEnvelope(): RpcEnvelope {
 }
 
 describe("httpClientTransport", () => {
+  it("binds unary cancellation to the original HTTP request without retrying it", async () => {
+    let observedSignal: AbortSignal | null = null;
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        observedSignal = init?.signal ?? null;
+        return await new Promise<Response>((_resolve, reject) => {
+          observedSignal?.addEventListener("abort", () => reject(observedSignal?.reason), {
+            once: true,
+          });
+        });
+      }
+    ) as unknown as typeof fetch;
+    const transport = httpClientTransport({
+      selfId: "worker:agent",
+      serverUrl: "http://127.0.0.1:65530",
+      authToken: "token",
+      fetch: fetchMock,
+    });
+    const controller = new AbortController();
+    const pending = transport.send(requestEnvelope(), controller.signal);
+    const reason = new Error("caller released activation");
+
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(observedSignal).toBe(controller.signal);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("annotates fetch failures with the RPC endpoint and low-level cause", async () => {
     const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:65530"), {
       code: "ECONNREFUSED",
@@ -94,11 +123,15 @@ describe("httpClientTransport", () => {
       await settled;
 
       await transport.send(
-        responseEnvelopeFor(inbound, { callerId: "do:notes:Bucket:key", callerKind: "do" }, {
-          type: "response",
-          requestId: "req-1",
-          result: "late",
-        })
+        responseEnvelopeFor(
+          inbound,
+          { callerId: "do:notes:Bucket:key", callerKind: "do" },
+          {
+            type: "response",
+            requestId: "req-1",
+            result: "late",
+          }
+        )
       );
 
       expect(fetchMock).not.toHaveBeenCalled();

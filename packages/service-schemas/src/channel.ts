@@ -73,7 +73,10 @@ export async function* readChannelSubscriptionRecords<TResult = unknown, TMessag
   response: Response
 ): AsyncGenerator<ChannelSubscriptionRecord<TResult, TMessage>, void, void> {
   if (!response.ok) {
-    throw new Error(`Channel subscription failed with HTTP ${response.status}`);
+    const detail = (await response.text()).trim().slice(0, 4096);
+    throw new Error(
+      `Channel subscription failed with HTTP ${response.status}${detail ? `: ${detail}` : ""}`
+    );
   }
   if (!response.body) throw new Error("Channel subscription returned no response body");
 

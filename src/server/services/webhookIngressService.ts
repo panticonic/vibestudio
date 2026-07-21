@@ -587,7 +587,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   const definition: ServiceDefinition = {
     name: "webhookIngress",
     description: "Generic public webhook ingress subscriptions",
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
+    authority: { principals: ["user", "host", "code"] },
     methods: webhookIngressMethods,
     handler: defineServiceHandler("webhookIngress", webhookIngressMethods, {
       createSubscription: (ctx, [input]) => createSubscription(ctx, input),

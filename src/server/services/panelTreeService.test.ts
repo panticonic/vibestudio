@@ -90,14 +90,10 @@ function treeDeps(overrides: Partial<PanelTreeServiceDeps> = {}): PanelTreeServi
 }
 
 describe("panelTreeService", () => {
-  it("is exposed to userland runtimes and trusted shell/server hosts", () => {
+  it("declares compositional authority for code, users, and the trusted host", () => {
     const service = createPanelTreeService(treeDeps({ approvalQueue: approvalQueueMock("deny") }));
 
-    // Authorized chrome is trusted by capability. Runtime callers are admitted
-    // but scoped by the context-boundary gate unless they hold chrome trust.
-    expect(service.policy).toEqual({
-      allowed: ["panel", "worker", "do", "shell", "server", "app"],
-    });
+    expect(service.authority).toEqual({ principals: ["code", "user", "host"] });
   });
 
   it("delegates open list operations without approval", async () => {
@@ -355,7 +351,7 @@ describe("panelTreeService", () => {
         "panels/child",
         { parentId: "parent", contextId: "ctx-foreign" },
       ])
-    ).rejects.toThrow("is another agent or panel's existing state");
+    ).rejects.toThrow("another existing workspace branch");
 
     // The gate runs before bridge mutation: only the metadata probe ran.
     expect(bridge).toHaveBeenCalledTimes(1);
@@ -407,7 +403,7 @@ describe("panelTreeService", () => {
 
     await expect(
       service.handler(ctx(), "setStateArgs", ["target", { mode: "edit" }])
-    ).rejects.toThrow("is another agent or panel's existing state");
+    ).rejects.toThrow("another existing workspace branch");
 
     expect(bridge).toHaveBeenCalledTimes(1);
     expect(bridge).toHaveBeenCalledWith(
@@ -451,6 +447,30 @@ describe("panelTreeService", () => {
       method: "setStateArgs",
       args: ["requester-slot", { mode: "edit" }],
     });
+  });
+
+  it("reserves contextId for panel lifecycle options instead of application state", async () => {
+    const bridge = vi.fn();
+    const service = createPanelTreeService(treeDeps({ bridge }));
+
+    await expect(
+      service.handler(ctx(), "setStateArgs", ["requester-slot", { contextId: "ctx-other" }])
+    ).rejects.toThrow(/stateArgs\.contextId cannot select a workspace branch/);
+    await expect(
+      service.handler(ctx(), "create", [
+        "panels/chat",
+        { contextId: "ctx-other", stateArgs: { contextId: "ctx-other" } },
+      ])
+    ).rejects.toThrow(/stateArgs\.contextId cannot select a workspace branch/);
+    await expect(
+      service.handler(ctx(), "navigate", [
+        "requester-slot",
+        "panels/chat",
+        { contextId: "ctx-other", stateArgs: { contextId: "ctx-other" } },
+      ])
+    ).rejects.toThrow(/stateArgs\.contextId cannot select a workspace branch/);
+
+    expect(bridge).not.toHaveBeenCalled();
   });
 
   it("does not prompt when a panel navigates into a fresh context", async () => {

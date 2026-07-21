@@ -16,9 +16,8 @@ import { pushMethods } from "@vibestudio/service-schemas/push";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
-  assertCanonicalSqliteSchema,
-  initializeCanonicalSqliteSchema,
-  isTrulyEmptySqliteDatabase,
+  openCanonicalSqliteDatabase,
+  type CanonicalSqliteMigrationPlan,
   type CanonicalSqliteSchema,
 } from "@vibestudio/sqlite";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
@@ -135,6 +134,12 @@ const PUSH_DATABASE_SCHEMA: CanonicalSqliteSchema = {
   ],
 };
 
+/** Version 1 is the first production baseline; future changes append migrations here. */
+const PUSH_DATABASE_MIGRATION_PLAN: CanonicalSqliteMigrationPlan = {
+  current: PUSH_DATABASE_SCHEMA,
+  migrations: [],
+};
+
 function getPushDatabasePath(): string {
   return path.join(getCentralDataPath(), "server-auth", "push.db");
 }
@@ -157,15 +162,9 @@ class PushRegistrationStore {
     this.db = new DatabaseSync(databasePath);
     this.db.exec("PRAGMA busy_timeout = 5000");
     try {
-      if (isTrulyEmptySqliteDatabase(this.db)) {
-        initializeCanonicalSqliteSchema(this.db, PUSH_DATABASE_SCHEMA);
-      } else {
-        assertCanonicalSqliteSchema(
-          this.db,
-          PUSH_DATABASE_SCHEMA,
-          `push schema in ${databasePath}`
-        );
-      }
+      openCanonicalSqliteDatabase(this.db, PUSH_DATABASE_MIGRATION_PLAN, {
+        description: `push schema in ${databasePath}`,
+      });
       this.db.exec("PRAGMA journal_mode = WAL");
     } catch (error) {
       this.db.close();
@@ -524,7 +523,7 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
   const definition: ServiceDefinition = {
     name: "push",
     description: "Push notification device registration and delivery",
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: pushMethods,
     handler: defineServiceHandler("push", pushMethods, {
       register: (ctx, [opts]) => {

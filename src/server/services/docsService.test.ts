@@ -13,7 +13,7 @@ import { createDocsService } from "./docsService.js";
 const blobstore: ServiceDefinition = {
   name: "blobstore",
   description: "Content-addressable blob storage",
-  policy: { allowed: ["panel", "worker", "do", "server"] },
+  authority: { principals: ["code", "host"] },
   methods: {
     putText: {
       description: "Store a UTF-8 string and return its digest",
@@ -23,7 +23,7 @@ const blobstore: ServiceDefinition = {
     "admin.wipe": {
       description: "Delete everything",
       args: z.tuple([]),
-      policy: { allowed: ["server"] },
+      authority: { principals: ["host"] },
     },
     internalTransport: {
       description: "Internal transport that has a higher-level runtime API",
@@ -36,9 +36,9 @@ const blobstore: ServiceDefinition = {
 
 const dispatcher = {
   getServiceDefinitions: () => [blobstore],
-  getPolicy: (service: string) => (service === blobstore.name ? blobstore.policy : undefined),
+  getPolicy: (service: string) => (service === blobstore.name ? blobstore.authority : undefined),
   getMethodPolicy: (service: string, method: string) =>
-    service === blobstore.name ? blobstore.methods[method]?.policy : undefined,
+    service === blobstore.name ? blobstore.methods[method]?.authority : undefined,
 } as unknown as ServiceDispatcher;
 const emptySurface = (target: "panel" | "workerRuntime"): RuntimeSurface => ({
   target,

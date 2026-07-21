@@ -66,7 +66,7 @@ export function createWorkerLogService(deps: WorkerLogServiceDeps = {}): Service
     name: "workerLog",
     description:
       "Forward DO console output to the server terminal and the workspace-unit log stream",
-    policy: { allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: workerLogMethods,
     handler: defineServiceHandler("workerLog", workerLogMethods, {
       write: (ctx, [level, message, fields]) => {

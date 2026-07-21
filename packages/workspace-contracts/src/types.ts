@@ -167,24 +167,6 @@ export interface InitPanelEntry {
 export type PanelRestorePolicy = "focused" | "none";
 
 /**
- * Caller kinds permitted in workspace `services[].policy.allowed`.
- * Kept inline (rather than re-imported from serviceDispatcher) so this types
- * file stays free of runtime-side dependencies.
- */
-export type WorkspaceServiceCallerKind =
-  | "panel"
-  | "app"
-  | "shell"
-  | "server"
-  | "worker"
-  | "do"
-  | "agent"
-  | "system"
-  | "user"
-  | "external"
-  | "extension";
-
-/**
  * A stable Durable Object singleton declared in `workspace/meta/vibestudio.yml`.
  * Every workspace `services[]` / `routes[]` entry that targets a DO class must
  * resolve to one of these via `(source, className)`.
@@ -207,7 +189,7 @@ export type WorkspaceServiceDecl = {
   title?: string;
   description?: string;
   protocols?: string[];
-  policy?: { allowed?: WorkspaceServiceCallerKind[] };
+  authority: { principals: ("host" | "user" | "device" | "code" | "entity")[] };
 } & (
   | { durableObject: { className: string }; worker?: never }
   | { worker: { routePath: string }; durableObject?: never }
@@ -498,7 +480,7 @@ export interface Workspace {
   panelsPath: string;
   /** Absolute path to packages directory (source/packages) */
   packagesPath: string;
-  /** Absolute path to the current destructive-epoch context projection root. */
+  /** Absolute path to the current disposable context-projection cache namespace. */
   contextProjectionsPath: string;
   /** Absolute path to cache directory (state/.cache) */
   cachePath: string;

@@ -19,7 +19,7 @@ import {
   type CloneContextResult,
 } from "@vibestudio/service-schemas/runtime";
 import type { ContextEdge, ContextEdgeKind } from "@vibestudio/shared/runtime/contextEdges";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type {
   LifecyclePrepareInput,
@@ -43,8 +43,12 @@ import {
   type ContextBoundaryAction,
   type ContextBoundaryDeps,
 } from "./contextBoundary.js";
+import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import { requireActiveExecutionIdentity } from "../runtimeExecutionIdentity.js";
 
 export interface RuntimeEntityHooks {
+  /** Immutable authority facts sealed into the selected build artifact. */
+
   /** Prepare runtime resources for a "do" entity. Returns targetId + effectiveVersion. */
   prepareDurableObject: (args: {
     source: string;
@@ -53,7 +57,7 @@ export interface RuntimeEntityHooks {
     key: string;
     contextId: string;
     stateArgs?: unknown;
-  }) => Promise<{ targetId: string; effectiveVersion: string }>;
+  }) => Promise<PreparedRuntimeExecution & { targetId: string }>;
 
   /** Prepare runtime resources for a "worker" entity. */
   prepareWorker: (args: {
@@ -66,19 +70,21 @@ export interface RuntimeEntityHooks {
     /** Launch parent (the verified caller) → worker `PARENT_*` env, so the
      *  worker's `parent` resolves from the same source as `EntityRecord.parentId`. */
     parent?: { parentId: string; parentEntityId: string; parentKind?: "panel" | "worker" | "do" };
-  }) => Promise<{ targetId: string; effectiveVersion: string }>;
+  }) => Promise<PreparedRuntimeExecution & { targetId: string }>;
 
   /** Start the lazy runtime image for a panel entity and resolve its EV. */
   preparePanel: (args: {
     source: string;
     ref: string | undefined;
-  }) => Promise<{ effectiveVersion: string }>;
+    /** Reattach an existing incarnation to its already-selected immutable artifact. */
+    buildKey?: string;
+  }) => Promise<PreparedRuntimeExecution>;
 
-  /** Resolve effective version for "app" entities (no runtime prep). */
-  resolveAppEffectiveVersion: (args: {
+  /** Resolve the exact immutable build for an app entity (no runtime prep). */
+  resolveAppExecution: (args: {
     source: string;
     ref: string | undefined;
-  }) => Promise<string>;
+  }) => Promise<PreparedRuntimeExecution>;
 
   /** Cleanup hooks invoked on retire — closed at bootstrap. */
   onRetire: (record: EntityRecord) => Promise<void>;
@@ -115,6 +121,14 @@ export interface RuntimeEntityHooks {
     className: string;
     key: string;
   }) => Promise<void>;
+}
+
+export interface PreparedRuntimeExecution {
+  effectiveVersion: string;
+  buildKey?: string;
+  executionDigest?: string;
+  authorityRequests?: readonly import("@vibestudio/rpc").CapabilityScope[];
+  authorityDelegations?: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
 }
 
 /** Disposable host projection directories for semantic contexts. */
@@ -206,7 +220,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   async function gateContextLaunch(
     caller: VerifiedCaller,
     targetContextId: string,
-    action: ContextBoundaryAction
+    action: ContextBoundaryAction,
+    originContextIdOverride?: string | null
   ): Promise<void> {
     // Panel-tree bridge calls retain the initiating entity id for durable
     // lineage while using the server caller kind. They are already gated at
@@ -217,7 +232,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     ) {
       return;
     }
-    const originContextId = await store.resolveContext(caller.runtime.id);
+    const originContextId =
+      originContextIdOverride === undefined
+        ? await store.resolveContext(caller.runtime.id)
+        : originContextIdOverride;
     if (await callerOwnsLifecycleContext(caller, originContextId, targetContextId)) return;
     const result = await requireContextBoundaryPermission(deps.contextBoundary, {
       subjectCaller: caller,
@@ -397,6 +415,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
 
     let canonicalId: string;
     let effectiveVersion: string;
+    let buildKey: string | undefined;
+    let executionDigest: string | undefined;
+    let activeAuthority: UnitAuthorityManifest | undefined;
     let targetId: string;
     let existing: EntityRecord | null = null;
 
@@ -420,6 +441,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         existing?.status === "retired"
           ? existing.source.effectiveVersion
           : prepared.effectiveVersion;
+      buildKey = prepared.buildKey;
+      ({ activeExecutionDigest: executionDigest, activeAuthority } = requireActiveExecutionIdentity(
+        prepared,
+        `Durable Object ${canonicalId}`
+      ));
       targetId = prepared.targetId;
     } else if (spec.kind === "worker") {
       canonicalId = canonicalEntityId({ kind: "worker", source: spec.source, key });
@@ -447,16 +473,28 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         existing?.status === "retired"
           ? existing.source.effectiveVersion
           : prepared.effectiveVersion;
+      buildKey = prepared.buildKey;
+      ({ activeExecutionDigest: executionDigest, activeAuthority } = requireActiveExecutionIdentity(
+        prepared,
+        `worker ${canonicalId}`
+      ));
       targetId = prepared.targetId;
     } else if (spec.kind === "app") {
       canonicalId = canonicalEntityId({ kind: "app", source: spec.source, key });
       existing = await store.resolveRecord(canonicalId);
-      const resolvedVersion = await deps.hooks.resolveAppEffectiveVersion({
+      const prepared = await deps.hooks.resolveAppExecution({
         source: spec.source,
         ref: spec.ref,
       });
       effectiveVersion =
-        existing?.status === "retired" ? existing.source.effectiveVersion : resolvedVersion;
+        existing?.status === "retired"
+          ? existing.source.effectiveVersion
+          : prepared.effectiveVersion;
+      buildKey = prepared.buildKey;
+      ({ activeExecutionDigest: executionDigest, activeAuthority } = requireActiveExecutionIdentity(
+        prepared,
+        `app ${canonicalId}`
+      ));
       targetId = canonicalId;
     } else if (spec.kind === "session") {
       canonicalId = canonicalEntityId({ kind: "session", key });
@@ -480,11 +518,31 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       const prepared = await deps.hooks.preparePanel({
         source: spec.source,
         ref: spec.ref,
+        ...(existing?.activeBuildKey ? { buildKey: existing.activeBuildKey } : {}),
       });
+      if (
+        existing &&
+        !existing.activeBuildKey &&
+        prepared.effectiveVersion !== existing.source.effectiveVersion
+      ) {
+        throw new Error(
+          `Cannot reactivate legacy panel ${canonicalId}: its immutable build key is unknown and current source resolves to a different effective version`
+        );
+      }
       effectiveVersion =
         existing?.status === "retired"
           ? existing.source.effectiveVersion
           : prepared.effectiveVersion;
+      if (!prepared.buildKey || !/^[0-9a-f]{64}$/.test(prepared.buildKey)) {
+        throw new Error(
+          `Panel ${canonicalId} preparation did not select an immutable BuildV2 artifact`
+        );
+      }
+      buildKey = prepared.buildKey;
+      ({ activeExecutionDigest: executionDigest, activeAuthority } = requireActiveExecutionIdentity(
+        prepared,
+        `panel ${canonicalId}`
+      ));
       targetId = canonicalId;
     }
 
@@ -502,6 +560,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     const activateInput = {
       kind: spec.kind,
       source: { repoPath: spec.source, effectiveVersion },
+      activeBuildKey: buildKey,
+      activeExecutionDigest: executionDigest,
+      activeAuthority,
       contextId,
       className: spec.kind === "do" ? spec.className : undefined,
       key,
@@ -533,6 +594,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       id: record.id,
       kind: spec.kind,
       source: record.source,
+      ...(record.activeBuildKey ? { buildKey: record.activeBuildKey } : {}),
+      ...(record.activeExecutionDigest ? { executionDigest: record.activeExecutionDigest } : {}),
+      ...(record.activeAuthority
+        ? {
+            authorityRequests: record.activeAuthority.requests,
+            authorityDelegations: record.activeAuthority.delegations,
+          }
+        : {}),
       contextId: record.contextId,
       targetId,
     };
@@ -544,18 +613,36 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
    * frontier and provenance timeline.
    */
   async function createContext(
-    caller: VerifiedCaller,
+    ctx: ServiceContext,
     args: { contextId?: string }
   ): Promise<WorkspaceContext> {
+    const caller = ctx.caller;
+    const delegatedOwnerContextId =
+      caller.runtime.kind === "extension" && ctx.chainCaller
+        ? await store.resolveContext(ctx.chainCaller.callerId)
+        : undefined;
     // Reusing a named foreign context is gated because it joins an existing
     // semantic timeline; a fresh/omitted context id is isolated.
     if (args.contextId != null && args.contextId !== "") {
-      await gateContextLaunch(caller, args.contextId, { kind: "runtime", verb: "Set up context" });
+      await gateContextLaunch(
+        caller,
+        args.contextId,
+        { kind: "runtime", verb: "Set up context" },
+        delegatedOwnerContextId
+      );
     }
     const contextId = args.contextId ?? randomUUID();
     const context = await setUpContext(contextId);
     await deps.contextFolders.ensureContextFolder(contextId);
-    const ownerContextId = await store.resolveContext(caller.runtime.id);
+    // An extension call is delegated work: the upstream verified code context
+    // owns any lifecycle context created for that request, while the extension
+    // runtime remains the exact creating entity. Without this edge an
+    // extension that has no context of its own creates an orphan context that
+    // neither side can subsequently read or mutate.
+    const ownerContextId =
+      delegatedOwnerContextId === undefined
+        ? await store.resolveContext(caller.runtime.id)
+        : delegatedOwnerContextId;
     if (ownerContextId && ownerContextId !== contextId) {
       await store.recordContextEdge({
         contextId,
@@ -1088,7 +1175,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   return {
     name: "runtime",
     description: "Runtime entity creation and retirement",
-    policy: { allowed: ["panel", "app", "shell", "server", "worker", "do", "extension"] },
+    authority: { principals: ["code", "user", "host"] },
     methods: runtimeMethods,
     handler: defineServiceHandler("runtime", runtimeMethods, {
       createEntity: (ctx, [spec]) => createEntity(ctx.caller, spec),
@@ -1097,7 +1184,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       },
       listEntities: (_ctx, [input]) => listEntities(input?.kind),
       resolveContext: (_ctx, [id]) => resolveContext(id),
-      createContext: (ctx, [{ contextId }]) => createContext(ctx.caller, { contextId }),
+      createContext: (ctx, [{ contextId }]) => createContext(ctx, { contextId }),
       cloneContext: (ctx, [cloneArgs]) => cloneContext(ctx.caller, cloneArgs),
       destroyContext: async (ctx, [{ contextId, recursive }]) => {
         await destroyContext(ctx.caller, { contextId, recursive });
@@ -1108,10 +1195,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       },
       createSubagentContext: (ctx, [subArgs]) => createSubagentContext(ctx.caller, subArgs),
       setTitle: async (ctx, [title, options]) => {
-        // Access is enforced by the per-method policy on `runtimeMethods.setTitle`
-        // (allowed: panel/app/worker/do), checked by the dispatcher before this
-        // handler runs. We deliberately do NOT re-gate caller kind here — declared
-        // policy == enforced, with a single source of truth (no handler-side narrowing).
+        // The method's code-principal authority declaration is the single gate:
+        // view/worker code may title its own runtime, while host callers cannot.
+        // The handler deliberately does not duplicate that authority decision.
         await deps.setEntityTitle?.(ctx.caller.runtime.id, title == null ? undefined : title, {
           explicit: options?.explicit === true,
         });

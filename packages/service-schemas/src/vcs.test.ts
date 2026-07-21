@@ -14,6 +14,7 @@ import {
   vcsChangeSchema,
   vcsCommitInputSchema,
   vcsCompareInputSchema,
+  vcsCompareResultSchema,
   vcsCopyInputSchema,
   vcsDiscardInputSchema,
   vcsEditInputSchema,
@@ -43,6 +44,7 @@ import {
   vcsStateNodeRefSchema,
   vcsStatusResultSchema,
   vcsWorkApplicationSchema,
+  vcsWorkingMutationResultSchema,
   vcsWorkUnitSchema,
 } from "./vcs.js";
 
@@ -53,6 +55,27 @@ const commonMutation = {
   contextId: "context:1",
   expectedWorkingHead: event,
 };
+
+const workingMutationResult = {
+  commandId: "command:1",
+  contextId: "context:1",
+  workUnitId: "work:1",
+  applicationId: "application:1",
+  changeCount: 1,
+  changeIds: ["change:1"],
+  incorporatedChangeCount: 0,
+  incorporatedChangeIds: [],
+  decisionIds: [],
+  workingHead: application,
+};
+
+describe("working mutation results", () => {
+  it("accepts the decision accounting returned by the semantic workspace", () => {
+    expect(vcsWorkingMutationResultSchema.parse(workingMutationResult)).toEqual(
+      workingMutationResult
+    );
+  });
+});
 
 const expectedMethods = [
   "blame",
@@ -752,6 +775,32 @@ describe("walkable bounded reads", () => {
     ).toBe(false);
   });
 
+  it("exposes one unambiguous integration-resolution gate", () => {
+    const result = {
+      target: application,
+      sourceEventId: "event:source",
+      resolution: { complete: true, remainingChangeCount: 0 },
+      counts: {
+        shared: 1,
+        alreadySatisfied: 0,
+        actionable: 0,
+        conflicting: 0,
+        blocked: 0,
+        accounted: 0,
+        historical: 0,
+      },
+      changes: [],
+      nextCursor: null,
+    };
+    expect(vcsCompareResultSchema.parse(result)).toEqual(result);
+    expect(
+      vcsCompareResultSchema.safeParse({
+        ...result,
+        resolution: { complete: true, remainingChangeCount: 1 },
+      }).success
+    ).toBe(false);
+  });
+
   it("keeps inspect and neighbors broad while history accepts only meaningful roots", () => {
     const roots = [
       { kind: "event", eventId: "event:1" },
@@ -978,11 +1027,38 @@ describe("walkable bounded reads", () => {
         range: { ...blame.range, coordinateKind: "utf16" },
       }).success
     ).toBe(false);
+    const result = {
+      state: event,
+      fileId: "file:1",
+      coordinateKind: "utf16" as const,
+      spans: [
+        {
+          start: 0,
+          end: 5,
+          change: { kind: "change" as const, changeId: "change:1" },
+          appliedChange: {
+            kind: "applied-change" as const,
+            appliedChangeId: "applied-change:1",
+          },
+          workUnit: { kind: "work-unit" as const, workUnitId: "work-unit:1" },
+          command: { kind: "command" as const, commandId: "command:1" },
+          path: [],
+          stop: "authored" as const,
+        },
+      ],
+      nextCursor: null,
+    };
+    const parsed = vcsBlameResultSchema.parse(result);
+    expect(parsed.coordinateKind).toBe("utf16");
+    expect(parsed.spans[0]).toMatchObject({
+      change: result.spans[0]!.change,
+      appliedChange: result.spans[0]!.appliedChange,
+      workUnit: result.spans[0]!.workUnit,
+      command: result.spans[0]!.command,
+    });
     expect(
-      vcsBlameResultSchema.parse({
-        state: event,
-        fileId: "file:1",
-        coordinateKind: "utf16",
+      vcsBlameResultSchema.safeParse({
+        ...result,
         spans: [
           {
             start: 0,
@@ -995,9 +1071,8 @@ describe("walkable bounded reads", () => {
             stop: "authored",
           },
         ],
-        nextCursor: null,
-      }).coordinateKind
-    ).toBe("utf16");
+      }).success
+    ).toBe(false);
     expect(
       vcsReadFileInputSchema.parse({
         state: event,

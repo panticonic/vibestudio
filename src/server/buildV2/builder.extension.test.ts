@@ -11,6 +11,7 @@ beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
 import { primaryTextArtifactContent } from "./buildStore.js";
 import { discoverPackageGraph } from "./packageGraph.js";
+import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 
 function git(cwd: string, args: string[]): void {
   execFileSync("git", args, {
@@ -81,7 +82,7 @@ describe("buildUnit extension builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const node = graph.get("@workspace-extensions/hello");
-    const result = await buildUnit(node, "ev-extension-test", graph, workspaceRoot, "state:test");
+    const result = await buildUnit(node, "a".repeat(64), graph, workspaceRoot, "state:test");
 
     expect(result.metadata).toMatchObject({
       kind: "extension",
@@ -90,10 +91,23 @@ describe("buildUnit extension builds", () => {
       details: {
         kind: "extension",
         runtimeDepsKey: null,
-        runtimeAbi: "3",
+        runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
         providerContracts: {
           gitInterop: { methods: ["ping"] },
         },
+      },
+      authority: {
+        requests: [
+          {
+            capability: "service:extensions.health",
+            resource: { kind: "prefix", prefix: "" },
+          },
+          {
+            capability: "service:extensions.ready",
+            resource: { kind: "prefix", prefix: "" },
+          },
+        ],
+        delegations: [],
       },
     });
     expect(fs.readFileSync(path.join(result.dir, "package.json"), "utf8")).toBe(
@@ -156,13 +170,7 @@ describe("buildUnit extension builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const node = graph.get("@workspace-extensions/cjs-extension");
-    const result = await buildUnit(
-      node,
-      "ev-extension-cjs-test",
-      graph,
-      workspaceRoot,
-      "state:test"
-    );
+    const result = await buildUnit(node, "b".repeat(64), graph, workspaceRoot, "state:test");
     const mod = await import(`file://${path.join(result.dir, "bundle.js")}`);
     const api = await mod.activate();
 

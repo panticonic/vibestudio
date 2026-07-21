@@ -3,6 +3,7 @@ import {
   SingletonRegistry,
   type WorkspaceDeclarations,
 } from "@vibestudio/workspace/singletonRegistry";
+import { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibestudio/shared/workspaceServiceRpc";
 import { resolveWorkspaceService } from "./workspaceServices.js";
 
 function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {
@@ -18,7 +19,7 @@ function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {
         source: "workers/example-store",
         name: "channel",
         protocols: ["example.store.v1"],
-        policy: { allowed: ["panel", "shell", "server", "worker", "extension"] },
+        authority: { principals: ["code", "user", "host"] },
         durableObject: { className: "ExampleStoreDO" },
       },
     ],
@@ -84,13 +85,23 @@ describe("sealed semantic control-plane services", () => {
     );
   });
 
-  it("resolves the GAD graph through the same sealed object", () => {
-    expect(resolveWorkspaceService(empty, "vibestudio.gad.workspace.v1")).toMatchObject({
+  it("resolves the GAD graph as the sealed workspace service authority", () => {
+    const expected = {
+      kind: "durable-object",
+      origin: "product",
+      name: "gad.workspace",
       title: "GAD workspace graph",
+      description: "Product-sealed semantic workspace authority",
+      protocols: [GAD_WORKSPACE_SERVICE_PROTOCOL],
       source: "vibestudio/internal",
+      authority: { principals: ["host", "user", "code"] },
       className: "GadWorkspaceDO",
       objectKey: "workspace-semantic-control-plane",
-    });
+      targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+    };
+
+    expect(resolveWorkspaceService(empty, GAD_WORKSPACE_SERVICE_PROTOCOL)).toEqual(expected);
+    expect(resolveWorkspaceService(empty, "gad.workspace")).toEqual(expected);
   });
 
   it("does not permit fan-out object keys for the control plane", () => {

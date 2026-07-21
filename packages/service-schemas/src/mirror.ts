@@ -12,12 +12,12 @@
 
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import type { ServicePolicy } from "@vibestudio/shared/servicePolicy";
+import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 
 /** shell + agent are the remote-mirror drivers; `do` keeps the agent⊆do
  *  invariant; server/panel for host-side tooling and tests. */
-export const MIRROR_POLICY: ServicePolicy = {
-  allowed: ["shell", "agent", "do", "server", "panel"],
+export const MIRROR_POLICY: ServiceAuthorityPolicy = {
+  principals: ["user", "entity", "code", "host"],
 };
 
 export const mirrorTargetSchema = z
@@ -69,7 +69,7 @@ export const mirrorMethods = defineServiceMethods({
     returns: z.array(mirrorTargetSchema),
     description:
       "Return repository content projections for a context's exact working head. Each {repoPath,stateHash} is a content-only projector target, never ancestry or a semantic revision. Stream its immutable tree through `objects`.",
-    policy: MIRROR_POLICY,
+    authority: MIRROR_POLICY,
     access: { sensitivity: "read" },
   },
   objects: {
@@ -77,7 +77,7 @@ export const mirrorMethods = defineServiceMethods({
     returns: mirrorObjectsResultSchema,
     description:
       "Stream one content-only repository tree as bounded pages of {path,mode,content,size}. Agent callers may read only states currently reachable from their host-bound context; no prior `targets` call is required. A stateHash never grants workspace history or provenance. Page with `next` until absent and optionally restrict to paths.",
-    policy: MIRROR_POLICY,
+    authority: MIRROR_POLICY,
     access: { sensitivity: "read" },
   },
 });

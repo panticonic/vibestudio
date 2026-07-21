@@ -1,5 +1,6 @@
 import {
   bridgeStreamSurfaceOf,
+  openBridgeStream,
   openBridgeUploadStream,
   rpcErrorDataOf,
   rpcErrorKindOf,
@@ -195,8 +196,13 @@ export function createPanelTransport(): EnvelopeRpcTransport {
   // for requests WITH a body — body-less streams keep the duplex envelope path
   // byte-identical. Without the surface, a body throws loudly in the client
   // core ("uploads require the WebRTC transport").
-  const uploadSurface = bridgeStreamSurfaceOf(shell);
-  if (uploadSurface) {
+  const streamSurface = bridgeStreamSurfaceOf(shell);
+  if (streamSurface) {
+    // The bridge's host owns the panel-principal session and its first-class
+    // stream plane. Use that plane for body-less subscriptions as well as
+    // uploads; plain envelope relays cannot carry the WebRTC response stream.
+    transport.stream = (envelope, signal, body) =>
+      openBridgeStream(streamSurface, envelope, signal ?? null, body ?? null);
     transport.streamBody = (envelope, signal, body) => {
       if (!body) {
         return Promise.reject(
@@ -205,7 +211,7 @@ export function createPanelTransport(): EnvelopeRpcTransport {
           )
         );
       }
-      return openBridgeUploadStream(uploadSurface, envelope, signal ?? null, body);
+      return openBridgeUploadStream(streamSurface, envelope, signal ?? null, body);
     };
   }
 

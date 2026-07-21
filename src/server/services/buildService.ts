@@ -16,7 +16,7 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
   return {
     name: "build",
     description: "Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)",
-    policy: { allowed: ["panel", "app", "shell", "server", "worker", "do", "extension"] },
+    authority: { principals: ["code", "user", "host"] },
     methods: buildMethods,
     handler: defineServiceHandler("build", buildMethods, {
       getBuild: (_ctx, [unit, ref, options]) => {

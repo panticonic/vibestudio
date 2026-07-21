@@ -55,7 +55,7 @@ export function createAccountService(deps: {
   return {
     name: "account",
     description: "Read-only live account profiles for this workspace",
-    policy: { allowed: ["server", "shell", "app", "panel"] },
+    authority: { principals: ["host", "user", "code"] },
     methods: accountMethods,
     handler: defineServiceHandler("account", accountMethods, {
       getProfile: (ctx, [requested]) => {

@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { stateLayout } from "./stateLayout.js";
+import {
+  parseUnitAuthorityManifest,
+  type UnitAuthorityManifest,
+} from "@vibestudio/shared/authorityManifest";
 
 export interface RuntimeImageRecord {
   id: string;
@@ -8,6 +12,9 @@ export interface RuntimeImageRecord {
   unitName: string;
   stateHash: string;
   buildKey: string;
+  executionDigest: string;
+  authorityRequests: UnitAuthorityManifest["requests"];
+  authorityDelegations: UnitAuthorityManifest["delegations"];
   effectiveVersion: string;
   generation: number;
   error?: RuntimeImageRecordError;
@@ -22,7 +29,7 @@ export interface RuntimeImageRecordError {
 }
 
 interface RuntimeImageFile {
-  version: 1;
+  version: 3;
   records: RuntimeImageRecord[];
 }
 
@@ -85,7 +92,7 @@ export class RuntimeImageStore {
     if (!fs.existsSync(this.filePath)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf-8")) as RuntimeImageFile;
-      if (parsed.version !== 1 || !Array.isArray(parsed.records)) return;
+      if (parsed.version !== 3 || !Array.isArray(parsed.records)) return;
       for (const record of parsed.records) {
         if (
           typeof record.id === "string" &&
@@ -93,11 +100,23 @@ export class RuntimeImageStore {
           typeof record.unitName === "string" &&
           typeof record.stateHash === "string" &&
           typeof record.buildKey === "string" &&
+          /^[0-9a-f]{64}$/.test(record.executionDigest) &&
           typeof record.effectiveVersion === "string" &&
           typeof record.generation === "number" &&
           typeof record.updatedAt === "number"
         ) {
-          const normalized: RuntimeImageRecord = { ...record };
+          const authority = parseUnitAuthorityManifest(
+            {
+              requests: record.authorityRequests,
+              delegations: record.authorityDelegations,
+            },
+            `runtime image ${record.id} authority`
+          );
+          const normalized: RuntimeImageRecord = {
+            ...record,
+            authorityRequests: authority.requests,
+            authorityDelegations: authority.delegations,
+          };
           if (
             record.error &&
             (record.error.code !== "rebind_failed" ||
@@ -117,7 +136,7 @@ export class RuntimeImageStore {
   private persist(): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     const payload: RuntimeImageFile = {
-      version: 1,
+      version: 3,
       records: this.list().sort((a, b) => a.id.localeCompare(b.id)),
     };
     const tmp = `${this.filePath}.tmp.${process.pid}`;

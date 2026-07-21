@@ -380,7 +380,7 @@ export function createAuthService(deps: {
   const definition: ServiceDefinition = {
     name: "auth",
     description: "Gateway authentication bootstrap routes",
-    policy: { allowed: ["server", "shell"] },
+    authority: { principals: ["host", "user"] },
     methods: authMethods,
     handler: defineServiceHandler("auth", authMethods, {
       grantConnection: (ctx, [principalId]) => {

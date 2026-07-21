@@ -5,6 +5,7 @@ import {
   type RpcEnvelope,
   type RpcEvent,
   type RpcRequest,
+  type RpcRequestCancel,
 } from "@vibestudio/rpc";
 import type { AgentBinding } from "@vibestudio/identity/types";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
@@ -32,7 +33,8 @@ export interface HttpRpcHandlerDeps {
   handleRequest(
     caller: AuthenticatedHttpRpcCaller,
     envelope: RpcEnvelope,
-    message: RpcRequest
+    message: RpcRequest,
+    signal: AbortSignal
   ): Promise<unknown>;
   handleEvent(
     caller: AuthenticatedHttpRpcCaller,
@@ -50,13 +52,28 @@ export function resolveRpcMaxBodyBytes(raw: string | undefined): number {
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
+  if (res.destroyed || res.writableEnded) return;
   res.writeHead(status, JSON_HEADERS);
   res.end(JSON.stringify(body));
 }
 
 /** HTTP transport adapter for the server's canonical RPC dispatch callbacks. */
 export class HttpRpcHandler {
+  private readonly activeRequests = new Map<string, AbortController>();
+
   constructor(private readonly deps: HttpRpcHandlerDeps) {}
+
+  private requestKey(caller: AuthenticatedHttpRpcCaller, requestId: string): string {
+    return `${caller.callerKind}:${caller.callerId}\u0000${requestId}`;
+  }
+
+  private cancelRequest(caller: AuthenticatedHttpRpcCaller, message: RpcRequestCancel): boolean {
+    const key = this.requestKey(caller, message.requestId);
+    const active = this.activeRequests.get(key);
+    if (!active) return false;
+    active.abort(new Error("RPC call aborted by caller"));
+    return true;
+  }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === "POST" && req.url === "/rpc/stream") {
@@ -118,13 +135,43 @@ export class HttpRpcHandler {
       return;
     }
 
+    if (message.type === "request-cancel") {
+      if (this.cancelRequest(admission.caller, message)) {
+        writeJson(res, 200, {});
+      } else {
+        // HTTP request cancellation normally rides the original fetch's
+        // AbortSignal. A standalone cancel has no ordering relation to a
+        // request on another connection, so never retain speculative state or
+        // silently evict another cancellation: report that no active target
+        // exists.
+        writeJson(res, 409, { error: "RPC request is not active" });
+      }
+      return;
+    }
+
     if (message.type !== "request") {
       writeJson(res, 400, { error: `Unsupported /rpc message type: ${message.type}` });
       return;
     }
 
+    const requestKey = this.requestKey(admission.caller, message.requestId);
+    const abort = new AbortController();
+    const abortDisconnectedTransport = (): void => {
+      if (!abort.signal.aborted) {
+        abort.abort(new Error("HTTP RPC caller disconnected"));
+      }
+    };
+    req.once("aborted", abortDisconnectedTransport);
+    res.once("close", abortDisconnectedTransport);
+    this.activeRequests.set(requestKey, abort);
+    if (req.aborted) abortDisconnectedTransport();
     try {
-      const result = await this.deps.handleRequest(admission.caller, envelope, message);
+      const result = await this.deps.handleRequest(
+        admission.caller,
+        envelope,
+        message,
+        abort.signal
+      );
       if (isDeferredResult(result)) {
         writeJson(res, 200, { deferred: true, requestId: result.requestId });
         return;
@@ -159,6 +206,12 @@ export class HttpRpcHandler {
           ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
         })
       );
+    } finally {
+      req.removeListener("aborted", abortDisconnectedTransport);
+      res.removeListener("close", abortDisconnectedTransport);
+      if (this.activeRequests.get(requestKey) === abort) {
+        this.activeRequests.delete(requestKey);
+      }
     }
   }
 }

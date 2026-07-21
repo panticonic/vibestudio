@@ -1,5 +1,6 @@
 import { envelopeFromMessage, type RpcEnvelope } from "@vibestudio/rpc";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -23,9 +24,15 @@ function request(options: { body?: string; method?: string; url?: string }): Inc
   }) as IncomingMessage;
 }
 
-function response(): { res: ServerResponse; captured: CapturedResponse } {
+function response(): {
+  res: ServerResponse;
+  captured: CapturedResponse;
+  events: EventEmitter;
+} {
   const captured: CapturedResponse = { status: null, headers: null, body: "" };
-  const res = {
+  const events = new EventEmitter();
+  const res = Object.assign(events, {
+    writableEnded: false,
     writeHead(status: number, headers?: unknown) {
       captured.status = status;
       captured.headers = headers;
@@ -33,10 +40,11 @@ function response(): { res: ServerResponse; captured: CapturedResponse } {
     },
     end(body?: string | Buffer) {
       captured.body = body === undefined ? "" : body.toString();
+      this.writableEnded = true;
       return this;
     },
-  } as unknown as ServerResponse;
-  return { res, captured };
+  }) as unknown as ServerResponse;
+  return { res, captured, events };
 }
 
 function rpcEnvelope(): RpcEnvelope {
@@ -144,7 +152,8 @@ describe("HttpRpcHandler", () => {
     expect(configured.handleRequest).toHaveBeenCalledWith(
       { callerId: "worker:trusted", callerKind: "worker" },
       envelope,
-      envelope.message
+      envelope.message,
+      expect.any(AbortSignal)
     );
     expect(captured.status).toBe(200);
     expect(JSON.parse(captured.body)).toMatchObject({
@@ -154,6 +163,102 @@ describe("HttpRpcHandler", () => {
         result: { services: ["docs"] },
       },
     });
+  });
+
+  it("aborts the authenticated caller's matching in-flight unary request", async () => {
+    let observedAbort = false;
+    let resolveEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const configured = deps({
+      handleRequest: vi.fn(async (_caller, _envelope, _message, signal) => {
+        resolveEntered();
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => {
+            observedAbort = true;
+            resolve();
+          })
+        );
+        return null;
+      }),
+    });
+    const handler = new HttpRpcHandler(configured);
+    const pendingResponse = response();
+    const pending = handler.handle(
+      request({ body: JSON.stringify(rpcEnvelope()) }),
+      pendingResponse.res
+    );
+    await entered;
+
+    const cancelEnvelope: RpcEnvelope = {
+      ...rpcEnvelope(),
+      message: {
+        type: "request-cancel",
+        requestId: "request-1",
+        fromId: "forged-caller",
+      },
+    };
+    const cancelResponse = response();
+    await handler.handle(request({ body: JSON.stringify(cancelEnvelope) }), cancelResponse.res);
+    await pending;
+
+    expect(observedAbort).toBe(true);
+    expect(cancelResponse.captured.status).toBe(200);
+  });
+
+  it("rejects an unordered pre-admission cancellation without poisoning a future request", async () => {
+    const configured = deps({
+      handleRequest: vi.fn(async (_caller, _envelope, _message, signal) => signal.aborted),
+    });
+    const handler = new HttpRpcHandler(configured);
+    const cancelEnvelope: RpcEnvelope = {
+      ...rpcEnvelope(),
+      message: {
+        type: "request-cancel",
+        requestId: "request-1",
+        fromId: "forged-caller",
+      },
+    };
+    const cancelled = response();
+    await handler.handle(request({ body: JSON.stringify(cancelEnvelope) }), cancelled.res);
+    const admitted = response();
+
+    await handler.handle(request({ body: JSON.stringify(rpcEnvelope()) }), admitted.res);
+
+    expect(cancelled.captured.status).toBe(409);
+    expect(JSON.parse(cancelled.captured.body)).toEqual({ error: "RPC request is not active" });
+    expect(JSON.parse(admitted.captured.body).message.result).toBe(false);
+  });
+
+  it("aborts dispatch when the original HTTP response connection closes", async () => {
+    let observedReason: unknown;
+    let resolveEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const configured = deps({
+      handleRequest: vi.fn(async (_caller, _envelope, _message, signal) => {
+        resolveEntered();
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()));
+        observedReason = signal.reason;
+        return null;
+      }),
+    });
+    const handler = new HttpRpcHandler(configured);
+    const disconnected = response();
+    const pending = handler.handle(
+      request({ body: JSON.stringify(rpcEnvelope()) }),
+      disconnected.res
+    );
+    await entered;
+
+    Object.assign(disconnected.res, { destroyed: true });
+    disconnected.events.emit("close");
+    await pending;
+
+    expect(observedReason).toEqual(new Error("HTTP RPC caller disconnected"));
+    expect(disconnected.captured.body).toBe("");
   });
 });
 
