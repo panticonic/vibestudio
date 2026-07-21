@@ -39,6 +39,16 @@ import {
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import { CompositorRecovery } from "./compositorRecovery.js";
+import type { CapabilityScope } from "@vibestudio/rpc";
+import type { EvalAuthorityDelegation } from "@vibestudio/shared/authorityManifest";
+
+export interface HostedCodeIdentity {
+  source?: string;
+  effectiveVersion?: string | null;
+  executionDigest?: string | null;
+  requested?: readonly CapabilityScope[];
+  delegations?: readonly EvalAuthorityDelegation[];
+}
 
 const log = createDevLogger("ViewManager");
 
@@ -58,8 +68,6 @@ export interface ViewConfig {
   partition?: string;
   /** Preload script path. Set to null to disable preload (for browsers). */
   preload?: string | null;
-  /** Initial URL to load */
-  url?: string;
   /** Parent view ID (for nesting) */
   parentId?: string;
   /** Whether to inject host theme CSS */
@@ -69,7 +77,7 @@ export interface ViewConfig {
   /** Full-window host chrome app. These views are not panel content. */
   hostChrome?: boolean;
   /** Workspace source path and effective version for app principals. */
-  appIdentity?: { source?: string; effectiveVersion?: string | null };
+  codeIdentity?: HostedCodeIdentity;
 }
 
 interface PanelDisplayDiagnostics {
@@ -141,13 +149,27 @@ interface ManagedView {
   injectHostThemeVariables: boolean;
   appCapabilities: readonly AppCapability[];
   hostChrome: boolean;
-  appIdentity?: { source?: string; effectiveVersion?: string | null };
+  codeIdentity?: HostedCodeIdentity;
+  /** Latest requested main-frame target, retained after its load settles. */
+  desiredUrl?: string;
+  /** Monotonic ownership token for main-frame navigations of this view. */
+  navigationRevision: number;
+  /** One owned request for the current desired URL; identical callers share it. */
+  navigation?: { url: string; revision: number; promise: Promise<void> };
   themeCssKey?: string;
   /** Stored event handlers for proper cleanup */
   handlers?: {
     domReady: () => void;
     contextMenu: (event: Electron.Event, params: Electron.ContextMenuParams) => void;
     renderProcessGone: (event: Electron.Event, details: Electron.RenderProcessGoneDetails) => void;
+    consoleMessage: (event: Electron.Event<Electron.WebContentsConsoleMessageEventParams>) => void;
+    didFailLoad: (
+      event: Electron.Event,
+      errorCode: number,
+      errorDescription: string,
+      validatedURL: string,
+      isMainFrame: boolean
+    ) => void;
   };
 }
 
@@ -343,6 +365,7 @@ export class ViewManager {
       injectHostThemeVariables: false,
       appCapabilities: [],
       hostChrome: false,
+      navigationRevision: 0,
     });
     this.webContentsIdToViewId.set(this.shellView.webContents.id, "shell");
 
@@ -550,7 +573,7 @@ export class ViewManager {
     const hostChrome =
       config.type === "app" &&
       (config.hostChrome ?? false) &&
-      isAuthorizedChromeAppCaller(config.id, config.appIdentity?.source);
+      isAuthorizedChromeAppCaller(config.id, config.codeIdentity?.source);
 
     // Track the managed view
     const managed: ManagedView = {
@@ -564,19 +587,14 @@ export class ViewManager {
       injectHostThemeVariables: config.injectHostThemeVariables ?? true,
       appCapabilities: config.type === "app" ? [...(config.appCapabilities ?? [])] : [],
       hostChrome,
-      appIdentity: config.type === "app" ? config.appIdentity : undefined,
+      codeIdentity:
+        config.type === "app" || config.type === "panel" ? config.codeIdentity : undefined,
+      navigationRevision: 0,
     };
     this.views.set(config.id, managed);
     this.webContentsIdToViewId.set(view.webContents.id, config.id);
     if (hostChrome) this.installShellKeyForwarding(view.webContents);
-    log.verbose(
-      ` Created view for ${config.id}, type: ${config.type}, url: ${config.url?.slice(0, 80)}...`
-    );
-
-    // Load URL if provided
-    if (config.url) {
-      void view.webContents.loadURL(config.url);
-    }
+    log.verbose(` Created view for ${config.id}, type: ${config.type}`);
 
     // Create named handlers for proper cleanup in destroyView
     const handlers = {
@@ -607,6 +625,27 @@ export class ViewManager {
           }
         }
       },
+      consoleMessage: (event: Electron.Event<Electron.WebContentsConsoleMessageEventParams>) => {
+        if (managed.type !== "app" || (event.level !== "error" && event.level !== "warning")) {
+          return;
+        }
+        const location = event.sourceId ? ` (${event.sourceId}:${event.lineNumber ?? 0})` : "";
+        const message = `[renderer:${config.id}] ${event.message ?? ""}${location}`;
+        if (event.level === "error") log.error(message);
+        else log.warn(message);
+      },
+      didFailLoad: (
+        _event: Electron.Event,
+        errorCode: number,
+        errorDescription: string,
+        validatedURL: string,
+        isMainFrame: boolean
+      ) => {
+        if (managed.type !== "app" || !isMainFrame || errorCode === -3) return;
+        log.error(
+          `[renderer:${config.id}] main-frame load failed: ${errorDescription} (${errorCode}) ${validatedURL}`
+        );
+      },
     };
 
     managed.handlers = handlers;
@@ -619,6 +658,8 @@ export class ViewManager {
 
     // Listen for render process crashes
     view.webContents.on("render-process-gone", handlers.renderProcessGone);
+    view.webContents.on("console-message", handlers.consoleMessage);
+    view.webContents.on("did-fail-load", handlers.didFailLoad);
 
     // Apply protection if this view is in the protected set
     // (handles case where view is recreated after crash while still protected)
@@ -815,6 +856,8 @@ export class ViewManager {
       managed.view.webContents.off("dom-ready", managed.handlers.domReady);
       managed.view.webContents.off("context-menu", managed.handlers.contextMenu);
       managed.view.webContents.off("render-process-gone", managed.handlers.renderProcessGone);
+      managed.view.webContents.off("console-message", managed.handlers.consoleMessage);
+      managed.view.webContents.off("did-fail-load", managed.handlers.didFailLoad);
     }
 
     // Remove from window
@@ -2001,7 +2044,7 @@ export class ViewManager {
     hostChrome: boolean;
     bounds: ViewBounds;
     capabilities: readonly AppCapability[];
-    appIdentity?: { source?: string; effectiveVersion?: string | null };
+    codeIdentity?: HostedCodeIdentity;
   } | null {
     const managed = this.views.get(id);
     if (!managed) {
@@ -2014,7 +2057,7 @@ export class ViewManager {
       hostChrome: managed.hostChrome,
       bounds: managed.bounds,
       capabilities: managed.appCapabilities,
-      appIdentity: managed.appIdentity,
+      codeIdentity: managed.codeIdentity,
     };
   }
 
@@ -2104,19 +2147,88 @@ export class ViewManager {
    * Navigate a view to a URL.
    */
   async navigateView(id: string, url: string): Promise<void> {
-    const contents = this.getWebContents(id);
-    if (!contents) {
+    const managed = this.views.get(id);
+    if (!managed || managed.view.webContents.isDestroyed()) {
       throw new Error(`View not found: ${id}`);
     }
 
-    await contents.loadURL(url);
+    managed.desiredUrl = url;
+    await this.loadManagedViewUrl(managed, url);
+  }
+
+  private async loadManagedViewUrl(managed: ManagedView, url: string): Promise<void> {
+    const contents = managed.view.webContents;
+    if (managed.navigation?.url === url) return managed.navigation.promise;
+    // A committed URL is terminal only when no different desired navigation is
+    // still in flight. Requesting the committed URL again must supersede that
+    // older request, otherwise the older load can win after this method returns.
+    if (
+      !managed.navigation &&
+      !contents.isDestroyed() &&
+      contents.getURL() === url &&
+      !contents.isLoading()
+    ) {
+      return;
+    }
+
+    const revision = ++managed.navigationRevision;
+    const promise = this.performManagedViewNavigation(managed, url, revision);
+    managed.navigation = { url, revision, promise };
+    return promise;
+  }
+
+  private restartManagedViewUrl(managed: ManagedView, url: string): Promise<void> {
+    const revision = ++managed.navigationRevision;
+    const promise = this.performManagedViewNavigation(managed, url, revision);
+    managed.navigation = { url, revision, promise };
+    return promise;
+  }
+
+  /**
+   * Retry a failed load only while that URL remains the view's desired target.
+   * A later navigation or error surface makes an old retry obsolete.
+   */
+  async retryViewNavigation(id: string, url: string): Promise<boolean> {
+    const managed = this.views.get(id);
+    if (!managed || managed.view.webContents.isDestroyed()) return false;
+    if (managed.desiredUrl !== url) return false;
+    await this.restartManagedViewUrl(managed, url);
+    return true;
+  }
+
+  private async performManagedViewNavigation(
+    managed: ManagedView,
+    url: string,
+    revision: number
+  ): Promise<void> {
+    const contents = managed.view.webContents;
+    try {
+      await contents.loadURL(url);
+    } catch (error) {
+      const superseded = revision !== managed.navigationRevision;
+      const committedRequestedUrl = !contents.isDestroyed() && contents.getURL() === url;
+      if (this.isAbortedNavigation(error) && (superseded || committedRequestedUrl)) return;
+      throw error;
+    } finally {
+      if (managed.navigation?.revision === revision) managed.navigation = undefined;
+    }
+  }
+
+  private isAbortedNavigation(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const candidate = error as { code?: unknown; errno?: unknown; message?: unknown };
+    return (
+      candidate.code === -3 ||
+      candidate.errno === -3 ||
+      (typeof candidate.message === "string" && candidate.message.includes("ERR_ABORTED"))
+    );
   }
 
   async updateAppView(
     id: string,
     url: string,
     capabilities?: readonly AppCapability[],
-    identity?: { source?: string; effectiveVersion?: string | null }
+    identity?: HostedCodeIdentity
   ): Promise<void> {
     const managed = this.views.get(id);
     if (!managed) throw new Error(`View not found: ${id}`);
@@ -2134,9 +2246,20 @@ export class ViewManager {
       this.showBootstrapShell();
       this.reconcileNativeLayerOrder();
     }
-    managed.appIdentity = nextIdentity;
-    await managed.view.webContents.loadURL(url);
+    managed.codeIdentity = nextIdentity;
+    managed.desiredUrl = url;
+    await this.loadManagedViewUrl(managed, url);
     if (managed.visible) this.updateLayout({});
+  }
+
+  /** Replace the host-sealed execution identity before navigating a code view. */
+  updateCodeIdentity(id: string, identity: HostedCodeIdentity | undefined): void {
+    const managed = this.views.get(id);
+    if (!managed) throw new Error(`View not found: ${id}`);
+    if (managed.type !== "panel" && managed.type !== "app") {
+      throw new Error(`View is not a code view: ${id}`);
+    }
+    managed.codeIdentity = identity;
   }
 
   /**
@@ -2324,18 +2447,24 @@ export class ViewManager {
     };
   }
 
-  /**
-   * Reload a view's content. Returns true if reload was initiated.
-   */
-  reloadView(viewId: string): boolean {
-    const contents = this.getWebContents(viewId);
-    if (!contents || contents.isDestroyed()) {
+  /** Reload the latest desired target through the owned navigation state machine. */
+  async reloadView(viewId: string): Promise<boolean> {
+    const managed = this.views.get(viewId);
+    const contents = managed?.view.webContents;
+    if (!managed || !contents || contents.isDestroyed()) {
       console.error(`[ViewManager] Cannot reload ${viewId}: webContents destroyed or missing`);
       return false;
     }
 
+    const targetUrl = managed.desiredUrl ?? contents.getURL();
+    if (!targetUrl) {
+      console.error(`[ViewManager] Cannot reload ${viewId}: no desired or committed URL`);
+      return false;
+    }
+
     try {
-      contents.reload();
+      managed.desiredUrl = targetUrl;
+      await this.restartManagedViewUrl(managed, targetUrl);
       return true;
     } catch (error) {
       console.error(

@@ -1,13 +1,22 @@
 import type { DefaultAgentConfig } from "@workspace/model-catalog/catalog";
 
-export function resolveChatContextId(
-  stateArgsContextId: string | undefined,
+/**
+ * Return the host-bound panel context and reject any channel/UI claim that
+ * disagrees with it. State args never select a workspace branch.
+ */
+export function requireChatContextId(
   runtimeContextId: string | undefined,
-): string | undefined {
-  const contextId = stateArgsContextId ?? runtimeContextId;
-  if (typeof contextId !== "string") return undefined;
-  const trimmed = contextId.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  claimedContextId?: string
+): string {
+  const runtime = runtimeContextId?.trim();
+  if (!runtime) throw new Error("Chat panel runtime has no workspace context");
+  const claimed = claimedContextId?.trim();
+  if (claimed && claimed !== runtime) {
+    throw new Error(
+      `Chat channel context ${claimed} does not match panel workspace context ${runtime}`
+    );
+  }
+  return runtime;
 }
 
 /** Per-agent record persisted into `stateArgs.installedAgents`. */
@@ -35,7 +44,7 @@ export function sanitizeHandle(raw: string, fallback = "ai-chat"): string {
  *  used by handleAddAgent so the persistence shape is unit-testable. */
 export function appendInstalledAgent(
   existing: InstalledAgentRecord[] | undefined,
-  agent: InstalledAgentRecord,
+  agent: InstalledAgentRecord
 ): InstalledAgentRecord[] {
   return [...(existing ?? []), agent];
 }

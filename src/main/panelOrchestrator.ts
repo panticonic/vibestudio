@@ -37,12 +37,7 @@ import type { PanelRestorePolicy } from "@vibestudio/workspace-contracts/types";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelPinStoreApi } from "./panelPinStore.js";
-import {
-  getCurrentSnapshot,
-  getPanelSource,
-  getPanelContextId,
-  getPanelRef,
-} from "@vibestudio/shared/panel/accessors";
+import { getPanelSource, getPanelContextId, getPanelRef } from "@vibestudio/shared/panel/accessors";
 import { assertPresent } from "../lintHelpers";
 import { PanelRuntimeLeaseController } from "./panelRuntimeLeaseController.js";
 
@@ -190,7 +185,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       ref?: string;
       stateArgs?: Record<string, unknown>;
     },
-    attachOpts: { focus?: boolean; browserUrl?: string },
+    attachOpts: { focus?: boolean },
     callPanelTree: PanelTreeCall
   ): Promise<{ id: string; title: string }> {
     const result = (await callPanelTree("create", [source, createOpts])) as {
@@ -360,7 +355,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return this.createViaPanelTree(
       url,
       { parentId, name: options?.name },
-      { focus: options?.focus, browserUrl: url },
+      { focus: options?.focus },
       caller ? this.panelTreeCallAs(caller) : this.panelTreeCallAsServer()
     );
   }
@@ -417,10 +412,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   async reloadPanel(panelId: string): Promise<PanelLifecycleResult> {
     const view = this.getPanelView();
     if (view?.hasView(panelId)) {
-      view.reloadView(panelId);
+      const reloaded = await view.reloadView(panelId);
       return this.lifecycleResult(panelId, "reload", "reloaded", {
-        loaded: true,
-        reloaded: true,
+        loaded: reloaded,
+        reloaded,
       });
     } else {
       const result = await this.rebuildUnloadedPanel(panelId);
@@ -823,11 +818,17 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   // =========================================================================
 
   async initializePanelTree(): Promise<void> {
-    // The server is the sole tree authority. Per-account init panels seed on
-    // the hosted shell's first authenticated panelTree read, so this early host
-    // mirror load may legitimately be empty. The later authoritative broadcast
-    // populates it; the desktop itself never creates defaults.
-    await this.shellCore.loadTree();
+    // The server is the sole tree authority. This canonical, authenticated
+    // panelTree read both performs first-attach seeding for the acting account
+    // and returns the resulting authoritative snapshot. Reading workspace-state
+    // directly here would bypass the owner-aware service boundary and could
+    // strand a fresh shell on an empty mirror forever.
+    const snapshot = (await this.callPanelTreeAsServer("getTreeSnapshot", [])) as PanelTreeSnapshot;
+    log.info(
+      `[initializePanelTree] Received authoritative tree revision ${snapshot.revision} with ${snapshot.forest.reduce((count, group) => count + group.rootPanels.length, 0)} root(s)`
+    );
+    await this.runtime.applyServerPanelTreeSnapshot(snapshot);
+    log.verbose("[initializePanelTree] Applied authoritative tree snapshot");
     await this.runtime.syncLeaseSnapshot().catch((error: unknown) => {
       log.warn(
         `[initializePanelTree] Failed to sync runtime leases: ${
@@ -835,12 +836,12 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         }`
       );
     });
+    log.verbose("[initializePanelTree] Synchronized runtime lease snapshot");
 
     const roots = this.registry.getRootPanels();
     if (roots.length === 0) {
-      // No roots yet (empty workspace, or the seed broadcast hasn't landed in
-      // the mirror). Nothing to build imperatively — the panel-tree-updated
-      // broadcast drives reactive rendering once roots appear.
+      // A genuinely empty workspace has no roots to restore. Nothing is
+      // created imperatively on the desktop.
       log.info(`[initializePanelTree] No roots in authoritative tree at init.`);
       this.registry.notifyPanelTreeUpdate();
       return;
@@ -860,6 +861,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       }
     }
     this.registry.notifyPanelTreeUpdate();
+    log.info(`[initializePanelTree] Initialized ${this.registry.listPanels().length} panel(s)`);
   }
 
   // =========================================================================
@@ -1126,6 +1128,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return buildPanelUrl({
       source,
       contextId: getPanelContextId(panel),
+      buildKey: panel.buildKey ?? null,
       ref: getPanelRef(panel),
       gatewayPort: this.deps.gatewayPort,
       basePath: this.deps.gatewayBasePath,
@@ -1140,37 +1143,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       source?: string;
       options?: Record<string, unknown>;
     },
-    opts: { focus?: boolean; browserUrl?: string } = {}
+    opts: { focus?: boolean } = {}
   ): Promise<void> {
     this.runtime.ensureStateArgsPush(result.panelId);
-    const panel = this.registry.getPanel(result.panelId);
-    const source = result.source ?? (panel ? getPanelSource(panel) : undefined);
-    if (opts.browserUrl) {
-      try {
-        await this.runtime.loadPanelIntoView(result.panelId);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!/running on|leased by/i.test(message))
-          this.runtime.markPanelLoadError(result.panelId, message);
-        this.runtime.releaseLocalPanelRuntime(result.panelId, "unload");
-        throw error;
-      }
-      this.registry.updateArtifacts(result.panelId, {
-        htmlPath: opts.browserUrl,
-        buildState: "ready",
-        buildRevision: undefined,
-      });
-      this.registry.notifyPanelTreeUpdate();
-      if (opts.focus) {
-        await this.focusPanel(result.panelId);
-      }
-      return;
-    }
-
-    let panelUrl: string | null = null;
     try {
       await this.runtime.loadPanelIntoView(result.panelId);
-      panelUrl = this.getPanelUrlForId(result.panelId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/running on|leased by/i.test(message))
@@ -1178,18 +1155,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       this.runtime.releaseLocalPanelRuntime(result.panelId, "unload");
       throw error;
     }
-
-    const ref =
-      (result.options?.["ref"] as string | undefined) ??
-      (panel ? (getCurrentSnapshot(panel).options.ref as string | undefined) : undefined);
-    const buildCached = source ? (this.panelHttpServer?.hasBuild(source, ref) ?? false) : false;
-    this.registry.updateArtifacts(result.panelId, {
-      htmlPath: panelUrl ?? undefined,
-      buildState: buildCached ? "ready" : "building",
-      buildRevision: source ? this.runtime.getBuildRevision(source, ref) : undefined,
-      buildProgress: buildCached ? undefined : "Waiting for build...",
-    });
-    this.registry.notifyPanelTreeUpdate();
     if (opts.focus) {
       await this.focusPanel(result.panelId);
     }

@@ -89,7 +89,7 @@ import {
   newsAgentKey,
   newsChannelName,
   relativeAge,
-  resolveNewsContextId,
+  requireNewsContextId,
   SUGGESTED_FEEDS,
   SUGGESTED_TOPICS,
 } from "./bootstrap.js";
@@ -460,7 +460,7 @@ export default function NewsPanel() {
   const theme = usePanelTheme();
   const appTheme = useAppTheme();
   const stateArgs = useStateArgs<NewsStateArgs>();
-  const resolvedContextId = resolveNewsContextId(stateArgs.contextId, runtimeContextId);
+  const resolvedContextId = requireNewsContextId(runtimeContextId);
 
   const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
   const [agentTarget, setAgentTarget] = useState<string | null>(null);
@@ -524,7 +524,6 @@ export default function NewsPanel() {
           void panel.stateArgs.set({
             channelName: channel,
             agentKey,
-            contextId: resolvedContextId,
           });
         }
         if (!stateArgs.channelName) setBootstrapChannel(channel);
@@ -781,9 +780,9 @@ export default function NewsPanel() {
         await openPanel("panels/chat", {
           name: `Deep-dive: ${story.title.slice(0, 40)}`,
           focus: true,
+          contextId: result.forkedContextId,
           stateArgs: {
             channelName: result.forkedChannelId,
-            contextId: resolvedContextId,
             // Surface the news agent in the deep-dive chat (mentions + launcher).
             ...(agent
               ? {

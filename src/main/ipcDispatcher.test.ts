@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import {
   ServiceDispatcher,
   type ServiceContext,
@@ -11,6 +12,7 @@ import { FRAME_DATA, FRAME_HEAD } from "@vibestudio/rpc/protocol/streamCodec";
 import { EventService } from "@vibestudio/shared/eventsService";
 import { createEventsServiceDefinition } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
 import { IpcDispatcher } from "./ipcDispatcher.js";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 
 const ipcHandlers = new Map<string, (...args: never[]) => void>();
 const ipcInvokeHandlers = new Map<string, (...args: never[]) => unknown>();
@@ -94,7 +96,7 @@ function makeDispatcher(opts: {
 }) {
   ipcHandlers.clear();
   ipcInvokeHandlers.clear();
-  const dispatcher = new ServiceDispatcher();
+  const dispatcher = createTestServiceDispatcher();
   opts.configureDispatcher?.(dispatcher);
   dispatcher.markInitialized();
   const serverClient = {
@@ -161,7 +163,9 @@ describe("IpcDispatcher", () => {
     makeDispatcher({
       resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
       configureDispatcher: (dispatcher) => {
-        dispatcher.registerService(createEventsServiceDefinition(eventService));
+        dispatcher.registerService(
+          createEventsServiceDefinition(eventService, { serviceName: "desktopEvents" })
+        );
       },
     });
 
@@ -171,7 +175,7 @@ describe("IpcDispatcher", () => {
         type: "stream-request",
         requestId: "events-watch-1",
         fromId: "@workspace-apps/shell",
-        method: "events.watch",
+        method: "desktopEvents.watch",
         args: [["build:complete"], "watch:ipc-events"],
       } satisfies RpcMessage) as never
     );
@@ -274,7 +278,7 @@ describe("IpcDispatcher", () => {
         dispatcher.registerService({
           name: "panel",
           description: "panel",
-          policy: { allowed: ["app"] },
+          authority: { principals: ["code"] },
           methods: panelMethods,
           handler: panelHandler,
         });
@@ -565,6 +569,7 @@ describe("IpcDispatcher", () => {
         callerKind: "app",
         repoPath: "apps/shell",
         effectiveVersion: "ev-shell",
+        executionDigest: "a".repeat(64),
       }),
       configureDispatcher: (dispatcher) => {
         dispatcher.registerService({
@@ -572,8 +577,13 @@ describe("IpcDispatcher", () => {
           // that the service is Electron-local.
           name: "electron-test",
           description: "test Electron-local service",
-          policy: { allowed: ["app"] },
-          methods: {},
+          authority: { principals: ["code"] },
+          methods: {
+            getInfo: {
+              args: z.tuple([]),
+              access: { sensitivity: "read" },
+            },
+          },
           handler: async (ctx) => {
             seenContext = ctx;
             return { ok: true };

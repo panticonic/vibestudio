@@ -405,6 +405,13 @@ export class PanelRuntimeLeaseController {
     this.locallyLoadingSlots.add(panelId);
     try {
       this.destroyViewIfPartitionChanged(view, panelId, snapshot);
+      const panel = this.deps.registry.getPanel(panelId);
+      if (!snapshot.source.startsWith("browser:") && !this.hasCompleteExecutionIdentity(panel)) {
+        const message =
+          "Panel unavailable: its restored runtime has no complete immutable execution identity. Rebuild the panel before loading it.";
+        this.markPanelLoadError(panelId, message);
+        throw new Error(message);
+      }
       await this.acquireRuntimeLease(panelId, leaseMode);
       if (snapshot.source.startsWith("browser:")) {
         const url = snapshot.source.slice("browser:".length);
@@ -420,11 +427,7 @@ export class PanelRuntimeLeaseController {
         return;
       }
 
-      const panelUrl = this.buildPanelUrl(
-        snapshot.source,
-        snapshot.contextId,
-        snapshot.options.ref
-      );
+      const panelUrl = this.buildPanelUrl(panelId, snapshot);
       await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
       this.recordViewMutation();
       this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl);
@@ -546,7 +549,15 @@ export class PanelRuntimeLeaseController {
       this.deps.registry.notifyPanelTreeUpdate();
       return;
     }
-    const panelUrl = this.buildPanelUrl(snapshot.source, snapshot.contextId, snapshot.options.ref);
+    const panel = this.deps.registry.getPanel(panelId);
+    if (!this.hasCompleteExecutionIdentity(panel)) {
+      this.markPanelLoadError(
+        panelId,
+        "Panel unavailable: its restored runtime has no complete immutable execution identity. Rebuild the panel before loading it."
+      );
+      return;
+    }
+    const panelUrl = this.buildPanelUrl(panelId, snapshot);
     await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
     this.recordViewMutation();
     this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl);
@@ -557,21 +568,45 @@ export class PanelRuntimeLeaseController {
     snapshot: PanelSnapshot,
     panelUrl: string
   ): void {
-    const buildReady = this.deps.panelHttpServer.hasBuild(snapshot.source, snapshot.options.ref);
+    const panel = this.deps.registry.getPanel(panelId);
+    if (!panel) return;
+
+    // createViewForPanel resolves only after the requested URL has finished
+    // loading. That observable load is the authoritative completion signal for
+    // both cache hits and fresh builds; remote/local panel-server facades cannot
+    // synchronously inspect the server's build cache. A build:error event may
+    // have arrived while navigation was pending, so preserve it instead of
+    // reporting a failed build as ready.
+    if (panel.artifacts.buildState === "error") return;
     this.deps.registry.updateArtifacts(panelId, {
+      ...panel.artifacts,
       htmlPath: panelUrl,
-      buildState: buildReady ? "ready" : "building",
+      buildState: "ready",
       buildRevision: this.getBuildRevision(snapshot.source, snapshot.options.ref),
-      buildProgress: buildReady ? undefined : "Waiting for build...",
+      buildProgress: undefined,
+      error: undefined,
     });
     this.deps.registry.notifyPanelTreeUpdate();
   }
 
-  private buildPanelUrl(source: string, contextId: string, ref?: string): string {
+  private hasCompleteExecutionIdentity(panel: Panel | null | undefined): boolean {
+    return Boolean(
+      panel?.buildKey &&
+      /^[0-9a-f]{64}$/.test(panel.buildKey) &&
+      panel.executionDigest &&
+      /^[0-9a-f]{64}$/.test(panel.executionDigest) &&
+      panel.authorityRequests &&
+      panel.authorityDelegations
+    );
+  }
+
+  private buildPanelUrl(panelId: string, snapshot: PanelSnapshot): string {
+    const buildKey = this.deps.registry.getPanel(panelId)?.buildKey ?? null;
     return buildPanelUrl({
-      source,
-      contextId,
-      ref,
+      source: snapshot.source,
+      contextId: snapshot.contextId,
+      buildKey,
+      ref: snapshot.options.ref,
       gatewayPort: this.deps.gatewayPort,
       basePath: this.deps.gatewayBasePath,
     });
@@ -629,6 +664,9 @@ export class PanelRuntimeLeaseController {
     return (
       current.id === incoming.id &&
       current.title === incoming.title &&
+      (current.runtimeEntityId ?? null) === (incoming.runtimeEntityId ?? null) &&
+      (current.buildKey ?? null) === (incoming.buildKey ?? null) &&
+      (current.executionDigest ?? null) === (incoming.executionDigest ?? null) &&
       (current.owner ?? null) === (incoming.owner ?? null) &&
       (current.positionId ?? null) === (incoming.positionId ?? null) &&
       (current.selectedChildId ?? null) === (incoming.selectedChildId ?? null) &&
@@ -650,6 +688,9 @@ export class PanelRuntimeLeaseController {
   private panelsMatchIgnoringTitle(current: Panel, incoming: Panel): boolean {
     return (
       current.id === incoming.id &&
+      (current.runtimeEntityId ?? null) === (incoming.runtimeEntityId ?? null) &&
+      (current.buildKey ?? null) === (incoming.buildKey ?? null) &&
+      (current.executionDigest ?? null) === (incoming.executionDigest ?? null) &&
       (current.owner ?? null) === (incoming.owner ?? null) &&
       (current.positionId ?? null) === (incoming.positionId ?? null) &&
       (current.selectedChildId ?? null) === (incoming.selectedChildId ?? null) &&

@@ -114,7 +114,7 @@ async function seedOpenAiCodexCredential(workspaceDir: string): Promise<void> {
   });
 }
 
-async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Promise<void> {
+async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Promise<string> {
   const sourceRoot = path.join(workspaceDir, "source");
   const extensionDir = path.join(sourceRoot, "extensions", "e2e-approval");
   await fs.mkdir(extensionDir, { recursive: true });
@@ -152,12 +152,23 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
   const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(await fs.readFile(configPath, "utf8")) ?? {}) as {
     extensions?: unknown[];
+    initPanels?: Array<{ source?: string; stateArgs?: Record<string, unknown> }>;
   };
   config.extensions = [
     ...(Array.isArray(config.extensions) ? config.extensions : []),
     { source: "extensions/e2e-approval" },
   ];
+  // Exercise the shipped onboarding contract itself. This test must not inject
+  // a substitute prompt: doing so would hide a template regression where the
+  // configured first turn disappears and the lazy chat correctly stays idle.
+  const initialChat = config.initPanels?.find((panel) => panel.source === "panels/chat");
+  if (!initialChat) throw new Error("Expected an initial chat panel in the workspace config");
+  const initialPrompt = initialChat.stateArgs?.initialPrompt;
+  if (typeof initialPrompt !== "string" || initialPrompt.trim().length === 0) {
+    throw new Error("Expected the shipped initial chat panel to declare a non-empty initialPrompt");
+  }
   await fs.writeFile(configPath, YAML.stringify(config), "utf8");
+  return initialPrompt;
 }
 
 async function listPendingApprovals(testApp: TestApp): Promise<PendingApproval[]> {
@@ -170,17 +181,20 @@ async function rpcCall(
   method: string,
   args: unknown[] = []
 ): Promise<unknown> {
-  return testApp.app.evaluate(async (_electron, request) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    return testApi.rpcCall(request.service, request.method, request.args);
-  }, { service, method, args });
+  return testApp.app.evaluate(
+    async (_electron, request) => {
+      const testApi = (
+        globalThis as {
+          __testApi?: {
+            rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
+          };
+        }
+      ).__testApi;
+      if (!testApi) throw new Error("Test API not available");
+      return testApi.rpcCall(request.service, request.method, request.args);
+    },
+    { service, method, args }
+  );
 }
 
 async function shellHasApprovalUi(testApp: TestApp): Promise<boolean> {
@@ -218,6 +232,35 @@ async function shellHasApprovalUi(testApp: TestApp): Promise<boolean> {
       }
     }
     return hasLaunchGateApproval || (hasHostedShellChrome && hasApprovalSurface);
+  });
+}
+
+async function credentialApprovalActionStyles(
+  testApp: TestApp
+): Promise<{ trustVersion: string; useOnce: string } | null> {
+  return testApp.app.evaluate(async ({ webContents }) => {
+    for (const contents of webContents.getAllWebContents()) {
+      if (contents.isDestroyed()) continue;
+      try {
+        const styles = await contents.executeJavaScript(
+          `(() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const trust = buttons.find((button) => button.innerText.trim() === 'Trust version');
+            const once = buttons.find((button) => button.innerText.trim() === 'Use once');
+            if (!(trust instanceof HTMLElement) || !(once instanceof HTMLElement)) return null;
+            return {
+              trustVersion: trust.getAttribute('data-accent-color') ?? '',
+              useOnce: once.getAttribute('data-accent-color') ?? '',
+            };
+          })()`,
+          true
+        );
+        if (styles) return styles;
+      } catch {
+        // Ignore non-DOM and transiently navigating webContents.
+      }
+    }
+    return null;
   });
 }
 
@@ -270,6 +313,38 @@ async function hostedShellHasChrome(testApp: TestApp): Promise<boolean> {
   });
 }
 
+async function callHostedShellService(
+  testApp: TestApp,
+  method: string,
+  args: unknown[] = []
+): Promise<unknown> {
+  return testApp.app.evaluate(
+    async ({ webContents }, request) => {
+      for (const contents of webContents.getAllWebContents()) {
+        if (contents.isDestroyed()) continue;
+        try {
+          const isHostedShell = await contents.executeJavaScript(
+            `Boolean(globalThis.__vibestudioApp?.serviceCall)
+              && Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
+                || document.querySelector('[aria-label="Menu"]'))`,
+            true
+          );
+          if (!isHostedShell) continue;
+          return await contents.executeJavaScript(
+            `globalThis.__vibestudioApp.serviceCall(${JSON.stringify(request.method)}, ...${JSON.stringify(request.args)})`,
+            true
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!/execution context|destroyed|navigat/i.test(message)) throw error;
+        }
+      }
+      throw new Error("Hosted shell app WebContents was not found");
+    },
+    { method, args }
+  );
+}
+
 async function bootstrapLaunchGateHasCredentialApproval(testApp: TestApp): Promise<boolean> {
   return testApp.app.evaluate(async ({ webContents }) => {
     for (const contents of webContents.getAllWebContents()) {
@@ -293,15 +368,14 @@ async function bootstrapLaunchGateHasCredentialApproval(testApp: TestApp): Promi
 }
 
 async function clickShellButton(testApp: TestApp, label: RegExp): Promise<boolean> {
-  return testApp.app.evaluate(
-    async ({ webContents }, labelSource) => {
-      const label = new RegExp(labelSource, "i");
-      const candidates: Array<{ contents: Electron.WebContents; priority: number }> = [];
-      for (const contents of webContents.getAllWebContents()) {
-        if (contents.isDestroyed()) continue;
-        try {
-          const priority = await contents.executeJavaScript(
-            `(() => {
+  return testApp.app.evaluate(async ({ webContents }, labelSource) => {
+    const label = new RegExp(labelSource, "i");
+    const candidates: Array<{ contents: Electron.WebContents; priority: number }> = [];
+    for (const contents of webContents.getAllWebContents()) {
+      if (contents.isDestroyed()) continue;
+      try {
+        const priority = await contents.executeJavaScript(
+          `(() => {
               const hasHostedShellChrome = Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
                 || document.querySelector('[aria-label="Menu"]'));
               const hasApprovalBar = Boolean(document.querySelector(".approval-card, .approval-pill"));
@@ -315,19 +389,19 @@ async function clickShellButton(testApp: TestApp, label: RegExp): Promise<boolea
               if (hasHostedShellChrome) return 2;
               return 3;
             })()`,
-            true
-          );
-          candidates.push({ contents, priority });
-        } catch {
-          // Ignore non-DOM webContents.
-        }
+          true
+        );
+        candidates.push({ contents, priority });
+      } catch {
+        // Ignore non-DOM webContents.
       }
-      candidates.sort((a, b) => a.priority - b.priority);
-      for (const { contents } of candidates) {
-        if (contents.isDestroyed()) continue;
-        try {
-          const clicked = await contents.executeJavaScript(
-            `(() => {
+    }
+    candidates.sort((a, b) => a.priority - b.priority);
+    for (const { contents } of candidates) {
+      if (contents.isDestroyed()) continue;
+      try {
+        const clicked = await contents.executeJavaScript(
+          `(() => {
               const label = new RegExp(${JSON.stringify(labelSource)}, "i");
               const buttons = Array.from(document.querySelectorAll("button"));
               const button = buttons.find((item) => label.test(item.textContent ?? ""));
@@ -335,17 +409,15 @@ async function clickShellButton(testApp: TestApp, label: RegExp): Promise<boolea
               button.click();
               return true;
             })()`,
-            true
-          );
-          if (clicked) return true;
-        } catch {
-          // Ignore non-DOM webContents.
-        }
+          true
+        );
+        if (clicked) return true;
+      } catch {
+        // Ignore non-DOM webContents.
       }
-      return false;
-    },
-    label.source
-  );
+    }
+    return false;
+  }, label.source);
 }
 
 async function clickShellButtonByPreference(testApp: TestApp, labels: RegExp[]): Promise<boolean> {
@@ -520,23 +592,23 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         : null;
     channelReplays.push({ channelName, replay });
     const agentParticipants = Array.isArray(participants)
-      ? participants.filter((participant: { participantId?: unknown }) =>
-          typeof participant.participantId === "string" &&
-          participant.participantId.startsWith("do:workers/agent-worker:AiChatWorker:")
+      ? participants.filter(
+          (participant: { participantId?: unknown }) =>
+            typeof participant.participantId === "string" &&
+            participant.participantId.startsWith("do:workers/agent-worker:AiChatWorker:")
         )
       : [];
     for (const agent of agentParticipants) {
       const agentId = (agent as { participantId: string }).participantId;
-      const debugState =
-        firstPanelId
-          ? await executePanelScript(
-              testApp.app,
-              firstPanelId,
-              `globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}])`
-            ).catch((error: unknown) => ({
-              error: error instanceof Error ? error.message : String(error),
-            }))
-          : null;
+      const debugState = firstPanelId
+        ? await executePanelScript(
+            testApp.app,
+            firstPanelId,
+            `globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}])`
+          ).catch((error: unknown) => ({
+            error: error instanceof Error ? error.message : String(error),
+          }))
+        : null;
       agentDebugStates.push({ channelName, agentId, debugState });
     }
     channelParticipants.push({ channelName, resolved, participants });
@@ -558,8 +630,14 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
     agentDebugStates,
     workerLogs,
   };
-  await fs.writeFile("/tmp/startup-approvals-diagnostics.json", JSON.stringify(diagnostics, null, 2));
-  console.log("STARTUP_APPROVALS_DIAGNOSTICS", JSON.stringify(diagnostics, null, 2).slice(0, 80_000));
+  await fs.writeFile(
+    "/tmp/startup-approvals-diagnostics.json",
+    JSON.stringify(diagnostics, null, 2)
+  );
+  console.log(
+    "STARTUP_APPROVALS_DIAGNOSTICS",
+    JSON.stringify(diagnostics, null, 2).slice(0, 80_000)
+  );
   await test.info().attach("startup-approvals-diagnostics.json", {
     body: JSON.stringify(diagnostics, null, 2),
     contentType: "application/json",
@@ -571,6 +649,8 @@ type StartupAgentCompletionState = {
   channels: Array<{
     channelName: string;
     agentIds: string[];
+    initialPromptDelivered: boolean;
+    onboardingSkillReadCompleted: boolean;
     assistantCompleted: boolean;
     turnClosed: boolean;
     pendingWork: string[];
@@ -580,7 +660,8 @@ type StartupAgentCompletionState = {
 };
 
 async function collectStartupAgentCompletion(
-  testApp: TestApp
+  testApp: TestApp,
+  expectedInitialPrompt: string
 ): Promise<StartupAgentCompletionState> {
   const panels = await getPanelTree(testApp.app).catch(() => []);
   const firstPanelId = panels[0]?.id;
@@ -590,7 +671,9 @@ async function collectStartupAgentCompletion(
     const channelName =
       typeof stateArgs?.channelName === "string"
         ? stateArgs.channelName
-        : (await getPanelText(testApp.app, panel.id).catch(() => "")).match(/\bchat-[a-z0-9]+\b/)?.[0];
+        : (await getPanelText(testApp.app, panel.id).catch(() => "")).match(
+            /\bchat-[a-z0-9]+\b/
+          )?.[0];
     if (channelName) channelNames.add(channelName);
   }
   if (!firstPanelId) {
@@ -622,6 +705,8 @@ async function collectStartupAgentCompletion(
       channels.push({
         channelName,
         agentIds: [],
+        initialPromptDelivered: false,
+        onboardingSkillReadCompleted: false,
         assistantCompleted: false,
         turnClosed: false,
         pendingWork: [],
@@ -659,7 +744,17 @@ async function collectStartupAgentCompletion(
             kind: agentic?.kind ?? event?.payloadKind ?? event?.type,
             actorId: agentic?.actor?.id,
             actorKind: agentic?.actor?.kind,
+            invocationId: agentic?.causality?.invocationId,
             role: body?.role ?? message?.role,
+            name: body?.name,
+            request: body?.request,
+            result: body?.result,
+            terminalOutcome: body?.terminalOutcome,
+            content: typeof body?.content === "string"
+              ? body.content
+              : typeof message?.content === "string"
+                ? message.content
+                : "",
             outcome: body?.outcome ?? message?.outcome,
             reason: body?.reason,
             recoverable: body?.recoverable,
@@ -686,7 +781,7 @@ async function collectStartupAgentCompletion(
     const participants = Array.isArray(
       (snapshot as { participants?: unknown } | null)?.participants
     )
-      ? ((snapshot as { participants: Array<{ participantId?: unknown }> }).participants)
+      ? (snapshot as { participants: Array<{ participantId?: unknown }> }).participants
       : [];
     const agentIds = participants
       .map((participant) =>
@@ -694,16 +789,57 @@ async function collectStartupAgentCompletion(
       )
       .filter(
         (participantId): participantId is string =>
-          !!participantId &&
-          participantId.startsWith("do:workers/agent-worker:AiChatWorker:")
+          !!participantId && participantId.startsWith("do:workers/agent-worker:AiChatWorker:")
       );
     const events = Array.isArray((snapshot as { events?: unknown } | null)?.events)
-      ? ((snapshot as { events: Array<Record<string, unknown>> }).events)
+      ? (snapshot as { events: Array<Record<string, unknown>> }).events
       : [];
     const isAgentEvent = (event: Record<string, unknown>) =>
-      agentIds.some(
-        (agentId) => event["actorId"] === agentId || event["senderId"] === agentId
-      );
+      agentIds.some((agentId) => event["actorId"] === agentId || event["senderId"] === agentId);
+    const initialPromptDelivered = events.some((event) => {
+      if (event["kind"] !== "message.completed" || event["role"] !== "user") return false;
+      const blocks = Array.isArray(event["blocks"]) ? event["blocks"] : [];
+      const blockText = blocks
+        .filter(
+          (block): block is { type: string; content: string } =>
+            !!block &&
+            typeof block === "object" &&
+            (block as { type?: unknown }).type === "text" &&
+            typeof (block as { content?: unknown }).content === "string"
+        )
+        .map((block) => block.content)
+        .join("\n")
+        .trim();
+      const content = typeof event["content"] === "string" ? event["content"].trim() : "";
+      return blockText === expectedInitialPrompt.trim() || content === expectedInitialPrompt.trim();
+    });
+    const onboardingReadInvocationIds = new Set(
+      events
+        .filter((event) => {
+          if (event["kind"] !== "invocation.started" || event["name"] !== "read") return false;
+          if (!isAgentEvent(event)) return false;
+          const request = event["request"];
+          if (!request || typeof request !== "object") return false;
+          const path = (request as Record<string, unknown>)["path"];
+          const target = (request as Record<string, unknown>)["target"];
+          return path === "skills/onboarding/SKILL.md" || target === "skills/onboarding/SKILL.md";
+        })
+        .map((event) => event["invocationId"])
+        .filter((invocationId): invocationId is string => typeof invocationId === "string")
+    );
+    const onboardingSkillReadCompleted = events.some((event) => {
+      if (event["kind"] !== "invocation.completed") return false;
+      if (event["terminalOutcome"] !== "success") return false;
+      if (!isAgentEvent(event)) return false;
+      const invocationId = event["invocationId"];
+      if (typeof invocationId !== "string" || !onboardingReadInvocationIds.has(invocationId)) {
+        return false;
+      }
+      // A terminal event alone only proves that the tool returned. Requiring a
+      // distinctive fragment from the shipped skill proves the real runtime
+      // transport returned the requested file contents to the agent.
+      return JSON.stringify(event["result"] ?? "").includes("name: onboarding");
+    });
     const assistantCompleted = events.some((event) => {
       if (event["kind"] !== "message.completed") return false;
       if (event["role"] !== "assistant" || event["outcome"] !== "completed") return false;
@@ -715,7 +851,7 @@ async function collectStartupAgentCompletion(
           typeof block === "object" &&
           (block as { type?: unknown }).type === "text" &&
           typeof (block as { content?: unknown }).content === "string" &&
-          ((block as { content: string }).content.trim().length > 0)
+          (block as { content: string }).content.trim().length > 0
       );
     });
     const turnClosed = events.some(
@@ -741,9 +877,7 @@ async function collectStartupAgentCompletion(
       });
       const state = (debugState as { result?: unknown } | null)?.result ?? debugState;
       const loop =
-        state &&
-        typeof state === "object" &&
-        (state as { loops?: Record<string, unknown> }).loops
+        state && typeof state === "object" && (state as { loops?: Record<string, unknown> }).loops
           ? (state as { loops: Record<string, unknown> }).loops[channelName]
           : null;
       if (loop && typeof loop === "object") {
@@ -759,6 +893,8 @@ async function collectStartupAgentCompletion(
     channels.push({
       channelName,
       agentIds,
+      initialPromptDelivered,
+      onboardingSkillReadCompleted,
       assistantCompleted,
       turnClosed,
       pendingWork,
@@ -771,6 +907,8 @@ async function collectStartupAgentCompletion(
     channels.every(
       (channel) =>
         channel.agentIds.length > 0 &&
+        channel.initialPromptDelivered &&
+        channel.onboardingSkillReadCompleted &&
         channel.assistantCompleted &&
         channel.turnClosed &&
         channel.pendingWork.length === 0 &&
@@ -807,7 +945,9 @@ function describeApproval(approval: PendingApproval): string {
 }
 
 function isOpenAiCredentialApproval(approval: PendingApproval): boolean {
-  return approval.kind === "credential" && approval.credentialLabel === "ChatGPT Codex model credential";
+  return (
+    approval.kind === "credential" && approval.credentialLabel === "ChatGPT Codex model credential"
+  );
 }
 
 test.describe("Desktop Startup Approvals", () => {
@@ -828,7 +968,7 @@ test.describe("Desktop Startup Approvals", () => {
   test("launch gate starts shell, then in-app approvals unblock initial chats", async () => {
     workspaceDir = createManagedTestWorkspace();
     await seedOpenAiCodexCredential(workspaceDir);
-    await makeWorkspaceExtensionRequireApproval(workspaceDir);
+    const configuredInitialPrompt = await makeWorkspaceExtensionRequireApproval(workspaceDir);
 
     testApp = await launchTestApp({
       workspace: workspaceDir,
@@ -865,19 +1005,23 @@ test.describe("Desktop Startup Approvals", () => {
     }
 
     try {
-      await expect.poll(() => hostedShellHasChrome(testApp!), {
-        timeout: 180_000,
-        intervals: [500, 1000, 2000, 5000],
-      }).toBe(true);
+      await expect
+        .poll(() => hostedShellHasChrome(testApp!), {
+          timeout: 180_000,
+          intervals: [500, 1000, 2000, 5000],
+        })
+        .toBe(true);
     } catch (error) {
       await attachStartupDiagnostics(testApp);
       throw error;
     }
 
-    await expect.poll(() => bootstrapLaunchGateHasCredentialApproval(testApp!), {
-      timeout: 10_000,
-      intervals: [500, 1000],
-    }).toBe(false);
+    await expect
+      .poll(() => bootstrapLaunchGateHasCredentialApproval(testApp!), {
+        timeout: 10_000,
+        intervals: [500, 1000],
+      })
+      .toBe(false);
 
     for (const panel of await getPanelTree(testApp.app)) {
       await startPanelDiagnostics(testApp.app, panel.id).catch(() => {});
@@ -891,25 +1035,40 @@ test.describe("Desktop Startup Approvals", () => {
       const pendingCredentialCount = pending.filter(isOpenAiCredentialApproval).length;
       const pendingTargetCount = pendingUnitBatchCount + pendingCredentialCount;
       if (pendingTargetCount === 0) break;
-      await expect
-        .poll(
-          async () =>
-            clickShellButtonByPreference(testApp!, [
-              /^Trust version$/,
-              /^Use this session$/,
-              /^Trust and start$/,
-              /^Approve all$/,
-              /^Dev session$/,
-              /^Approve and start$/,
-              /^Approve$/,
-              /^Install and run$/,
-              /^Run once$/,
-              /^Allow for session$/,
-              /^Use once$/,
-            ]),
-          { timeout: 15_000, intervals: [500, 1000, 2000] }
-        )
-        .toBe(true);
+      if (pendingCredentialCount > 0) {
+        await expect
+          .poll(() => credentialApprovalActionStyles(testApp!), {
+            timeout: 45_000,
+            intervals: [250, 500, 1_000, 2_000],
+          })
+          .toEqual({ trustVersion: "sky", useOnce: "" });
+      }
+      try {
+        await expect
+          .poll(
+            async () =>
+              clickShellButtonByPreference(testApp!, [
+                /^Trust version$/,
+                /^Use this session$/,
+                /^Trust and start$/,
+                /^Approve all$/,
+                /^Dev session$/,
+                /^Approve and start$/,
+                /^Approve$/,
+                /^Install and run$/,
+                /^Run once$/,
+                /^Allow for session$/,
+                /^Use once$/,
+              ]),
+            // Extension and agent panels compile on demand. The authoritative
+            // approval can exist before the hosted shell has mounted its card.
+            { timeout: 45_000, intervals: [500, 1000, 2000, 5000] }
+          )
+          .toBe(true);
+      } catch (error) {
+        await attachStartupDiagnostics(testApp);
+        throw error;
+      }
       let currentCredentialCount = pendingCredentialCount;
       await expect
         .poll(
@@ -927,31 +1086,157 @@ test.describe("Desktop Startup Approvals", () => {
     }
 
     await expect
-      .poll(
-        async () => (await listPendingApprovals(testApp!)).filter(isUnitBatchApproval).length,
-        { timeout: 30_000, intervals: [500, 1000, 2000] }
-      )
+      .poll(async () => (await listPendingApprovals(testApp!)).filter(isUnitBatchApproval).length, {
+        timeout: 30_000,
+        intervals: [500, 1000, 2000],
+      })
       .toBe(0);
 
     await expect
       .poll(
-        async () => (await listPendingApprovals(testApp!)).filter(isOpenAiCredentialApproval).length,
+        async () =>
+          (await listPendingApprovals(testApp!)).filter(isOpenAiCredentialApproval).length,
         { timeout: 30_000, intervals: [500, 1000, 2000] }
       )
       .toBe(0);
 
     try {
       await expect
-        .poll(async () => (await collectStartupAgentCompletion(testApp!)).complete, {
-          timeout: 120_000,
-          intervals: [1000, 2000, 5000],
-        })
+        .poll(
+          async () =>
+            (await collectStartupAgentCompletion(testApp!, configuredInitialPrompt)).complete,
+          {
+            timeout: 120_000,
+            intervals: [1000, 2000, 5000],
+          }
+        )
         .toBe(true);
     } catch (error) {
       console.log(
         "STARTUP_AGENT_COMPLETION_STATE",
-        JSON.stringify(await collectStartupAgentCompletion(testApp!), null, 2)
+        JSON.stringify(
+          await collectStartupAgentCompletion(testApp!, configuredInitialPrompt),
+          null,
+          2
+        )
       );
+      await attachStartupDiagnostics(testApp);
+      throw error;
+    }
+  });
+
+  test("persisted startup trust survives a same-workspace warm launch with scoped app RPC", async () => {
+    workspaceDir = createManagedTestWorkspace();
+    await makeWorkspaceExtensionRequireApproval(workspaceDir);
+
+    // Keep this lifecycle test independent of model credentials and agent
+    // execution: it targets the app/extension startup grant and exact shell
+    // incarnation restored on the second process.
+    const configPath = path.join(workspaceDir, "source", "meta", "vibestudio.yml");
+    const config = (YAML.parse(await fs.readFile(configPath, "utf8")) ?? {}) as {
+      initPanels?: unknown[];
+    };
+    config.initPanels = [];
+    await fs.writeFile(configPath, YAML.stringify(config), "utf8");
+
+    testApp = await launchTestApp({ workspace: workspaceDir, launchTimeout: 240_000 });
+    try {
+      let firstLaunchState: "approval" | "ready" | "waiting" = "waiting";
+      await expect
+        .poll(
+          async () => {
+            const pending = await listPendingApprovals(testApp!);
+            if (pending.some(isElectronHostAppApproval) && (await shellHasApprovalUi(testApp!))) {
+              firstLaunchState = "approval";
+            } else if (await hostedShellHasChrome(testApp!)) {
+              firstLaunchState = "ready";
+            } else {
+              firstLaunchState = "waiting";
+            }
+            return firstLaunchState;
+          },
+          { timeout: 90_000, intervals: [500, 1000, 2000] }
+        )
+        .not.toBe("waiting");
+      expect(firstLaunchState).toBe("approval");
+      expect(await clickShellButton(testApp, /^Trust and start$/)).toBe(true);
+      await expect
+        .poll(() => hostedShellHasChrome(testApp!), {
+          timeout: 180_000,
+          intervals: [500, 1000, 2000, 5000],
+        })
+        .toBe(true);
+      await expect
+        .poll(
+          async () => (await listPendingApprovals(testApp!)).filter(isUnitBatchApproval).length,
+          { timeout: 30_000, intervals: [500, 1000, 2000] }
+        )
+        .toBe(1);
+      await expect
+        .poll(() => clickShellButton(testApp!, /^Approve all$/), {
+          timeout: 30_000,
+          intervals: [250, 500, 1000],
+        })
+        .toBe(true);
+      await expect
+        .poll(
+          async () => (await listPendingApprovals(testApp!)).filter(isUnitBatchApproval).length,
+          { timeout: 30_000, intervals: [500, 1000, 2000] }
+        )
+        .toBe(0);
+      expect(await callHostedShellService(testApp, "app.getInfo")).toMatchObject({
+        connectionMode: "local",
+        connectionStatus: "connected",
+      });
+    } catch (error) {
+      await attachStartupDiagnostics(testApp);
+      throw error;
+    }
+
+    await testApp.cleanup();
+    testApp = undefined;
+
+    testApp = await launchTestApp({ workspace: workspaceDir, launchTimeout: 240_000 });
+    const secondLaunchApprovalObservations: string[] = [];
+    try {
+      await expect
+        .poll(
+          async () => {
+            const pending = await listPendingApprovals(testApp!);
+            const unitApprovals = pending.filter(isUnitBatchApproval).map(describeApproval);
+            if (unitApprovals.length > 0) {
+              secondLaunchApprovalObservations.push(...unitApprovals);
+            }
+            if (await shellHasApprovalUi(testApp!)) {
+              secondLaunchApprovalObservations.push("approval UI became visible");
+            }
+            return hostedShellHasChrome(testApp!);
+          },
+          { timeout: 180_000, intervals: [250, 500, 1000, 2000] }
+        )
+        .toBe(true);
+
+      expect(secondLaunchApprovalObservations).toEqual([]);
+      expect(
+        (await listPendingApprovals(testApp)).filter(isUnitBatchApproval).map(describeApproval)
+      ).toEqual([]);
+      expect(await callHostedShellService(testApp, "app.getInfo")).toMatchObject({
+        connectionMode: "local",
+        connectionStatus: "connected",
+      });
+      expect(
+        (await listPendingApprovals(testApp)).filter(isUnitBatchApproval).map(describeApproval)
+      ).toEqual([]);
+      const authorityFailureLines = testApp
+        .getOutput()
+        .split(/\r?\n/)
+        .filter(
+          (line) =>
+            /missing-grant/i.test(line) ||
+            /sealed.{0,40}incarnation|incarnation.{0,40}sealed/i.test(line)
+        );
+      expect(authorityFailureLines).toEqual([]);
+    } catch (error) {
       await attachStartupDiagnostics(testApp);
       throw error;
     }

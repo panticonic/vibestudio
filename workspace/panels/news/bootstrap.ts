@@ -1,13 +1,9 @@
 /** Pure bootstrap + presentation helpers, unit-testable without the runtime. */
 
-export function resolveNewsContextId(
-  stateArgsContextId: string | undefined,
-  runtimeContextId: string | undefined,
-): string | undefined {
-  const contextId = stateArgsContextId ?? runtimeContextId;
-  if (typeof contextId !== "string") return undefined;
-  const trimmed = contextId.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+export function requireNewsContextId(runtimeContextId: string | undefined): string {
+  const contextId = runtimeContextId?.trim();
+  if (!contextId) throw new Error("News panel runtime has no workspace context");
+  return contextId;
 }
 
 /**

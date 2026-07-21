@@ -1,9 +1,18 @@
 import { createDevLogger } from "@vibestudio/dev-log";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { PanelViewLike } from "@vibestudio/shared/panelInterfaces";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import {
+  parseUnitAuthorityManifest,
+  type EvalAuthorityDelegation,
+} from "@vibestudio/shared/authorityManifest";
+import { parseSha256 } from "@vibestudio/shared/execution/identity";
+import { domainHash } from "@vibestudio/shared/execution/identity";
+import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import type { CapabilityScope } from "@vibestudio/rpc";
 
 const log = createDevLogger("AppOrchestrator");
 
@@ -31,6 +40,9 @@ export interface AppAvailableEvent {
   capabilities?: readonly AppCapability[];
   effectiveVersion?: string | null;
   buildKey?: string | null;
+  executionDigest?: string | null;
+  authorityRequests?: readonly CapabilityScope[];
+  authorityDelegations?: readonly EvalAuthorityDelegation[];
   adoptionPolicy?: "immediate" | "prompt" | "artifact-only";
   selectedForHost?: boolean;
 }
@@ -41,7 +53,7 @@ export interface AppOrchestratorDeps {
 }
 
 interface BakedAppManifest {
-  version: 1;
+  version: 2;
   app: {
     name: string;
     source: string;
@@ -49,11 +61,26 @@ interface BakedAppManifest {
     capabilities?: AppCapability[];
   };
   build: {
+    key: string;
     effectiveVersion: string;
+    executionDigest: string;
+    execution: {
+      version: 1;
+      source: { repoPath: string; effectiveVersion: string };
+      buildInputDigest: string;
+      artifactDigest: string;
+      executionDigest: string;
+    };
+    authorityRequests: readonly CapabilityScope[];
+    authorityDelegations: readonly EvalAuthorityDelegation[];
   };
   artifacts: Array<{
     path: string;
     role: string;
+    contentType: string;
+    encoding: string;
+    platform?: string;
+    integrity: string;
   }>;
 }
 
@@ -122,6 +149,7 @@ export class AppOrchestrator {
         `Electron app ${event.appId} requests unsupported host capabilities: ${unsupportedCapabilities.join(", ")}`
       );
     }
+    sealedAppCodeIdentity(event);
   }
 
   private requirePanelView(): PanelViewLike {
@@ -133,20 +161,19 @@ export class AppOrchestrator {
   }
 
   private async mountApp(event: AppAvailableEvent): Promise<void> {
+    this.validateElectronApp(event);
     const panelView = this.requirePanelView();
     const createViewForApp = panelView.createViewForApp;
     if (!createViewForApp) throw new Error("App view runtime is unavailable");
     log.verbose(`Loading app view ${event.appId}: ${event.url}`);
+    const identity = sealedAppCodeIdentity(event);
     await createViewForApp.call(
       panelView,
       event.appId,
       event.url,
       event.contextId ?? undefined,
       event.capabilities,
-      {
-        source: event.source,
-        effectiveVersion: event.effectiveVersion ?? undefined,
-      }
+      identity
     );
     panelView.setViewVisible?.(event.appId, true);
     this.adopted.set(event.appId, event);
@@ -207,29 +234,191 @@ export class AppOrchestrator {
 }
 
 function appAvailableIdentity(event: AppAvailableEvent): string {
-  return event.buildKey ?? event.effectiveVersion ?? event.url;
+  return sealedAppCodeIdentity(event).executionDigest;
+}
+
+function sealedAppCodeIdentity(event: AppAvailableEvent): {
+  source: string;
+  effectiveVersion?: string;
+  executionDigest: string;
+  requested: readonly CapabilityScope[];
+  delegations: readonly EvalAuthorityDelegation[];
+} {
+  const source = event.source;
+  if (
+    typeof source !== "string" ||
+    source.length === 0 ||
+    source !== source.trim() ||
+    source !== source.normalize("NFC") ||
+    source.includes("\\") ||
+    source.startsWith("/") ||
+    source.startsWith("workspace/") ||
+    source.split(/[\\/]/).some((part) => !part || part === "." || part === "..")
+  ) {
+    throw new Error(`Electron app ${event.appId} has an invalid workspace source identity`);
+  }
+  const executionDigest = parseSha256(
+    event.executionDigest ?? "",
+    `Electron app ${event.appId} execution digest`
+  );
+  const authority = parseUnitAuthorityManifest(
+    {
+      requests: event.authorityRequests,
+      delegations: event.authorityDelegations,
+    },
+    `Electron app ${event.appId} sealed authority`
+  );
+  return {
+    source,
+    ...(event.effectiveVersion ? { effectiveVersion: event.effectiveVersion } : {}),
+    executionDigest,
+    requested: authority.requests,
+    delegations: authority.delegations,
+  };
 }
 
 export function readBakedElectronApp(distDir: string): AppAvailableEvent | null {
   const manifestPath = path.join(distDir, "manifest.json");
   if (!fs.existsSync(manifestPath)) return null;
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as BakedAppManifest;
-  if (manifest.version !== 1) {
+  const raw = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as unknown;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Baked app manifest must be an object");
+  }
+  const manifest = raw as BakedAppManifest;
+  if (manifest.version !== 2) {
     throw new Error(`Unsupported baked app manifest version: ${String(manifest.version)}`);
   }
+  if (!manifest.app || !manifest.build || !Array.isArray(manifest.artifacts)) {
+    throw new Error("Baked app manifest is missing its app, build, or artifact identity");
+  }
   if (manifest.app.target !== "electron") return null;
+  if (
+    typeof manifest.app.name !== "string" ||
+    typeof manifest.app.source !== "string" ||
+    !Array.isArray(manifest.app.capabilities) ||
+    typeof manifest.build.key !== "string" ||
+    typeof manifest.build.effectiveVersion !== "string" ||
+    manifest.artifacts.some(
+      (artifact) =>
+        !artifact ||
+        typeof artifact !== "object" ||
+        typeof artifact.path !== "string" ||
+        typeof artifact.role !== "string" ||
+        typeof artifact.contentType !== "string" ||
+        typeof artifact.encoding !== "string"
+    )
+  ) {
+    throw new Error("Baked Electron app manifest has malformed app, build, or artifact fields");
+  }
   const html = manifest.artifacts.find((artifact) => artifact.role === "html");
   if (!html) throw new Error(`Baked Electron app ${manifest.app.name} is missing an HTML artifact`);
-  const htmlPath = path.join(distDir, "artifacts", html.path);
-  if (!fs.existsSync(htmlPath)) {
-    throw new Error(`Baked Electron app HTML artifact is missing: ${html.path}`);
+  const artifactPaths = new Set<string>();
+  for (const artifact of manifest.artifacts) {
+    if (
+      typeof artifact.path !== "string" ||
+      artifact.path.length === 0 ||
+      path.isAbsolute(artifact.path) ||
+      artifact.path.split(/[\\/]/).some((part) => !part || part === "." || part === "..")
+    ) {
+      throw new Error(`Baked Electron app has an invalid artifact path: ${String(artifact.path)}`);
+    }
+    if (artifactPaths.has(artifact.path)) {
+      throw new Error(`Baked Electron app has a duplicate artifact path: ${artifact.path}`);
+    }
+    artifactPaths.add(artifact.path);
+    if (!/^sha256-[0-9a-f]{64}$/.test(artifact.integrity ?? "")) {
+      throw new Error(
+        `Baked Electron app artifact ${artifact.path} is missing canonical content integrity`
+      );
+    }
+    const artifactPath = path.join(distDir, "artifacts", artifact.path);
+    if (!fs.existsSync(artifactPath)) {
+      throw new Error(`Baked Electron app artifact is missing: ${artifact.path}`);
+    }
+    const actualIntegrity = `sha256-${crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(artifactPath))
+      .digest("hex")}`;
+    if (actualIntegrity !== artifact.integrity) {
+      throw new Error(`Baked Electron app artifact integrity mismatch: ${artifact.path}`);
+    }
   }
-  return {
+  const htmlPath = path.join(distDir, "artifacts", html.path);
+  const executionDigest = verifyBakedExecutionIdentity(manifest);
+  const authority = parseUnitAuthorityManifest(
+    {
+      requests: manifest.build.authorityRequests,
+      delegations: manifest.build.authorityDelegations,
+    },
+    `Baked Electron app ${manifest.app.name} sealed authority`
+  );
+  const event: AppAvailableEvent = {
     appId: manifest.app.name,
     source: manifest.app.source,
     target: "electron",
     url: pathToFileURL(htmlPath).href,
     capabilities: manifest.app.capabilities ?? [],
+    buildKey: manifest.build.key,
     effectiveVersion: manifest.build.effectiveVersion,
+    executionDigest,
+    authorityRequests: authority.requests,
+    authorityDelegations: authority.delegations,
   };
+  sealedAppCodeIdentity(event);
+  return event;
+}
+
+function verifyBakedExecutionIdentity(manifest: BakedAppManifest): string {
+  const label = `Baked Electron app ${manifest.app.name}`;
+  const execution = manifest.build.execution;
+  if (
+    !execution ||
+    execution.version !== 1 ||
+    !execution.source ||
+    execution.source.repoPath !== manifest.app.source
+  ) {
+    throw new Error(`${label} execution identity does not match its source`);
+  }
+  const source = {
+    repoPath: execution.source.repoPath,
+    effectiveVersion: parseSha256(
+      execution.source.effectiveVersion,
+      `${label} execution effective version`
+    ),
+  };
+  const buildInputDigest = parseSha256(execution.buildInputDigest, `${label} build input digest`);
+  const artifactDigest = domainHash(
+    "vibestudio/build-v2-artifacts/v1",
+    canonicalJson(
+      manifest.artifacts
+        .map((artifact) => ({
+          path: artifact.path.replace(/\\/g, "/").normalize("NFC"),
+          role: artifact.role,
+          contentType: artifact.contentType,
+          encoding: artifact.encoding,
+          platform: artifact.platform ?? null,
+          integrity: artifact.integrity ?? null,
+        }))
+        .sort((left, right) =>
+          `${left.path}\0${left.platform ?? ""}`.localeCompare(
+            `${right.path}\0${right.platform ?? ""}`
+          )
+        )
+    )
+  );
+  if (parseSha256(execution.artifactDigest, `${label} artifact digest`) !== artifactDigest) {
+    throw new Error(`${label} artifact manifest does not match its execution identity`);
+  }
+  const executionDigest = domainHash(
+    "vibestudio/build-v2-execution/v1",
+    canonicalJson({ version: 1, source, buildInputDigest, artifactDigest })
+  );
+  if (
+    parseSha256(execution.executionDigest, `${label} sealed execution digest`) !==
+      executionDigest ||
+    parseSha256(manifest.build.executionDigest, `${label} execution digest`) !== executionDigest
+  ) {
+    throw new Error(`${label} execution digest does not match its sealed identity`);
+  }
+  return executionDigest;
 }

@@ -17,8 +17,8 @@ import {
 } from "@vibestudio/shared/panel/panelLease";
 import type {
   RuntimeClient,
+  SlotCommitPreparedNavigationResult,
   SlotCreateInput,
-  SlotHistoryEntryInput,
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
@@ -61,14 +61,12 @@ export class PanelInitClient {
       resolveSlotByEntity: (entityId) =>
         call<string | null>("workspace-state.slot.resolveByEntity", [entityId]),
       createSlot: (input: SlotCreateInput) => callVoid("workspace-state.slot.create", [input]),
-      appendSlotHistory: (slotId, entry: SlotHistoryEntryInput) =>
-        call<number>("workspace-state.slot.appendHistory", [slotId, entry]),
-      setSlotCurrent: (slotId, entryKey) =>
-        callVoid("workspace-state.slot.setCurrent", [slotId, entryKey]),
+      commitPreparedNavigation: (input) =>
+        call<SlotCommitPreparedNavigationResult>("workspace-state.slot.commitPreparedNavigation", [
+          input,
+        ]),
       updateCurrentStateArgs: (slotId, stateArgs) =>
         callVoid("workspace-state.slot.updateCurrentStateArgs", [slotId, stateArgs]),
-      replaceSlotHistory: (slotId, entries, cursor) =>
-        callVoid("workspace-state.slot.replaceHistory", [slotId, entries, cursor]),
       setSlotParent: (slotId, parentSlotId) =>
         callVoid("workspace-state.slot.setParent", [slotId, parentSlotId]),
       setSlotPosition: (slotId, positionId) =>
@@ -121,6 +119,7 @@ export class PanelInitClient {
     >;
     const source = String(init["sourceRepo"] ?? "");
     const contextId = String(init["contextId"] ?? "");
+    const buildKey = typeof init["buildKey"] === "string" ? init["buildKey"] : null;
     if (!source) throw new Error(`panel ${slotId} has no source`);
 
     const url = new URL(this.serverUrl);
@@ -130,6 +129,7 @@ export class PanelInitClient {
       : buildPanelUrl({
           source,
           contextId,
+          buildKey,
           ref: undefined,
           gatewayPort: Number.parseInt(url.port, 10) || (url.protocol === "https:" ? 443 : 80),
           basePath: basePath === "/" ? "" : basePath,

@@ -5,43 +5,71 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 const adblockMethods = defineServiceMethods({
-  getConfig: { args: z.tuple([]) },
-  setEnabled: { args: z.tuple([z.boolean()]) },
+  getConfig: { args: z.tuple([]), access: { sensitivity: "read" } },
+  setEnabled: { args: z.tuple([z.boolean()]), access: { sensitivity: "write" } },
   setListEnabled: {
     args: z.tuple([z.enum(["ads", "privacy", "annoyances", "social"]), z.boolean()]),
+    access: { sensitivity: "write" },
   },
-  addCustomList: { args: z.tuple([z.string()]) },
-  removeCustomList: { args: z.tuple([z.string()]) },
-  addToWhitelist: { args: z.tuple([z.string()]), policy: { allowed: ["shell", "panel"] } },
+  addCustomList: { args: z.tuple([z.string()]), access: { sensitivity: "write" } },
+  removeCustomList: {
+    args: z.tuple([z.string()]),
+    access: { sensitivity: "destructive" },
+  },
+  addToWhitelist: {
+    args: z.tuple([z.string()]),
+    authority: { principals: ["user", "code"] },
+    access: { sensitivity: "write" },
+  },
   removeFromWhitelist: {
     args: z.tuple([z.string()]),
-    policy: { allowed: ["shell", "panel"] },
+    authority: { principals: ["user", "code"] },
+    access: { sensitivity: "destructive" },
   },
-  getStats: { args: z.tuple([]), policy: { allowed: ["shell", "panel"] } },
-  resetStats: { args: z.tuple([]) },
-  rebuildEngine: { args: z.tuple([]) },
-  isActive: { args: z.tuple([]), policy: { allowed: ["shell", "panel"] } },
-  getStatsForPanel: { args: z.tuple([z.number()]), policy: { allowed: ["shell", "panel"] } },
+  getStats: {
+    args: z.tuple([]),
+    authority: { principals: ["user", "code"] },
+    access: { sensitivity: "read" },
+  },
+  resetStats: { args: z.tuple([]), access: { sensitivity: "destructive" } },
+  rebuildEngine: { args: z.tuple([]), access: { sensitivity: "write" } },
+  isActive: {
+    args: z.tuple([]),
+    authority: { principals: ["user", "code"] },
+    access: { sensitivity: "read" },
+  },
+  getStatsForPanel: {
+    args: z.tuple([z.number()]),
+    authority: { principals: ["user", "code"] },
+    access: { sensitivity: "read" },
+  },
   isEnabledForPanel: {
     args: z.tuple([z.number()]),
-    policy: { allowed: ["shell", "panel"] },
+    authority: { principals: ["user", "code"] },
+    access: { sensitivity: "read" },
   },
   setEnabledForPanel: {
     args: z.tuple([z.number(), z.boolean()]),
-    policy: { allowed: ["shell", "panel"] },
+    authority: { principals: ["user", "code"] },
+    access: { sensitivity: "write" },
   },
   resetStatsForPanel: {
     args: z.tuple([z.number()]),
-    policy: { allowed: ["shell", "panel"] },
+    authority: { principals: ["user", "code"] },
+    access: { sensitivity: "write" },
   },
-  getPanelUrl: { args: z.tuple([z.number()]), policy: { allowed: ["shell", "panel"] } },
+  getPanelUrl: {
+    args: z.tuple([z.number()]),
+    authority: { principals: ["user", "code"] },
+    access: { sensitivity: "read" },
+  },
 });
 
 export function createAdblockService(deps: { adBlockManager: AdBlockManager }): ServiceDefinition {
   return {
     name: "adblock",
     description: "Ad blocking configuration and stats",
-    policy: { allowed: ["shell"] },
+    authority: { principals: ["user", "host", "code"] },
     methods: adblockMethods,
     handler: defineServiceHandler("adblock", adblockMethods, {
       getConfig: () => deps.adBlockManager.getConfig(),

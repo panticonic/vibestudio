@@ -3,17 +3,15 @@ import {
   newsAgentKey,
   newsChannelName,
   relativeAge,
-  resolveNewsContextId,
+  requireNewsContextId,
   SUGGESTED_FEEDS,
   SUGGESTED_TOPICS,
 } from "./bootstrap.js";
 
-describe("resolveNewsContextId", () => {
-  it("prefers stateArgs, falls back to runtime, rejects blanks", () => {
-    expect(resolveNewsContextId("ctx-a", "ctx-b")).toBe("ctx-a");
-    expect(resolveNewsContextId(undefined, "ctx-b")).toBe("ctx-b");
-    expect(resolveNewsContextId("  ", undefined)).toBeUndefined();
-    expect(resolveNewsContextId(undefined, undefined)).toBeUndefined();
+describe("requireNewsContextId", () => {
+  it("uses only the host-bound panel context", () => {
+    expect(requireNewsContextId("ctx-b")).toBe("ctx-b");
+    expect(() => requireNewsContextId(undefined)).toThrow(/runtime has no workspace context/);
   });
 });
 

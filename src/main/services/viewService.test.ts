@@ -27,7 +27,7 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
             visible: true,
             bounds: { x: 0, y: 0, width: 800, height: 600 },
             capabilities,
-            appIdentity: opts.source
+            codeIdentity: opts.source
               ? { source: opts.source, effectiveVersion: "test" }
               : undefined,
           }

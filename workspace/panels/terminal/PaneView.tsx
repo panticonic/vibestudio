@@ -44,6 +44,20 @@ import "./terminal.css";
 
 const IMAGE_PASTE_HINT_KEY = "terminal.imagePasteScratchHintShown";
 
+const PANE_CONTROL_SELECTOR = [
+  "a[href]",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "[contenteditable]:not([contenteditable='false'])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function isPaneControl(target: EventTarget | null): target is Element {
+  return target instanceof Element && target.closest(PANE_CONTROL_SELECTOR) !== null;
+}
+
 declare global {
   interface Window {
     __vibestudioTerminalPaneTestRegistry?: Record<string, { serialize(): string }>;
@@ -78,6 +92,7 @@ export function PaneView(props: {
   onNotification(notification: ParsedNotification): void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const paneRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const terminalRef = useRef<VscodeTerminalInstance | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -173,7 +188,11 @@ export function PaneView(props: {
 
   useEffect(() => {
     if (!props.focused) return;
-    const frame = requestAnimationFrame(() => terminalRef.current?.focus());
+    const frame = requestAnimationFrame(() => {
+      const activeElement = document.activeElement;
+      if (paneRef.current?.contains(activeElement) && isPaneControl(activeElement)) return;
+      terminalRef.current?.focus();
+    });
     return () => cancelAnimationFrame(frame);
   }, [props.focused]);
 
@@ -274,10 +293,11 @@ export function PaneView(props: {
     terminalRef.current?.selectAll?.();
   }
 
-  function focusPane() {
+  function activatePane(target: EventTarget | null) {
     props.onFocus();
     void panel.focusPanel(panel.slotId).catch(() => {});
     window.focus();
+    if (isPaneControl(target)) return;
     requestAnimationFrame(() => terminalRef.current?.focus?.());
   }
 
@@ -339,8 +359,8 @@ export function PaneView(props: {
 
   // Jump from a context-scoped Claude Code session to its linked conversation
   // (docs/claude-code-channels-plan.md §8.1). Resolve the channel from the
-  // context via the claude-code extension, then open the chat panel with the
-  // { channelName, contextId } stateArgs the chat panel accepts.
+  // context via the claude-code extension, then open the chat panel in that
+  // explicit workspace branch. The channel remains ordinary panel state.
   const linkedContextId = props.session.contextId;
   const canOpenLinkedChat =
     props.session.detectedAgent?.kind === "claude-code" && Boolean(linkedContextId);
@@ -361,7 +381,8 @@ export function PaneView(props: {
       }
       await openPanel("panels/chat", {
         focus: true,
-        stateArgs: { channelName: resolved.channelId, contextId: linkedContextId },
+        contextId: linkedContextId,
+        stateArgs: { channelName: resolved.channelId },
       });
     } catch (err) {
       console.error("[terminal] jump to conversation failed:", err);
@@ -525,6 +546,7 @@ export function PaneView(props: {
 
   const pane = (
     <Flex
+      ref={paneRef}
       direction="column"
       style={{
         flex: 1,
@@ -537,8 +559,7 @@ export function PaneView(props: {
         background: "var(--gray-1)",
         boxShadow: paneAttentionShadow(props.severity),
       }}
-      onPointerDownCapture={focusPane}
-      onMouseDown={focusPane}
+      onPointerDownCapture={(event) => activatePane(event.target)}
       onPaste={(event) => void handlePasteEvent(event)}
       onDragEnter={(event) => {
         event.preventDefault();

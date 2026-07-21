@@ -253,9 +253,23 @@ export class PanelView implements PanelViewLike {
   // ==== PanelViewLike implementation ========================================
 
   async createViewForPanel(panelId: string, url: string, contextId?: string): Promise<void> {
+    const panel = this.panelRegistry.getPanel(panelId) as
+      | import("@vibestudio/shared/types").Panel
+      | undefined;
+    const identity = panel
+      ? {
+          source: panel.snapshot.source,
+          effectiveVersion: panel.effectiveVersion,
+          buildKey: panel.buildKey,
+          executionDigest: panel.executionDigest,
+          requested: panel.authorityRequests,
+          delegations: panel.authorityDelegations,
+        }
+      : undefined;
     if (this.viewManager.hasView(panelId)) {
+      this.viewManager.updateCodeIdentity(panelId, identity);
       const currentUrl = this.viewManager.getViewUrl(panelId);
-      if (currentUrl !== url) void this.viewManager.navigateView(panelId, url);
+      if (currentUrl !== url) await this.viewManager.navigateView(panelId, url);
       return;
     }
 
@@ -265,10 +279,10 @@ export class PanelView implements PanelViewLike {
       id: panelId,
       type: "panel",
       preload: this.panelPreloadPath ?? null,
-      url,
       parentId: parentId ?? undefined,
       partition: contextId ? contextIdToPartition(contextId) : undefined,
       injectHostThemeVariables: true,
+      codeIdentity: identity,
     });
 
     this.setupBrowserStateTracking(panelId, view.webContents);
@@ -283,6 +297,7 @@ export class PanelView implements PanelViewLike {
     this.contentLoadHandlers.set(panelId, { domReady: domReadyHandler });
 
     this.setupLinkInterception(panelId, view.webContents);
+    await this.viewManager.navigateView(panelId, url);
   }
 
   async createViewForApp(
@@ -307,16 +322,16 @@ export class PanelView implements PanelViewLike {
       id: appId,
       type: "app",
       preload: this.appPreloadPath,
-      url,
       partition: contextId ? contextIdToPartition(contextId) : undefined,
       injectHostThemeVariables: true,
       appCapabilities: capabilities,
       hostChrome: capabilities?.includes("panel-hosting") ?? false,
-      appIdentity: identity,
+      codeIdentity: identity,
     });
 
     this.setupBrowserStateTracking(appId, view.webContents);
     this.setupLinkInterception(appId, view.webContents);
+    await this.viewManager.navigateView(appId, url);
   }
 
   setViewVisible(panelId: string, visible: boolean): void {
@@ -340,7 +355,7 @@ export class PanelView implements PanelViewLike {
     this.viewManager.destroyView(panelId);
   }
 
-  reloadView(panelId: string): boolean {
+  reloadView(panelId: string): Promise<boolean> {
     return this.viewManager.reloadView(panelId);
   }
 
@@ -367,7 +382,7 @@ export class PanelView implements PanelViewLike {
   async createViewForBrowser(panelId: string, url: string, _contextId: string): Promise<void> {
     if (this.viewManager.hasView(panelId)) {
       const currentUrl = this.viewManager.getViewUrl(panelId);
-      if (currentUrl !== url) void this.viewManager.navigateView(panelId, url);
+      if (currentUrl !== url) await this.viewManager.navigateView(panelId, url);
       return;
     }
 
@@ -377,7 +392,6 @@ export class PanelView implements PanelViewLike {
       id: panelId,
       type: "panel",
       preload: this.browserPreloadPath ?? this.autofillPreloadPath ?? null,
-      url,
       parentId: parentId ?? undefined,
       partition: BROWSER_SESSION_PARTITION,
       injectHostThemeVariables: false,
@@ -400,6 +414,7 @@ export class PanelView implements PanelViewLike {
     }
 
     // No setupLinkInterception — browser panels navigate freely
+    await this.viewManager.navigateView(panelId, url);
   }
 
   // ==== Additional public methods ===========================================
@@ -433,10 +448,21 @@ export class PanelView implements PanelViewLike {
       return;
     }
     log.verbose(` Attempting reload of ${viewId}`);
-    if (!this.viewManager.reloadView(viewId)) {
-      console.warn(`[PanelView] Reload failed for ${viewId}, attempting view recreation`);
-      void this.recreatePanelView(viewId);
-    }
+    void this.viewManager
+      .reloadView(viewId)
+      .then((reloaded) => {
+        if (reloaded) return;
+        console.warn(`[PanelView] Reload failed for ${viewId}, attempting view recreation`);
+        return this.recreatePanelView(viewId);
+      })
+      .catch((error: unknown) => {
+        console.warn(
+          `[PanelView] Reload failed for ${viewId}: ${
+            error instanceof Error ? error.message : String(error)
+          }; attempting view recreation`
+        );
+        return this.recreatePanelView(viewId);
+      });
   }
 
   // ==== Browser state tracking ==============================================
@@ -525,7 +551,7 @@ export class PanelView implements PanelViewLike {
               log.info(
                 `Retrying transient main-frame load for ${panelId} (${transientMainFrameLoadRetries}/${MAX_TRANSIENT_MAIN_FRAME_LOAD_RETRIES}): ${url}`
               );
-              contents.loadURL(url).catch((error: unknown) => {
+              this.viewManager.retryViewNavigation(panelId, url).catch((error: unknown) => {
                 log.warn(
                   `[PanelView] Retry load failed for ${panelId}: ${
                     error instanceof Error ? error.message : String(error)
@@ -927,9 +953,15 @@ export class PanelView implements PanelViewLike {
   <details><summary>Technical details</summary><p>${escapeHtml(detail)}</p></details>
   ${targetUrl ? `<p><a href="${escapeHtml(targetUrl)}">Reload panel</a></p>` : panel ? "<p>Open the panel menu and choose Rebuild.</p>" : "<p>Restart Vibestudio from the launcher to recover the app shell.</p>"}
 </div></body></html>`;
-    void contents
-      .loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-      .catch(() => {});
+    void this.viewManager
+      .navigateView(panelId, `data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+      .catch((error: unknown) => {
+        log.warn(
+          `[PanelView] Failed to present error surface for ${panelId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
   }
 
   private shouldAttemptReload(viewId: string): boolean {

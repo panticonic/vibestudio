@@ -133,7 +133,7 @@ export function createRemoteCredService(deps: {
   return {
     name: "remoteCred",
     description: "Manage this desktop's encrypted WebRTC device pairing",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "code"] },
     methods: remoteCredMethods,
     handler: defineServiceHandler("remoteCred", remoteCredMethods, {
       getCurrent: (ctx) => {

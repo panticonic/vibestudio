@@ -24,6 +24,25 @@ export interface SlotHistoryEntryInput {
   options?: unknown;
 }
 
+export type SlotPreparedNavigationMutation =
+  | { kind: "append"; entry: SlotHistoryEntryInput }
+  | { kind: "replace"; entry: SlotHistoryEntryInput }
+  | { kind: "select"; entryKey: string };
+
+export interface SlotCommitPreparedNavigationInput {
+  slotId: PanelSlotId;
+  /** Compare-and-swap guard: the entity current when preparation began. */
+  expectedCurrentEntityId: PanelEntityId;
+  mutation: SlotPreparedNavigationMutation;
+}
+
+export interface SlotCommitPreparedNavigationResult {
+  previousEntityId: PanelEntityId;
+  currentEntityId: PanelEntityId;
+  currentEntryKey: string;
+  cursor: number;
+}
+
 export interface SlotCreateInput {
   slotId: PanelSlotId;
   parentSlotId: PanelSlotId | null;
@@ -74,14 +93,10 @@ export interface WorkspaceStateClient {
   resolveSlotByEntity(entityId: string): Promise<string | null>;
 
   createSlot(input: SlotCreateInput): Promise<void>;
-  appendSlotHistory(slotId: PanelSlotId, entry: SlotHistoryEntryInput): Promise<number>;
-  setSlotCurrent(slotId: PanelSlotId, entryKey: string): Promise<void>;
+  commitPreparedNavigation(
+    input: SlotCommitPreparedNavigationInput
+  ): Promise<SlotCommitPreparedNavigationResult>;
   updateCurrentStateArgs(slotId: PanelSlotId, stateArgs: unknown): Promise<void>;
-  replaceSlotHistory(
-    slotId: PanelSlotId,
-    entries: SlotHistoryEntryInput[],
-    cursor: number
-  ): Promise<void>;
   setSlotParent(slotId: PanelSlotId, parentSlotId: PanelSlotId | null): Promise<void>;
   setSlotPosition(slotId: PanelSlotId, positionId: string): Promise<void>;
   moveSlot(

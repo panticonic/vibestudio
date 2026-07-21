@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendInstalledAgent,
   buildAgentSubscriptionConfig,
-  resolveChatContextId,
+  requireChatContextId,
   sanitizeHandle,
   type InstalledAgentRecord,
 } from "./bootstrap.js";
@@ -37,25 +37,34 @@ describe("sanitizeHandle", () => {
   });
 
   it("always yields a base handle that (with a 4-char suffix) is a valid handle", () => {
-    for (const raw of ["Gmail Agent", "123-agent", "", "OnboardingAgentWorker", "a".repeat(200), "@#$%"]) {
+    for (const raw of [
+      "Gmail Agent",
+      "123-agent",
+      "",
+      "OnboardingAgentWorker",
+      "a".repeat(200),
+      "@#$%",
+    ]) {
       const handle = `${sanitizeHandle(raw)}-abcd`;
       expect(handle).toMatch(HANDLE_RE);
     }
   });
 });
 
-describe("resolveChatContextId", () => {
-  it("prefers the state-args context when present", () => {
-    expect(resolveChatContextId("ctx-from-state", "ctx-from-runtime")).toBe("ctx-from-state");
+describe("requireChatContextId", () => {
+  it("returns the host-bound panel context", () => {
+    expect(requireChatContextId("ctx-from-runtime")).toBe("ctx-from-runtime");
   });
 
-  it("falls back to the runtime context", () => {
-    expect(resolveChatContextId(undefined, "ctx-from-runtime")).toBe("ctx-from-runtime");
+  it("accepts a matching channel context claim", () => {
+    expect(requireChatContextId("ctx-from-runtime", "ctx-from-runtime")).toBe("ctx-from-runtime");
   });
 
-  it("returns null when no usable context is available", () => {
-    expect(resolveChatContextId(undefined, undefined)).toBeUndefined();
-    expect(resolveChatContextId("", "   ")).toBeUndefined();
+  it("rejects missing runtime context and mismatched channel claims", () => {
+    expect(() => requireChatContextId(undefined)).toThrow(/runtime has no workspace context/);
+    expect(() => requireChatContextId("ctx-panel", "ctx-other")).toThrow(
+      /does not match panel workspace context/
+    );
   });
 });
 

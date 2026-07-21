@@ -2,7 +2,12 @@ import * as path from "path";
 import { randomBytes } from "crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
-import type { Panel, PanelNavigationState, PanelSnapshot, ThemeAppearance } from "@vibestudio/shared/types";
+import type {
+  Panel,
+  PanelNavigationState,
+  PanelSnapshot,
+  ThemeAppearance,
+} from "@vibestudio/shared/types";
 import type { PanelSearchIndex } from "@vibestudio/shared/panelSearchTypes";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { loadPanelManifest } from "@vibestudio/shared/panelTypes";
@@ -25,12 +30,12 @@ import {
   updatePanelNavigationState,
 } from "@vibestudio/shared/panel/accessors";
 import { between as rankBetween, first as firstRank } from "@vibestudio/shared/lexorank";
-import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
+import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
   RuntimeClient,
-  SlotHistoryEntryInput,
+  SlotCommitPreparedNavigationResult,
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
@@ -315,6 +320,10 @@ export class PanelManager {
       title: manifest.title,
       runtimeEntityId: entityId,
       effectiveVersion: handle.source.effectiveVersion,
+      buildKey: handle.buildKey ?? null,
+      executionDigest: handle.executionDigest ?? null,
+      authorityRequests: handle.authorityRequests,
+      authorityDelegations: handle.authorityDelegations,
       ...(opts?.ownerUserId ? { owner: opts.ownerUserId } : {}),
       children: [],
       positionId,
@@ -406,6 +415,8 @@ export class PanelManager {
       title,
       runtimeEntityId: entityId,
       effectiveVersion: handle.source.effectiveVersion,
+      buildKey: handle.buildKey ?? null,
+      executionDigest: handle.executionDigest ?? null,
       ...(opts?.ownerUserId ? { owner: opts.ownerUserId } : {}),
       children: [],
       positionId,
@@ -632,8 +643,7 @@ export class PanelManager {
     const nextSnapshot = this.createNavigationSnapshot(panel, source, opts);
     const title = this.titleFor(slotId, nextSnapshot.source);
 
-    const previousEntityId =
-      this.currentEntityBySlot.get(slotId) ?? this.deriveEntityIdFromPanel(panel);
+    const previousEntityId = await this.resolveCurrentEntityIdForSlot(slotId);
 
     const historyEntryKey = mintHistoryEntryKey();
     const stateArgsPayload = (nextSnapshot.stateArgs ?? {}) as Record<string, unknown>;
@@ -647,15 +657,21 @@ export class PanelManager {
     });
     const entityId = asPanelEntityId(handle.id);
 
-    await this.workspaceState.appendSlotHistory(slotId, {
-      entryKey: historyEntryKey,
-      entityId,
-      source: nextSnapshot.source,
-      contextId: nextSnapshot.contextId,
-      stateArgs: stateArgsPayload,
-      options: nextSnapshot.options,
+    const transition = await this.workspaceState.commitPreparedNavigation({
+      slotId,
+      expectedCurrentEntityId: previousEntityId,
+      mutation: {
+        kind: "append",
+        entry: {
+          entryKey: historyEntryKey,
+          entityId,
+          source: nextSnapshot.source,
+          contextId: nextSnapshot.contextId,
+          stateArgs: stateArgsPayload,
+          options: nextSnapshot.options,
+        },
+      },
     });
-    await this.workspaceState.setSlotCurrent(slotId, historyEntryKey);
 
     this.recordOptionsForEntry(slotId, historyEntryKey, nextSnapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
@@ -667,15 +683,19 @@ export class PanelManager {
       livePanel.title = title;
       livePanel.runtimeEntityId = entityId;
       livePanel.effectiveVersion = handle.source.effectiveVersion;
+      livePanel.buildKey = handle.buildKey ?? null;
+      livePanel.executionDigest = handle.executionDigest ?? null;
+      livePanel.authorityRequests = handle.authorityRequests;
+      livePanel.authorityDelegations = handle.authorityDelegations;
       this.registry.replaceCurrentSnapshot(slotId, nextSnapshot, nextHistory);
     }
 
     this.indexPanel(slotId, title, nextSnapshot.source);
 
-    if (previousEntityId && previousEntityId !== entityId) {
-      await this.runtime.retireEntity(previousEntityId).catch((error: unknown) => {
+    if (transition.previousEntityId !== entityId) {
+      await this.runtime.retireEntity(transition.previousEntityId).catch((error: unknown) => {
         log.warn(
-          `Failed to retire panel entity ${previousEntityId} on navigate: ${
+          `Failed to retire panel entity ${transition.previousEntityId} on navigate: ${
             error instanceof Error ? error.message : String(error)
           }`
         );
@@ -731,17 +751,7 @@ export class PanelManager {
     const targetEntityId =
       slotHistory[targetIndex]?.entity_id ??
       asPanelEntityId(canonicalEntityId({ kind: "panel", key: targetEntryKey }));
-    const currentEntityId =
-      this.currentEntityBySlot.get(slotId) ?? this.deriveEntityIdFromPanel(before);
-    if (currentEntityId && currentEntityId !== targetEntityId) {
-      await this.runtime.retireEntity(currentEntityId).catch((error: unknown) => {
-        log.warn(
-          `Failed to retire panel entity ${currentEntityId} on history navigate: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      });
-    }
+    const currentEntityId = await this.resolveCurrentEntityIdForSlot(slotId);
 
     // Reactivate (or no-op for the same identity).
     const stateArgsPayload = (targetSnapshot.stateArgs ?? {}) as Record<string, unknown>;
@@ -753,8 +763,17 @@ export class PanelManager {
       stateArgs: stateArgsPayload,
       ref: targetSnapshot.options.ref,
     });
-    await this.workspaceState.setSlotCurrent(slotId, targetEntryKey);
     const entityId = asPanelEntityId(handle.id);
+    if (entityId !== targetEntityId) {
+      throw new Error(
+        `Prepared history entity mismatch: expected ${targetEntityId}, received ${entityId}`
+      );
+    }
+    const transition = await this.workspaceState.commitPreparedNavigation({
+      slotId,
+      expectedCurrentEntityId: currentEntityId,
+      mutation: { kind: "select", entryKey: targetEntryKey },
+    });
     this.currentEntityBySlot.set(slotId, entityId);
     this.currentEntitySourceBySlot.set(slotId, handle.source);
 
@@ -766,7 +785,20 @@ export class PanelManager {
     if (livePanel) {
       livePanel.runtimeEntityId = entityId;
       livePanel.effectiveVersion = handle.source.effectiveVersion;
+      livePanel.buildKey = handle.buildKey ?? null;
+      livePanel.executionDigest = handle.executionDigest ?? null;
+      livePanel.authorityRequests = handle.authorityRequests;
+      livePanel.authorityDelegations = handle.authorityDelegations;
       this.registry.replaceCurrentSnapshot(slotId, targetSnapshot, nextHistoryState);
+    }
+    if (transition.previousEntityId !== entityId) {
+      await this.runtime.retireEntity(transition.previousEntityId).catch((error: unknown) => {
+        log.warn(
+          `Failed to retire panel entity ${transition.previousEntityId} on history navigate: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
     }
     return this.registry.getPanel(slotId) ?? null;
   }
@@ -939,6 +971,7 @@ export class PanelManager {
       slotId,
       contextId: getPanelContextId(panel),
       effectiveVersion: (await this.getCurrentEntitySource(slotId))?.effectiveVersion ?? null,
+      buildKey: panel.buildKey ?? null,
       parentId,
       parentEntityId,
       source: getPanelSource(panel),
@@ -1026,12 +1059,12 @@ export class PanelManager {
     );
     const metadataBySource = await this.fetchPanelMetadataForHistories(histories);
 
-    const entitySourceById = new Map<string, { repoPath: string; effectiveVersion: string }>();
+    const entityById = new Map<string, EntityRecord>();
     await Promise.all(
       openSlots.map(async (slot) => {
         if (!slot.current_entity_id) return;
         const record = await this.workspaceState.resolveActiveEntity(slot.current_entity_id);
-        if (record?.source) entitySourceById.set(slot.current_entity_id, record.source);
+        if (record) entityById.set(slot.current_entity_id, record);
       })
     );
 
@@ -1050,7 +1083,8 @@ export class PanelManager {
       if (currentEntityId) {
         this.currentEntityBySlot.set(slot.slot_id, currentEntityId);
       }
-      const entitySource = currentEntityId ? entitySourceById.get(currentEntityId) : undefined;
+      const entity = currentEntityId ? entityById.get(currentEntityId) : undefined;
+      const entitySource = entity?.source;
       if (entitySource) this.currentEntitySourceBySlot.set(slot.slot_id, entitySource);
       const title = this.titleFor(
         slot.slot_id,
@@ -1063,6 +1097,8 @@ export class PanelManager {
         title,
         runtimeEntityId: currentEntityId,
         effectiveVersion: entitySource?.effectiveVersion ?? null,
+        buildKey: entity?.activeBuildKey ?? null,
+        executionDigest: entity?.activeExecutionDigest ?? null,
         ...(slot.owner_user_id ? { owner: slot.owner_user_id } : {}),
         children: [],
         positionId: slot.position_id,
@@ -1217,21 +1253,12 @@ export class PanelManager {
     return null;
   }
 
-  private deriveEntityIdFromPanel(panel: Panel): PanelEntityId | null {
-    const tracked = this.currentEntityBySlot.get(asPanelSlotId(panel.id));
-    if (tracked) return tracked;
-    return null;
-  }
-
   private async replaceHistoryAtCurrent(
     slotId: PanelSlotId,
     panel: Panel,
     nextSnapshot: PanelSnapshot
   ): Promise<void> {
-    const currentEntityId = this.currentEntityBySlot.get(slotId);
-    if (currentEntityId) {
-      await this.runtime.retireEntity(currentEntityId).catch(() => {});
-    }
+    const currentEntityId = await this.resolveCurrentEntityIdForSlot(slotId);
     const newEntryKey = mintHistoryEntryKey();
     const stateArgsPayload = (nextSnapshot.stateArgs ?? {}) as Record<string, unknown>;
     const handle = await this.runtime.createEntity({
@@ -1243,37 +1270,37 @@ export class PanelManager {
       ref: nextSnapshot.options.ref,
     });
     const entityId = asPanelEntityId(handle.id);
-
-    // Replace history at the current cursor (overwrite, not append).
-    const existing = await this.workspaceState.getSlotHistory(slotId);
-    const cursor = panel.history?.index ?? Math.max(0, existing.length - 1);
-    const nextEntries: SlotHistoryEntryInput[] = existing.map((row, idx) =>
-      idx === cursor
-        ? {
+    let transition: SlotCommitPreparedNavigationResult;
+    try {
+      transition = await this.workspaceState.commitPreparedNavigation({
+        slotId,
+        expectedCurrentEntityId: currentEntityId,
+        mutation: {
+          kind: "replace",
+          entry: {
             entryKey: newEntryKey,
             entityId,
             source: nextSnapshot.source,
             contextId: nextSnapshot.contextId,
             stateArgs: stateArgsPayload,
-          }
-        : {
-            entryKey: row.entry_key,
-            entityId: row.entity_id,
-            source: row.source,
-            contextId: row.context_id,
-            stateArgs: row.state_args ? this.safeParseJson(row.state_args) : undefined,
-          }
-    );
-    if (nextEntries.length === 0) {
-      nextEntries.push({
-        entryKey: newEntryKey,
-        entityId,
-        source: nextSnapshot.source,
-        contextId: nextSnapshot.contextId,
-        stateArgs: stateArgsPayload,
+            options: nextSnapshot.options,
+          },
+        },
       });
+    } catch (commitError) {
+      try {
+        await this.runtime.retireEntity(entityId);
+      } catch (retirementError) {
+        const combined = new Error(
+          `Atomic panel replacement failed for ${slotId}, and prepared entity ${entityId} could not be retired: ${
+            retirementError instanceof Error ? retirementError.message : String(retirementError)
+          }`
+        ) as Error & { causes: unknown[] };
+        combined.causes = [commitError, retirementError];
+        throw combined;
+      }
+      throw commitError;
     }
-    await this.workspaceState.replaceSlotHistory(slotId, nextEntries, cursor);
 
     this.recordOptionsForEntry(slotId, newEntryKey, nextSnapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
@@ -1283,12 +1310,25 @@ export class PanelManager {
     if (livePanel) {
       livePanel.runtimeEntityId = entityId;
       livePanel.effectiveVersion = handle.source.effectiveVersion;
+      livePanel.buildKey = handle.buildKey ?? null;
+      livePanel.executionDigest = handle.executionDigest ?? null;
+      livePanel.authorityRequests = handle.authorityRequests;
+      livePanel.authorityDelegations = handle.authorityDelegations;
       const history = panel.history ?? { entries: [getCurrentSnapshot(panel)], index: 0 };
       const entries = history.entries.slice();
       entries[history.index] = nextSnapshot;
       this.registry.replaceCurrentSnapshot(slotId, nextSnapshot, {
         entries,
         index: history.index,
+      });
+    }
+    if (transition.previousEntityId !== entityId) {
+      await this.runtime.retireEntity(transition.previousEntityId).catch((error: unknown) => {
+        log.warn(
+          `Failed to retire panel entity ${transition.previousEntityId} on replace-current: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       });
     }
   }

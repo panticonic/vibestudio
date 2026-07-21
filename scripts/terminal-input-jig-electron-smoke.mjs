@@ -12,10 +12,7 @@ const outDir = path.join(root, ".tmp/terminal-input-jig-smoke");
 const mainPath = path.join(outDir, "electron-main.mjs");
 
 await fs.promises.mkdir(outDir, { recursive: true });
-await fs.promises.copyFile(
-  path.join(sourceDir, "inputJig.html"),
-  path.join(outDir, "index.html")
-);
+await fs.promises.copyFile(path.join(sourceDir, "inputJig.html"), path.join(outDir, "index.html"));
 
 await esbuild.build({
   entryPoints: [path.join(sourceDir, "inputJig.tsx")],
@@ -25,7 +22,17 @@ await esbuild.build({
   target: "es2022",
   sourcemap: true,
   outfile: path.join(outDir, "inputJig.js"),
-  loader: { ".css": "css" },
+  loader: { ".css": "css", ".png": "file" },
+  plugins: [
+    {
+      name: "dedupe-react",
+      setup(build) {
+        build.onResolve({ filter: /^(?:react|react-dom)(?:\/.*)?$/ }, (args) => ({
+          path: require.resolve(args.path),
+        }));
+      },
+    },
+  ],
 });
 
 await fs.promises.writeFile(

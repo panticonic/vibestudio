@@ -12,6 +12,7 @@ import {
   type RpcClient,
   type RpcEnvelope,
 } from "@vibestudio/rpc";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -483,6 +484,7 @@ async function connectRpcWebSocket(options: {
       ws.send(
         JSON.stringify({
           type: "ws:auth",
+          contractVersion: RPC_CONTRACT_VERSION,
           token: options.token,
           clientLabel: options.clientLabel,
           clientPlatform: "desktop",

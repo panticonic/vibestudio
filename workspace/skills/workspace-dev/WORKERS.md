@@ -28,7 +28,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `createDisposableRemote`, `publishToDisposableRemote`, `pushDisposableRemote`, `inspectDisposableRemote`, `removeDisposableRemote`, `commitMapping`, `importProject`, `completeWorkspaceDependencies` | Typed external Git operations routed through the workspace's configured gitInterop provider. |
 | `vcs` | namespace | `edit`, `move`, `copy`, `integrate`, `revert`, `commit`, `discard`, `importSnapshot`, `push`, `status`, `compare`, `inspect`, `neighbors`, `history`, `blame`, `resolveRepository`, `readFile`, `listFiles` | Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, and directly walkable provenance. |
 | `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryEvents`, `appendChannelEnvelope`, `appendChannelEnvelopeWithRegistryMutation`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
-| `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree`, `delete`, `list`, `putBytes`, `readText` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string \| null. Runtime-only putBytes(Uint8Array \| ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
+| `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree`, `delete`, `list`, `putBytes`, `getBytes`, `readText` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string \| null. Runtime-only putBytes(Uint8Array \| ArrayBuffer) and getBytes(digest) losslessly bridge the wire's base64 representation; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` | Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings. |
 | `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on`, `list`, `reload` |  |
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
@@ -52,6 +52,14 @@ For panel navigation options, `contextId` changes the target panel's
 filesystem/storage context and `ref` selects the code build. Never rely on
 `contextId` to imply `ctx:<contextId>`; pass `ref` explicitly when replacing a
 panel with context-branch code.
+
+A context is the complete workspace branch across every repository. Repository
+or vault selection is ordinary state inside that branch. Panels, their channels,
+and agents launched from them share the panel's host-bound context; never put a
+second authoritative context in `stateArgs`. New branches come only from the
+explicit fork/clone/subagent lifecycle APIs. A panel may move to an existing
+branch only through `panel.switchContext(contextId, opts?)` or an explicit
+panel-tree navigation carrying `contextId`.
 
 For workers and Durable Objects, the owning `contextId` also selects the
 default semantic working state. Omit `ref` to follow that context; use `ref: "main"` only
@@ -339,6 +347,12 @@ through `workers.resolveService(...)` / `workers.resolveDurableObject(...)` and
 separate `rpc.call(...)` calls as shown above. This is the integration path: it
 uses workerd, the declared service policy, the method's `@rpc` caller policy,
 and the object's persistent SQLite database.
+
+Prefer `resolveService(...)` whenever a service exists. Raw
+`resolveDurableObject(...)` may address workspace worker DO classes, but
+product-internal DOs are closed unless the exact source/class/object-key target
+is present in the reviewed product catalog. An exported internal class is not a
+class-wide grant, and a different key is a different, unauthorized target.
 
 For fast Vitest-only unit coverage, keep storage logic in methods like the above
 and use `createTestDO(...)` in a co-located worker test. That helper is

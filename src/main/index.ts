@@ -121,10 +121,12 @@ function surfaceMainProcessFatal(title: string, error: unknown): void {
 // "A JavaScript Error Occurred in the main process" alert. Vibestudio should log
 // these errors instead of interrupting the user with generic native dialogs.
 process.on("uncaughtException", (error) => {
+  recordMainProcessError("uncaughtException", error);
   console.error("[App] Uncaught exception in main process:", formatUnknownError(error));
   surfaceMainProcessFatal("Vibestudio encountered an internal error", error);
 });
 process.on("unhandledRejection", (reason) => {
+  recordMainProcessError("unhandledRejection", reason);
   console.error("[App] Unhandled rejection in main process:", formatUnknownError(reason));
   surfaceMainProcessFatal("A Vibestudio operation failed", reason);
 });
@@ -144,6 +146,7 @@ import { PanelPinStore } from "./panelPinStore.js";
 import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_DESKTOP } from "@vibestudio/shared/constants";
 import type { PanelView } from "./panelView.js";
 import type { AppAvailableEvent } from "./appOrchestrator.js";
+import { readyElectronLaunchEvent } from "./hostTargetLaunchAdapter.js";
 import { resolveElectronViewCaller } from "./callerResolution.js";
 import { setMenuPanelLifecycle, setMenuPanelRegistry, setMenuEventService } from "./menu.js";
 import { getAppRoot } from "./paths.js";
@@ -189,20 +192,27 @@ import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
 
 import {
+  createHostCaller,
   createVerifiedCaller,
   ServiceDispatcher,
   parseServiceMethod,
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
+import { authorizeVerifiedCaller } from "../server/services/authorityRuntime.js";
 import { autofillMethods } from "@vibestudio/service-schemas/autofill";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
-import { createEventsServiceDefinition } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
 import { callerHasPlatformCapability, viewHasAppCapability } from "./services/appCapabilities.js";
 import { assertPresent } from "../lintHelpers";
 import { ApplicationWindowController } from "./applicationWindowController.js";
+import { AsyncStateConvergenceLoop } from "./asyncStateConvergenceLoop.js";
+import { recordMainProcessError } from "./mainProcessErrorLedger.js";
+import {
+  clearPanelInitializationFailure,
+  recordPanelInitializationFailure,
+} from "./panelInitializationFailure.js";
 
 // =============================================================================
 // Early Diagnostics (enabled via VIBESTUDIO_DEBUG_PATHS=1)
@@ -293,9 +303,9 @@ let cdpHostProvider: CdpHostProvider | null = null;
 let panelRegistry: PanelRegistry | null = null;
 let panelOrchestrator: PanelOrchestrator | null = null;
 let pendingReadyElectronLaunch: AppAvailableEvent | null = null;
-let electronHostLaunchTimer: ReturnType<typeof setTimeout> | null = null;
 let electronHostLaunchBlockedByApproval = false;
-let electronHostLaunchInFlight = false;
+let electronHostTargetSyncLoop: AsyncStateConvergenceLoop<ElectronHostTargetSyncResult> | null =
+  null;
 let bootstrapWorkspaceRpcReady = false;
 let bootstrapStartupDetail: string | null = null;
 let desktopAutoUpdater: {
@@ -368,6 +378,7 @@ const applicationWindow = new ApplicationWindowController({
   initializePanelTreeOnce,
   onWindowClosed: () => {
     panelTreeInitializationStarted = false;
+    clearPanelInitializationFailure();
     appliedElectronHostTargetKey = null;
     electronHostLaunchLastStatusKey = null;
   },
@@ -1017,58 +1028,12 @@ async function handleCredentialSessionCaptureRequest(
   }
 }
 
-function readyElectronLaunchEvent(result: unknown): AppAvailableEvent | null {
-  const launch =
-    typeof result === "object" && result !== null
-      ? (result as {
-          status?: unknown;
-          appId?: unknown;
-          source?: unknown;
-          artifactRoute?: unknown;
-          capabilities?: unknown;
-          buildKey?: unknown;
-          effectiveVersion?: unknown;
-          adoptionPolicy?: unknown;
-        })
-      : null;
-  if (launch?.status !== "ready") return null;
-  if (typeof launch.appId !== "string" || typeof launch.source !== "string") {
-    log.warn("[apps] Electron host target is ready but did not include hosted app metadata");
-    return null;
-  }
-  const artifactRoute =
-    typeof launch.artifactRoute === "string" && isAppArtifactRoute(launch.artifactRoute)
-      ? launch.artifactRoute
-      : null;
-  if (!artifactRoute) {
-    log.warn("[apps] Electron host target is ready but did not include an app artifact route");
-    return null;
-  }
-  const url = resolveElectronAppArtifactRoute(artifactRoute);
-  if (!url) {
-    return null;
-  }
-  return {
-    appId: launch.appId,
-    source: launch.source,
-    target: "electron",
-    url,
-    ...(artifactRoute ? { artifactRoute } : {}),
-    capabilities: Array.isArray(launch.capabilities)
-      ? (launch.capabilities as import("@vibestudio/shared/unitManifest").AppCapability[])
-      : [],
-    buildKey: typeof launch.buildKey === "string" ? launch.buildKey : null,
-    effectiveVersion: typeof launch.effectiveVersion === "string" ? launch.effectiveVersion : null,
-    adoptionPolicy:
-      launch.adoptionPolicy === "prompt" || launch.adoptionPolicy === "artifact-only"
-        ? launch.adoptionPolicy
-        : "immediate",
-    selectedForHost: true,
-  };
-}
-
 async function applyReadyElectronLaunchResult(result: unknown): Promise<boolean> {
-  const event = readyElectronLaunchEvent(result);
+  const event = readyElectronLaunchEvent(result, {
+    resolveArtifactRoute: (route) =>
+      isAppArtifactRoute(route) ? resolveElectronAppArtifactRoute(route) : null,
+    warn: (message) => log.warn(`[apps] ${message}`),
+  });
   if (!event) return false;
   const appOrchestrator = applicationWindow.appOrchestrator;
   if (!appOrchestrator) {
@@ -1237,24 +1202,33 @@ function initializePanelTreeOnce(reason: string): void {
   const orchestrator = panelOrchestrator;
   if (!orchestrator) return;
   panelTreeInitializationStarted = true;
+  clearPanelInitializationFailure();
   log.info(`[panels] Initializing panel tree after ${reason}`);
-  orchestrator.initializePanelTree().catch((error) => {
-    panelTreeInitializationStarted = false;
-    console.error("[App] Failed to initialize panel tree:", error);
-    eventService.emit("panel-initialization-error", {
-      path: "",
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
+  orchestrator.initializePanelTree().then(
+    () => clearPanelInitializationFailure(),
+    (error) => {
+      panelTreeInitializationStarted = false;
+      const failure = recordPanelInitializationFailure(reason, error);
+      console.error("[App] Failed to initialize panel tree:", error);
+      eventService.emit("panel-initialization-error", {
+        path: "",
+        error: failure.message,
+      });
+    }
+  );
 }
 
 function stopElectronHostTargetLaunchLoop(): void {
-  if (!electronHostLaunchTimer) return;
-  clearTimeout(electronHostLaunchTimer);
-  electronHostLaunchTimer = null;
+  electronHostTargetSyncLoop?.stop();
+  electronHostTargetSyncLoop = null;
 }
 
-type ElectronHostTargetSyncResult = "adopted" | "blocked-by-approval" | "preparing" | "retry";
+type ElectronHostTargetSyncResult =
+  | "adopted"
+  | "blocked-by-approval"
+  | "preparing"
+  | "waiting-for-change"
+  | "retry";
 
 function rememberElectronHostLaunchStatus(
   status: string,
@@ -1308,7 +1282,7 @@ async function syncElectronHostTarget(
         log.warn("[apps] No launchable Electron host target is selected");
       }
     }
-    return "retry";
+    return "waiting-for-change";
   } catch (error) {
     log.warn(
       `[apps] Failed to synchronize Electron host target: ${
@@ -1323,37 +1297,23 @@ function startElectronHostTargetLaunchLoop(serverClient: Pick<ServerClient, "cal
   stopElectronHostTargetLaunchLoop();
   electronHostLaunchBlockedByApproval = false;
   electronHostLaunchLastStatusKey = null;
-  scheduleElectronHostTargetLaunch(serverClient);
-}
-
-function scheduleElectronHostTargetLaunch(
-  serverClient: Pick<ServerClient, "call">,
-  delayMs = 0
-): void {
-  if (electronHostLaunchTimer) return;
-  electronHostLaunchTimer = setTimeout(() => {
-    electronHostLaunchTimer = null;
-    if (electronHostLaunchInFlight) return;
-    electronHostLaunchInFlight = true;
-    void syncElectronHostTarget(serverClient).finally(() => {
-      electronHostLaunchInFlight = false;
-    });
-  }, delayMs);
+  electronHostTargetSyncLoop = new AsyncStateConvergenceLoop(
+    () => syncElectronHostTarget(serverClient),
+    (result) => result === "preparing" || result === "retry",
+    1_000
+  );
+  electronHostTargetSyncLoop.start();
 }
 
 function retryElectronHostTargetLaunchAfterApprovalChange(pending: PendingApproval[]): void {
   if (!electronHostLaunchBlockedByApproval) return;
   if (filterBootstrapApprovalsForTarget(pending, "electron").length > 0) return;
-  const client = serverSession?.serverClient;
-  if (!client) return;
-  scheduleElectronHostTargetLaunch(client);
+  electronHostTargetSyncLoop?.request();
 }
 
 function retryElectronHostTargetLaunchAfterAppEvent(change: ServerHostTargetChangeEvent): void {
   if (!shouldSyncElectronHostTargetForChange(change)) return;
-  const client = serverSession?.serverClient;
-  if (!client) return;
-  scheduleElectronHostTargetLaunch(client);
+  electronHostTargetSyncLoop?.request();
 }
 
 type BootstrapWorkspaceEntry = { name: string; lastOpened: number };
@@ -1946,6 +1906,40 @@ app.on("ready", async () => {
   }
 
   const dispatcher = new ServiceDispatcher();
+  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+    authorizeVerifiedCaller(caller, {
+      workspaceId,
+      workspaceMember: true,
+      sessionId: `electron-main:${workspaceId}`,
+      audience: "electron-main-services",
+      capability,
+      resourceKey,
+    })
+  );
+
+  const codeIdentityForView = (callerId: string) => {
+    const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
+    if (viewInfo?.type !== "app" && viewInfo?.type !== "panel") return null;
+    const identity = viewInfo.codeIdentity;
+    if (
+      !identity?.source ||
+      !identity.effectiveVersion ||
+      !identity.executionDigest ||
+      !identity.requested ||
+      !identity.delegations
+    ) {
+      return null;
+    }
+    return {
+      callerId,
+      callerKind: viewInfo.type,
+      repoPath: identity.source,
+      effectiveVersion: identity.effectiveVersion,
+      executionDigest: identity.executionDigest,
+      requested: identity.requested,
+      delegations: identity.delegations,
+    } as const;
+  };
 
   performance.mark("startup:services-registered");
 
@@ -2050,6 +2044,20 @@ app.on("ready", async () => {
     },
     onCredentialCaptureRequest: (payload) =>
       handleCredentialSessionCaptureRequest(payload as CredentialSessionCaptureRequest),
+    onNotificationAction: async (_id, actionId) => {
+      if (actionId === "desktop-update-download") {
+        if (!desktopAutoUpdater) throw new Error("Desktop updater is unavailable");
+        await desktopAutoUpdater.downloadUpdate();
+      } else if (actionId === "desktop-update-install") {
+        if (!desktopAutoUpdater) throw new Error("Desktop updater is unavailable");
+        desktopAutoUpdater.quitAndInstall();
+      } else if (actionId.startsWith("oauth-cancel:")) {
+        const transactionId = actionId.slice("oauth-cancel:".length);
+        const client = serverClientRef;
+        if (!client) throw new Error("The server connection is unavailable");
+        await client.call("credentials", "cancelOAuth", [{ transactionId }]);
+      }
+    },
   });
   const serverEventSubscriptions = createServerEventSubscriptionBridge({
     getServerClient: () => serverClientRef,
@@ -2182,6 +2190,7 @@ app.on("ready", async () => {
       "panel:runtimeLeaseChanged",
       "shell-approval:pending-changed",
       "credential:capture-request",
+      "notification:action",
     ]);
     // Seed badge/seen-set from approvals already pending at launch without
     // firing OS notifications for them — the bar shows them once the shell
@@ -2242,18 +2251,7 @@ app.on("ready", async () => {
         const viewInfo = viewManager.getViewInfo(callerId);
         return resolveElectronViewCaller(callerId, viewInfo);
       },
-      getCodeIdentityForCaller: (callerId) => {
-        const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
-        if (viewInfo?.type !== "app") return null;
-        const identity = viewInfo.appIdentity;
-        if (!identity?.source || !identity.effectiveVersion) return null;
-        return {
-          callerId,
-          callerKind: "app",
-          repoPath: identity.source,
-          effectiveVersion: identity.effectiveVersion,
-        };
-      },
+      getCodeIdentityForCaller: codeIdentityForView,
       getWebContentsForCaller: (callerId) =>
         applicationWindow.viewManager?.getWebContents(callerId) ?? null,
       getPanelRuntimeConnection: (panelId) => panelOrchestrator?.getPanelRuntimeConnection(panelId),
@@ -2486,9 +2484,8 @@ app.on("ready", async () => {
     const { createViewService } = await import("./services/viewService.js");
     const { createPaletteService } = await import("./services/paletteService.js");
     const { createMenuService } = await import("./services/menuService.js");
-    const { createNotificationService } = await import("./services/notificationService.js");
-    const { createSettingsService } = await import("./services/settingsService.js");
     const { createAdblockService } = await import("./services/adblockService.js");
+    const { createDesktopEventsService } = await import("./services/desktopEventsService.js");
     // FS and git-local services removed — server owns these via panel service
     const { createBrowserDataClient } = await import("@vibestudio/browser-data");
 
@@ -2536,30 +2533,9 @@ app.on("ready", async () => {
         serverClient: sc,
       })
     );
-    electronContainer.registerRpc(
-      createNotificationService({
-        eventService,
-        getViewManager,
-        onAction: async (_id, actionId) => {
-          if (actionId === "desktop-update-download") {
-            if (!desktopAutoUpdater) throw new Error("Desktop updater is unavailable");
-            await desktopAutoUpdater.downloadUpdate();
-          } else if (actionId === "desktop-update-install") {
-            if (!desktopAutoUpdater) throw new Error("Desktop updater is unavailable");
-            desktopAutoUpdater.quitAndInstall();
-          } else if (actionId.startsWith("oauth-cancel:")) {
-            const transactionId = actionId.slice("oauth-cancel:".length);
-            const client = serverClientRef;
-            if (!client) throw new Error("The server connection is unavailable");
-            await client.call("credentials", "cancelOAuth", [{ transactionId }]);
-          }
-        },
-      })
-    );
     // Current-workspace operations route to the selected child. Server-wide
     // catalog/account control routes to the stable hub through the host service
     // above; the child is never a control-plane deputy.
-    electronContainer.registerRpc(createSettingsService({ serverClient: sc, getViewManager }));
     const { createRemoteCredService } = await import("./services/remoteCredService.js");
     electronContainer.registerRpc(
       createRemoteCredService({
@@ -2618,19 +2594,13 @@ app.on("ready", async () => {
       method: keyof typeof autofillMethods,
       args: unknown[]
     ): Promise<unknown> => {
-      if (
-        ctx.caller.runtime.kind === "panel" &&
-        ctx.caller.code?.repoPath !== "about/credentials"
-      ) {
-        throw new Error("Only the trusted Credentials page may manage browser passwords");
-      }
       if (!autofillManager) throw new Error("Autofill not initialized");
       return autofillManager.getServiceDefinition().handler(ctx, method, args);
     };
     electronContainer.registerRpc({
       name: "autofill",
       description: "Password autofill management",
-      policy: { allowed: ["shell", "panel"] },
+      authority: { principals: ["user", "host", "code"] },
       methods: autofillMethods,
       handler: defineServiceHandler("autofill", autofillMethods, {
         confirmSave: (ctx, args) => invokeAutofill(ctx, "confirmSave", args),
@@ -2652,7 +2622,8 @@ app.on("ready", async () => {
         return viewHasAppCapability(caller.runtime.id, viewInfo, "panel-hosting");
       };
       electronContainer.registerRpc(
-        createEventsServiceDefinition(eventService, {
+        createDesktopEventsService({
+          eventService,
           snapshots: {
             "panel-tree-updated": () => panelRegistry?.getPanelTreeSnapshot(),
           },
@@ -2707,19 +2678,6 @@ app.on("ready", async () => {
     ): { callerId: string; callerKind: "shell" | "panel" | "app" } => {
       const callerId = resolveCallerId(event);
       return resolveElectronViewCaller(callerId, getViewManager().getViewInfo(callerId));
-    };
-
-    const codeIdentityForCallerId = (callerId: string) => {
-      const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
-      if (viewInfo?.type !== "app") return null;
-      const identity = viewInfo.appIdentity;
-      if (!identity?.source || !identity.effectiveVersion) return null;
-      return {
-        callerId,
-        callerKind: "app" as const,
-        repoPath: identity.source,
-        effectiveVersion: identity.effectiveVersion,
-      };
     };
 
     /**
@@ -2831,17 +2789,16 @@ app.on("ready", async () => {
         authorizeAppServerCall(callerId, parsed.service, parsed.method, args);
         return sc.callAs({ callerId, callerKind }, parsed.service, parsed.method, args);
       }
-      return dispatcher.dispatch(
-        { caller: createVerifiedCaller(callerId, callerKind, codeIdentityForCallerId(callerId)) },
-        parsed.service,
-        parsed.method,
-        args
-      );
+      const caller =
+        callerKind === "shell"
+          ? createHostCaller(callerId, "shell")
+          : createVerifiedCaller(callerId, callerKind, codeIdentityForView(callerId));
+      return dispatcher.dispatch({ caller }, parsed.service, parsed.method, args);
     });
     ipcMain.handle("vibestudio:isLocalService", (event, service: unknown) => {
       const { callerKind } = resolveCaller(event);
       if (callerKind !== "shell" && callerKind !== "app" && callerKind !== "panel") return false;
-      return typeof service === "string" && dispatcher.routesToHost(service, callerKind);
+      return typeof service === "string" && dispatcher.hasService(service);
     });
 
     // Workspace RPC is now registered; the bootstrap shell may leave its

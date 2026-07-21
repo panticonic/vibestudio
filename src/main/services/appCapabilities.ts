@@ -25,7 +25,7 @@ export function viewHasAppCapability(
 ): boolean {
   if (viewInfo?.type !== "app" || !viewInfo.capabilities.includes(capability)) return false;
   if (capability !== "panel-hosting") return true;
-  return isAuthorizedChromeAppCaller(callerId, viewInfo.appIdentity?.source);
+  return isAuthorizedChromeAppCaller(callerId, viewInfo.codeIdentity?.source);
 }
 
 export function requireAppCapability(

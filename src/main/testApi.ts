@@ -10,6 +10,17 @@ import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelView } from "./panelView.js";
 import type { Panel, PanelLifecycleResult } from "@vibestudio/shared/types";
 import { webContents as electronWebContents } from "electron";
+import { getPanelSource } from "@vibestudio/shared/panel/accessors";
+import { panelReadinessSnapshot, type PanelReadinessSnapshot } from "./panelReadiness.js";
+import {
+  clearMainProcessErrors,
+  readMainProcessErrors,
+  type MainProcessErrorRecord,
+} from "./mainProcessErrorLedger.js";
+import {
+  readPanelInitializationFailure,
+  type PanelInitializationFailure,
+} from "./panelInitializationFailure.js";
 
 export type PanelDiagnostic = {
   type: "console" | "did-fail-load" | "render-process-gone" | "unresponsive";
@@ -38,6 +49,8 @@ export interface PanelLayoutAudit {
     height: number;
   }>;
 }
+
+export type { PanelReadinessSnapshot } from "./panelReadiness.js";
 
 export interface TestApi {
   /** Get the full panel tree as a flat array */
@@ -73,8 +86,15 @@ export interface TestApi {
   /** Reload a panel in place */
   reloadPanel(id: string): Promise<PanelLifecycleResult>;
 
-  /** Check if a panel's view is loaded */
-  isPanelLoaded(panelId: string): boolean;
+  /** Read all terminal-readiness signals for a panel. */
+  getPanelReadiness(panelId: string): PanelReadinessSnapshot;
+
+  /** Main-process failures captured since the last ledger clear. */
+  readMainProcessErrors(): MainProcessErrorRecord[];
+  clearMainProcessErrors(): void;
+
+  /** Caught terminal failure of the current panel-tree initialization attempt. */
+  readPanelInitializationFailure(): PanelInitializationFailure | null;
 
   /** Read text content from a panel's WebContents */
   getPanelText(panelId: string): Promise<string>;
@@ -243,11 +263,34 @@ export function setupTestApi(
       return panelOrchestrator.reloadPanel(id);
     },
 
-    isPanelLoaded(panelId): boolean {
-      if (!panelView) return false;
-      const wc = panelView.getWebContents(panelId);
-      return wc !== null && !wc.isDestroyed();
+    getPanelReadiness(panelId): PanelReadinessSnapshot {
+      const panel = panelRegistry.getPanel(panelId);
+      const wc = panelView?.getWebContents(panelId) ?? null;
+      const viewExists = !!wc && !wc.isDestroyed();
+      const artifacts = panel?.artifacts;
+      const nativeSlotBound =
+        panelView
+          ?.getViewManager()
+          .getNativePanelSlotDebugInfo()
+          .some((slot) => slot.panelId === panelId) ?? false;
+      const url = viewExists ? wc.getURL() : null;
+      const isLoading = viewExists ? wc.isLoading() : null;
+      const buildState = artifacts?.buildState ?? null;
+      const htmlPath = artifacts?.htmlPath ?? null;
+      const error = artifacts?.error ?? null;
+      return panelReadinessSnapshot({
+        panelId,
+        source: panel ? getPanelSource(panel) : null,
+        view: { exists: viewExists, url, isLoading },
+        artifacts: { buildState, htmlPath, error },
+        runtime: panel?.state?.runtime ?? null,
+        nativeSlotBound,
+      });
     },
+
+    readMainProcessErrors,
+    clearMainProcessErrors,
+    readPanelInitializationFailure,
 
     async getPanelText(panelId): Promise<string> {
       if (!panelView) throw new Error("PanelView not available");

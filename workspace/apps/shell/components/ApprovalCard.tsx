@@ -54,6 +54,7 @@ import {
   getApprovalAttribution,
   getApprovalCopy,
   getApprovalOperationKindLabel,
+  getRecommendedStandardDecision,
   getRequesterCategoryLabel,
   getStandardActionCopy,
   getUnitBatchActionCopy,
@@ -146,7 +147,11 @@ export function ApprovalCard({
           approval.options.find((option) => option.tone === "primary") ?? approval.options[0];
         if (primary) emitForApproval({ type: "resolve-userland", choice: primary.value });
       } else if (approval.kind !== "device-code") {
-        emitForApproval({ type: "decide", decision: "once" });
+        emitForApproval({
+          type: "decide",
+          decision:
+            approval.kind === "unit-batch" ? "once" : getRecommendedStandardDecision(approval),
+        });
       }
     }
   };
@@ -599,14 +604,15 @@ function StandardApprovalActions({
   onBlock: () => void;
 }) {
   const copy = getStandardActionCopy(approval);
+  const recommendedDecision = getRecommendedStandardDecision(approval);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       <DecisionButton
         label={copy.once.label}
         description={copy.once.description}
-        color={isSevereCapability ? "amber" : "sky"}
-        variant="solid"
+        color={recommendedDecision === "once" ? (isSevereCapability ? "amber" : "sky") : undefined}
+        variant={recommendedDecision === "once" ? "solid" : "surface"}
         onClick={() => decide("once")}
       />
       {copy.session && (
@@ -621,7 +627,10 @@ function StandardApprovalActions({
         <DecisionButton
           label={copy.version.label}
           description={copy.version.description}
-          variant="surface"
+          color={
+            recommendedDecision === "version" ? (isSevereCapability ? "red" : "sky") : undefined
+          }
+          variant={recommendedDecision === "version" ? "solid" : "surface"}
           onClick={() => decide("version")}
         />
       )}

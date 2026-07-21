@@ -22,7 +22,7 @@ export function createHubControlHostService(deps: {
   return {
     name: "hubControl",
     description: "Stable server-wide account and workspace control",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "host", "code"] },
     methods: hubControlMethods,
     handler: defineServiceHandler(
       "hubControl",

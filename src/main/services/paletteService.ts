@@ -28,7 +28,7 @@ export function createPaletteService(deps: {
   return {
     name: "palette",
     description: "App-level command palette contributions",
-    policy: { allowed: ["shell", "app", "panel"] },
+    authority: { principals: ["user", "code"] },
     methods: paletteMethods,
     handler: defineServiceHandler("palette", paletteMethods, {
       register: (ctx, [commands]) => {

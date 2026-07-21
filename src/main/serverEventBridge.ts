@@ -33,6 +33,8 @@ export interface ServerEventBridgeDeps {
    * capture. The handler answers with `credentials.completeCapture`.
    */
   onCredentialCaptureRequest?(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
+  /** Apply actions whose implementation is owned by this desktop host. */
+  onNotificationAction?(id: string, actionId: string): void | Promise<void>;
 }
 
 export interface ServerHostTargetChangeEvent {
@@ -142,6 +144,21 @@ export function createServerEventBridge(
 
     const attention = notificationAttention(bareEvent, payload);
     if (attention) deps.onAttentionRequired?.(attention.title, attention.message);
+
+    if (bareEvent === "notification:action") {
+      const action = payload as { id?: unknown; actionId?: unknown };
+      if (typeof action.id === "string" && typeof action.actionId === "string") {
+        void Promise.resolve(deps.onNotificationAction?.(action.id, action.actionId)).catch(
+          (error: unknown) => {
+            deps.warn(
+              `[notification] desktop action failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        );
+      }
+    }
 
     if (bareEvent === "credential:capture-request") {
       const request = payload as Record<string, unknown>;

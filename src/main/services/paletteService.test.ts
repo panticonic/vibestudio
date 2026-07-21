@@ -39,8 +39,8 @@ function harness() {
   const viewManager = {
     getViewInfo: (id: string) =>
       id === "@workspace-apps/shell"
-        ? { type: "app", capabilities: ["panel-hosting"], appIdentity: { source: "apps/shell" } }
-        : { type: "app", capabilities: [], appIdentity: { source: "apps/news" } },
+        ? { type: "app", capabilities: ["panel-hosting"], codeIdentity: { source: "apps/shell" } }
+        : { type: "app", capabilities: [], codeIdentity: { source: "apps/news" } },
   } as unknown as ViewManager;
   const service = createPaletteService({
     panelOrchestrator: orchestrator as never,

@@ -28,7 +28,7 @@ export function createMenuService(deps: {
   return {
     name: "menu",
     description: "Native menus",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "code"] },
     methods: menuMethods,
     handler: defineServiceHandler("menu", menuMethods, {
       showHamburger: (ctx, [position]) => {
