@@ -383,6 +383,7 @@ describe("rpcClient", () => {
     await expect(client.call("auth.getConnectionInfo", [])).rejects.toThrow(
       "different server or workspace"
     );
+    await expect(client.close()).resolves.toBeUndefined();
     expect(webRtcMocks.ctor).not.toHaveBeenCalled();
   });
 

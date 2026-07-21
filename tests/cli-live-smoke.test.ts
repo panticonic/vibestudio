@@ -30,6 +30,7 @@ import {
 } from "../src/server/services/authService.js";
 import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngress.js";
 import { ensurePersistentCert } from "../src/node/webrtc/cert.js";
+import { isolatedCliEnvironment } from "./setup/isolatedCliEnvironment.js";
 
 const execFileAsync = promisify(execFile);
 const RUN_WEBRTC_E2E = process.env["VIBESTUDIO_RUN_WEBRTC_E2E"] === "1";
@@ -243,9 +244,9 @@ describe("live CLI smoke", () => {
           ice: "all",
         });
 
+        const childHome = path.join(tmp, "home");
         const childEnv = {
-          ...process.env,
-          HOME: path.join(tmp, "home"),
+          ...isolatedCliEnvironment(process.env, childHome),
           VIBESTUDIO_LOG_LEVEL: "error",
         };
         const pair = await execFileAsync(

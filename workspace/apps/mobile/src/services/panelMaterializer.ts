@@ -70,7 +70,12 @@ export async function materializeMobilePanel(opts: {
   }
   return {
     panelId: opts.panelId,
-    url: buildPanelUrl(snapshot.source, snapshot.contextId, opts.hostConfig),
+    url: buildPanelUrl(
+      snapshot.source,
+      snapshot.contextId,
+      opts.panel.buildKey ?? "",
+      opts.hostConfig
+    ),
     managed: true,
     panelInit:
       panelInit && typeof panelInit === "object"

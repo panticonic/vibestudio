@@ -750,7 +750,7 @@ export class ShellClient {
         return this.panels.createFromSource("panels/chat", {
           name: config?.title?.trim() || undefined,
           contextId,
-          stateArgs: { channelName: channelId, contextId },
+          stateArgs: { channelName: channelId },
         });
       },
     };

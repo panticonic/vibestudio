@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HubProcessLeaseRecord } from "@vibestudio/shared/centralData";
 import type { CliCredentials } from "./credentialStore.js";
-import { resolveLocalHubControlTransport } from "./localHubTransport.js";
+import {
+  localHubIdentityDatabasePath,
+  resolveLocalHubControlTransport,
+} from "./localHubTransport.js";
 
 const serverId = `srv_${"S".repeat(24)}`;
 const hubBootId = `boot_${"H".repeat(24)}`;
@@ -32,6 +35,14 @@ function health(overrides: Record<string, unknown> = {}) {
 }
 
 describe("local hub control resolution", () => {
+  it("uses the hub identity override for isolated local servers", () => {
+    expect(
+      localHubIdentityDatabasePath({
+        VIBESTUDIO_IDENTITY_DB_PATH: "/tmp/vibestudio-system-tests-identity.db",
+      })
+    ).toBe("/tmp/vibestudio-system-tests-identity.db");
+  });
+
   it("returns only the fenced machine-control endpoint", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => health());
 

@@ -315,6 +315,26 @@ describe("vibestudio CLI", () => {
     }
   });
 
+  it("does not redeem a pairing invite while the CLI profile already has an identity", async () => {
+    const { main } = await import("./client.js");
+    writeCredentials();
+    const before = fs.readFileSync(credentialPath());
+
+    await expect(
+      main([
+        "remote",
+        "pair",
+        createConnectDeepLink(pairing("A".repeat(32))),
+        "--label",
+        "Automated test",
+        "--json",
+      ])
+    ).resolves.not.toBe(0);
+
+    expect(webrtcMock.instances).toHaveLength(0);
+    expect(fs.readFileSync(credentialPath())).toEqual(before);
+  });
+
   it("rejects removed URL/code pairing flags", async () => {
     const { main } = await import("./client.js");
     await expect(
@@ -322,15 +342,16 @@ describe("vibestudio CLI", () => {
     ).resolves.toBe(2);
   });
 
-  it("tightens an existing credential file when replacing it", async () => {
+  it("refuses to replace non-canonical credential state during pairing", async () => {
     if (process.platform === "win32") return;
     fs.mkdirSync(path.dirname(credentialPath()), { recursive: true });
     fs.writeFileSync(credentialPath(), "{}", { mode: 0o644 });
     const { main } = await import("./client.js");
     await expect(
       main(["remote", "pair", createConnectDeepLink(pairing("A".repeat(32)))])
-    ).resolves.toBe(0);
-    expect(fs.statSync(credentialPath()).mode & 0o777).toBe(0o600);
+    ).resolves.not.toBe(0);
+    expect(webrtcMock.instances).toHaveLength(0);
+    expect(fs.readFileSync(credentialPath(), "utf8")).toBe("{}");
   });
 
   it("logs out by removing the device credential", async () => {
@@ -690,6 +711,9 @@ describe("vibestudio CLI", () => {
         source: "apps/remote-cli",
         appId: "@workspace-apps/remote-cli",
         buildKey: "build-terminal",
+        executionDigest: "a".repeat(64),
+        authorityRequests: [],
+        authorityDelegations: [],
       },
     }));
     const { main } = await import("./client.js");

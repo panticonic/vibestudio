@@ -21,8 +21,16 @@ export interface LocalHubTransportDeps {
   readLease?: () => HubProcessLeaseRecord | null;
 }
 
+export function localHubIdentityDatabasePath(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env["VIBESTUDIO_IDENTITY_DB_PATH"]?.trim();
+  return override || path.join(getCentralDataPath(), "server-auth", "identity.db");
+}
+
 function readCanonicalLease(): HubProcessLeaseRecord | null {
-  const databasePath = path.join(getCentralDataPath(), "server-auth", "identity.db");
+  // The hub's identity-path override moves the identity and central-data
+  // stores together. Local CLI discovery must read the same lease database or
+  // an isolated/dev hub is indistinguishable from an unreachable remote one.
+  const databasePath = localHubIdentityDatabasePath();
   if (!fs.existsSync(databasePath)) return null;
   const central = new CentralDataManager({ databasePath });
   try {

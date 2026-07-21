@@ -6,6 +6,7 @@ import {
   hubIdentityPath,
   workspaceIdentityPath,
 } from "../scripts/cli/lib/config-paths.mjs";
+import { isolatedCliEnvironment } from "./setup/isolatedCliEnvironment.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -21,5 +22,22 @@ describe("CLI config paths", () => {
     expect(workspaceIdentityPath("dev")).toBe(
       path.join(root, "workspaces", "dev", "reach", "webrtc", "identity.pem")
     );
+  });
+
+  it("forces pairing-test subprocesses away from an inherited operator XDG profile", () => {
+    const env = isolatedCliEnvironment(
+      {
+        HOME: "/home/operator",
+        XDG_CONFIG_HOME: "/home/operator/.config",
+        KEEP_ME: "yes",
+      },
+      "/tmp/vibestudio-test/client-home"
+    );
+
+    expect(env).toMatchObject({
+      HOME: "/tmp/vibestudio-test/client-home",
+      XDG_CONFIG_HOME: "/tmp/vibestudio-test/client-home/.config",
+      KEEP_ME: "yes",
+    });
   });
 });

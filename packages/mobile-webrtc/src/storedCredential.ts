@@ -66,8 +66,7 @@ function isCurrentPairing(
     return false;
   }
   const fingerprint = typeof value["fp"] === "string" ? normalizeFingerprint(value["fp"]) : null;
-  const signaling =
-    typeof value["sig"] === "string" ? parseSignalingEndpoint(value["sig"]) : null;
+  const signaling = typeof value["sig"] === "string" ? parseSignalingEndpoint(value["sig"]) : null;
   if (
     typeof value["room"] !== "string" ||
     !PAIRING_ROOM_PATTERN.test(value["room"]) ||
@@ -90,6 +89,36 @@ function isCurrentPairing(
   );
 }
 
+function describePairingValidationFailure(value: unknown, allowCode: boolean): string {
+  if (!isRecord(value)) return "is not an object";
+  const allowedKeys = allowCode ? FRESH_PAIRING_KEYS : PAIRING_KEYS;
+  const unexpectedKeys = Object.keys(value).filter((key) => !allowedKeys.has(key));
+  if (unexpectedKeys.length > 0) {
+    return `contains unexpected field(s): ${unexpectedKeys.sort().join(", ")}`;
+  }
+  if (typeof value["room"] !== "string" || !PAIRING_ROOM_PATTERN.test(value["room"])) {
+    return "has an invalid signaling room";
+  }
+  const fingerprint = typeof value["fp"] === "string" ? normalizeFingerprint(value["fp"]) : null;
+  if (fingerprint === null || !/^[0-9A-F]{64}$/.test(fingerprint)) {
+    return "has an invalid DTLS fingerprint";
+  }
+  const signaling = typeof value["sig"] === "string" ? parseSignalingEndpoint(value["sig"]) : null;
+  if (signaling?.kind !== "ok") return "has an invalid signaling endpoint";
+  if (value["v"] !== PAIRING_PROTOCOL_VERSION) return "has an unsupported protocol version";
+  if (value["ice"] !== "all" && value["ice"] !== "relay") {
+    return "has an invalid ICE transport policy";
+  }
+  if (
+    allowCode &&
+    value["code"] !== undefined &&
+    (typeof value["code"] !== "string" || !PAIRING_CODE_PATTERN.test(value["code"]))
+  ) {
+    return "has an invalid pairing code";
+  }
+  return "is not a current WebRTC pairing";
+}
+
 export function createStoredShellCredential(
   credential: ShellCredential,
   controlPairing: ShellPairing,
@@ -101,11 +130,15 @@ export function createStoredShellCredential(
       "Cannot persist a device credential that was not emitted by the current issuer"
     );
   }
-  if (
-    !isCurrentPairing(controlPairing, true, false) ||
-    !isCurrentPairing(workspacePairing, true, false)
-  ) {
-    throw new Error("Cannot persist a non-canonical WebRTC pairing");
+  if (!isCurrentPairing(controlPairing, true, false)) {
+    throw new Error(
+      `Cannot persist the control WebRTC pairing: ${describePairingValidationFailure(controlPairing, true)}`
+    );
+  }
+  if (!isCurrentPairing(workspacePairing, true, false)) {
+    throw new Error(
+      `Cannot persist the workspace WebRTC pairing: ${describePairingValidationFailure(workspacePairing, true)}`
+    );
   }
   if (!Number.isSafeInteger(pairedAt) || pairedAt <= 0) {
     throw new Error("Cannot persist a device credential with an invalid pairing timestamp");

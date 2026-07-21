@@ -52,6 +52,7 @@ import {
   getApprovalAttribution,
   getApprovalCopy,
   getApprovalOperationKindLabel,
+  getRecommendedStandardDecision,
   getApprovalRiskTone,
   getRequesterCategoryLabel,
   getStandardActionCopy,
@@ -1514,6 +1515,7 @@ function StandardActions({
   onChoose: (decision: ApprovalDecision) => void;
 }) {
   const copy = getStandardActionCopy(approval);
+  const recommendedDecision = getRecommendedStandardDecision(approval);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
   return (
     <View style={styles.actionGroups}>
@@ -1521,7 +1523,7 @@ function StandardActions({
         <DecisionButton
           label={copy.once.label}
           description={copy.once.description}
-          variant="surface"
+          variant={recommendedDecision === "once" ? "primary" : "surface"}
           disabled={busy}
           loading={pendingAction === "once"}
           onPress={() => onChoose("once")}
@@ -1531,7 +1533,13 @@ function StandardActions({
           <DecisionButton
             label={copy.version.label}
             description={copy.version.description}
-            variant={isSevereCapability ? "dangerPrimary" : "primary"}
+            variant={
+              recommendedDecision === "version"
+                ? isSevereCapability
+                  ? "dangerPrimary"
+                  : "primary"
+                : "surface"
+            }
             disabled={busy}
             loading={pendingAction === "version"}
             icon={isSevereCapability ? AlertTriangle : CheckCircle2}

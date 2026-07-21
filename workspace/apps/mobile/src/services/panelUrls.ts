@@ -65,7 +65,12 @@ export function parseHostConfig(serverUrl: string): HostConfig {
  *
  * @returns The URL string to load in the WebView
  */
-export function buildPanelUrl(source: string, contextId: string, hostConfig: HostConfig): string {
+export function buildPanelUrl(
+  source: string,
+  contextId: string,
+  buildKey: string,
+  hostConfig: HostConfig
+): string {
   // Panels load from a fixed loopback origin (the on-device asset façade), never
   // a remote server: panel RPC rides the postMessage bridge, not a direct
   // socket. `hostConfig.port` is the loopback façade port; protocol/host are
@@ -74,7 +79,10 @@ export function buildPanelUrl(source: string, contextId: string, hostConfig: Hos
   const portSuffix = hostConfig.port ? `:${hostConfig.port}` : "";
   const origin = `http://${LOOPBACK_PANEL_HOST}${portSuffix}${hostConfig.basePath ?? ""}`;
   const encodedPath = encodeURIComponent(source).replace(/%2F/g, "/");
-  return `${origin}/${encodedPath}/?contextId=${encodeURIComponent(contextId)}`;
+  if (!/^[0-9a-f]{64}$/.test(buildKey)) {
+    throw new Error(`Workspace panel ${source} has no immutable BuildV2 build key`);
+  }
+  return `${origin}/${encodedPath}/?contextId=${encodeURIComponent(contextId)}&buildKey=${encodeURIComponent(buildKey)}`;
 }
 
 /**
