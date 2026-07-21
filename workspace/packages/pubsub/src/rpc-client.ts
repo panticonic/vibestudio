@@ -69,6 +69,20 @@ import { iterateChannelReplayAfterPages } from "./channel-replay.js";
 import { readChannelSubscriptionRecords } from "@vibestudio/service-schemas/channel";
 
 const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
+const METHOD_START_REDRIVE_BASE_DELAY_MS = 100;
+const METHOD_START_REDRIVE_MAX_DELAY_MS = 5_000;
+
+/**
+ * A remote access/application rejection proves the channel refused the start.
+ * Every other failure can occur after the request crossed the boundary but
+ * before its acknowledgement returned, so it cannot authoritatively terminate
+ * a journal-before-dispatch method call.
+ */
+function isAmbiguousMethodStartFailure(error: unknown): boolean {
+  const kind = (error as { errorKind?: unknown } | null)?.errorKind;
+  return kind !== "access" && kind !== "application";
+}
+
 /** Wire attachment shape — base64 data string, not Uint8Array. */
 interface WireAttachment {
   id: string;
@@ -1801,6 +1815,35 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     };
     methodCallStates.set(callId, state);
 
+    const startRecoveryController = new AbortController();
+    void result.then(
+      () => startRecoveryController.abort(),
+      () => startRecoveryController.abort()
+    );
+
+    const rejectMethodStart = (error: unknown): void => {
+      if (state.complete) return;
+      const err = error instanceof Error ? error : new Error(String(error));
+      state.complete = true;
+      state.isError = true;
+      stream.close(err);
+      rejectResult(new AgenticError(err.message, "connection-error", err));
+      methodCallStates.delete(callId);
+    };
+
+    const waitForMethodStartRedrive = async (delayMs: number): Promise<void> => {
+      if (startRecoveryController.signal.aborted) return;
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer);
+          startRecoveryController.signal.removeEventListener("abort", finish);
+          resolve();
+        };
+        const timer = setTimeout(finish, delayMs);
+        startRecoveryController.signal.addEventListener("abort", finish, { once: true });
+      });
+    };
+
     const cancelCall = (notifyProvider: boolean, waitForProvider: boolean): Promise<void> => {
       if (state.complete) return Promise.resolve();
       state.complete = true;
@@ -1811,7 +1854,9 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       if (!notifyProvider) {
         return Promise.resolve();
       }
-      const cancelPromise = callChannel("cancelMethodCall", transportCallId).then(() => undefined);
+      const cancelPromise = callChannel("cancelMethodCall", pid, transportCallId).then(
+        () => undefined
+      );
       if (waitForProvider) return cancelPromise;
       void cancelPromise.catch((err) => {
         console.warn(
@@ -1838,21 +1883,47 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     }
 
     if (!state.complete) {
-      // Publish an invocation start via the channel DO.
-      void callChannel("callMethod", pid, providerId, transportCallId, methodName, args ?? {}, {
-        invocationId,
+      const callArgs = [
+        pid,
+        providerId,
         transportCallId,
-        ...(callOptions?.timeoutMs ? { timeoutMs: callOptions.timeoutMs } : {}),
-        ...(callOptions?.turnId ? { turnId: callOptions.turnId } : {}),
-      }).catch((e: unknown) => {
-        if (state.complete) return;
-        const err = e instanceof Error ? e : new Error(String(e));
-        state.complete = true;
-        state.isError = true;
-        stream.close(err);
-        rejectResult(new AgenticError(err.message, "connection-error", err));
-        methodCallStates.delete(callId);
-      });
+        methodName,
+        args ?? {},
+        {
+          invocationId,
+          transportCallId,
+          ...(callOptions?.timeoutMs ? { timeoutMs: callOptions.timeoutMs } : {}),
+          ...(callOptions?.turnId ? { turnId: callOptions.turnId } : {}),
+        },
+      ] as const;
+
+      // Channel method starts are journal-before-dispatch. An internal,
+      // protocol, service, or transport failure is therefore an ambiguous ACK:
+      // the durable start (and even its terminal) may already exist. Keep the
+      // local result pending and re-drive the exact same coordinates until the
+      // channel accepts them or a durable terminal/cancel/close settles state.
+      // ChannelDO deduplicates both the start and terminal by those identities.
+      void (async () => {
+        let failures = 0;
+        while (!state.complete) {
+          try {
+            await callChannel("callMethod", ...callArgs);
+            return;
+          } catch (error) {
+            if (state.complete) return;
+            if (!isAmbiguousMethodStartFailure(error)) {
+              rejectMethodStart(error);
+              return;
+            }
+            const delayMs = Math.min(
+              METHOD_START_REDRIVE_BASE_DELAY_MS * 2 ** Math.min(failures, 6),
+              METHOD_START_REDRIVE_MAX_DELAY_MS
+            );
+            failures += 1;
+            await waitForMethodStartRedrive(delayMs);
+          }
+        }
+      })();
     }
 
     return {
@@ -1874,7 +1945,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   }
 
   async function cancelMethodCall(callId: string): Promise<void> {
-    await callChannel("cancelMethodCall", callId);
+    await callChannel("cancelMethodCall", pid, callId);
   }
 
   // Abort a method THIS client is executing, synchronously and in-process.

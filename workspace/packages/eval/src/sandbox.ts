@@ -32,6 +32,7 @@ import {
 import { createConsoleCapture, formatConsoleEntry, formatConsoleOutput } from "./consoleCapture.js";
 import { getAsyncTracking } from "./asyncTracking.js";
 import { assertNoPreInjectedImports, assertNamedExportsExist } from "./importValidation.js";
+import { instrumentDeadlineCheckpoints } from "./deadline.js";
 
 // =============================================================================
 // Types
@@ -46,8 +47,14 @@ export interface SandboxImportLoader {
 export interface SandboxOptions {
   /** Source syntax (default: "tsx") */
   syntax?: "javascript" | "typescript" | "jsx" | "tsx";
-  /** Abort signal used to interrupt async eval work. Synchronous user code cannot be preempted. */
+  /** Abort signal used to interrupt async eval work and native calls that honor cancellation. */
   signal?: AbortSignal;
+  /**
+   * Optional absolute wall deadline for cooperative synchronous checkpoints.
+   * The host still supplies `signal` for async cancellation and native-code
+   * recovery; this field bounds authored loops and recursion in-process.
+   */
+  deadline?: { atMs: number; timeoutMs: number };
   /** Packages to build and load before execution.
    *  - Workspace packages: value is "latest" or a git ref (branch/tag/SHA)
    *  - npm packages: value is "npm:<version>" (e.g. "npm:^4.17.21", "npm:latest")
@@ -947,6 +954,7 @@ export async function executeSandbox(
 ): Promise<SandboxResult> {
   const { syntax = "tsx", bindings = {} } = options;
   const { signal } = options;
+  let deactivateDeadline: (() => void) | null = null;
 
   // Per-execution module registry + require. When the caller passes a `moduleMap`/`require`
   // (e.g. multi-tenant EvalDO, one map per owner), module state is isolated to that map.
@@ -1052,6 +1060,26 @@ export async function executeSandbox(
     }
     throwIfAborted(signal);
     const { transformed } = built;
+    const deadlineInstrumented = options.deadline
+      ? instrumentDeadlineCheckpoints(transformed.code)
+      : null;
+    const executableCode = deadlineInstrumented?.code ?? transformed.code;
+    let executionBindings = bindings;
+    if (deadlineInstrumented && options.deadline) {
+      const now = Date.now.bind(Date);
+      let active = true;
+      const { atMs, timeoutMs } = options.deadline;
+      const checkpoint = () => {
+        if (active && now() >= atMs) throw new Error(`eval timed out after ${timeoutMs}ms`);
+      };
+      executionBindings = {
+        ...bindings,
+        [deadlineInstrumented.checkpointName]: checkpoint,
+      };
+      deactivateDeadline = () => {
+        active = false;
+      };
+    }
 
     // Validate requires
     if (!requireFn) {
@@ -1135,12 +1163,12 @@ export async function executeSandbox(
     const journal = createRuntimeJournal(runtimeModule);
     const runUserCode = async () => {
       throwIfAborted(signal);
-      const wrapped = wrapForTopLevelAwait(transformed.code);
+      const wrapped = wrapForTopLevelAwait(executableCode);
       let result: ReturnType<typeof execute>;
       try {
         result = execute(wrapped, {
           console: capture.proxy,
-          bindings,
+          bindings: executionBindings,
           require: requireFn,
         });
       } finally {
@@ -1193,6 +1221,7 @@ export async function executeSandbox(
       error: errorMessage,
     };
   } finally {
+    deactivateDeadline?.();
     restoreLazyImportLoader?.();
     unsubscribe();
     if (tracking && trackingContext) {

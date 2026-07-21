@@ -55,12 +55,11 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
    pnpm cli system-test run TEST_NAME
    ```
 
-   CLI runs have one five-minute agent-turn budget per test through the harness's
-   existing `testTimeoutMs` mechanism. Multi-phase orchestrations share that
-   budget; every phase receives only the time remaining from the original
-   deadline. Use `--test-timeout-ms N` only to replace it for a deliberately
-   longer or shorter investigation. A timeout is a terminal errored result to
-   inspect, not a reason to add sleeps or retries.
+   CLI runs have no per-test deadline by default. Use `--test-timeout-ms N`
+   only when an investigation needs an explicit finite budget. When supplied,
+   multi-phase orchestrations share that budget and every phase receives only
+   the time remaining from the original deadline. A timeout is a terminal
+   errored result to inspect, not a reason to add sleeps or retries.
 
    Cancellation is terminal only after the active test has followed its normal
    cleanup path: the agent turn is interrupted, the headless session/context is

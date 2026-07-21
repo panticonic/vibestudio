@@ -10,16 +10,32 @@ describe("project lifecycle prompts", () => {
       .map((test) => test.prompt);
 
     expect(panelPrompts).toEqual([
-      "Create and open a brand-new isolated panel project. Finish with PROJECT_PANEL_OK.",
-      "Fork an existing panel into a new isolated panel and open the result. Finish with PROJECT_FORK_OK.",
+      "Create a brand-new isolated panel project and open it for use.",
+      "Fork the existing panel into a new isolated panel and open the result.",
     ]);
 
     for (const prompt of panelPrompts) {
-      expect(prompt).not.toContain("publish/build");
-      expect(prompt).not.toContain("Unknown build unit");
-      expect(prompt).not.toContain("do not emit the success marker");
-      expect(prompt).not.toContain("Close any temporary opened panel handle");
+      expect(prompt).not.toMatch(/finish with|respond with|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/iu);
+      expect(prompt).not.toMatch(/createProject|forkProject|openPanel|dryRun/iu);
     }
+  });
+
+  it("declares repository creation scopes that match each lifecycle task", () => {
+    const fixtureFor = (name: string) =>
+      projectLifecycleTests.find((test) => test.name === name)?.workspaceRepoFixture;
+
+    expect(fixtureFor("panel-create-commit-open")).toEqual({
+      kind: "created-repository",
+      section: "panels",
+    });
+    expect(fixtureFor("panel-fork-dry-run-and-commit")).toEqual({
+      kind: "buildable-panel-with-derived",
+      section: "panels",
+    });
+    expect(fixtureFor("commit-existing-project")).toEqual({
+      kind: "created-repository",
+      section: "packages",
+    });
   });
 
   it("keeps docs workspace-dev probe broad", () => {

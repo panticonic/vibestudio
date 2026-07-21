@@ -76,6 +76,7 @@ export function createDocsSearchTool(
   return {
     name: "docs_search",
     label: "docs_search",
+    executionMode: "parallel",
     description:
       "Search the capability catalog — server services and runtime APIs — by keyword. Returns compact hits filtered to what you may call; use docs_open(id) for the full typed schema, access rules, and examples.",
     parameters: searchSchema,
@@ -308,6 +309,7 @@ export function createDocsOpenTool(
   return {
     name: "docs_open",
     label: "docs_open",
+    executionMode: "parallel",
     description:
       "Open a catalog entry by id (from docs_search): full description, typed args/returns JSON Schema, access & restrictedness (allowed callers, approval/grant gates, sensitivity), and examples.",
     parameters: openSchema,

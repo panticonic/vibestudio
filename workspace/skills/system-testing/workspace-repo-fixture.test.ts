@@ -5,6 +5,12 @@ import {
 } from "./workspace-repo-fixture.js";
 
 const BUILDABLE = { kind: "buildable-package", section: "packages" } as const;
+const BUILDABLE_WORKER = { kind: "buildable-worker", section: "workers" } as const;
+const CREATED_PANEL = { kind: "created-repository", section: "panels" } as const;
+const PANEL_WITH_DERIVED = {
+  kind: "buildable-panel-with-derived",
+  section: "panels",
+} as const;
 const CONTENT = { kind: "content", section: "projects" } as const;
 
 function event(eventId: string) {
@@ -19,6 +25,7 @@ function createPort() {
   let taskTail: "import" | "escaped" | "file" | "local-file" = "import";
   let publishedFileLive = false;
   let reportedSnapshotRevision: string | null = null;
+  let taskCreatedRepositories: Array<{ repositoryId: string; repoPath: string }> = [];
   const destroyContext = vi.fn(async (_contextId: string) => undefined);
   const putText = vi.fn(async (text: string) => ({
     digest: text.includes("fixtureValue") ? "b".repeat(64) : "a".repeat(64),
@@ -46,7 +53,11 @@ function createPort() {
               : "event:main";
   const status = vi.fn(async ({ contextId }: { contextId: string }) => {
     const committedEventId =
-      contextId === "context:1" ? (prepared ? taskEventId() : "event:main") : mainEventId();
+      contextId === "context:1"
+        ? prepared || taskCreatedRepositories.length > 0
+          ? taskEventId()
+          : "event:main"
+        : mainEventId();
     const currentMainEventId = mainEventId();
     return {
       contextId,
@@ -71,7 +82,9 @@ function createPort() {
   );
   const changesForWork = (workUnitId: string): string[] =>
     workUnitId === "work:escaped"
-      ? ["change:escaped"]
+      ? taskCreatedRepositories.length > 0
+        ? taskCreatedRepositories.map((_, index) => `change:task-created:${index}`)
+        : ["change:escaped"]
       : workUnitId === "work:file"
         ? ["change:file"]
         : workUnitId === "work:local"
@@ -82,7 +95,10 @@ function createPort() {
       if (node.kind === "event") {
         const eventShape: Record<string, { applications: string[]; parents: string[] }> = {
           "event:import": { applications: ["application:import"], parents: ["event:main"] },
-          "event:task": { applications: ["application:escaped"], parents: ["event:import"] },
+          "event:task": {
+            applications: ["application:escaped"],
+            parents: [prepared ? "event:import" : "event:main"],
+          },
           "event:file": { applications: ["application:file"], parents: ["event:import"] },
           "event:local": { applications: ["application:local"], parents: ["event:import"] },
           "event:main": { applications: [], parents: [] },
@@ -160,10 +176,17 @@ function createPort() {
         };
       }
       if (node.kind === "change") {
+        const taskCreatedIndex = node.changeId.startsWith("change:task-created:")
+          ? Number(node.changeId.slice("change:task-created:".length))
+          : -1;
+        const taskCreated = taskCreatedRepositories[taskCreatedIndex];
         const repositoryCreate =
-          node.changeId === "change:repository" || node.changeId === "change:escaped";
+          node.changeId === "change:repository" ||
+          node.changeId === "change:escaped" ||
+          taskCreated !== undefined;
         const repositoryId =
-          node.changeId === "change:escaped" ? "repository:escaped" : "repository:fixture";
+          taskCreated?.repositoryId ??
+          (node.changeId === "change:escaped" ? "repository:escaped" : "repository:fixture");
         return {
           root: node,
           node: {
@@ -180,9 +203,10 @@ function createPort() {
                       repositoryId,
                       beforePath: null,
                       afterPath:
-                        repositoryId === "repository:escaped"
+                        taskCreated?.repoPath ??
+                        (repositoryId === "repository:escaped"
                           ? "projects/outside-fixture"
-                          : "projects/system-test-content",
+                          : "projects/system-test-content"),
                     },
                   ]
                 : [
@@ -203,8 +227,11 @@ function createPort() {
         };
       }
       if (node.kind !== "repository") throw new Error(`unexpected node ${node.kind}`);
+      const taskCreated = taskCreatedRepositories.find(
+        ({ repositoryId }) => repositoryId === node.repositoryId
+      );
       const isEscaped = node.repositoryId === "repository:escaped";
-      if ((isEscaped && !escaped) || (!isEscaped && !published)) {
+      if ((isEscaped && !escaped) || (!isEscaped && !taskCreated && !published)) {
         throw Object.assign(new Error("repository is absent"), { code: "InvalidReference" });
       }
       return {
@@ -214,8 +241,12 @@ function createPort() {
           state: event("event:main"),
           value: {
             kind: "present" as const,
-            repositoryId: isEscaped ? "repository:escaped" : "repository:fixture",
-            repoPath: isEscaped ? "projects/outside-fixture" : "projects/system-test-content",
+            repositoryId:
+              taskCreated?.repositoryId ??
+              (isEscaped ? "repository:escaped" : "repository:fixture"),
+            repoPath:
+              taskCreated?.repoPath ??
+              (isEscaped ? "projects/outside-fixture" : "projects/system-test-content"),
             manifestId: "manifest:fixture",
           },
         },
@@ -279,6 +310,10 @@ function createPort() {
       if (changeIds.includes("change:repository") && publishedFileLive) {
         throw Object.assign(new Error("later file still depends on repository creation"), {
           code: "DependencyBlocked",
+          errorData: {
+            code: "DependencyBlocked",
+            blockingChangeIds: ["change:file"],
+          },
         });
       }
       if (changeIds.includes("change:file")) publishedFileLive = false;
@@ -343,12 +378,24 @@ function createPort() {
       escaped = true;
       taskTail = "escaped";
     },
+    createTaskRepositories: (repoPaths: string[]) => {
+      taskCreatedRepositories = repoPaths.map((repoPath, index) => ({
+        repositoryId: `repository:task-created:${index}`,
+        repoPath,
+      }));
+      taskTail = "escaped";
+    },
     externalEscape: () => {
       escaped = true;
     },
     publishWithFile: () => {
       published = true;
       taskTail = "file";
+      publishedFileLive = true;
+    },
+    publishWithUnattributedFile: () => {
+      published = true;
+      taskTail = "import";
       publishedFileLive = true;
     },
     publishThenEditLocally: () => {
@@ -359,6 +406,153 @@ function createPort() {
 }
 
 describe("WorkspaceRepoFixtureLifecycle", () => {
+  it("starts a task-created repository scope without seeding a repository", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "panel-create-test",
+      null,
+      CREATED_PANEL
+    );
+
+    const state = await fixture.prepare();
+
+    expect(state).toMatchObject({
+      kind: "created-repository",
+      section: "panels",
+      contextId: "context:1",
+      repoName: null,
+      repositoryId: null,
+      repoPath: null,
+      seedFilePaths: [],
+      importWorkUnitId: null,
+      importChangeIds: [],
+      taskBaseEventId: "event:main",
+    });
+    expect(fake.putText).not.toHaveBeenCalled();
+    expect(fake.importSnapshot).not.toHaveBeenCalled();
+
+    fake.createTaskRepositories(["panels/task-created"]);
+    await expect(fixture.cleanup(state)).resolves.toEqual({
+      publishedFixtureRemoved: {
+        repositoryId: "repository:task-created:0",
+        repoPath: "panels/task-created",
+      },
+      unexpectedPublishedRepositoriesRemoved: [],
+      counteractedChangeIds: ["change:task-created:0"],
+    });
+  });
+
+  it("fails a task-created scope when the task creates no repository", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "panel-create-zero-test",
+      null,
+      CREATED_PANEL
+    );
+    const state = await fixture.prepare();
+
+    await expect(fixture.cleanup(state)).rejects.toThrow(
+      "expected exactly one task-created repository in panels/, found 0: none"
+    );
+    expect(fake.revert).not.toHaveBeenCalled();
+    expect(fake.destroyContext).toHaveBeenCalledWith("context:1");
+  });
+
+  it("counteracts and fails a task-created scope with multiple repositories", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "panel-create-multiple-test",
+      null,
+      CREATED_PANEL
+    );
+    const state = await fixture.prepare();
+    fake.createTaskRepositories(["panels/first", "panels/second"]);
+
+    await expect(fixture.cleanup(state)).rejects.toThrow(
+      "expected exactly one task-created repository in panels/, found 2: panels/first, panels/second"
+    );
+    expect(fake.revert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changeIds: ["change:task-created:0", "change:task-created:1"],
+      })
+    );
+    expect(fake.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("counteracts and fails a task-created repository in the wrong section", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "panel-create-wrong-section-test",
+      null,
+      CREATED_PANEL
+    );
+    const state = await fixture.prepare();
+    fake.createTaskRepositories(["packages/not-a-panel"]);
+
+    await expect(fixture.cleanup(state)).rejects.toThrow(
+      "expected exactly one task-created repository in panels/, found packages/not-a-panel"
+    );
+    expect(fake.revert).toHaveBeenCalledWith(
+      expect.objectContaining({ changeIds: ["change:task-created:0"] })
+    );
+    expect(fake.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("seeds one buildable panel and owns exactly one task-derived panel", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "panel-fork-test",
+      "system-test-panel-source",
+      PANEL_WITH_DERIVED
+    );
+    const state = await fixture.prepare();
+
+    expect(state).toMatchObject({
+      repositoryId: "repository:fixture",
+      repoPath: "panels/system-test-panel-source",
+      seedFilePaths: ["package.json", "index.ts"],
+    });
+    const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
+    expect(seededText).toContain('"@workspace-panels/system-test-panel-source"');
+    expect(seededText).toContain('"template": "vanilla"');
+
+    fake.createTaskRepositories(["panels/system-test-panel-fork"]);
+    await expect(fixture.cleanup(state)).resolves.toEqual({
+      publishedFixtureRemoved: {
+        repositoryId: "repository:task-created:0",
+        repoPath: "panels/system-test-panel-fork",
+      },
+      unexpectedPublishedRepositoriesRemoved: [],
+      counteractedChangeIds: [
+        "change:task-created:0",
+        "change:repository",
+        "change:package",
+        "change:source",
+      ],
+    });
+  });
+
+  it("does not count the seeded panel as the required derived repository", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "panel-fork-without-derived-test",
+      "system-test-panel-source",
+      PANEL_WITH_DERIVED
+    );
+    const state = await fixture.prepare();
+
+    await expect(fixture.cleanup(state)).rejects.toThrow(
+      "expected exactly one task-created repository in panels/, found 0: none"
+    );
+    expect(fake.destroyContext).toHaveBeenCalledWith("context:1");
+  });
+
   it("imports a buildable snapshot with exact CAS-backed file metadata", async () => {
     const fake = createPort();
     const fixture = new WorkspaceRepoFixtureLifecycle(
@@ -398,6 +592,46 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(fake.revert).not.toHaveBeenCalled();
     expect(fake.createContext).toHaveBeenCalledTimes(1);
     expect(fake.destroyContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("seeds a worker fixture under worker discovery with a runnable Durable Object manifest", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "worker-test",
+      "system-test-worker",
+      BUILDABLE_WORKER
+    );
+
+    const state = await fixture.prepare();
+
+    expect(state).toMatchObject({
+      contextId: "context:1",
+      repositoryId: "repository:fixture",
+      repoPath: "workers/system-test-worker",
+      seedFilePaths: ["package.json", "index.ts"],
+    });
+    const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
+    expect(seededText).toContain('"kind": "worker"');
+    expect(seededText).toContain('"entry": "index.ts"');
+    expect(seededText).toContain('"className": "FixtureWorkerDO"');
+    expect(seededText).toContain('from "@workspace/runtime/worker"');
+    expect(fake.importSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repositories: [
+          expect.objectContaining({
+            repoPath: "workers/system-test-worker",
+            files: [
+              expect.objectContaining({ path: "package.json" }),
+              expect.objectContaining({ path: "index.ts" }),
+            ],
+          }),
+        ],
+      })
+    );
+
+    await fixture.cleanup(state);
+    expect(fake.destroyContext).toHaveBeenCalledWith("context:1");
   });
 
   it("does not enumerate ambient repositories during setup or cleanup", async () => {
@@ -583,6 +817,77 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     );
     expect(fake.commit).toHaveBeenCalledTimes(1);
     expect(fake.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("discovers and counteracts an incorporated blocker outside first-parent authored work", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "integrated-file-test",
+      "system-test-content",
+      CONTENT
+    );
+    const state = await fixture.prepare();
+    fake.publishWithUnattributedFile();
+
+    await expect(fixture.cleanup(state)).resolves.toMatchObject({
+      counteractedChangeIds: [
+        "change:file",
+        "change:repository",
+        "change:package",
+        "change:source",
+      ],
+    });
+    expect(fake.revert).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        expectedWorkingHead: event("event:import"),
+        changeIds: ["change:repository", "change:package", "change:source"],
+      })
+    );
+    expect(fake.revert).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        expectedWorkingHead: event("event:import"),
+        changeIds: ["change:file"],
+      })
+    );
+    expect(fake.revert).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        expectedWorkingHead: {
+          kind: "application",
+          applicationId: "application:revert:2",
+        },
+        changeIds: ["change:repository", "change:package", "change:source"],
+      })
+    );
+    expect(fake.commit).toHaveBeenCalledTimes(1);
+    expect(fake.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when DependencyBlocked omits its typed blocker identities", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "malformed-dependency-test",
+      "system-test-content",
+      CONTENT
+    );
+    const state = await fixture.prepare();
+    fake.publish();
+    fake.revert.mockRejectedValueOnce(
+      Object.assign(new Error("blocked without structured detail"), {
+        code: "DependencyBlocked",
+      })
+    );
+
+    await expect(fixture.cleanup(state)).rejects.toThrow(
+      "DependencyBlocked did not provide any blocking change identities"
+    );
+    expect(fake.commit).not.toHaveBeenCalled();
+    expect(fake.push).not.toHaveBeenCalled();
+    expect(fake.destroyContext).toHaveBeenCalledTimes(2);
   });
 
   it("leaves newer unpublished task work to context destruction", async () => {

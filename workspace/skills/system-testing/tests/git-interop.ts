@@ -1,35 +1,11 @@
 import type { TestCase } from "../types.js";
 import {
   findLastAgentMessage,
-  finalMessageHasAll,
-  finalMessageHasAny,
   getToolCalls,
   noIncompleteInvocations,
-  requireAnyEvalEvidence,
   successfulEvalCode,
+  successfulEvalReturnValues,
 } from "./_helpers.js";
-
-function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
-  const msg = finalMessageHasAll(result, tokens);
-  if (!msg.passed) return msg;
-  return noIncompleteInvocations(result);
-}
-
-/** Require a successful path or an explicit, deployment-dependent fallback. */
-function checkedOrUnavailable(
-  result: Parameters<typeof finalMessageHasAll>[0],
-  okTokens: string[],
-  unavailableMarker: string,
-  evidenceAlternatives: readonly (readonly string[])[]
-) {
-  const ok = finalMessageHasAll(result, okTokens);
-  if (ok.passed) {
-    const pending = noIncompleteInvocations(result);
-    if (!pending.passed) return pending;
-    return requireAnyEvalEvidence(result, evidenceAlternatives);
-  }
-  return checked(result, [unavailableMarker]);
-}
 
 interface ObservedGitImport {
   path: string;
@@ -40,6 +16,196 @@ interface ObservedGitImport {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function records(value: unknown, found: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    for (const item of value) records(item, found);
+    return found;
+  }
+  if (!isRecord(value)) return found;
+  found.push(value);
+  for (const child of Object.values(value)) records(child, found);
+  return found;
+}
+
+function arrays(value: unknown, found: unknown[][] = []): unknown[][] {
+  if (Array.isArray(value)) {
+    found.push(value);
+    for (const item of value) arrays(item, found);
+  } else if (isRecord(value)) {
+    for (const child of Object.values(value)) arrays(child, found);
+  }
+  return found;
+}
+
+function exactNumber(message: string, value: number): boolean {
+  return new RegExp(`(?:^|\\D)${value}(?:\\D|$)`, "u").test(message);
+}
+
+function unavailableGitResult(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  const failed = getToolCalls(result).some(
+    (call) =>
+      call.name === "eval" &&
+      call.execution?.isError === true &&
+      /\bgit\./iu.test(String(call.arguments?.["code"] ?? ""))
+  );
+  const final = findLastAgentMessage(result);
+  return failed &&
+    /(unavailable|blocked|unsupported|cannot|could not|failed)/iu.test(final) &&
+    final.trim().length > 20
+    ? noIncompleteInvocations(result)
+    : {
+        passed: false,
+        reason: "Git unavailability was not backed by a failed canonical invocation",
+      };
+}
+
+function upstreamStatusChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  if (!/git\.upstreamStatus/iu.test(successfulEvalCode(result))) {
+    return {
+      passed: false,
+      reason: "No successful canonical Git upstream-status call was observed",
+    };
+  }
+  const statuses = successfulEvalReturnValues(result)
+    .flatMap((value) => arrays(value))
+    .find((items) =>
+      items.every(
+        (item) =>
+          isRecord(item) &&
+          typeof item["repoPath"] === "string" &&
+          typeof item["state"] === "string" &&
+          typeof item["autoPush"] === "boolean" &&
+          Number.isInteger(item["aheadBy"]) &&
+          Number.isInteger(item["behindBy"])
+      )
+    );
+  if (!statuses)
+    return { passed: false, reason: "Git status result contained no canonical row set" };
+  const final = findLastAgentMessage(result);
+  if (!exactNumber(final, statuses.length)) {
+    return { passed: false, reason: "Final response did not report the observed upstream count" };
+  }
+  if (statuses.length === 0) {
+    return /no|none|zero|not track/iu.test(final)
+      ? noIncompleteInvocations(result)
+      : { passed: false, reason: "Final response did not explain the empty upstream set" };
+  }
+  const cited = statuses.some(
+    (item) =>
+      isRecord(item) &&
+      final.includes(String(item["repoPath"])) &&
+      final.toLowerCase().includes(String(item["state"]).toLowerCase())
+  );
+  return cited
+    ? noIncompleteInvocations(result)
+    : { passed: false, reason: "Final response did not cite an observed repository and state" };
+}
+
+function disposablePublishChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  const code = successfulEvalCode(result);
+  const values = successfulEvalReturnValues(result);
+  const final = findLastAgentMessage(result);
+  if (/git\.publishToDisposableRemote/iu.test(code)) {
+    const published = records(values).find(
+      (item) =>
+        typeof item["repoPath"] === "string" &&
+        typeof item["branch"] === "string" &&
+        item["pushed"] === true &&
+        Number.isInteger(item["commitCount"]) &&
+        Number(item["commitCount"]) > 0 &&
+        typeof item["headCommit"] === "string"
+    );
+    if (
+      published &&
+      final.includes(String(published["repoPath"])) &&
+      exactNumber(final, Number(published["commitCount"])) &&
+      /push|publish|received/iu.test(final)
+    ) {
+      return noIncompleteInvocations(result);
+    }
+    return {
+      passed: false,
+      reason: "One-call disposable publish result was incomplete or unreported",
+    };
+  }
+
+  const required = [
+    "createDisposableRemote",
+    "pushDisposableRemote",
+    "inspectDisposableRemote",
+    "removeDisposableRemote",
+  ];
+  if (!required.every((method) => code.includes(`git.${method}`))) {
+    return unavailableGitResult(result);
+  }
+  const all = records(values);
+  const remote = all.find(
+    (item) =>
+      typeof item["id"] === "string" &&
+      typeof item["url"] === "string" &&
+      typeof item["branch"] === "string" &&
+      Number.isInteger(item["expiresAt"])
+  );
+  const inspected = remote
+    ? all.find(
+        (item) =>
+          item !== remote &&
+          item["id"] === remote["id"] &&
+          item["url"] === remote["url"] &&
+          Number.isInteger(item["commitCount"]) &&
+          Number(item["commitCount"]) > 0 &&
+          typeof item["headCommit"] === "string"
+      )
+    : undefined;
+  const removed = all.some((item) => item["removed"] === true);
+  if (
+    !remote ||
+    !inspected ||
+    !removed ||
+    !exactNumber(final, Number(inspected["commitCount"])) ||
+    !/push|publish|received/iu.test(final) ||
+    !/remove|clean/iu.test(final)
+  ) {
+    return {
+      passed: false,
+      reason: "Stepwise disposable publish was not identity-joined and cleaned up",
+    };
+  }
+  return noIncompleteInvocations(result);
+}
+
+function commitMappingChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  if (!/git\.commitMapping/iu.test(successfulEvalCode(result))) return unavailableGitResult(result);
+  const mappings = successfulEvalReturnValues(result)
+    .flatMap((value) => arrays(value))
+    .find(
+      (items) =>
+        items.length > 0 &&
+        items.every(
+          (item) =>
+            isRecord(item) &&
+            typeof item["gitSha"] === "string" &&
+            typeof item["eventId"] === "string" &&
+            typeof item["summary"] === "string"
+        )
+    );
+  if (!mappings)
+    return { passed: false, reason: "Git commit mapping result had no canonical rows" };
+  const final = findLastAgentMessage(result);
+  const cited = mappings.some(
+    (item) =>
+      isRecord(item) &&
+      final.includes(String(item["gitSha"])) &&
+      final.includes(String(item["eventId"]))
+  );
+  return cited && exactNumber(final, mappings.length)
+    ? noIncompleteInvocations(result)
+    : {
+        passed: false,
+        reason: "Final response did not cite an observed Git/event mapping and count",
+      };
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -130,7 +296,7 @@ function statusProvesUnpublishedCandidate(value: unknown, imported: ObservedGitI
   return Object.values(value).some((child) => statusProvesUnpublishedCandidate(child, imported));
 }
 
-function requireGitImportSemanticEvidence(result: Parameters<typeof finalMessageHasAll>[0]): {
+function requireGitImportSemanticEvidence(result: Parameters<typeof noIncompleteInvocations>[0]): {
   passed: boolean;
   reason?: string;
 } {
@@ -267,8 +433,8 @@ export const gitInteropTests: TestCase[] = [
     category: "git-interop",
     resources: ["workspace-config:git"],
     prompt:
-      "Find out whether any repos in this workspace track an external Git upstream and report their sync state. Finish with GIT_UPSTREAM_STATUS_OK and tracked:<count>.",
-    validate: (result) => checked(result, ["GIT_UPSTREAM_STATUS_OK", "tracked:"]),
+      "Do any repositories in this workspace track an external Git upstream? Give me a bounded summary of what is tracked and its synchronization state.",
+    validate: upstreamStatusChecked,
   },
   {
     name: "git-publish-local-remote",
@@ -276,13 +442,8 @@ export const gitInteropTests: TestCase[] = [
     category: "git-interop",
     resources: ["workspace-config:git"],
     prompt:
-      "Connect a small disposable workspace repo to an external Git remote that you can reach without real credentials (create a throwaway local one if that is the documented way), ship the repo's main there, and verify the remote actually received it. Finish with GIT_PUBLISH_OK and pushed:<commit-count>, or GIT_PUBLISH_UNAVAILABLE with the concrete blocking reason.",
-    validate: (result) =>
-      checkedOrUnavailable(result, ["GIT_PUBLISH_OK", "pushed:"], "GIT_PUBLISH_UNAVAILABLE", [
-        ["git."],
-        ["gitInterop"],
-        ["@vibestudio/git"],
-      ]),
+      "Publish a small disposable workspace repository to a credential-free throwaway Git remote, verify that the remote received its main history, and clean up the temporary remote afterward. If this deployment cannot do that, report the concrete blocker.",
+    validate: disposablePublishChecked,
   },
   {
     name: "git-import-project",
@@ -290,12 +451,8 @@ export const gitInteropTests: TestCase[] = [
     category: "git-interop",
     resources: ["workspace-config:git"],
     prompt:
-      "Can you bring a small credential-free Git project into this workspace and tell me where it landed and whether it is already published? Finish with GIT_IMPORT_OK.",
-    validate: (result) => {
-      const base = checked(result, ["GIT_IMPORT_OK"]);
-      if (!base.passed) return base;
-      return requireGitImportSemanticEvidence(result);
-    },
+      "Can you bring a small credential-free Git project into this workspace and tell me where it landed and whether it is already published?",
+    validate: requireGitImportSemanticEvidence,
   },
   {
     name: "git-commit-mapping",
@@ -303,11 +460,7 @@ export const gitInteropTests: TestCase[] = [
     category: "git-interop",
     resources: ["workspace-config:git"],
     prompt:
-      "For a repo that has been exported to external Git (set one up first if none exists and the environment allows it), report how workspace commits map to git commits. Finish with GIT_MAPPING_OK and mapped:<count>, or GIT_MAPPING_UNAVAILABLE with the concrete blocking reason.",
-    validate: (result) => {
-      const ok = finalMessageHasAny(result, ["GIT_MAPPING_OK", "GIT_MAPPING_UNAVAILABLE"]);
-      if (!ok.passed) return ok;
-      return noIncompleteInvocations(result);
-    },
+      "For a repository exported to external Git, explain how its workspace commits map to Git commits. If no suitable export can be prepared in this deployment, report the concrete blocker.",
+    validate: commitMappingChecked,
   },
 ];

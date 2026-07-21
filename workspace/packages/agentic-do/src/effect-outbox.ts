@@ -84,7 +84,11 @@ export function ensureOutboxSchema(sql: SqlStorage): void {
 export function maxAttempts(kind: EffectKind, mutating = false): number {
   switch (kind) {
     case "model_call":
-      return 3;
+      // A retry-classified provider failure is explicitly non-terminal. Keep
+      // the journaled request pending until it succeeds or the owning turn is
+      // cancelled; an arbitrary attempt budget turns a temporary network
+      // partition into permanent loss of an otherwise untouched turn.
+      return Number.POSITIVE_INFINITY;
     case "local_tool":
       return mutating ? 1 : 3;
     case "channel_call":

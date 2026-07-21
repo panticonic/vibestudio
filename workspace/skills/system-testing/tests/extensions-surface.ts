@@ -1,14 +1,37 @@
-import type { TestCase } from "../types.js";
+import type { TestCase, TestExecutionResult } from "../types.js";
 import {
-  finalMessageHasAll,
-  finalMessageHasNumericField,
-  noIncompleteInvocations,
-} from "./_helpers.js";
+  completedScenarioEvidence,
+  hasNonEmptyStructuredResult,
+  requireCodeOperations,
+  walkArrays,
+  walkRecords,
+} from "./_scenario-evidence.js";
 
-function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
-  const msg = finalMessageHasAll(result, tokens);
-  if (!msg.passed) return msg;
-  return noIncompleteInvocations(result);
+function extensionEvidence(
+  result: TestExecutionResult,
+  alternatives: readonly (readonly string[])[]
+) {
+  const base = completedScenarioEvidence(result);
+  if (!base.passed) return base;
+  const exercised = requireCodeOperations(base.evidence.evalCode, alternatives);
+  return exercised.passed ? { passed: true as const, evidence: base.evidence } : exercised;
+}
+
+function hasDiagnostics(values: readonly unknown[]): boolean {
+  return walkRecords(values).some(
+    (record) =>
+      Array.isArray(record["diagnostics"]) ||
+      (record["result"] !== null &&
+        typeof record["result"] === "object" &&
+        Array.isArray((record["result"] as Record<string, unknown>)["diagnostics"]))
+  );
+}
+
+function hasInvocationResult(values: readonly unknown[]): boolean {
+  return walkRecords(values).some((record) => {
+    const value = record["result"] ?? record["value"];
+    return hasNonEmptyStructuredResult([value]);
+  });
 }
 
 export const extensionSurfaceTests: TestCase[] = [
@@ -16,12 +39,13 @@ export const extensionSurfaceTests: TestCase[] = [
     name: "extension-list",
     description: "List the extensions available in this workspace",
     category: "extensions",
-    prompt:
-      "Report which extensions are available in this workspace. Finish with EXT_LIST_OK and count:<number>.",
+    prompt: "Which extensions are available in this workspace?",
     validate: (result) => {
-      const base = checked(result, ["EXT_LIST_OK"]);
+      const base = extensionEvidence(result, [["extensions.list"]]);
       if (!base.passed) return base;
-      return finalMessageHasNumericField(result, "count");
+      return walkArrays(base.evidence.evalValues).some((entries) => entries.length > 0)
+        ? { passed: true, reason: undefined }
+        : { passed: false, reason: "The completed extension registry call returned no entries" };
     },
   },
   {
@@ -29,19 +53,36 @@ export const extensionSurfaceTests: TestCase[] = [
     description: "Typecheck a workspace unit through the typecheck extension",
     category: "extensions",
     prompt:
-      "Run a type check over a small existing workspace panel or package using the workspace's supported typecheck surface (not shell commands), and report the diagnostic outcome. Finish with EXT_TYPECHECK_OK and diagnostics:<count>.",
-    validate: (result) => checked(result, ["EXT_TYPECHECK_OK", "diagnostics:"]),
+      "Type-check a small existing workspace unit through its extension surface and summarize the diagnostics.",
+    validate: (result) => {
+      const base = extensionEvidence(result, [
+        ["extensions.invoke", "typecheck", "check"],
+        ["extensions.use", "typecheck", "check"],
+      ]);
+      if (!base.passed) return base;
+      return hasDiagnostics(base.evidence.evalValues)
+        ? { passed: true, reason: undefined }
+        : {
+            passed: false,
+            reason: "The completed typecheck invocation returned no diagnostics collection",
+          };
+    },
   },
   {
     name: "extension-invoke-roundtrip",
     description: "Invoke a harmless extension method and report the structured result",
     category: "extensions",
     prompt:
-      "Pick a running extension that exposes a harmless read-only method, invoke it, and report the structured result shape you got back. Finish with EXT_INVOKE_OK and method:<name>, or EXT_INVOKE_UNAVAILABLE with the concrete blocking reason.",
+      "Use an available extension for a harmless read-only operation and summarize its structured result.",
     validate: (result) => {
-      const ok = finalMessageHasAll(result, ["EXT_INVOKE_OK", "method:"]);
-      if (ok.passed) return noIncompleteInvocations(result);
-      return checked(result, ["EXT_INVOKE_UNAVAILABLE"]);
+      const base = extensionEvidence(result, [["extensions.list", "extensions.invoke"]]);
+      if (!base.passed) return base;
+      return hasInvocationResult(base.evidence.evalValues)
+        ? { passed: true, reason: undefined }
+        : {
+            passed: false,
+            reason: "The completed extension invocation returned no observable result",
+          };
     },
   },
 ];

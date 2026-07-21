@@ -1,10 +1,93 @@
 import type { HeadlessSession } from "@workspace/agentic-session";
 import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "../types.js";
-import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+import {
+  findLastAgentMessage,
+  getToolCalls,
+  noIncompleteInvocations,
+  successfulEvalCode,
+  successfulEvalReturnValues,
+} from "./_helpers.js";
 
-function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
-  const msg = finalMessageHasAll(result, tokens);
-  if (!msg.passed) return msg;
+function skillChoiceChecked(
+  result: Parameters<typeof noIncompleteInvocations>[0],
+  skillName: string,
+  finalClaim: RegExp
+) {
+  const loaded = getToolCalls(result).some(
+    (call) =>
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true &&
+      JSON.stringify(call.arguments ?? {})
+        .toLowerCase()
+        .includes(`/skills/${skillName.toLowerCase()}/`)
+  );
+  if (!loaded) return { passed: false, reason: `No completed read loaded the ${skillName} skill` };
+  if (!finalClaim.test(findLastAgentMessage(result))) {
+    return {
+      passed: false,
+      reason: `Final response did not explain the ${skillName} workflow choice`,
+    };
+  }
+  return noIncompleteInvocations(result);
+}
+
+const MISSING_API_CREDENTIAL_ID = "credential:system-test-missing";
+const MISSING_API_URL = "https://system-test-missing.invalid/resource";
+
+function apiIntegrationChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  const final = findLastAgentMessage(result);
+  if (
+    !/(credential|authentication)/iu.test(final) ||
+    !/(missing|unavailable|not configured|not found)/iu.test(final) ||
+    !/(without|did not|didn't|no)\b[^.\n]*(secret|credential data|prompt|authoriz)/iu.test(final)
+  ) {
+    return {
+      passed: false,
+      reason: "Final response did not semantically report the safe missing-credential outcome",
+    };
+  }
+
+  const evalCalls = getToolCalls(result).filter((call) => call.name === "eval");
+  const code = successfulEvalCode(result);
+  if (
+    evalCalls.length !== 1 ||
+    !code.includes("credentials.fetch") ||
+    !code.includes(MISSING_API_CREDENTIAL_ID) ||
+    !code.includes(MISSING_API_URL)
+  ) {
+    return {
+      passed: false,
+      reason: "Expected one successful host-mediated fetch with the reserved missing credential",
+    };
+  }
+  const allEvalCode = evalCalls
+    .map((call) => (typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : ""))
+    .join("\n");
+  if (
+    /credentials\.(?:listStoredCredentials|inspectStoredCredentials|resolveCredential|forAudience|store|connect|configureClient|requestCredentialInput|revokeCredential|deleteClientConfig)|openExternal/u.test(
+      allEvalCode
+    )
+  ) {
+    return {
+      passed: false,
+      reason: "Missing-credential API probe inspected, mutated, or requested credential state",
+    };
+  }
+
+  const values = successfulEvalReturnValues(result);
+  if (
+    values.length !== 1 ||
+    !values[0] ||
+    typeof values[0] !== "object" ||
+    Array.isArray(values[0]) ||
+    Object.keys(values[0]).join(",") !== "missing" ||
+    (values[0] as Record<string, unknown>)["missing"] !== true
+  ) {
+    return {
+      passed: false,
+      reason: "Missing-credential API eval must return exactly { missing: true }",
+    };
+  }
   return noIncompleteInvocations(result);
 }
 
@@ -47,11 +130,7 @@ async function orchestrateHeadlessDiagnosis(
   try {
     await context.sendAndWait(
       session,
-      `Set up a controlled diagnostic target. Spawn one fresh Pi subagent labelled "stalled headless fixture". Give that child this task exactly:
-
-"Start one eval tool whose code awaits a promise that never resolves. This is an intentional stalled-session fixture; do not perform any other work and do not send a final message."
-
-The child must be a real subagent in your runtime tree, not a hypothetical example. Once it is launched, finish this setup turn with FIXTURE_READY.`,
+      "Set up a controlled diagnostic target by spawning one real Pi subagent labelled 'stalled headless fixture'. Ask it to begin an intentionally non-terminating eval and do no other work, then acknowledge once that child is running.",
       "create a real stalled child fixture"
     );
     const remainingTimeMs = context.remainingTimeMs();
@@ -63,7 +142,7 @@ The child must be a real subagent in your runtime tree, not a hypothetical examp
     );
     await context.sendAndWait(
       session,
-      "Diagnose a headless agent that used a tool but produced no final message. Finish with SKILL_HEADLESS_OK and bounded-diagnostics.",
+      "Diagnose why the child agent has not produced a final response. Keep the investigation bounded and report only evidence you can observe.",
       "diagnose the stalled child"
     );
   } catch (err) {
@@ -108,35 +187,49 @@ export const skillTests: TestCase[] = [
     description: "Apply the sandbox skill to choose an execution surface",
     category: "skills",
     prompt:
-      "Choose how to handle a one-off state inspection. Finish with SKILL_SANDBOX_OK and chosen-surface.",
-    validate: (result) => checked(result, ["SKILL_SANDBOX_OK", "chosen-surface"]),
+      "I need a one-off, read-only state inspection. Which execution surface should we use, and why?",
+    validate: (result) =>
+      skillChoiceChecked(result, "sandbox", /(sandbox|eval|execution surface|read-only)/iu),
   },
   {
     name: "load-workspace-dev",
     description: "Apply the workspace-dev skill to choose a project workflow",
     category: "skills",
     prompt:
-      "Choose a workflow for a requested panel change. Finish with SKILL_WORKSPACE_DEV_OK and workflow-choice.",
-    validate: (result) => checked(result, ["SKILL_WORKSPACE_DEV_OK", "workflow-choice"]),
+      "I want to change a workspace panel. Which development workflow fits this request, and why?",
+    validate: (result) =>
+      skillChoiceChecked(result, "workspace-dev", /(workspace|panel|development|workflow)/iu),
   },
   {
     name: "load-api-integrations",
     description: "Apply the API integrations skill to handle missing credentials",
     category: "skills",
-    prompt:
-      "Handle a missing credential for an API request. Finish with SKILL_API_OK and no-secret-paste.",
-    validate: (result) => checked(result, ["SKILL_API_OK", "no-secret-paste"]),
+    prompt: `Try the deliberately unconfigured test API at ${MISSING_API_URL} using the reserved test credential ${MISSING_API_CREDENTIAL_ID}. Explain the safe outcome without inspecting, changing, requesting, or exposing credential data.`,
+    validate: apiIntegrationChecked,
   },
   {
     name: "load-headless-sessions",
     description: "Apply the headless-sessions skill to diagnose a stalled agent",
     category: "skills",
     prompt:
-      "Diagnose a headless agent that used a tool but produced no final message. Finish with SKILL_HEADLESS_OK and bounded-diagnostics.",
+      "Diagnose why a headless agent used a tool but never produced a final response. Keep the investigation bounded and explain the observed state.",
     orchestrate: orchestrateHeadlessDiagnosis,
     // The fixture deliberately leaves one child invocation in flight. Validate
     // the diagnostic agent's final response here; the suite's independent
     // unexpected-tool-failure accounting still rejects any unintended errors.
-    validate: (result) => finalMessageHasAll(result, ["SKILL_HEADLESS_OK", "bounded-diagnostics"]),
+    validate: (result) => {
+      const fixture = result.diagnostics?.["fixture"] as Record<string, unknown> | undefined;
+      const final = findLastAgentMessage(result);
+      return fixture?.["kind"] === "real-subagent-with-in-flight-tool" &&
+        typeof fixture["invocationId"] === "string" &&
+        /(in[- ]flight|pending|running|stalled)/iu.test(final) &&
+        /(bounded|limit|recent|one child)/iu.test(final)
+        ? { passed: true }
+        : {
+            passed: false,
+            reason:
+              "Diagnosis lacked the real in-flight child evidence or a bounded semantic conclusion",
+          };
+    },
   },
 ];

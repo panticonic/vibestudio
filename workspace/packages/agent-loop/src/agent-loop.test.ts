@@ -42,6 +42,7 @@ const baseConfig: AgentLoopConfig = {
   respondPolicy: "all",
   systemPromptHash: "blob:system-prompt",
   activeToolNames: ["read", "write"],
+  localToolExecutionModes: { read: "parallel", write: "sequential" },
   roster: { participants: [] },
 };
 
@@ -183,8 +184,17 @@ describe("agent-loop core lifecycle", () => {
     expect(started.payload).toMatchObject({
       name: "read",
       transport: { kind: "local", awaiterId: "tc-1" },
+      executionMode: "parallel",
     });
     expect(pendingEffectIds(s)).toEqual([ids.invocationEffect("tc-1")]);
+    expect(derivePendingEffects(s.state)).toContainEqual(
+      expect.objectContaining({
+        kind: "local_tool",
+        invocationId: "tc-1",
+        invocationSeq: started.seq,
+        executionMode: "parallel",
+      })
+    );
 
     resolveEffect(s, ids.invocationEffect("tc-1"), {
       kind: "tool",
@@ -227,6 +237,7 @@ describe("agent-loop core lifecycle", () => {
     });
     const intermediate = s.log.find((row) => row.envelopeId === ids.messageTerminal(msg0))!;
     expect((intermediate.payload as { tier?: string }).tier).toBe("secondary");
+    expect(intermediate.causality).toMatchObject({ messageId: msg0, turnId: turn1 });
 
     resolveEffect(s, ids.invocationEffect("tc-1"), {
       kind: "tool",
@@ -242,6 +253,7 @@ describe("agent-loop core lifecycle", () => {
     });
     const final = s.log.find((row) => row.envelopeId === ids.messageTerminal(msg1))!;
     expect((final.payload as { tier?: string }).tier).toBe("primary");
+    expect(final.causality).toMatchObject({ messageId: msg1, turnId: turn1 });
   });
 
   it("keeps spawn_subagent launch results trajectory-only so the visible card stays running", () => {
@@ -433,6 +445,32 @@ describe("agent-loop core lifecycle", () => {
     expect(s.state.openTurn).toBeNull();
   });
 
+  it("journals side-effecting tool calls in model source order with sequential metadata", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        { type: "toolCall", id: "tc-write-1", name: "write", arguments: { path: "a" } },
+        { type: "toolCall", id: "tc-write-2", name: "write", arguments: { path: "b" } },
+      ],
+      stopReason: "completed",
+    });
+
+    const effects = derivePendingEffects(s.state).filter((effect) => effect.kind === "local_tool");
+    expect(effects).toEqual([
+      expect.objectContaining({
+        invocationId: "tc-write-1",
+        executionMode: "sequential",
+      }),
+      expect.objectContaining({
+        invocationId: "tc-write-2",
+        executionMode: "sequential",
+      }),
+    ]);
+    expect(effects[0]!.invocationSeq).toBeLessThan(effects[1]!.invocationSeq!);
+  });
+
   it("interrupt mid-model-call settles pendings and closes the turn after the interrupted terminal", () => {
     const s = scenario();
     prompt(s);
@@ -450,6 +488,46 @@ describe("agent-loop core lifecycle", () => {
     const closed = s.log.find((row) => row.payloadKind === "turn.closed")!;
     expect(closed.payload).toMatchObject({ reason: "user_interrupted" });
     expect(pendingEffectIds(s)).toEqual([]);
+  });
+
+  it("journals distinct deterministic interrupts when channel retirement follows a user interrupt", () => {
+    const s = scenario();
+    prompt(s);
+
+    dispatch(s, { type: "command", command: { kind: "interrupt" } });
+    dispatch(s, {
+      type: "command",
+      command: { kind: "abort", reason: "channel_unsubscribe" },
+    });
+
+    const interrupts = s.log.filter(
+      (row) =>
+        row.payloadKind === "system.event" &&
+        (row.payload as { details?: { kind?: string } }).details?.kind === "interrupt"
+    );
+    expect(interrupts).toEqual([
+      expect.objectContaining({
+        envelopeId: ids.interruptEvent(turn1, "user_interrupted"),
+        payload: expect.objectContaining({
+          details: { kind: "interrupt", reason: "user_interrupted" },
+        }),
+      }),
+      expect.objectContaining({
+        envelopeId: ids.interruptEvent(turn1, "channel_unsubscribe"),
+        payload: expect.objectContaining({
+          details: { kind: "interrupt", reason: "channel_unsubscribe" },
+        }),
+      }),
+    ]);
+
+    const replay = scenario();
+    prompt(replay);
+    dispatch(replay, { type: "command", command: { kind: "interrupt" } });
+    dispatch(replay, {
+      type: "command",
+      command: { kind: "abort", reason: "channel_unsubscribe" },
+    });
+    expect(replay.log).toEqual(s.log);
   });
 
   it("classifies empty and tool_calls_only outcomes", () => {
@@ -895,6 +973,7 @@ describe("agent-loop core lifecycle", () => {
     expect(s.state.openTurn).not.toBeNull();
     expect(s.log.filter((row) => row.payloadKind === "message.started")).toHaveLength(1);
     const failed = s.log.find((row) => row.envelopeId === ids.messageTerminal(msg0))!;
+    expect(failed.causality).toMatchObject({ messageId: msg0, turnId: turn1 });
     expect(failed.payload).toMatchObject({
       reason:
         "The usage limit has been reached for GPT-5.3 Codex-Spark. Try again after Jun 15, 2026 at 6:35 PM UTC.",

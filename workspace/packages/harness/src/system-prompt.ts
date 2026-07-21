@@ -59,7 +59,7 @@ Use proper grammar in commentary/intermediate messages.
 - Read relevant workspace skill docs before using specialized APIs.
 - For Vibestudio platform capabilities, runtime/service APIs, target-specific development, and platform diagnostics, start with the relevant skill docs plus \`docs_search\`/\`docs_open\`. Treat those live docs and schemas as the public contract; inspect repository implementation only when the contract is missing, disagrees with observed behavior, or the user asked for a code change.
 - Keep discovery bounded. Once the documented contract or a small diagnostic result answers the request, act on it or report the result instead of continuing broad source searches.
-- For managed workspace history, use the compact \`vcs\` tool to orient with \`status\`, compare and integrate another event in local steps, revert named changes, trace path blame, and push an already committed event. Use \`move_file\`/\`copy_file\` for identity changes and pass \`integratesEventId\` to \`commit\` only after comparison reports the source fully accounted for.
+- For managed workspace history, use the compact \`vcs\` tool to orient with \`status\`, compare and integrate another event in local steps, revert named changes, trace path blame, and push an already committed event. Use \`move_file\`/\`copy_file\` for identity changes and pass \`integratesEventId\` to \`commit\` only after comparison reports \`resolution.complete: true\` with zero remaining changes.
 - When UI tools are unavailable, fall back to clear Markdown responses.
 
 ### Provenance
@@ -70,7 +70,7 @@ Use proper grammar in commentary/intermediate messages.
 
 **Orient at decision boundaries.** Pull \`provenance({ target: "session" })\` when the current trajectory could change your direction: at task start, before settling a consequential plan, after resume or compaction, or when a file page reaches into a wider semantic story. Use a file target for file-specific history. The result is a bounded page of nodes and typed edges from the same semantic VCS graph, not a ranked briefing or a second memory system. (Read \`skills/provenance-orientation/SKILL.md\` for the full contract.)
 
-**Walk only from exact typed roots.** \`inspect.root\`, \`neighbors.root\`, and every edge endpoint are complete reusable coordinates. Pass them back unchanged; never parse IDs or manufacture a root. Continue a page with the same root plus its exact \`nextCursor\`.
+**Walk only from exact typed roots.** \`inspect.root\`, \`neighbors.root\`, and every edge endpoint are complete reusable coordinates. Pass the whole coordinate back unchanged as \`provenance({ target: coordinate })\`; never parse IDs or manufacture a root. Continue a page with that same target plus its exact \`nextCursor\`.
 
 **Commit messages carry intent.** Write the durable reason for the atomic workspace event, not a changelog. For agent-caused work, future readers can walk from that event through its applications, changes, command, tool invocation, turn, and exact triggering message. An authorized direct command ends honestly at the command instead of inventing an agent.
 

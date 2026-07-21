@@ -37,18 +37,24 @@ function fixture(options: { missing?: boolean; failure?: Error } = {}) {
       content: { kind: "text" as const, text: "content" },
     };
   });
-  const mutationResult = {
+  const mutationResult = (commandId: string) => ({
     contextId: "context:1",
+    commandId,
     workUnitId: "work:1",
     applicationId: "application:next",
     changeCount: 1,
     changeIds: ["change:1"],
     incorporatedChangeCount: 0,
     incorporatedChangeIds: [],
+    decisionIds: [],
     workingHead: next,
-  };
-  const move = vi.fn(async () => mutationResult);
-  const copy = vi.fn(async () => mutationResult);
+  });
+  const move = vi.fn(async (input: Parameters<ToolFileTransferVcs["move"]>[0]) =>
+    mutationResult(input.commandId)
+  );
+  const copy = vi.fn(async (input: Parameters<ToolFileTransferVcs["copy"]>[0]) =>
+    mutationResult(input.commandId)
+  );
   const vcs = { status, resolveRepository, readFile, move, copy } satisfies ToolFileTransferVcs;
   return { vcs, move, copy, readFile };
 }

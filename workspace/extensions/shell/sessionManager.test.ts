@@ -5,6 +5,30 @@ import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "./sessionManager.js";
 
 describe("SessionManager janitor", () => {
+  it("returns JSON-safe session info when no terminal agent is detected", async () => {
+    const manager = new SessionManager({}, { janitorIntervalMs: 60 * 60_000 });
+    const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
+    const owner = { callerId: "panel:test", callerKind: "panel" };
+    const opened = manager.open(
+      {
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 5000)"],
+        cwd: root,
+        env: {},
+        cols: 80,
+        rows: 24,
+      },
+      owner
+    );
+    const session = manager.requireOwner(opened.sessionId, owner.callerId);
+
+    const info = manager.info(session);
+
+    expect(Object.hasOwn(info, "detectedAgent")).toBe(false);
+    expect(JSON.parse(JSON.stringify(info))).toEqual(info);
+    manager.dispose(session);
+  });
+
   it("emits watch-all heartbeats only after an idle interval", async () => {
     vi.useFakeTimers();
     const manager = new SessionManager(

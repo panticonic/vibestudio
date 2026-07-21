@@ -9,7 +9,10 @@ export type {
   SystemTestFailure,
   SystemTestJsonValue,
 } from "./structured-error.js";
-export type { WorkspaceRepoFixtureSpec } from "./workspace-repo-fixture.js";
+export type {
+  WorkspaceRepoCreationScope,
+  WorkspaceRepoFixtureSpec,
+} from "./workspace-repo-fixture.js";
 
 export const CONTENT_WORKSPACE_REPO_FIXTURE = {
   kind: "content",
@@ -19,6 +22,26 @@ export const CONTENT_WORKSPACE_REPO_FIXTURE = {
 export const BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE = {
   kind: "buildable-package",
   section: "packages",
+} as const satisfies WorkspaceRepoFixtureSpec;
+
+export const BUILDABLE_WORKER_WORKSPACE_REPO_FIXTURE = {
+  kind: "buildable-worker",
+  section: "workers",
+} as const satisfies WorkspaceRepoFixtureSpec;
+
+export const CREATED_PANEL_WORKSPACE_REPO_FIXTURE = {
+  kind: "created-repository",
+  section: "panels",
+} as const satisfies WorkspaceRepoFixtureSpec;
+
+export const CREATED_PACKAGE_WORKSPACE_REPO_FIXTURE = {
+  kind: "created-repository",
+  section: "packages",
+} as const satisfies WorkspaceRepoFixtureSpec;
+
+export const BUILDABLE_PANEL_WITH_DERIVED_WORKSPACE_REPO_FIXTURE = {
+  kind: "buildable-panel-with-derived",
+  section: "panels",
 } as const satisfies WorkspaceRepoFixtureSpec;
 
 export interface ToolFailureSummary {
@@ -56,12 +79,12 @@ export interface TestCase {
   resources?: string[];
   /**
    * Give tests that create/publish workspace repos one fresh semantic task
-   * context and one exactly owned disposable repository. Setup commits a local
-   * fixture; cleanup point-inspects only repository identities derived from the
-   * task's exact work and touches protected main only when a task event is
-   * reachable from it. Published task work is counteracted in reverse causal
-   * order; newer local work disappears with the task context. Sibling fixtures
-   * remain concurrent.
+   * context and a typed repository creation scope. Depending on the selected
+   * sum member, setup either seeds one exact local repository, seeds no
+   * repository and expects exactly one task-created repository in a declared
+   * section, or seeds a buildable panel and expects exactly one derived panel.
+   * Cleanup derives identities only from the task's exact first-parent work and
+   * touches protected main only when a task event is reachable from it.
    * This keeps fixture mechanics out of the user-like prompt.
    */
   workspaceRepoFixture?: WorkspaceRepoFixtureSpec;

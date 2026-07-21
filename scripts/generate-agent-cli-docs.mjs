@@ -6,8 +6,8 @@
  * every src/server/services/*Service(Def).ts module is imported (via tsx),
  * its exported `create*` factories are invoked with inert proxy deps (deps
  * are only used inside handler closures), and the resulting
- * ServiceDefinitions are filtered to the ones a `shell` caller — i.e. the
- * paired CLI — is allowed to dispatch to.
+ * ServiceDefinitions are filtered to the ones admitting the authenticated
+ * user principal carried by a paired CLI session.
  *
  * Usage:
  *   pnpm generate:agent-docs          # rewrite API.md
@@ -79,8 +79,21 @@ async function collectServiceDefinitions() {
   return [...defs.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function shellCallable(def) {
-  return Array.isArray(def.policy?.allowed) && def.policy.allowed.includes("shell");
+function authorityPrincipals(authority) {
+  const found = new Set();
+  const visit = (value) => {
+    if (!value || typeof value !== "object") return;
+    if (typeof value.principal === "string") found.add(value.principal);
+    for (const principal of value.principals ?? []) found.add(principal);
+    for (const requirement of value.requirements ?? []) visit(requirement);
+    visit(value.requirement);
+  };
+  visit(authority);
+  return [...found].sort();
+}
+
+function pairedCliCallable(def) {
+  return authorityPrincipals(def.authority).includes("user");
 }
 
 function escapeTableCell(value) {
@@ -90,12 +103,16 @@ function escapeTableCell(value) {
 function renderService(def) {
   const lines = [`## \`${def.name}\``, ""];
   if (def.description) lines.push(def.description, "");
-  lines.push(`Allowed callers: ${def.policy.allowed.map((c) => `\`${c}\``).join(", ")}`, "");
+  lines.push(
+    `Authority principals: ${authorityPrincipals(def.authority)
+      .map((principal) => `\`${principal}\``)
+      .join(", ")}`,
+    ""
+  );
   lines.push("| Method | Description |", "|--------|-------------|");
   for (const [methodName, method] of Object.entries(def.methods)) {
-    const shellBlocked =
-      Array.isArray(method.policy?.allowed) && !method.policy.allowed.includes("shell");
-    if (shellBlocked) continue; // method-level override excludes the CLI
+    const effectiveAuthority = method.authority ?? def.authority;
+    if (!authorityPrincipals(effectiveAuthority).includes("user")) continue;
     lines.push(`| \`${def.name}.${methodName}\` | ${escapeTableCell(method.description ?? "")} |`);
   }
   return lines.join("\n");
@@ -123,7 +140,7 @@ is actually live. This is the selected workspace child's API. Server-wide
 workspace, device, and account mutation commands run over the client's separate
 stable hub session and intentionally do not appear as child services here.
 
-Some internal services (e.g. workerd) are not shell-callable and do not appear
+Some internal services (e.g. workerd) do not admit paired user authority and do not appear
 here. Create workers and DOs via \`runtime.createEntity\` (\`kind: "worker"\` /
 \`"do"\`), then dispatch to them with \`--target\` relay calls.
 
@@ -133,8 +150,8 @@ ${defs.map(renderService).join("\n\n")}
 
 async function main() {
   const checkOnly = process.argv.includes("--check");
-  const defs = (await collectServiceDefinitions()).filter(shellCallable);
-  if (defs.length === 0) throw new Error("no shell-callable service definitions found");
+  const defs = (await collectServiceDefinitions()).filter(pairedCliCallable);
+  if (defs.length === 0) throw new Error("no paired-CLI service definitions found");
   const next = renderDoc(defs);
   const current = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : null;
   if (checkOnly) {

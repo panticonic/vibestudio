@@ -18,19 +18,18 @@ import { createExtensionProxy } from "@vibestudio/extension";
 import path from "node:path";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
-import {
-  DEFAULT_MAX_BYTES,
-  formatSize,
-  truncateHead,
-  type TruncationResult,
-} from "./truncate.js";
+import { DEFAULT_MAX_BYTES, formatSize, truncateHead, type TruncationResult } from "./truncate.js";
 import { globToRegex } from "./grep.js";
 
 const findSchema = Type.Object({
-  pattern: Type.Optional(Type.String({
-    description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
-  })),
-  path: Type.Optional(Type.String({ description: "Directory to search in (default: current directory)" })),
+  pattern: Type.Optional(
+    Type.String({
+      description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
+    })
+  ),
+  path: Type.Optional(
+    Type.String({ description: "Directory to search in (default: current directory)" })
+  ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of results (default: 1000)" })),
 });
 
@@ -78,7 +77,7 @@ const SKIP_DIRS = new Set([
 export function createFindTool(
   cwd: string,
   fs: RuntimeFs,
-  deps?: FindToolDeps,
+  deps?: FindToolDeps
 ): AgentTool<typeof findSchema, FindToolDetails | undefined> {
   const fileTools = deps?.rpc
     ? createExtensionProxy<FileToolsApi>(deps.rpc, FILE_TOOLS_EXTENSION, () => false)
@@ -86,13 +85,19 @@ export function createFindTool(
   return {
     name: "find",
     label: "find",
+    executionMode: "parallel",
     description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
     parameters: findSchema,
     execute: async (_toolCallId, input, signal) => {
       const { pattern, path: searchDir, limit } = input;
       if (typeof pattern !== "string") {
         return {
-          content: [{ type: "text", text: "No find pattern supplied. Pass a glob such as `*`, `**/*.ts`, or `src/**`." }],
+          content: [
+            {
+              type: "text",
+              text: "No find pattern supplied. Pass a glob such as `*`, `**/*.ts`, or `src/**`.",
+            },
+          ],
           details: undefined,
         };
       }
@@ -156,7 +161,11 @@ export function createFindTool(
             if (SKIP_DIRS.has(entry.name)) continue;
             // Test the directory itself against the glob too — it lets users find
             // directories like `**/__tests__`.
-            if (regex.test(rel + "/") || basenameRegex?.test(entry.name) || basenameRegex?.test(entry.name + "/")) {
+            if (
+              regex.test(rel + "/") ||
+              basenameRegex?.test(entry.name) ||
+              basenameRegex?.test(entry.name + "/")
+            ) {
               matches.push(rel + "/");
               if (matches.length >= effectiveLimit) {
                 resultLimitReached = true;
@@ -193,7 +202,7 @@ export function createFindTool(
 
       if (resultLimitReached) {
         notices.push(
-          `${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`,
+          `${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`
         );
         details.resultLimitReached = effectiveLimit;
       }
@@ -214,12 +223,13 @@ export function createFindTool(
 }
 
 function isFileToolsExtensionFallback(err: unknown): boolean {
-  const code = typeof err === "object" && err !== null
-    ? (err as { code?: unknown }).code
-    : undefined;
+  const code =
+    typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
   // ENOEXT = not installed/enabled; ENOTREADY = declared but not yet running.
   // Both mean the extension can't serve this call, so fall back to runtime-fs.
   if (code === "ENOEXT" || code === "ENOTREADY") return true;
   const message = err instanceof Error ? err.message : String(err);
-  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running|\b(?:ENOENT|path not found|no such file)\b/i.test(message);
+  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running|\b(?:ENOENT|path not found|no such file)\b/i.test(
+    message
+  );
 }

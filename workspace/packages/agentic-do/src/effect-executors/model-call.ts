@@ -7,7 +7,10 @@
  */
 
 import { stream } from "@earendil-works/pi-ai/compat";
-import { closeOpenAICodexWebSocketSessions } from "@earendil-works/pi-ai/api/openai-codex-responses";
+import {
+  closeOpenAICodexWebSocketSessions,
+  releaseOpenAICodexWebSocketSession,
+} from "@earendil-works/pi-ai/api/openai-codex-responses";
 import type { Context, Message } from "@earendil-works/pi-ai";
 import {
   buildModelContext,
@@ -737,13 +740,19 @@ async function executeModelCall(
       );
       trace("loopback.ensure-loaded.start", { model: request.model });
       const [loaded, auth] = await Promise.all([
-        localModels.ensureLoaded(request.model),
-        localModels.getLoopbackAuth(),
+        localModels.ensureLoaded(request.model, signal),
+        localModels.getLoopbackAuth(signal),
       ]);
       liveBaseUrl = loaded.baseUrl;
       credentials = { apiKey: auth.apiKey };
       trace("loopback.ready", { baseUrl: loaded.baseUrl });
     } catch (err) {
+      // Activation release owns this signal. Cancellation is not a model
+      // failure and must not manufacture a terminal outcome; let the driver
+      // retain the durable outbox row for recovery in the next activation.
+      if (signal.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new Error("model call aborted");
+      }
       return {
         kind: "model",
         blocks: [],
@@ -854,7 +863,11 @@ async function executeModelCall(
   // placeholder port, passing the spec unmodified dials a dead endpoint.
   const effectiveSpec = liveBaseUrl ? { ...modelSpec, baseUrl: liveBaseUrl } : modelSpec;
   const providerSessionId = modelStreamSessionId(descriptor, deps.selfRef);
-  const closeProviderSession = () => closeOpenAICodexWebSocketSessions(providerSessionId);
+  // Invalidation preserves the provider's same-session SSE fallback marker so
+  // the durable retry does not immediately reuse a poisoned WebSocket.
+  const invalidateProviderSession = () => closeOpenAICodexWebSocketSessions(providerSessionId);
+  // Terminal release also clears fallback/debug state for this per-turn key.
+  const releaseProviderSession = () => releaseOpenAICodexWebSocketSession(providerSessionId);
   const attemptId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
   onModelExecutionAttempt?.({
@@ -893,11 +906,14 @@ async function executeModelCall(
       ...(credentials.headers ? { headers: credentials.headers } : {}),
       signal: streamAbort.signal,
       sessionId: providerSessionId,
+      ...(modelSpec.streamIdleTimeoutMs !== undefined
+        ? { streamIdleTimeoutMs: modelSpec.streamIdleTimeoutMs }
+        : {}),
       ...buildRawThinkingOptions(modelSpec as unknown as RawThinkingModel, request.thinkingLevel),
     } as never);
   } catch (error) {
     signal.removeEventListener("abort", forwardAbort);
-    closeProviderSession();
+    invalidateProviderSession();
     finishAttempt("failed", { error: error instanceof Error ? error.message : String(error) });
     throw error;
   }
@@ -1043,7 +1059,7 @@ async function executeModelCall(
     stopPrefillSignals = null;
     signal.removeEventListener("abort", forwardAbort);
     if (signal.aborted) {
-      closeProviderSession();
+      releaseProviderSession();
       finishAttempt("aborted", { error: String(signal.reason ?? "aborted") });
       return { kind: "model", blocks: [], stopReason: "aborted" };
     }
@@ -1056,7 +1072,7 @@ async function executeModelCall(
     trace("stream.failed", {
       error: err instanceof Error ? err.message : String(err),
     });
-    closeProviderSession();
+    invalidateProviderSession();
     finishAttempt("failed", { error: err instanceof Error ? err.message : String(err) });
     return modelFailureOutcome(err, request, { modelBaseUrl });
   }
@@ -1071,11 +1087,12 @@ async function executeModelCall(
       eventStream as unknown as { result(): Promise<Record<string, unknown>> }
     ).result();
   } catch (err) {
-    closeProviderSession();
     if (signal.aborted) {
+      releaseProviderSession();
       finishAttempt("aborted", { error: String(signal.reason ?? "aborted") });
       return { kind: "model", blocks: [], stopReason: "aborted" };
     }
+    invalidateProviderSession();
     finishAttempt("failed", { error: err instanceof Error ? err.message : String(err) });
     return modelFailureOutcome(
       err instanceof Error ? err : new Error("model stream failed"),
@@ -1097,7 +1114,7 @@ async function executeModelCall(
     blockCount: content.length,
   });
   if (signal.aborted || stopReason === "aborted") {
-    closeProviderSession();
+    releaseProviderSession();
     finishAttempt("aborted", {
       ...(usage ? { usage } : {}),
       error: String(signal.reason ?? result["errorMessage"] ?? "aborted"),
@@ -1109,7 +1126,7 @@ async function executeModelCall(
     };
   }
   if (stopReason === "error") {
-    closeProviderSession();
+    invalidateProviderSession();
     // Provider-reported terminal error (e.g. a WS close mid-generation).
     // This path throws nothing, so without this log the failure is invisible
     // in worker logs — only the journaled message.failed records it.
@@ -1130,7 +1147,7 @@ async function executeModelCall(
   // context for the immediately following model request. Final assistant
   // output ends the reuse scope explicitly; no idle socket is required for
   // correctness and no socket is left behind to impede DO hibernation.
-  if (!hasToolCallBlock(blocks)) closeProviderSession();
+  if (!hasToolCallBlock(blocks)) releaseProviderSession();
   finishAttempt("completed", usage ? { usage } : {});
   return {
     kind: "model",

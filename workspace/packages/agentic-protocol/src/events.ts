@@ -418,6 +418,8 @@ export type InvocationPayload =
       invocationType?: "tool" | "panel" | "agent" | "user" | "http" | "system";
       request?: unknown;
       transport?: InvocationTransport;
+      /** Durable execution ordering selected from the invoked tool's metadata. */
+      executionMode?: "sequential" | "parallel";
       requiresApproval?: boolean;
       userVisible?: boolean;
       summary?: string;

@@ -35,7 +35,6 @@ type EvalClient = ReturnType<typeof evalClientFor>;
 type EvalStatus = Awaited<ReturnType<EvalClient["getRun"]>>;
 
 const DEFAULT_POLL_MS = 1_000;
-const DEFAULT_TEST_TIMEOUT_MS = 5 * 60 * 1_000;
 const MAX_CONSECUTIVE_STATUS_READ_FAILURES = 5;
 // Stay below EvalDO's 60k structured-return preview threshold even after wire
 // serialization. Pages are returned as UTF-16LE base64 (2 bytes per JS code
@@ -126,11 +125,6 @@ function routing(scope: SessionScope, stored?: StoredSystemTestRun | null) {
 function runCode(runId: string, config: StoredSystemTestRun["config"]): string {
   const options = JSON.stringify({ runId, ...config });
   return `
-    import {
-      inspectSystemTestRun,
-      runSystemTests,
-      systemTestTrajectory,
-    } from "@workspace-skills/system-testing/cli";
     const progressKey = ${JSON.stringify(runId)};
     const durableHeartbeatLimit = 220 * 1024;
     let lastProgress = null;
@@ -149,43 +143,62 @@ function runCode(runId: string, config: StoredSystemTestRun["config"]): string {
       lastProgress = durable;
       (ctx as any).reportProgress(durable);
     };
+    let driver = null;
+    let driverRetired = false;
+    const retireDriver = async () => {
+      if (!driver || driverRetired) return;
+      driverRetired = true;
+      await rpc.call("main", "runtime.retireEntity", [{ id: driver.id }]);
+    };
     try {
-      const record = await runSystemTests({
+      driver = await rpc.call("main", "runtime.createEntity", [{
+        kind: "do",
+        source: "workers/system-test-runner",
+        className: "SystemTestRunnerDO",
+        key: progressKey,
+        contextId: ctx.contextId,
+      }]);
+      let record = null;
+      let executionError = null;
+      let settled = false;
+      const execution = rpc.call(driver.targetId, "runSystemTests", [{
         ...${options},
         contextId: ctx.contextId,
-        onProgress: publishProgress,
-        onInspectionUpdate: (liveRecord) => {
-          const limits = { failures: 2, messages: 4, invocations: 6, debugEvents: 6, text: 300 };
-          const inspect = inspectSystemTestRun(liveRecord, { limits });
-          const base = { ...(lastProgress || {}) };
-          const trajectories = {};
-          for (const entry of liveRecord.suite.results) {
-            const name = entry.test.name;
-            const candidate = {
-              ...trajectories,
-              [name]: { bounded: systemTestTrajectory(liveRecord, name, { limits }) },
-            };
-            const heartbeat = { ...base, liveInspection: { inspect, trajectories: candidate } };
-            if (JSON.stringify(heartbeat).length <= durableHeartbeatLimit) {
-              Object.assign(trajectories, candidate);
-            }
-          }
-          publishProgress({
-            ...base,
-            liveInspection: { inspect, trajectories },
-          });
-        },
-        registerCancellationCleanup: (cleanup) => ctx.onCancel(async () => {
-          const cancelledRecord = await cleanup();
-          if (cancelledRecord) {
-            const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
-              ? scope.systemTestRuns
-              : {};
-            runs[progressKey] = cancelledRecord;
-            scope.systemTestRuns = runs;
-          }
-        }),
+      }]).then(
+        (value) => { record = value; settled = true; },
+        (error) => { executionError = error; settled = true; },
+      );
+      ctx.onCancel(async () => {
+        const cancelledRecord = await rpc.call(
+          driver.targetId,
+          "cancelSystemTestRun",
+          [progressKey],
+        );
+        if (cancelledRecord) {
+          const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
+            ? scope.systemTestRuns
+            : {};
+          runs[progressKey] = cancelledRecord;
+          scope.systemTestRuns = runs;
+        }
+        await retireDriver();
       });
+      while (!settled) {
+        await Promise.race([
+          execution,
+          new Promise((resolve) => setTimeout(resolve, 1_000)),
+        ]);
+        if (settled) break;
+        const snapshot = await rpc.call(
+          driver.targetId,
+          "getSystemTestRunSnapshot",
+          [progressKey],
+        );
+        if (snapshot?.progress) publishProgress(snapshot.progress);
+      }
+      await execution;
+      if (executionError) throw executionError;
+      if (!record) throw new Error("System-test driver returned no record for " + progressKey);
       const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
         ? scope.systemTestRuns
         : {};
@@ -204,6 +217,8 @@ function runCode(runId: string, config: StoredSystemTestRun["config"]): string {
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
+    } finally {
+      await retireDriver();
     }
   `;
 }
@@ -370,14 +385,14 @@ async function run(inv: ParsedInvocation): Promise<number> {
       throw new UsageError("select exact test names, --category CATEGORY, or --all");
     }
     const scope = await resolveSystemTestScope(inv);
+    const testTimeoutMs = positiveInt(inv, "test-timeout-ms");
     const config: StoredSystemTestRun["config"] = {
       names,
       ...(category ? { category } : {}),
       all,
       ...(typeof inv.flags["model"] === "string" ? { model: inv.flags["model"] } : {}),
       concurrency: positiveInt(inv, "concurrency", 1) ?? 1,
-      testTimeoutMs:
-        positiveInt(inv, "test-timeout-ms", DEFAULT_TEST_TIMEOUT_MS) ?? DEFAULT_TEST_TIMEOUT_MS,
+      ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
     };
     const stored = await startRun(scope, config, outDir(inv));
     if (inv.flags["detach"] === true) {
@@ -954,7 +969,7 @@ const RUN_FLAGS = [
   {
     name: "test-timeout-ms",
     takesValue: true,
-    description: "Per-test timeout in milliseconds (default 300000)",
+    description: "Optional per-test timeout in milliseconds (no timeout when omitted)",
   },
   { name: "poll-ms", takesValue: true, description: "Status polling interval (default 1000)" },
   {
@@ -1064,7 +1079,8 @@ export const systemTestCommands: CliCommand[] = [
       {
         name: "test-timeout-ms",
         takesValue: true,
-        description: "Replace the prior run's per-test timeout in milliseconds",
+        description:
+          "Replace the prior run's optional per-test timeout in milliseconds (otherwise preserve it)",
       },
       { name: "poll-ms", takesValue: true },
       { name: "detach", takesValue: false },

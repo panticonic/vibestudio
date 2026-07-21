@@ -15,6 +15,7 @@ import {
 const mocks = vi.hoisted(() => ({
   clampThinkingLevel: vi.fn((_model: unknown, level: unknown) => level),
   closeOpenAICodexWebSocketSessions: vi.fn(),
+  releaseOpenAICodexWebSocketSession: vi.fn(),
   getModel: vi.fn(),
   stream: vi.fn(),
 }));
@@ -30,6 +31,7 @@ vi.mock("@earendil-works/pi-ai/compat", () => ({
 
 vi.mock("@earendil-works/pi-ai/api/openai-codex-responses", () => ({
   closeOpenAICodexWebSocketSessions: mocks.closeOpenAICodexWebSocketSessions,
+  releaseOpenAICodexWebSocketSession: mocks.releaseOpenAICodexWebSocketSession,
 }));
 
 const { modelCallExecutor, toPiAssistantBlocks, toProtocolBlocks } =
@@ -207,7 +209,7 @@ describe("modelCallExecutor", () => {
 
     expect(outcome).toMatchObject({ kind: "model", stopReason: "completed" });
     expect(getApiKey).not.toHaveBeenCalled();
-    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b");
+    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b", expect.any(AbortSignal));
     expect(attempts).toMatchObject([
       {
         phase: "started",
@@ -235,6 +237,52 @@ describe("modelCallExecutor", () => {
     // pi-ai constructs its client from model.baseUrl and IGNORES a baseUrl
     // option — the live endpoint must be baked into the model literal.
     expect(streamedModel).toMatchObject({ baseUrl: "http://127.0.0.1:43117/v1" });
+  });
+
+  it("propagates activation cancellation while local model loading is pending", async () => {
+    let resolveEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const ensureLoaded = vi.fn(
+      async (_modelId: string, signal: AbortSignal): Promise<{ baseUrl: string }> => {
+        resolveEntered();
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }
+    );
+    const inputDeps = deps();
+    inputDeps.localModels = {
+      ensureLoaded,
+      getLoopbackAuth: vi.fn(async () => ({ apiKey: "loopback-key" })),
+    };
+    const controller = new AbortController();
+    const pending = modelCallExecutor.execute({
+      descriptor: descriptor({
+        provider: "local",
+        model: "lfm2.5-1.2b",
+        auth: "loopback",
+        modelSpec: {
+          ...descriptor().request.modelSpec,
+          id: "lfm2.5-1.2b",
+          name: "LFM2.5 1.2B Instruct",
+          provider: "local",
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:0/v1",
+        },
+      }),
+      state: initialAgentState({ channelId: "channel-1", config }),
+      signal: controller.signal,
+      deps: inputDeps,
+      onEphemeral: () => {},
+    });
+    await entered;
+
+    controller.abort(new Error("durable-object activation released"));
+
+    await expect(pending).rejects.toThrow("durable-object activation released");
+    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b", controller.signal);
   });
 
   it("fails a loopback request with a model error when the local-models port is absent", async () => {
@@ -300,6 +348,102 @@ describe("modelCallExecutor", () => {
     expect(warn).toHaveBeenCalledWith(
       "[model-call] stream failed:",
       expect.stringContaining("Rate limit reached")
+    );
+  });
+
+  it("sets no default stream idle deadline and forwards only an explicit model configuration", async () => {
+    const observedOptions: Array<Record<string, unknown>> = [];
+    mocks.stream.mockImplementation((_model, _context, options) => {
+      observedOptions.push(options as Record<string, unknown>);
+      return {
+        async *[Symbol.asyncIterator]() {},
+        result: async () => ({
+          content: [{ type: "text", text: "ok" }],
+          stopReason: "stop",
+        }),
+      };
+    });
+
+    const codexSpec = {
+      ...modelSpec,
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+    };
+    await modelCallExecutor.execute({
+      descriptor: descriptor({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
+        modelSpec: codexSpec as never,
+      }),
+      state: initialAgentState({ channelId: "channel-1", config }),
+      signal: new AbortController().signal,
+      deps: deps(),
+      onEphemeral: () => {},
+    });
+    await modelCallExecutor.execute({
+      descriptor: descriptor({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
+        modelSpec: { ...codexSpec, streamIdleTimeoutMs: 45_000 } as never,
+      }),
+      state: initialAgentState({ channelId: "channel-1", config }),
+      signal: new AbortController().signal,
+      deps: deps(),
+      onEphemeral: () => {},
+    });
+
+    expect(observedOptions[0]).not.toHaveProperty("streamIdleTimeoutMs");
+    expect(observedOptions[1]).toMatchObject({ streamIdleTimeoutMs: 45_000 });
+  });
+
+  it("closes and durably retries a Codex session whose explicit idle deadline expires", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let providerSessionId: string | undefined;
+    mocks.stream.mockImplementation((_model, _context, options) => {
+      providerSessionId = String(options.sessionId);
+      return {
+        [Symbol.asyncIterator]() {
+          return {
+            next: async () => {
+              throw new Error("WebSocket idle timeout after 300000ms");
+            },
+          };
+        },
+        result: async () => ({ content: [], stopReason: "stop" }),
+      };
+    });
+    const codexSpec = {
+      ...modelSpec,
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+      streamIdleTimeoutMs: 300_000,
+    };
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: descriptor({
+          provider: "openai-codex",
+          model: "gpt-5.3-codex-spark",
+          modelSpec: codexSpec as never,
+        }),
+        state: initialAgentState({ channelId: "channel-1", config }),
+        signal: new AbortController().signal,
+        deps: deps(),
+        onEphemeral: () => {},
+      })
+    ).resolves.toMatchObject({
+      kind: "retry",
+      code: "unknown_retryable",
+      retryAfterMs: 1_000,
+      reason: "WebSocket idle timeout after 300000ms",
+    });
+    expect(providerSessionId).toBeTruthy();
+    expect(mocks.closeOpenAICodexWebSocketSessions).toHaveBeenCalledWith(providerSessionId);
+    expect(warn).toHaveBeenCalledWith(
+      "[model-call] stream failed:",
+      expect.stringContaining("WebSocket idle timeout")
     );
   });
 
@@ -497,7 +641,7 @@ describe("modelCallExecutor", () => {
         },
       ],
     });
-    expect(mocks.closeOpenAICodexWebSocketSessions).toHaveBeenCalledWith(
+    expect(mocks.releaseOpenAICodexWebSocketSession).toHaveBeenCalledWith(
       "channel-1:agent:self:turn-1:test:model"
     );
   });
@@ -524,7 +668,7 @@ describe("modelCallExecutor", () => {
       stopReason: "completed",
       blocks: [expect.objectContaining({ type: "toolCall", name: "read" })],
     });
-    expect(mocks.closeOpenAICodexWebSocketSessions).not.toHaveBeenCalled();
+    expect(mocks.releaseOpenAICodexWebSocketSession).not.toHaveBeenCalled();
   });
 
   it("bounds long provider session IDs before streaming", async () => {
@@ -787,7 +931,7 @@ describe("modelCallExecutor", () => {
     expect(mocks.stream).not.toHaveBeenCalled();
   });
 
-  it("returns a deterministic OpenAI Codex response in VIBESTUDIO_TEST_MODE without credential lookup", async () => {
+  it("does not inject onboarding instructions or tool calls in deterministic test mode", async () => {
     const previous = process.env["VIBESTUDIO_TEST_MODE"];
     delete process.env["VIBESTUDIO_TEST_MODE"];
     try {
@@ -799,6 +943,7 @@ describe("modelCallExecutor", () => {
       const inputDescriptor = descriptor();
       inputDescriptor.request.provider = "openai-codex";
       inputDescriptor.request.model = "gpt-5.3-codex-spark";
+      inputDescriptor.request.activeToolNames = ["read"];
 
       const outcome = await modelCallExecutor.execute({
         descriptor: inputDescriptor,
@@ -820,6 +965,7 @@ describe("modelCallExecutor", () => {
           },
         ],
       });
+      expect(JSON.stringify(outcome)).not.toContain("skills/onboarding/SKILL.md");
     } finally {
       if (previous === undefined) {
         delete process.env["VIBESTUDIO_TEST_MODE"];

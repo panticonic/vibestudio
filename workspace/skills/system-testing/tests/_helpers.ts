@@ -295,6 +295,25 @@ export function successfulEvalCode(result: TestExecutionResult): string {
     .join("\n");
 }
 
+/** Values returned through the canonical successful eval result projection. */
+export function successfulEvalReturnValues(result: TestExecutionResult): unknown[] {
+  return getToolCalls(result)
+    .filter(
+      (call) =>
+        call.name === "eval" &&
+        call.execution?.status === "complete" &&
+        call.execution.isError !== true
+    )
+    .flatMap((call) => {
+      const executionResult = call.execution?.result;
+      if (!isRecord(executionResult) || !isRecord(executionResult["details"])) return [];
+      const details = executionResult["details"];
+      return Object.prototype.hasOwnProperty.call(details, "returnValue")
+        ? [details["returnValue"]]
+        : [];
+    });
+}
+
 export function requireEvalEvidence(
   result: TestExecutionResult,
   required: readonly string[]
@@ -454,7 +473,7 @@ export function requirePublishedCommitEvidence(result: TestExecutionResult): {
   );
 }
 
-/** Prove one source event was decided locally, re-compared as accounted, parented, and pushed. */
+/** Prove one source event was resolved locally, re-compared complete, parented, and pushed. */
 export function requireIncrementalIntegrationEvidence(result: TestExecutionResult): {
   passed: boolean;
   reason?: string;
@@ -493,6 +512,7 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
             decision && isStringArray(decision["sourceChangeIds"])
               ? decision["sourceChangeIds"]
               : [],
+          decisionKind: decision ? stringField(decision, "kind") : null,
         };
       })
       .filter(
@@ -511,10 +531,10 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
       );
     if (decisions.length === 0) continue;
     const firstDecision = decisions[0]!;
-    const sourceWasCompared = calls
+    const sourceCompare = calls
       .slice(0, firstDecision.index)
-      .map((candidate) => focusedVcsResult(candidate, "compare"))
-      .some((compare) => {
+      .map((candidate, index) => ({ index, value: focusedVcsResult(candidate, "compare") }))
+      .find(({ value: compare }) => {
         if (!compare || compare["sourceEventId"] !== sourceEventId) return false;
         const comparedChanges = Array.isArray(compare["changes"]) ? compare["changes"] : [];
         return decisions.every((entry) =>
@@ -532,7 +552,27 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
           )
         );
       });
-    if (!sourceWasCompared) continue;
+    if (!sourceCompare?.value) continue;
+    const localTarget = recordField(sourceCompare.value, "target");
+    const localEventId =
+      localTarget?.["kind"] === "event" && typeof localTarget["eventId"] === "string"
+        ? localTarget["eventId"]
+        : null;
+    if (!localEventId || localEventId === sourceEventId) continue;
+    let localCommitIndex = -1;
+    for (let index = sourceCompare.index - 1; index >= 0; index -= 1) {
+      const candidateCommit = focusedCommitResult(calls[index]!);
+      if (candidateCommit && eventIdFromCommit(candidateCommit) === localEventId) {
+        localCommitIndex = index;
+        break;
+      }
+    }
+    if (localCommitIndex < 0) continue;
+    const localWasPublished = calls.slice(localCommitIndex + 1, commitIndex).some((candidate) => {
+      const push = focusedVcsResult(candidate, "push");
+      return push?.["eventId"] === localEventId || push?.["mainEventId"] === localEventId;
+    });
+    if (localWasPublished) continue;
     const committedApplications = commit["committedApplicationIds"];
     if (
       !isStringArray(committedApplications) ||
@@ -544,7 +584,7 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
     }
 
     const lastDecision = decisions.at(-1)!;
-    const accountedCompare = calls
+    const resolvedCompare = calls
       .slice(lastDecision.index + 1, commitIndex)
       .map((candidate) => focusedVcsResult(candidate, "compare"))
       .find((compare) => {
@@ -556,22 +596,47 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
           return false;
         }
         const counts = recordField(compare, "counts");
+        const resolution = recordField(compare, "resolution");
         if (
           !counts ||
+          !resolution ||
+          resolution["complete"] !== true ||
+          resolution["remainingChangeCount"] !== 0 ||
           counts["actionable"] !== 0 ||
+          counts["alreadySatisfied"] !== 0 ||
           counts["conflicting"] !== 0 ||
           counts["blocked"] !== 0
         ) {
           return false;
         }
         const comparedChanges = Array.isArray(compare["changes"]) ? compare["changes"] : [];
+        if (comparedChanges.length === 0) {
+          const adoptedCount = decisions
+            .filter((entry) => entry.decisionKind === "adopted")
+            .reduce((total, entry) => total + entry.sourceChangeIds.length, 0);
+          const accountedCount = decisions
+            .filter(
+              (entry) => entry.decisionKind === "reconciled" || entry.decisionKind === "declined"
+            )
+            .reduce((total, entry) => total + entry.sourceChangeIds.length, 0);
+          return (
+            typeof counts["shared"] === "number" &&
+            counts["shared"] >= adoptedCount &&
+            typeof counts["accounted"] === "number" &&
+            counts["accounted"] >= accountedCount
+          );
+        }
         return decisions.every((entry) => {
           const decisionId = entry.value["decisionId"] as string;
           return entry.sourceChangeIds.every((changeId) =>
             comparedChanges.some((candidate) => {
               if (!isRecord(candidate) || candidate["changeId"] !== changeId) return false;
               const disposition = recordField(candidate, "disposition");
+              if (entry.decisionKind === "adopted") {
+                return disposition?.["status"] === "shared";
+              }
               return (
+                (entry.decisionKind === "reconciled" || entry.decisionKind === "declined") &&
                 disposition?.["status"] === "accounted" &&
                 isStringArray(disposition["decisionIds"]) &&
                 disposition["decisionIds"].includes(decisionId)
@@ -580,20 +645,27 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
           );
         });
       });
-    if (!accountedCompare) continue;
+    if (!resolvedCompare) continue;
 
     const published = calls.slice(commitIndex + 1).some((candidate) => {
       const push = focusedVcsResult(candidate, "push");
       return push?.["eventId"] === eventId && push["mainEventId"] === eventId;
     });
     if (!published) continue;
-    if (!findLastAgentMessage(result).includes(eventId)) {
-      return fail(`The final answer did not report integrated event ${eventId}`);
-    }
+    const clean = calls.slice(commitIndex + 1).some((candidate) => {
+      const status = focusedVcsResult(candidate, "status");
+      return Boolean(
+        status?.["clean"] === true &&
+        eventRefEquals(status["committed"], eventId) &&
+        eventRefEquals(status["workingHead"], eventId) &&
+        zeroWorkingCounts(status["workingCounts"])
+      );
+    });
+    if (!clean) continue;
     return { passed: true, reason: undefined };
   }
   return fail(
-    "Completed canonical results did not identity-join one published source through local decisions, an accounted compare, the commit integration parent, and final push"
+    "Completed canonical results did not identity-join an unpublished local commit and published source through local decisions, a complete comparison, the integration commit, clean final state, and final push"
   );
 }
 
@@ -646,7 +718,7 @@ export function requireMoveCopyEvidence(result: TestExecutionResult): {
     const from = recordField(edge, "from");
     const to = recordField(edge, "to");
     return (
-      edge["kind"] === "copies-content" &&
+      edge["kind"] === "authored-copy-source" &&
       from?.["kind"] === "change" &&
       from["changeId"] === copyChangeId &&
       to?.["kind"] === "file" &&
@@ -816,12 +888,6 @@ export function requireRevertEvidence(result: TestExecutionResult): {
           !focusedToolProtocolText(call).includes(newText)
       );
     if (!clean || !restored) continue;
-    const final = findLastAgentMessage(result);
-    if (!final.includes(originalChangeId) || !final.includes(counteractionChangeId)) {
-      return fail(
-        "The final answer did not report the exact original and counteraction change identities"
-      );
-    }
     return { passed: true, reason: undefined };
   }
   return fail(
@@ -987,6 +1053,30 @@ interface ObservedBlameOrigin {
   commandId: string;
 }
 
+function blameOrigin(record: Record<string, unknown>): ObservedBlameOrigin | null {
+  const change = record["change"];
+  const workUnit = record["workUnit"];
+  const command = record["command"];
+  if (
+    !isRecord(change) ||
+    change["kind"] !== "change" ||
+    typeof change["changeId"] !== "string" ||
+    !isRecord(workUnit) ||
+    workUnit["kind"] !== "work-unit" ||
+    typeof workUnit["workUnitId"] !== "string" ||
+    !isRecord(command) ||
+    command["kind"] !== "command" ||
+    typeof command["commandId"] !== "string"
+  ) {
+    return null;
+  }
+  return {
+    changeId: change["changeId"],
+    workUnitId: workUnit["workUnitId"],
+    commandId: command["commandId"],
+  };
+}
+
 interface InvocationCoordinate {
   logId: string;
   head: string;
@@ -1143,9 +1233,9 @@ const ORDINARY_CHANGE_KINDS = new Set([
  * The snapshot is a fact on the import work unit, not a synthetic change. A
  * valid proof therefore joins the terminal blame identities through an
  * ordinary inspected change, its exact import work unit and recorded intent,
- * and the completed import command. The user-facing answer must report the
- * tuple actually observed in that joined work unit; prose placeholders or an
- * unrelated snapshot inspection cannot satisfy the validator.
+ * and the completed import command. User-facing prose is deliberately not an
+ * evidence channel; an unrelated snapshot or a polished unsupported claim
+ * cannot satisfy the validator.
  */
 export function requireImportBoundaryEvidence(
   result: TestExecutionResult,
@@ -1163,18 +1253,8 @@ export function requireImportBoundaryEvidence(
     seen.add(value);
     if (!Array.isArray(value)) {
       const record = value as Record<string, unknown>;
-      if (
-        record["stop"] === "import-boundary" &&
-        typeof record["changeId"] === "string" &&
-        typeof record["workUnitId"] === "string" &&
-        typeof record["commandId"] === "string"
-      ) {
-        origins.push({
-          changeId: record["changeId"],
-          workUnitId: record["workUnitId"],
-          commandId: record["commandId"],
-        });
-      }
+      const origin = blameOrigin(record);
+      if (record["stop"] === "import-boundary" && origin) origins.push(origin);
       const node = record["node"];
       if (isRecord(node) && isRecord(node["value"])) {
         const inspected = node["value"];
@@ -1198,7 +1278,6 @@ export function requireImportBoundaryEvidence(
     visit(call.execution.result, new Set<object>());
   }
 
-  const finalMessage = findLastAgentMessage(result);
   for (const origin of origins) {
     const change = changes.get(origin.changeId);
     if (
@@ -1242,19 +1321,13 @@ export function requireImportBoundaryEvidence(
       continue;
     }
 
-    const reportedSnapshot = [
-      snapshot["sourceUri"],
-      snapshot["snapshotRevision"],
-      snapshot["snapshotDigest"],
-    ].every((fact) => finalMessage.includes(String(fact)));
-    const reportedIntent = finalMessage.includes(String(workUnit["intentSummary"]));
-    if (reportedSnapshot && reportedIntent) return { passed: true, reason: undefined };
+    return { passed: true, reason: undefined };
   }
 
   return {
     passed: false,
     reason:
-      "Completed tool results and final answer did not identity-join an import-boundary blame span through its ordinary change, owning import work unit with exact external snapshot and intent, and completed command while reporting that same intent, source URI, revision, and digest",
+      "Completed tool results did not identity-join an import-boundary blame span through its ordinary change, owning import work unit with exact external snapshot and intent, and completed command",
   };
 }
 
@@ -1274,19 +1347,14 @@ function collectCausalEvidence(
     if (typeof record["kind"] === "string" && isRecord(record["from"]) && isRecord(record["to"])) {
       edges.push({ kind: record["kind"], from: record["from"], to: record["to"] });
     }
+    const origin = blameOrigin(record);
     if (
       typeof record["start"] === "number" &&
       typeof record["end"] === "number" &&
       Array.isArray(record["path"]) &&
-      typeof record["changeId"] === "string" &&
-      typeof record["workUnitId"] === "string" &&
-      typeof record["commandId"] === "string"
+      origin
     ) {
-      origins.push({
-        changeId: record["changeId"],
-        workUnitId: record["workUnitId"],
-        commandId: record["commandId"],
-      });
+      origins.push(origin);
     }
     if (
       isRecord(record["node"]) &&
@@ -1427,6 +1495,74 @@ function isTrajectoryNode(
   );
 }
 
+/** Prove an uncertain exact mutation retry replayed one terminal result without
+ * creating a second semantic application, work unit, or change. */
+export function requireCommandIdempotencyEvidence(result: TestExecutionResult): {
+  passed: boolean;
+  reason?: string;
+} {
+  const evalCode = successfulEvalCode(result);
+  if ((evalCode.match(/\bvcs\.edit\s*\(/gu) ?? []).length < 2) {
+    return fail("A successful eval did not submit the same semantic edit twice");
+  }
+
+  const mutations: Record<string, unknown>[] = [];
+  const statuses: Record<string, unknown>[] = [];
+  const visit = (value: unknown, seen: Set<object>): void => {
+    if (!value || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    if (!Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      const workingHead = recordField(record, "workingHead");
+      if (
+        stringField(record, "commandId") &&
+        stringField(record, "contextId") &&
+        stringField(record, "workUnitId") &&
+        stringField(record, "applicationId") &&
+        record["changeCount"] === 1 &&
+        isStringArray(record["changeIds"]) &&
+        record["changeIds"].length === 1 &&
+        record["incorporatedChangeCount"] === 0 &&
+        isStringArray(record["incorporatedChangeIds"]) &&
+        record["incorporatedChangeIds"].length === 0 &&
+        isStringArray(record["decisionIds"]) &&
+        workingHead?.["kind"] === "application" &&
+        workingHead["applicationId"] === record["applicationId"]
+      ) {
+        mutations.push(record);
+      }
+      if (stringField(record, "contextId") && workingHead && isRecord(record["workingCounts"])) {
+        statuses.push(record);
+      }
+    }
+    for (const child of Object.values(value)) visit(child, seen);
+  };
+  for (const value of successfulEvalReturnValues(result)) visit(value, new Set<object>());
+
+  for (const [index, first] of mutations.entries()) {
+    const second = mutations
+      .slice(index + 1)
+      .find((candidate) => JSON.stringify(candidate) === JSON.stringify(first));
+    if (!second) continue;
+    const applicationId = stringField(first, "applicationId")!;
+    const contextId = stringField(first, "contextId")!;
+    const status = statuses.find((candidate) => {
+      const counts = recordField(candidate, "workingCounts");
+      return (
+        candidate["contextId"] === contextId &&
+        sameState(candidate["workingHead"], { kind: "application", applicationId }) &&
+        counts?.["applications"] === 1 &&
+        counts["workUnits"] === 1 &&
+        counts["changes"] === 1
+      );
+    });
+    if (status) return { passed: true, reason: undefined };
+  }
+  return fail(
+    "Completed canonical results did not show two identical mutation terminals joined to one application, work unit, change, and final working state"
+  );
+}
+
 /**
  * Validate the observable protocol proof for the stale-frontier recovery test.
  *
@@ -1461,13 +1597,10 @@ export function requireFreshnessRecoveryEvidence(result: TestExecutionResult): {
     successfulResults.some((value) =>
       containsStructuredField(value, "code", (candidate) => candidate === "RevisionChanged")
     ) || failedResults.some((value) => containsExactProtocolToken(value, "RevisionChanged"));
-  const noPartialEffect = successfulResults.some((value) =>
-    containsStructuredField(value, "partialEffect", (candidate) => candidate === "none")
-  );
-  const recovered = successfulResults.some((value) =>
-    containsStructuredField(value, "recovered", (candidate) => candidate === true)
-  );
-  const distinctCommands = successfulResults.some((value) => hasDistinctFreshnessCommands(value));
+  const proofs = successfulResults.map((value) => canonicalFreshnessProof(value));
+  const noPartialEffect = proofs.some((proof) => proof.noPartialEffect);
+  const recovered = proofs.some((proof) => proof.recovered);
+  const distinctCommands = proofs.some((proof) => proof.distinctCommands);
 
   const missing = [
     !refusalObserved ? "typed RevisionChanged refusal" : null,
@@ -1505,23 +1638,118 @@ function containsExactProtocolToken(value: unknown, token: string): boolean {
   return Object.values(value).some((child) => containsExactProtocolToken(child, token));
 }
 
-function hasDistinctFreshnessCommands(value: unknown, seen = new Set<object>()): boolean {
-  if (!value || typeof value !== "object") return false;
-  if (seen.has(value)) return false;
+interface FreshnessStatusProof {
+  contextId: string;
+  committed: unknown;
+  workingHead: unknown;
+  workingCounts: unknown;
+}
+
+function freshnessStatus(value: unknown): FreshnessStatusProof | null {
+  if (
+    !isRecord(value) ||
+    typeof value["contextId"] !== "string" ||
+    !isRecord(value["committed"]) ||
+    !isRecord(value["workingHead"]) ||
+    !isRecord(value["workingCounts"])
+  ) {
+    return null;
+  }
+  return {
+    contextId: value["contextId"],
+    committed: value["committed"],
+    workingHead: value["workingHead"],
+    workingCounts: value["workingCounts"],
+  };
+}
+
+function sameFreshnessStatus(left: FreshnessStatusProof, right: FreshnessStatusProof): boolean {
+  return (
+    left.contextId === right.contextId &&
+    JSON.stringify(left.committed) === JSON.stringify(right.committed) &&
+    JSON.stringify(left.workingHead) === JSON.stringify(right.workingHead) &&
+    JSON.stringify(left.workingCounts) === JSON.stringify(right.workingCounts)
+  );
+}
+
+function canonicalFreshnessProof(
+  value: unknown,
+  seen = new Set<object>()
+): { noPartialEffect: boolean; recovered: boolean; distinctCommands: boolean } {
+  const empty = { noPartialEffect: false, recovered: false, distinctCommands: false };
+  if (!value || typeof value !== "object" || seen.has(value)) return empty;
   seen.add(value);
+
   if (!Array.isArray(value)) {
     const record = value as Record<string, unknown>;
-    if (
-      typeof record["oldCommand"] === "string" &&
-      record["oldCommand"].length > 0 &&
-      typeof record["newCommand"] === "string" &&
-      record["newCommand"].length > 0 &&
-      record["oldCommand"] !== record["newCommand"]
-    ) {
-      return true;
+    const entries = Object.entries(record);
+    const stale = entries
+      .filter(([key]) => /stale|refusal/iu.test(key))
+      .map(([, candidate]) => candidate)
+      .find(
+        (candidate) =>
+          isRecord(candidate) &&
+          typeof candidate["commandId"] === "string" &&
+          containsStructuredField(candidate, "code", (code) => code === "RevisionChanged")
+      );
+    const staleCommandId =
+      isRecord(stale) && typeof stale["commandId"] === "string" ? stale["commandId"] : null;
+
+    const before = entries
+      .filter(([key]) => /before.*stale|after.*(?:advance|step2)|status.*step2/iu.test(key))
+      .map(([, candidate]) => freshnessStatus(candidate))
+      .find((candidate): candidate is FreshnessStatusProof => candidate !== null);
+    const afterStale = entries
+      .filter(([key]) => /after.*stale/iu.test(key))
+      .map(([, candidate]) => freshnessStatus(candidate))
+      .find((candidate): candidate is FreshnessStatusProof => candidate !== null);
+    const afterRecovery = entries
+      .filter(([key]) => /after.*(?:retry|recover|fresh)/iu.test(key))
+      .map(([, candidate]) => freshnessStatus(candidate))
+      .find((candidate): candidate is FreshnessStatusProof => candidate !== null);
+    const recoveryMutation = entries
+      .filter(([key]) => /retry|recover|fresh/iu.test(key))
+      .map(([, candidate]) => candidate)
+      .find(
+        (candidate) =>
+          isRecord(candidate) &&
+          typeof candidate["commandId"] === "string" &&
+          typeof candidate["workUnitId"] === "string" &&
+          typeof candidate["applicationId"] === "string" &&
+          isRecord(candidate["workingHead"])
+      );
+    const recoveryCommandId =
+      isRecord(recoveryMutation) && typeof recoveryMutation["commandId"] === "string"
+        ? recoveryMutation["commandId"]
+        : null;
+    const noPartialEffect = Boolean(
+      before && afterStale && sameFreshnessStatus(before, afterStale)
+    );
+    const recovered = Boolean(
+      afterStale &&
+      afterRecovery &&
+      recoveryMutation &&
+      afterStale.contextId === afterRecovery.contextId &&
+      JSON.stringify(afterStale.workingHead) !== JSON.stringify(afterRecovery.workingHead) &&
+      JSON.stringify((recoveryMutation as Record<string, unknown>)["workingHead"]) ===
+        JSON.stringify(afterRecovery.workingHead)
+    );
+    const distinctCommands = Boolean(
+      staleCommandId && recoveryCommandId && staleCommandId !== recoveryCommandId
+    );
+    if (noPartialEffect || recovered || distinctCommands) {
+      return { noPartialEffect, recovered, distinctCommands };
     }
   }
-  return Object.values(value).some((child) => hasDistinctFreshnessCommands(child, seen));
+
+  return Object.values(value).reduce((proof, child) => {
+    const nested = canonicalFreshnessProof(child, seen);
+    return {
+      noPartialEffect: proof.noPartialEffect || nested.noPartialEffect,
+      recovered: proof.recovered || nested.recovered,
+      distinctCommands: proof.distinctCommands || nested.distinctCommands,
+    };
+  }, empty);
 }
 
 export function requireAnyEvalEvidence(

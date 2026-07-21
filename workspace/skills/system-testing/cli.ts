@@ -390,8 +390,9 @@ export function failedSystemTestNames(record: SystemTestRunRecord): string[] {
 }
 
 export async function systemTestDoctor(
-  expectedModel = SYSTEM_TEST_AGENT_MODEL
+  expectedModel?: string
 ): Promise<SystemTestDoctorResult> {
+  const primaryModel = expectedModel ?? SYSTEM_TEST_AGENT_MODEL;
   const checks: SystemTestDoctorResult["checks"] = [];
   const capture = async (name: string, operation: () => Promise<unknown>, detail: string) => {
     try {
@@ -439,7 +440,9 @@ export async function systemTestDoctor(
   await capture(
     "model",
     async () => {
-      const modelRoute = systemTestModelRoute(expectedModel);
+      const modelRoute = systemTestModelRoute(primaryModel, {
+        allowUsageLimitFallback: expectedModel === undefined,
+      });
       const service = await workers.resolveService("vibestudio.models.v1", null);
       if (service.kind !== "durable-object" || !service.targetId) {
         throw new Error("vibestudio.models.v1 did not resolve to a Durable Object");

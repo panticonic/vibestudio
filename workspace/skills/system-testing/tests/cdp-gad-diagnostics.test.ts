@@ -61,11 +61,19 @@ const integrityTest = cdpGadDiagnosticTests.find(
 const branchTest = cdpGadDiagnosticTests.find(
   (test) => test.name === "gad-branch-file-diff-probe"
 )!;
+const CLICK_FINAL =
+  "I clicked the disposable page control, evaluated the requested value, and captured a screenshot successfully.";
+const INTEGRITY_FINAL =
+  "The GAD assessment covered storage, publication, the current turn and invocation, hashes, and integrity.";
+const BRANCH_FINAL =
+  "The branch files and state probe completed, and the invalid requests produced the expected controlled rejections.";
+const STATE_FINAL =
+  "The panel state was visible in the inspected automation snapshot after the change.";
 
 describe("cdp-gad diagnostics validators", () => {
   it("rejects a final success marker when an invocation failed", () => {
     const result = clickTest.validate(
-      executionWithInvocation("CDP_LIGHTWEIGHT_INTERACTION_OK clicked evaluated screenshot", {
+      executionWithInvocation(CLICK_FINAL, {
         id: "call-1",
         name: "eval",
         execution: {
@@ -84,7 +92,7 @@ describe("cdp-gad diagnostics validators", () => {
 
   it("rejects terminal failure outcomes even when invocation status is complete", () => {
     const result = clickTest.validate(
-      executionWithInvocation("CDP_LIGHTWEIGHT_INTERACTION_OK clicked evaluated screenshot", {
+      executionWithInvocation(CLICK_FINAL, {
         id: "call-1",
         name: "eval",
         execution: {
@@ -101,19 +109,41 @@ describe("cdp-gad diagnostics validators", () => {
     expect(result.reason).toContain("Expected no failed tool calls");
   });
 
+  it("does not accept inspected source as a substitute for executed diagnostic evidence", () => {
+    const result = clickTest.validate(
+      executionWithInvocation(CLICK_FINAL, {
+        id: "call-read",
+        name: "read",
+        execution: {
+          status: "complete",
+          result: {
+            protocolContent: [{ type: "text", text: "if (result.ok === false) throw err;" }],
+          },
+        },
+      })
+    );
+
+    expect(result).toMatchObject({ passed: false });
+  });
+
   it("accepts an ok:false diagnostic finding behind an execution-success marker", () => {
     const result = integrityTest.validate(
-      executionWithInvocation(
-        "GAD_DIAGNOSTICS_OK storage publication turn invocation hashes integrity",
-        {
-          id: "call-1",
-          name: "eval",
-          execution: {
-            status: "complete",
-            result: { summary: { ok: false, problem: "publication mismatch" } },
+      executionWithInvocation(INTEGRITY_FINAL, {
+        id: "call-1",
+        name: "eval",
+        execution: {
+          status: "complete",
+          result: {
+            storage: {},
+            publication: {},
+            turn: {},
+            invocation: {},
+            hashes: {},
+            integrity: {},
+            summary: { ok: false, problem: "publication mismatch" },
           },
-        }
-      )
+        },
+      })
     );
 
     expect(result).toEqual({ passed: true });
@@ -121,17 +151,15 @@ describe("cdp-gad diagnostics validators", () => {
 
   it("accepts a stringified ok:false diagnostic finding", () => {
     const result = integrityTest.validate(
-      executionWithInvocation(
-        "GAD_DIAGNOSTICS_OK storage publication turn invocation hashes integrity",
-        {
-          id: "call-1",
-          name: "eval",
-          execution: {
-            status: "complete",
-            result: '{"summary":{"ok":false}}',
-          },
-        }
-      )
+      executionWithInvocation(INTEGRITY_FINAL, {
+        id: "call-1",
+        name: "eval",
+        execution: {
+          status: "complete",
+          result:
+            '{"storage":{},"publication":{},"turn":{},"invocation":{},"hashes":{},"integrity":{},"summary":{"ok":false}}',
+        },
+      })
     );
 
     expect(result).toEqual({ passed: true });
@@ -167,21 +195,26 @@ describe("cdp-gad diagnostics validators", () => {
     expect(result).toEqual({ passed: true });
   });
 
-  it("accepts ok:false wording when the diagnostic operation itself succeeded", () => {
+  it("rejects health prose without canonical diagnostic evidence", () => {
     const result = integrityTest.validate(
       executionWithFinal(
-        "GAD_DIAGNOSTICS_OK storage publication turn invocation hashes integrity, but overall ok: false only because the current turn is open"
+        "The GAD assessment covered storage, publication, the current turn and invocation, hashes, and integrity, but overall ok is false only because the current turn is open."
       )
     );
 
-    expect(result).toEqual({ passed: true });
+    expect(result).toMatchObject({ passed: false });
   });
 
   it("rejects impossible success wording in the final message", () => {
     const result = stateArgsTest.validate(
-      executionWithFinal(
-        "STATEARGS_CDP_OK STATEARGS_CDP_OK_2 snapshot stateArgs, but snapshot target was not reachable"
-      )
+      executionWithInvocation(`${STATE_FINAL} However, the snapshot target was not reachable.`, {
+        id: "call-1",
+        name: "eval",
+        execution: {
+          status: "complete",
+          result: { snapshot: { stateArgs: { value: 2 } } },
+        },
+      })
     );
 
     expect(result).toMatchObject({
@@ -192,13 +225,14 @@ describe("cdp-gad diagnostics validators", () => {
 
   it("accepts controlled branch probe rejections returned as data", () => {
     const result = branchTest.validate(
-      executionWithInvocation("GAD_BRANCH_OK branch-files state-probe controlled-errors", {
+      executionWithInvocation(BRANCH_FINAL, {
         id: "call-1",
         name: "eval",
         execution: {
           status: "complete",
           result: {
             checks: [{ name: "branch-files", ok: true }],
+            stateProbe: { ok: true },
             controlledErrors: [
               { name: "write CTE", ok: false, error: "rawSql writes are disabled" },
             ],
@@ -212,7 +246,7 @@ describe("cdp-gad diagnostics validators", () => {
 
   it("accepts unrelated in-flight agent health during a branch probe", () => {
     const result = branchTest.validate(
-      executionWithInvocation("GAD_BRANCH_OK branch-files state-probe controlled-errors", {
+      executionWithInvocation(BRANCH_FINAL, {
         id: "call-1",
         name: "eval",
         execution: {
@@ -229,6 +263,7 @@ describe("cdp-gad diagnostics validators", () => {
             },
             branchFiles: [],
             stateProbe: null,
+            controlledErrors: [{ rejected: true, error: "rawSql writes are disabled" }],
           },
         },
       })
@@ -240,7 +275,7 @@ describe("cdp-gad diagnostics validators", () => {
   it("accepts in-flight health repeated through a bounded eval preview and final prose", () => {
     const result = branchTest.validate(
       executionWithInvocation(
-        "GAD_BRANCH_OK branch-files state-probe controlled-errors; current health ok=false because openTurns=1 and nonterminalInvocations=1, with publicationIssues=0 and storageIssues=0",
+        `${BRANCH_FINAL} Current health is false because openTurns=1 and nonterminalInvocations=1, with publicationIssues=0 and storageIssues=0.`,
         {
           id: "call-1",
           name: "eval",
@@ -256,6 +291,9 @@ describe("cdp-gad diagnostics validators", () => {
                   },
                 },
               ],
+              branchFiles: [],
+              stateProbe: null,
+              controlledErrors: [{ rejected: true, error: "rawSql writes are disabled" }],
             },
           },
         }
@@ -267,27 +305,24 @@ describe("cdp-gad diagnostics validators", () => {
 
   it("still rejects a nonzero integrity issue alongside in-flight health", () => {
     const result = branchTest.validate(
-      executionWithInvocation(
-        "GAD_BRANCH_OK branch-files state-probe controlled-errors; current health ok=false",
-        {
-          id: "call-1",
-          name: "eval",
-          execution: {
-            status: "complete",
-            result: {
-              health: {
-                summary: {
-                  ok: false,
-                  openTurns: 1,
-                  nonterminalInvocations: 1,
-                  publicationIssues: 1,
-                  storageIssues: 0,
-                },
+      executionWithInvocation(`${BRANCH_FINAL} Current health is false.`, {
+        id: "call-1",
+        name: "eval",
+        execution: {
+          status: "complete",
+          result: {
+            health: {
+              summary: {
+                ok: false,
+                openTurns: 1,
+                nonterminalInvocations: 1,
+                publicationIssues: 1,
+                storageIssues: 0,
               },
             },
           },
-        }
-      )
+        },
+      })
     );
 
     expect(result).toMatchObject({ passed: false });
@@ -295,13 +330,13 @@ describe("cdp-gad diagnostics validators", () => {
 
   it("accepts stringified controlled branch probe rejections returned as data", () => {
     const result = branchTest.validate(
-      executionWithInvocation("GAD_BRANCH_OK branch-files state-probe controlled-errors", {
+      executionWithInvocation(BRANCH_FINAL, {
         id: "call-1",
         name: "eval",
         execution: {
           status: "complete",
           result:
-            '[eval] Return value:\n{"checks":[{"name":"branch-files","ok":true}],"controlledErrors":[{"name":"write CTE","ok":false,"error":"rawSql writes are disabled"}]}',
+            '[eval] Return value:\n{"checks":[{"name":"branch-files","ok":true}],"stateProbe":{"ok":true},"controlledErrors":[{"name":"write CTE","ok":false,"error":"rawSql writes are disabled"}]}',
         },
       })
     );
@@ -309,23 +344,21 @@ describe("cdp-gad diagnostics validators", () => {
     expect(result).toEqual({ passed: true });
   });
 
-  it("accepts explicit no-failure wording when no tool actually failed", () => {
+  it("rejects explicit success prose when no diagnostic tool ran", () => {
     const result = clickTest.validate(
-      executionWithFinal(
-        "CDP_LIGHTWEIGHT_INTERACTION_OK clicked evaluated screenshot; no tool failures"
-      )
+      executionWithFinal(`${CLICK_FINAL} No tool failures occurred.`)
     );
 
-    expect(result).toEqual({ passed: true });
+    expect(result).toMatchObject({ passed: false });
   });
 
-  it("still rejects a missing final marker", () => {
-    const result = clickTest.validate(executionWithFinal("clicked evaluated screenshot"));
+  it("rejects fabricated natural prose without canonical browser evidence", () => {
+    const result = clickTest.validate(executionWithFinal(CLICK_FINAL));
 
     expect(result).toMatchObject({
       passed: false,
     });
-    expect(result.reason).toContain("Missing CDP_LIGHTWEIGHT_INTERACTION_OK");
+    expect(result.reason).toContain("Canonical eval");
   });
 });
 
@@ -359,7 +392,10 @@ describe("cdp-gad diagnostics prompts", () => {
     }
 
     expect(stateArgsTest.prompt).toContain("Open a workspace panel");
-    expect(integrityTest.prompt).toContain("Run a quick GAD health check");
-    expect(branchTest.prompt).toContain("Probe GAD branch and state inspection");
+    expect(integrityTest.prompt).toContain("health assessment");
+    expect(branchTest.prompt).toContain("branch files and state inspection");
+    for (const test of cdpGadDiagnosticTests) {
+      expect(test.prompt).not.toMatch(/Finish with|[A-Z][A-Z0-9_]{3,}_OK|\w+:<count>/u);
+    }
   });
 });

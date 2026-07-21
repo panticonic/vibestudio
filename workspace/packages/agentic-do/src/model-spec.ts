@@ -58,6 +58,7 @@ interface PiModelLike {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  streamIdleTimeoutMs?: number;
   thinkingLevelMap?: Record<string, unknown>;
   headers?: Record<string, string>;
   compat?: Record<string, unknown>;
@@ -76,6 +77,9 @@ export function piModelToSpec(model: PiModelLike): AgentModelSpec {
     cost: { ...model.cost },
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
+    ...(model.streamIdleTimeoutMs !== undefined
+      ? { streamIdleTimeoutMs: model.streamIdleTimeoutMs }
+      : {}),
     ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
     ...(model.headers ? { headers: { ...model.headers } } : {}),
     ...(model.compat ? { compat: { ...model.compat } } : {}),

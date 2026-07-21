@@ -240,6 +240,7 @@ const invocationStartedPayloadSchema = z
     invocationType: z.enum(["tool", "panel", "agent", "user", "http", "system"]).optional(),
     request: z.unknown().optional(),
     transport: invocationTransportSchema.optional(),
+    executionMode: z.enum(["sequential", "parallel"]).optional(),
     requiresApproval: z.boolean().optional(),
     userVisible: z.boolean().optional(),
     summary: z.string().optional(),
@@ -1004,8 +1005,22 @@ export const trajectoryEventSchema = z
     }
 
     const event = eventResult.data;
+    // Private trajectory copies of inbound messages are stamped with the
+    // owning agent as their storage actor, while payload.senderRef preserves
+    // the actual author. They are inputs waiting to be assigned to a turn, not
+    // agent-authored output, so their user role must not trigger the owner
+    // turn-scope invariant. Actual agent messages and every other owner event
+    // in this set remain strictly turn-scoped.
+    const isInboundMessageCopy =
+      (event.kind === "message.started" ||
+        event.kind === "message.delta" ||
+        event.kind === "message.completed" ||
+        event.kind === "message.failed") &&
+      "role" in event.payload &&
+      event.payload["role"] === "user";
     if (
       event.actor.kind === "agent" &&
+      !isInboundMessageCopy &&
       TURN_SCOPED_OWNER_KINDS.includes(event.kind as (typeof TURN_SCOPED_OWNER_KINDS)[number]) &&
       !event.turnId
     ) {

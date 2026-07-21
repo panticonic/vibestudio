@@ -1,14 +1,38 @@
+import { Value } from "@sinclair/typebox/value";
 import { describe, expect, it } from "vitest";
 import { createEvalTool, formatEvalResult, type EvalRunResult } from "./eval.js";
 
 /** Join the text parts of a formatted tool result. */
 function textOf(out: ReturnType<typeof formatEvalResult>): string {
-  return out.content
-    .map((c) => (c as { type: string; text?: string }).text ?? "")
-    .join("\n");
+  return out.content.map((c) => (c as { type: string; text?: string }).text ?? "").join("\n");
 }
 
 describe("formatEvalResult (shared by the eval tool's execute + the agent's deferred onEvalComplete)", () => {
+  it("makes the JavaScript parser boundary explicit in the model-visible schema", () => {
+    const tool = createEvalTool(async () => ({ success: true, console: "" }) as never);
+    const schema = JSON.stringify(tool.parameters);
+
+    expect(schema).toContain("Omit this for TypeScript/TSX");
+    expect(schema).toContain("only for plain JavaScript with no type annotations");
+  });
+
+  it("accepts only a positive integer timeout and forwards the explicit deadline", async () => {
+    const calls: unknown[][] = [];
+    const tool = createEvalTool(async (_method, args) => {
+      calls.push(args);
+      return { success: true, console: "" } as never;
+    });
+
+    expect(Value.Check(tool.parameters, { code: "return 1" })).toBe(true);
+    expect(Value.Check(tool.parameters, { code: "return 1", timeoutMs: 250 })).toBe(true);
+    expect(Value.Check(tool.parameters, { code: "return 1", timeoutMs: 0 })).toBe(false);
+    expect(Value.Check(tool.parameters, { code: "return 1", timeoutMs: 1.5 })).toBe(false);
+    expect(tool.description).toContain("no implicit wall deadline");
+
+    await tool.execute("call-timeout", { code: "return 1", timeoutMs: 250 });
+    expect(calls[0]?.[0]).toMatchObject({ code: "return 1", timeoutMs: 250 });
+  });
+
   it("treats a transport-materialized empty path as omitted for inline code", async () => {
     const calls: unknown[][] = [];
     const tool = createEvalTool(async (_method, args) => {
@@ -107,17 +131,13 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
 
   it("windows an oversized return value pointing at $lastReturn", () => {
     const big = "b".repeat(150_000);
-    const text = textOf(
-      formatEvalResult({ success: true, console: "", returnValue: big })
-    );
+    const text = textOf(formatEvalResult({ success: true, console: "", returnValue: big }));
     expect(text).toContain("scope.$lastReturn");
     expect(text).toContain("truncated");
   });
 
   it("does not truncate normal-sized output", () => {
-    const text = textOf(
-      formatEvalResult({ success: true, console: "small", returnValue: "tiny" })
-    );
+    const text = textOf(formatEvalResult({ success: true, console: "small", returnValue: "tiny" }));
     expect(text).not.toContain("truncated");
     expect(text).toContain("small");
     expect(text).toContain("tiny");

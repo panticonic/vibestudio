@@ -5,10 +5,12 @@ import {
   type TestExecutionResult,
 } from "../types.js";
 import {
-  finalMessageHasAll,
   getToolCalls,
+  findLastAgentMessage,
+  hasAgentResponse,
   noIncompleteInvocations,
   requireCausalEdgeEvidence,
+  requireCommandIdempotencyEvidence,
   requireFreshnessRecoveryEvidence,
   requireImportBoundaryEvidence,
   requireMoveCopyEvidence,
@@ -16,19 +18,20 @@ import {
   requireVcsEvidence,
 } from "./_helpers.js";
 
-function checked(result: TestExecutionResult, tokens: string[], evidence: string[]) {
-  const message = finalMessageHasAll(result, tokens);
-  if (!message.passed) return message;
+function checked(result: TestExecutionResult, evidence: string[]) {
+  if (!hasAgentResponse(result) || !findLastAgentMessage(result).trim()) {
+    return { passed: false, reason: "No agent response received" };
+  }
   const invocations = noIncompleteInvocations(result);
   if (!invocations.passed) return invocations;
   return requireVcsEvidence(result, evidence);
 }
 
-const VCS_CAUSALITY_PROMPT =
-  "Create and publish a distinctive multi-line file, then change and commit only one line. Using the workspace guidance, explain an untouched line from the current file. Follow the realized work all the way back to the exact initiating message and sender, show how the exact action request remains retrievable, and distinguish observable intent evidence from private reasoning. Finish with VCS_CAUSALITY_OK untouched:original command: invocation: turn: message:exact sender:exact request:walkable intent:observable-private blame:exact edges:walkable.";
+const CAUSALITY_PROMPT =
+  "Create and publish a distinctive multi-line file in the disposable project, then change and commit only one line. Explain where an untouched line came from and what can actually be established about the request and intent behind it.";
 
-const VCS_MIXED_IMPORT_PROMPT =
-  "Change exactly one existing line in the disposable project. Then explain what we actually know about both that edited line and a neighboring untouched line, including why each is present and where certainty ends. Finish with VCS_MIXED_ORIGIN_OK edited:native untouched:import-boundary pre-import:unknown.";
+const MIXED_IMPORT_PROMPT =
+  "Change exactly one existing line in the disposable project. Then explain what we actually know about both that edited line and a neighboring untouched line, including why each is present and where certainty ends.";
 
 function requireDistinctMixedBlameSpans(result: TestExecutionResult) {
   const spans = getToolCalls(result).flatMap((call) => {
@@ -49,16 +52,28 @@ function requireDistinctMixedBlameSpans(result: TestExecutionResult) {
   });
   const authored = spans.find((span) => span["stop"] === "authored");
   const imported = spans.find((span) => span["stop"] === "import-boundary");
+  const authoredChange = authored?.["change"];
+  const importedChange = imported?.["change"];
+  const authoredWork = authored?.["workUnit"];
+  const importedWork = imported?.["workUnit"];
+  const authoredCommand = authored?.["command"];
+  const importedCommand = imported?.["command"];
   if (
     !authored ||
     !imported ||
+    !isRecord(authoredChange) ||
+    !isRecord(importedChange) ||
+    !isRecord(authoredWork) ||
+    !isRecord(importedWork) ||
+    !isRecord(authoredCommand) ||
+    !isRecord(importedCommand) ||
     !Number.isInteger(authored["start"]) ||
     !Number.isInteger(authored["end"]) ||
     !Number.isInteger(imported["start"]) ||
     !Number.isInteger(imported["end"]) ||
-    authored["changeId"] === imported["changeId"] ||
-    authored["workUnitId"] === imported["workUnitId"] ||
-    authored["commandId"] === imported["commandId"] ||
+    authoredChange["changeId"] === importedChange["changeId"] ||
+    authoredWork["workUnitId"] === importedWork["workUnitId"] ||
+    authoredCommand["commandId"] === importedCommand["commandId"] ||
     Math.max(authored["start"] as number, imported["start"] as number) <
       Math.min(authored["end"] as number, imported["end"] as number)
   ) {
@@ -82,19 +97,9 @@ export const vcsAdvancedTests: TestCase[] = [
     category: "vcs-advanced",
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Use the workspace guidance to create two managed source files in the disposable project. Move one to a nested path and independently copy the other. Do not reconstruct either operation by deleting and rewriting bytes. Walk the resulting provenance far enough to prove the move kept its file identity and the copy got a new identity linked to its source. Finish with VCS_TRANSFER_OK moved:same-identity copied:new-identity ancestry:walkable work-units:2.",
+      "Create two small source files in the disposable project. Reorganize them so one moves to a nested location and the other is duplicated, then explain what happened to their identities and history.",
     validate: (result) => {
-      const base = checked(
-        result,
-        [
-          "VCS_TRANSFER_OK",
-          "moved:same-identity",
-          "copied:new-identity",
-          "ancestry:walkable",
-          "work-units:2",
-        ],
-        ["vcs.neighbors"]
-      );
+      const base = checked(result, ["vcs.move", "vcs.copy", "vcs.inspect", "vcs.neighbors"]);
       if (!base.passed) return base;
       return requireMoveCopyEvidence(result);
     },
@@ -105,27 +110,11 @@ export const vcsAdvancedTests: TestCase[] = [
     category: "vcs-advanced",
     resources: ["vcs:protected-main"],
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
-    prompt: VCS_CAUSALITY_PROMPT,
+    prompt: CAUSALITY_PROMPT,
     validate: (result) => {
-      const base = checked(
-        result,
-        [
-          "VCS_CAUSALITY_OK",
-          "untouched:original",
-          "command:",
-          "invocation:",
-          "turn:",
-          "message:exact",
-          "sender:exact",
-          "request:walkable",
-          "intent:observable-private",
-          "blame:exact",
-          "edges:walkable",
-        ],
-        ["vcs.blame", "vcs.inspect", "vcs.neighbors"]
-      );
+      const base = checked(result, ["vcs.blame", "vcs.inspect", "vcs.neighbors"]);
       if (!base.passed) return base;
-      return requireCausalEdgeEvidence(result, VCS_CAUSALITY_PROMPT);
+      return requireCausalEdgeEvidence(result, CAUSALITY_PROMPT);
     },
   },
   {
@@ -135,13 +124,9 @@ export const vcsAdvancedTests: TestCase[] = [
     category: "vcs-advanced",
     workspaceRepoFixture: BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Who changed an untouched line in the disposable project, and what can we actually establish about why it is here? Finish with VCS_IMPORT_BOUNDARY_OK.",
+      "Who changed an untouched line in the disposable project, and what can we actually establish about why it is here?",
     validate: (result) => {
-      const base = checked(
-        result,
-        ["VCS_IMPORT_BOUNDARY_OK", "pre-import:unknown"],
-        ["vcs.blame", "vcs.inspect"]
-      );
+      const base = checked(result, ["vcs.blame", "vcs.inspect"]);
       if (!base.passed) return base;
       return requireImportBoundaryEvidence(result, {
         sourceKind: "generated",
@@ -154,17 +139,13 @@ export const vcsAdvancedTests: TestCase[] = [
     description: "Distinguish new native intent from untouched imported origin in one file",
     category: "vcs-advanced",
     workspaceRepoFixture: BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
-    prompt: VCS_MIXED_IMPORT_PROMPT,
+    prompt: MIXED_IMPORT_PROMPT,
     validate: (result) => {
-      const base = checked(
-        result,
-        ["VCS_MIXED_ORIGIN_OK", "edited:native", "untouched:import-boundary", "pre-import:unknown"],
-        ["vcs.blame", "vcs.inspect", "vcs.neighbors"]
-      );
+      const base = checked(result, ["vcs.blame", "vcs.inspect", "vcs.neighbors"]);
       if (!base.passed) return base;
       const spans = requireDistinctMixedBlameSpans(result);
       if (!spans.passed) return spans;
-      const native = requireCausalEdgeEvidence(result, VCS_MIXED_IMPORT_PROMPT);
+      const native = requireCausalEdgeEvidence(result, MIXED_IMPORT_PROMPT);
       if (!native.passed) return native;
       return requireImportBoundaryEvidence(result, {
         sourceKind: "generated",
@@ -178,13 +159,15 @@ export const vcsAdvancedTests: TestCase[] = [
     category: "vcs-advanced",
     workspaceRepoFixture: BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Change and commit one existing line in the disposable project. Then undo that exact change through workspace history, commit the reversal, and verify both the restored file and the original/counteraction history. Finish with VCS_REVERT_OK restored:true original: counteraction: history:preserved.",
+      "Change and commit one existing line in the disposable project. Restore its original content, commit that restoration, and explain what the workspace history records about both changes.",
     validate: (result) => {
-      const base = checked(
-        result,
-        ["VCS_REVERT_OK", "restored:true", "original:", "counteraction:", "history:preserved"],
-        ["vcs.revert", "vcs.commit", "vcs.neighbors", "vcs.status"]
-      );
+      const base = checked(result, [
+        "vcs.edit",
+        "vcs.revert",
+        "vcs.commit",
+        "vcs.neighbors",
+        "vcs.status",
+      ]);
       return base.passed ? requireRevertEvidence(result) : base;
     },
   },
@@ -194,19 +177,9 @@ export const vcsAdvancedTests: TestCase[] = [
     category: "vcs-advanced",
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "In the disposable project, deliberately retain an observed working identity, advance the context once, and try a different write against the retained identity. Prove the stale attempt was rejected with no partial effect. Re-observe and complete the intent with a new command identity. Finish with VCS_STALE_OK refusal:RevisionChanged partial:none commands:distinct recovered:true.",
+      "Demonstrate how the disposable project behaves when a change is attempted from an out-of-date view, then complete the intended change safely. Explain whether the rejected attempt had any effect.",
     validate: (result) => {
-      const base = checked(
-        result,
-        [
-          "VCS_STALE_OK",
-          "refusal:RevisionChanged",
-          "partial:none",
-          "commands:distinct",
-          "recovered:true",
-        ],
-        ["vcs.edit"]
-      );
+      const base = checked(result, ["vcs.edit"]);
       if (!base.passed) return base;
       return requireFreshnessRecoveryEvidence(result);
     },
@@ -217,12 +190,10 @@ export const vcsAdvancedTests: TestCase[] = [
     category: "vcs-advanced",
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Perform one small managed-file change, retain the complete canonical request, and retry that identical request with the same command identity as if the first response had been uncertain. Prove the terminal response is identical and no second work unit, application, or change appeared. Finish with VCS_IDEMPOTENT_OK result:same work-units:1 applications:1 changes:1.",
-    validate: (result) =>
-      checked(
-        result,
-        ["VCS_IDEMPOTENT_OK", "result:same", "work-units:1", "applications:1", "changes:1"],
-        ["vcs.edit", "commandId"]
-      ),
+      "Demonstrate what happens when the same managed-file change is submitted again because its first response might have been lost. Explain whether any duplicate history was created.",
+    validate: (result) => {
+      const base = checked(result, ["vcs.edit"]);
+      return base.passed ? requireCommandIdempotencyEvidence(result) : base;
+    },
   },
 ];

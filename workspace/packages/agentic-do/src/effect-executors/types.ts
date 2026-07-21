@@ -101,8 +101,8 @@ export interface LocalModelsPort {
   /** Request-path start/load: boots the local server process if needed,
    *  triggers the router load, returns the LIVE base URL (journaled ports
    *  must never become load-bearing). */
-  ensureLoaded(modelId: string): Promise<{ baseUrl: string }>;
-  getLoopbackAuth(): Promise<{ apiKey: string }>;
+  ensureLoaded(modelId: string, signal: AbortSignal): Promise<{ baseUrl: string }>;
+  getLoopbackAuth(signal: AbortSignal): Promise<{ apiKey: string }>;
 }
 
 export interface LocalToolPort {

@@ -15,6 +15,7 @@ function fixture() {
   const compare = vi.fn(async (input: Parameters<ToolWorkflowVcs["compare"]>[0]) => ({
     target: input.target,
     sourceEventId: input.sourceEventId,
+    resolution: { complete: false, remainingChangeCount: 1 },
     counts: {
       shared: 1,
       alreadySatisfied: 0,
@@ -60,10 +61,13 @@ function fixture() {
       {
         start: input.range.start,
         end: input.range.end,
-        changeId: "change:origin",
-        appliedChangeId: "applied:origin",
-        workUnitId: "work:origin",
-        commandId: "command:origin",
+        change: { kind: "change", changeId: "change:origin" },
+        appliedChange: {
+          kind: "applied-change",
+          appliedChangeId: "applied-change:origin",
+        },
+        workUnit: { kind: "work-unit", workUnitId: "work-unit:origin" },
+        command: { kind: "command", commandId: "command:origin" },
         path: [],
         stop: "authored",
       },
@@ -185,12 +189,45 @@ describe("workspace VCS agent tool", () => {
     });
   });
 
+  it("resolves path-based reconciliation evidence at the exact working state", async () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:reconcile",
+    });
+
+    await tool.execute("call:reconcile", {
+      operation: "integrate",
+      sourceEventId: "event:source",
+      decision: {
+        kind: "reconciled",
+        sourceChangeIds: ["change:source"],
+        evidence: [{ kind: "file-content", path: "packages/demo/a.ts" }],
+        rationale: "The merged file preserves both intended behaviors.",
+      },
+    });
+
+    expect(f.integrate).toHaveBeenCalledWith({
+      contextId: "context:test",
+      expectedWorkingHead: f.working,
+      commandId: "command:reconcile",
+      sourceEventId: "event:source",
+      decision: {
+        kind: "reconciled",
+        sourceChangeIds: ["change:source"],
+        evidence: [{ kind: "file-content", fileId: "file:demo", contentHash: "blob:demo" }],
+        rationale: "The merged file preserves both intended behaviors.",
+      },
+    });
+  });
+
   it("resolves a friendly file path for bounded blame", async () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
       commandId: "command:blame",
     });
+    expect(JSON.stringify(tool.parameters)).toContain("This is not a line number");
     const result = await tool.execute("call:blame", {
       operation: "blame",
       path: "packages/demo/a.ts",
@@ -245,10 +282,13 @@ describe("workspace VCS agent tool", () => {
         {
           start: 0,
           end: 5,
-          changeId: "change:import",
-          appliedChangeId: "applied:import",
-          workUnitId: "work:import",
-          commandId: "command:import",
+          change: { kind: "change", changeId: "change:import" },
+          appliedChange: {
+            kind: "applied-change",
+            appliedChangeId: "applied-change:import",
+          },
+          workUnit: { kind: "work-unit", workUnitId: "work-unit:import" },
+          command: { kind: "command", commandId: "command:import" },
           path: [],
           stop: "import-boundary",
         },
@@ -268,8 +308,23 @@ describe("workspace VCS agent tool", () => {
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: expect.stringContaining(
-        "inspect terminal change change:import, then owning import work unit work:import for the exact external snapshot; earlier coordinate authorship is unknown"
+        'pass these typed roots unchanged to provenance: inspect terminal change {"kind":"change","changeId":"change:import"}, then owning import work unit {"kind":"work-unit","workUnitId":"work-unit:import"} for the exact external snapshot; earlier coordinate authorship is unknown'
       ),
+    });
+    expect(result.details).toMatchObject({
+      result: {
+        spans: [
+          {
+            change: { kind: "change", changeId: "change:import" },
+            appliedChange: {
+              kind: "applied-change",
+              appliedChangeId: "applied-change:import",
+            },
+            workUnit: { kind: "work-unit", workUnitId: "work-unit:import" },
+            command: { kind: "command", commandId: "command:import" },
+          },
+        ],
+      },
     });
   });
 

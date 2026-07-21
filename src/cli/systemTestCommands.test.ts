@@ -160,6 +160,8 @@ describe("vibestudio system-test commands", () => {
   });
 
   it("recreates an explicit named session after an ephemeral workspace restart", async () => {
+    const credentialFile = path.join(root, ".config", "vibestudio", "cli-credentials.json");
+    const credentialBefore = fs.readFileSync(credentialFile);
     const sessionsDir = path.join(root, ".config", "vibestudio", "agent-sessions");
     fs.writeFileSync(
       path.join(sessionsDir, "system-tests.json"),
@@ -216,9 +218,12 @@ describe("vibestudio system-test commands", () => {
       contextId: "ctx_fresh",
       subKey: "system-tests",
     });
+    // Doctor may recreate its runtime session, but pairing is a separate
+    // operator action. It must never rotate or repoint the device credential.
+    expect(fs.readFileSync(credentialFile)).toEqual(credentialBefore);
   });
 
-  it("starts a detached durable run and saves local routing metadata", async () => {
+  it("starts a detached durable run without inventing a per-test timeout", async () => {
     transportMock.handle = (body) => {
       if (body.method === "eval.startRun") {
         const runId = (body.args[0] as { runId: string }).runId;
@@ -266,15 +271,48 @@ describe("vibestudio system-test commands", () => {
     ) as {
       ownerId: string;
       artifactDir: string;
-      config: { names: string[]; testTimeoutMs: number };
+      config: { names: string[]; testTimeoutMs?: number };
     };
     expect(stored.ownerId).toBe("session:default");
     expect(stored.artifactDir).toBe(
       path.join(root, ".config", "vibestudio", "system-test-runs", value.runId)
     );
     expect(stored.config.names).toEqual(["eval-return-value"]);
-    expect(stored.config.testTimeoutMs).toBe(5 * 60 * 1_000);
-    expect(args.code).toContain('"testTimeoutMs":300000');
+    expect(stored.config).not.toHaveProperty("testTimeoutMs");
+    expect(args.code).not.toContain("testTimeoutMs");
+  });
+
+  it("persists and forwards an explicitly supplied per-test timeout", async () => {
+    transportMock.handle = (body) => {
+      if (body.method === "eval.startRun") {
+        return { runId: (body.args[0] as { runId: string }).runId };
+      }
+      return null;
+    };
+    const { main } = await import("./client.js");
+
+    await expect(
+      main([
+        "system-test",
+        "run",
+        "eval-return-value",
+        "--test-timeout-ms",
+        "1234",
+        "--detach",
+        "--json",
+      ])
+    ).resolves.toBe(0);
+
+    const value = output() as { runId: string };
+    const start = transportMock.rpcBodies.find((body) => body.method === "eval.startRun")!;
+    expect(String((start.args[0] as { code: string }).code)).toContain('"testTimeoutMs":1234');
+    const stored = JSON.parse(
+      fs.readFileSync(
+        path.join(root, ".config", "vibestudio", "system-test-runs", value.runId, "run.json"),
+        "utf8"
+      )
+    ) as { config: { testTimeoutMs?: number } };
+    expect(stored.config.testTimeoutMs).toBe(1234);
   });
 
   it("preserves a custom artifact directory across detached status and run listing", async () => {
@@ -881,6 +919,52 @@ describe("vibestudio system-test commands", () => {
     ]);
   });
 
+  it("keeps a timeout-free source run timeout-free when rerunning", async () => {
+    const runId = "st_no_timeout_rerun";
+    const dir = path.join(root, ".config", "vibestudio", "system-test-runs", runId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "run.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        runId,
+        createdAt: 1,
+        serverUrl: "webrtc://room-cli/_workspace/dev",
+        sessionName: "default",
+        ownerId: "session:default",
+        contextId: "ctx_before_restart",
+        subKey: "default",
+        config: { names: [], all: true, concurrency: 1 },
+      })
+    );
+    fs.writeFileSync(
+      path.join(dir, "summary.json"),
+      JSON.stringify({ failedTests: ["failed-test"], testsWithUnexpectedToolFailures: [] })
+    );
+    transportMock.handle = (body) => {
+      if (body.method === "eval.startRun") {
+        return { runId: (body.args[0] as { runId: string }).runId };
+      }
+      if (body.method === "eval.getRun") {
+        return {
+          status: "done",
+          result: {
+            success: true,
+            console: "",
+            returnValue: { passed: 1, failed: 0, errored: 0, toolFailureCount: 0 },
+          },
+        };
+      }
+      return null;
+    };
+    const { main } = await import("./client.js");
+
+    await expect(main(["system-test", "rerun", runId, "--json"])).resolves.toBe(0);
+
+    const start = transportMock.rpcBodies.find((body) => body.method === "eval.startRun")!;
+    expect(String((start.args[0] as { code: string }).code)).not.toContain("testTimeoutMs");
+  });
+
   it("reruns from a custom artifact directory recorded with the source run", async () => {
     const runId = "st_custom_summary";
     const runDir = path.join(root, ".config", "vibestudio", "system-test-runs", runId);
@@ -927,12 +1011,29 @@ describe("vibestudio system-test commands", () => {
     await expect(main(["system-test", "rerun", runId, "--json"])).resolves.toBe(0);
 
     const start = transportMock.rpcBodies.find((body) => body.method === "eval.startRun")!;
-    expect(String((start.args[0] as { code: string }).code)).toContain('"names":["failed-custom"]');
+    const code = String((start.args[0] as { code: string }).code);
+    expect(code).toContain('"names":["failed-custom"]');
+    expect(code).toContain('"testTimeoutMs":100');
   });
 
   it("rejects an unselected run before contacting the server", async () => {
     const { main } = await import("./client.js");
     await expect(main(["system-test", "run", "--json"])).resolves.toBe(2);
+    expect(transportMock.rpcBodies).toEqual([]);
+  });
+
+  it("documents that the run timeout is optional", async () => {
+    const { main } = await import("./client.js");
+
+    await expect(main(["system-test", "run", "--help"])).resolves.toBe(0);
+
+    const help = vi
+      .mocked(console.log)
+      .mock.calls.map(([value]) => String(value))
+      .join("\n");
+    expect(help).toContain("Optional per-test timeout in milliseconds");
+    expect(help).toContain("no timeout when omitted");
+    expect(help).not.toContain("default 300000");
     expect(transportMock.rpcBodies).toEqual([]);
   });
 });

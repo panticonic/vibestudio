@@ -13,6 +13,7 @@ describe("shipped first-run workspace", () => {
       expect.objectContaining({
         source: "panels/chat",
         stateArgs: expect.objectContaining({
+          initialPrompt: "I just opened this workspace for the first time, help me get onboarded.",
           actionBarFile: "skills/onboarding/ActionBar.tsx",
           systemPrompt: expect.stringContaining("Vibestudio onboarding assistant"),
         }),

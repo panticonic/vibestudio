@@ -35,6 +35,13 @@ export interface AgentModelSpec {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  /**
+   * Optional provider-transport silence deadline. Absent means the model call
+   * is unbounded and can be stopped only by explicit lifecycle/caller
+   * cancellation. This is intentionally configuration, never a runtime
+   * default.
+   */
+  streamIdleTimeoutMs?: number;
   thinkingLevelMap?: Record<string, unknown>;
   headers?: Record<string, string>;
   compat?: Record<string, unknown>;
@@ -96,6 +103,9 @@ export interface AgentLoopConfig {
   skillIndexHash?: string;
   toolSchemasHash?: string;
   activeToolNames: string[];
+  /** Execution ordering declared by local AgentTool metadata. Missing entries
+   * fail safe to sequential execution. */
+  localToolExecutionModes?: Record<string, "sequential" | "parallel">;
   roster: RosterSnapshot;
   agentHopLimit?: number;
   /** Channel publication discipline (gated by `publishPolicyPolicy`, appended
@@ -226,6 +236,9 @@ export interface PendingInvocation {
   attemptId?: string;
   name: string;
   transport: InvocationTransport;
+  /** Folded from invocation.started so replay preserves the originally
+   * selected ordering even if the installed tool registry later changes. */
+  executionMode: "sequential" | "parallel";
   /** Durable ask_user fan-out audience. The pure effect derivation recreates
    * one independently journaled channel call per target after a restart. */
   askUserTargets?: ParticipantRef[];

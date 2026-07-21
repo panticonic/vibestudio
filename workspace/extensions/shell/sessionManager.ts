@@ -202,6 +202,7 @@ export class SessionManager {
   }
 
   info(session: Session): SessionInfo {
+    const detectedAgent = this.detectAgent?.(session.command.argv);
     return {
       sessionId: session.id,
       ownerCallerId: session.ownerCallerId,
@@ -223,7 +224,7 @@ export class SessionManager {
       detectedUrls: session.detection.detectedUrls,
       bytesOut: session.bytesOut,
       meta: session.meta,
-      detectedAgent: this.detectAgent?.(session.command.argv),
+      ...(detectedAgent ? { detectedAgent } : {}),
     };
   }
 

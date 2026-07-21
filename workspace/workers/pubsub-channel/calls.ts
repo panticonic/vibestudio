@@ -739,7 +739,11 @@ export class CallTransport {
 
   // ── cancel / timeout / abandon ────────────────────────────────────────────
 
-  async cancelMethodCall(callId: string, reason = "cancelled"): Promise<PendingCallRow | null> {
+  async cancelMethodCall(
+    callId: string,
+    reason = "cancelled",
+    expectedCallerId?: string
+  ): Promise<PendingCallRow | null> {
     // Settle against the committed start, never a half-written one (a cancel
     // racing a redrive's start would otherwise no-op or recover spuriously).
     await this.awaitInFlightStart(callId);
@@ -758,6 +762,11 @@ export class CallTransport {
     }
     if (!pending) {
       return null;
+    }
+    if (expectedCallerId !== undefined && pending.callerId !== expectedCallerId) {
+      throw new Error(
+        `cancelMethodCall rejected: participant ${expectedCallerId} did not initiate method call ${callId}`
+      );
     }
     const event = this.deps.builders().cancelled({
       descriptor: {

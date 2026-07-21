@@ -80,6 +80,24 @@ function status(eventId: string) {
 }
 
 describe("joined VCS scenario validators", () => {
+  it("accepts natural status reporting only when backed by a canonical read-only status", () => {
+    const test = vcsTests.find(({ name }) => name === "vcs-status-orientation")!;
+    const call = invocation("status", "vcs", { operation: "status" }, status("event:current"));
+    const report =
+      "The context is clean and ahead of protected main event:main; both its committed and working identity are event:current.";
+
+    expect(test.prompt).not.toMatch(/VCS_STATUS_OK|clean:|committed:|working:|relation:/u);
+    expect(test.validate(execution(report, [call]))).toEqual({ passed: true });
+
+    const mutating = invocation(
+      "write",
+      "write",
+      { path: "projects/demo/a.ts" },
+      mutation("application:unexpected", "change:unexpected")
+    );
+    expect(test.validate(execution(report, [call, mutating])).passed).toBe(false);
+  });
+
   it("joins two application results through the whole-chain commit and final clean status", () => {
     const test = vcsTests.find(({ name }) => name === "vcs-edit-whole-chain-commit")!;
     const eventId = "event:whole-chain";
@@ -104,8 +122,33 @@ describe("joined VCS scenario validators", () => {
       ),
       invocation("status", "vcs", { operation: "status" }, status(eventId)),
     ];
-    const final = `VCS_COMMIT_OK changes:2 event:${eventId} clean:true`;
+    const final = `Both related edits are now one clean milestone at ${eventId}.`;
     expect(test.validate(execution(final, calls))).toEqual({ passed: true, reason: undefined });
+
+    // The clean state is canonical tool evidence, not a prose claim. A model
+    // may summarize it naturally instead of repeating the requested field,
+    // while the final status still proves the exact committed event is clean.
+    const naturalFinal = `The complete two-step chain is committed at ${eventId}; the working tree is clean.`;
+    expect(test.validate(execution(naturalFinal, calls))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+
+    const dirtyCalls = [...calls];
+    dirtyCalls[3] = invocation(
+      "status",
+      "vcs",
+      { operation: "status" },
+      {
+        ...status(eventId),
+        result: {
+          ...status(eventId).result,
+          clean: false,
+          workingCounts: { applications: 1, workUnits: 1, changes: 1 },
+        },
+      }
+    );
+    expect(test.validate(execution(naturalFinal, dirtyCalls)).passed).toBe(false);
 
     const fabricated = [...calls];
     fabricated[2] = invocation(
@@ -138,7 +181,7 @@ describe("joined VCS scenario validators", () => {
         }
       ),
     ];
-    const final = `VCS_PUSH_OK event:${eventId} main:${eventId} match:true`;
+    const final = `The committed milestone ${eventId} is now protected main.`;
     expect(test.validate(execution(final, calls))).toEqual({ passed: true, reason: undefined });
 
     const unjoined = [...calls];
@@ -154,7 +197,7 @@ describe("joined VCS scenario validators", () => {
     expect(test.validate(execution(final, unjoined)).passed).toBe(false);
   });
 
-  it("joins source publication, decision, accounted compare, commit parent, and final push", () => {
+  it("joins source publication, adopted identity, complete compare, commit parent, and final push", () => {
     const test = vcsTests.find(({ name }) => name === "vcs-incremental-integration")!;
     const sourceEventId = "event:source";
     const integratedEventId = "event:integrated";
@@ -162,6 +205,12 @@ describe("joined VCS scenario validators", () => {
     const decisionId = "decision:source";
     const applicationId = "application:integration";
     const calls = [
+      invocation(
+        "local-commit",
+        "commit",
+        { message: "Compatible local milestone" },
+        commit("event:local", ["application:local"])
+      ),
       invocation(
         "source-push",
         "vcs",
@@ -180,7 +229,8 @@ describe("joined VCS scenario validators", () => {
           result: {
             sourceEventId,
             target: { kind: "event", eventId: "event:local" },
-            counts: { actionable: 1, conflicting: 0, blocked: 0 },
+            resolution: { complete: false, remainingChangeCount: 1 },
+            counts: { actionable: 1, alreadySatisfied: 0, conflicting: 0, blocked: 0 },
             changes: [
               {
                 changeId: sourceChangeId,
@@ -208,7 +258,7 @@ describe("joined VCS scenario validators", () => {
         }
       ),
       invocation(
-        "compare-accounted",
+        "compare-complete",
         "vcs",
         { operation: "compare", sourceEventId },
         {
@@ -216,11 +266,12 @@ describe("joined VCS scenario validators", () => {
           result: {
             sourceEventId,
             target: { kind: "application", applicationId },
-            counts: { actionable: 0, conflicting: 0, blocked: 0 },
+            resolution: { complete: true, remainingChangeCount: 0 },
+            counts: { actionable: 0, alreadySatisfied: 0, conflicting: 0, blocked: 0 },
             changes: [
               {
                 changeId: sourceChangeId,
-                disposition: { status: "accounted", decisionIds: [decisionId] },
+                disposition: { status: "shared" },
               },
             ],
           },
@@ -232,6 +283,7 @@ describe("joined VCS scenario validators", () => {
         { message: "Integrate", integratesEventId: sourceEventId },
         commit(integratedEventId, [applicationId], sourceEventId)
       ),
+      invocation("status", "vcs", { operation: "status" }, status(integratedEventId)),
       invocation(
         "push",
         "vcs",
@@ -242,17 +294,69 @@ describe("joined VCS scenario validators", () => {
         }
       ),
     ];
-    const final = `VCS_INTEGRATE_OK incoming:accounted local:preserved pushed:true event:${integratedEventId}`;
+    const final =
+      "The incoming and local compatible changes are both present in the clean published result.";
     expect(test.validate(execution(final, calls))).toEqual({ passed: true, reason: undefined });
+
+    const reconciledOverview = structuredClone(calls);
+    reconciledOverview[3]!.invocation.arguments = {
+      operation: "integrate",
+      sourceEventId,
+      decision: {
+        kind: "reconciled",
+        sourceChangeIds: [sourceChangeId],
+        evidence: [{ kind: "file-content", path: "projects/demo/a.ts" }],
+        rationale: "The target result preserves the source intent.",
+      },
+    };
+    const overviewDetails = (
+      reconciledOverview[4]!.invocation.execution.result as {
+        details: Record<string, unknown>;
+      }
+    ).details;
+    const overviewResult = overviewDetails["result"] as {
+      counts: Record<string, number>;
+      changes: unknown[];
+    };
+    overviewResult.counts["shared"] = 0;
+    overviewResult.counts["accounted"] = 1;
+    overviewResult.changes = [];
+    expect(test.validate(execution(final, reconciledOverview))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
 
     const fabricated = structuredClone(calls);
     const details = (
-      fabricated[3]!.invocation.execution.result as { details: Record<string, unknown> }
+      fabricated[4]!.invocation.execution.result as { details: Record<string, unknown> }
     ).details;
-    const result = details["result"] as {
-      changes: Array<{ disposition: { decisionIds: string[] } }>;
+    const result = details["result"] as { changes: Array<{ disposition: unknown }> };
+    result.changes[0]!.disposition = {
+      status: "accounted",
+      decisionIds: ["decision:unrelated"],
     };
-    result.changes[0]!.disposition.decisionIds = ["decision:unrelated"];
     expect(test.validate(execution(final, fabricated)).passed).toBe(false);
+
+    const unrelatedLocalTarget = structuredClone(calls);
+    const compareDetails = (
+      unrelatedLocalTarget[2]!.invocation.execution.result as { details: Record<string, unknown> }
+    ).details;
+    (compareDetails["result"] as { target: unknown }).target = {
+      kind: "event",
+      eventId: "event:not-a-local-commit",
+    };
+    expect(test.validate(execution(final, unrelatedLocalTarget)).passed).toBe(false);
+
+    const dirty = structuredClone(calls);
+    const statusDetails = (
+      dirty[6]!.invocation.execution.result as { details: Record<string, unknown> }
+    ).details;
+    const statusResult = statusDetails["result"] as {
+      clean: boolean;
+      workingCounts: Record<string, number>;
+    };
+    statusResult.clean = false;
+    statusResult.workingCounts = { applications: 1, workUnits: 1, changes: 1 };
+    expect(test.validate(execution(final, dirty)).passed).toBe(false);
   });
 });

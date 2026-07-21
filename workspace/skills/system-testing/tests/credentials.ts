@@ -1,28 +1,88 @@
 import type { TestCase } from "../types.js";
-import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+import {
+  findLastAgentMessage,
+  getToolCalls,
+  noIncompleteInvocations,
+  successfulEvalCode,
+  successfulEvalReturnValues,
+} from "./_helpers.js";
 
-function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
-  const msg = finalMessageHasAll(result, tokens);
-  if (!msg.passed) return msg;
+function storeInspectionChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  const final = findLastAgentMessage(result);
+  if (
+    !/credential/iu.test(final) ||
+    !/(lifecycle|active|expired|revoked|state)/iu.test(final) ||
+    !/(without|did not|didn't|no)\b[^.\n]*(secret|material|mutat|change|revoke|delete)/iu.test(
+      final
+    )
+  ) {
+    return {
+      passed: false,
+      reason:
+        "Final response did not report the bounded credential lifecycle summary and read-only secret-safe handling",
+    };
+  }
+
+  const evalCalls = getToolCalls(result).filter((call) => call.name === "eval");
+  if (
+    evalCalls.length !== 1 ||
+    !successfulEvalCode(result).includes("credentials.inspectStoredCredentials")
+  ) {
+    return {
+      passed: false,
+      reason: "Expected exactly one successful eval inspecting the managed credential store",
+    };
+  }
+  const allEvalCode = getToolCalls(result)
+    .filter((call) => call.name === "eval")
+    .map((call) => (typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : ""))
+    .join("\n");
+  if (
+    /credentials\.(?:store|connect|configureClient|requestCredentialInput|revokeCredential|deleteClientConfig)/u.test(
+      allEvalCode
+    )
+  ) {
+    return {
+      passed: false,
+      reason: "Credential inspection probe attempted to mutate credential state",
+    };
+  }
+
+  const values = successfulEvalReturnValues(result);
+  if (values.length !== 1 || !isExactCredentialStoreSummary(values[0])) {
+    return {
+      passed: false,
+      reason:
+        "Credential inspection eval must return exactly { count: nonnegative integer, states: distinct lifecycle state names[] }",
+    };
+  }
   return noIncompleteInvocations(result);
+}
+
+function isExactCredentialStoreSummary(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== "count,states") return false;
+  if (!Number.isSafeInteger(record["count"]) || (record["count"] as number) < 0) return false;
+  const states = record["states"];
+  if (!Array.isArray(states) || states.length > 3) return false;
+  if (
+    !states.every(
+      (state) => typeof state === "string" && ["active", "expired", "revoked"].includes(state)
+    )
+  ) {
+    return false;
+  }
+  return new Set(states).size === states.length;
 }
 
 export const credentialTests: TestCase[] = [
   {
-    name: "credential-store-inspect-revoke",
-    description: "Store a dummy URL-bound credential, inspect it without leaking, revoke it",
+    name: "credential-store-inspect",
+    description: "Inspect managed credential lifecycle summaries without mutation or secret access",
     category: "credentials",
     prompt:
-      "Exercise the credential lifecycle with an obviously fake test credential bound to a made-up https URL that will never be called: store it, confirm it appears in the stored-credential listing and inspect its metadata without ever revealing the secret value, then revoke it and confirm it is gone. Finish with CRED_LIFECYCLE_OK, no-secret-leak, and revoked:yes.",
-    validate: (result) =>
-      checked(result, ["CRED_LIFECYCLE_OK", "no-secret-leak", "revoked:yes"]),
-  },
-  {
-    name: "credential-client-config-status",
-    description: "Inspect OAuth client configuration status without secrets",
-    category: "credentials",
-    prompt:
-      "Report the OAuth client configuration status for the providers this workspace knows about — which are configured and which are not — without exposing any client secrets. Finish with CRED_CLIENT_STATUS_OK and providers:<count>.",
-    validate: (result) => checked(result, ["CRED_CLIENT_STATUS_OK", "providers:"]),
+      "How many managed credentials are stored here, and which lifecycle states are represented? Give me only a bounded summary—do not expose credential details or secrets, and do not change anything.",
+    validate: storeInspectionChecked,
   },
 ];

@@ -7,7 +7,9 @@ import {
   type TestOrchestrationContext,
 } from "../types.js";
 import {
-  finalMessageHasAll,
+  findLastAgentMessage,
+  getToolCalls,
+  hasAgentResponse,
   noIncompleteInvocations,
   requireIncrementalIntegrationEvidence,
   requirePublishedCommitEvidence,
@@ -15,12 +17,79 @@ import {
   requireWholeChainCommitEvidence,
 } from "./_helpers.js";
 
-function checked(result: TestExecutionResult, tokens: string[], evidence: string[]) {
-  const message = finalMessageHasAll(result, tokens);
-  if (!message.passed) return message;
+function checked(result: TestExecutionResult, evidence: string[]) {
+  if (!hasAgentResponse(result)) return { passed: false, reason: "No agent response received" };
   const invocations = noIncompleteInvocations(result);
   if (!invocations.passed) return invocations;
   return requireVcsEvidence(result, evidence);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireCanonicalStatus(result: TestExecutionResult) {
+  const status = getToolCalls(result).find(
+    (call) =>
+      call.name === "vcs" &&
+      call.arguments?.["operation"] === "status" &&
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true
+  );
+  const envelope = status?.execution?.result;
+  const details = isRecord(envelope) ? envelope["details"] : undefined;
+  const canonical = isRecord(details) ? details["result"] : undefined;
+  if (
+    !isRecord(canonical) ||
+    typeof canonical["contextId"] !== "string" ||
+    typeof canonical["clean"] !== "boolean" ||
+    !isRecord(canonical["committed"]) ||
+    !isRecord(canonical["workingHead"]) ||
+    typeof canonical["mainEventId"] !== "string" ||
+    !["at", "ahead", "behind", "diverged"].includes(String(canonical["mainRelation"]))
+  ) {
+    return {
+      passed: false,
+      reason:
+        "No completed status call exposed canonical context, state, cleanliness, and main-relation evidence",
+    };
+  }
+  const committed = canonical["committed"];
+  const working = canonical["workingHead"];
+  const committedId = isRecord(committed) ? committed["eventId"] : undefined;
+  const workingId = isRecord(working)
+    ? working["kind"] === "event"
+      ? working["eventId"]
+      : working["applicationId"]
+    : undefined;
+  const final = findLastAgentMessage(result).toLowerCase();
+  const requiredClaims = [
+    committedId,
+    workingId,
+    canonical["mainEventId"],
+    canonical["mainRelation"],
+    canonical["clean"] === true ? "clean" : "dirty",
+  ].filter((value): value is string => typeof value === "string");
+  if (requiredClaims.some((claim) => !final.includes(claim.toLowerCase()))) {
+    return {
+      passed: false,
+      reason:
+        "The final orientation did not report the exact committed, working, main-relation, and cleanliness facts returned by status",
+    };
+  }
+  const mutations = getToolCalls(result).filter(
+    (call) =>
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true &&
+      (["edit", "write", "move_file", "copy_file", "commit"].includes(call.name) ||
+        (call.name === "vcs" &&
+          ["edit", "move", "copy", "integrate", "revert", "commit", "discard", "push"].includes(
+            String(call.arguments?.["operation"])
+          )))
+  );
+  return mutations.length === 0
+    ? { passed: true }
+    : { passed: false, reason: "Status orientation unexpectedly mutated the workspace" };
 }
 
 /** Two real contexts advance independently; integration happens as local steps in A. */
@@ -41,7 +110,7 @@ async function orchestrateIncrementalIntegration(
     sessions.push({ role: "agent-a", session: agentA });
     await context.sendAndWait(
       agentA,
-      `Work in ${repoPath}. Publish a small shared baseline, then make and commit one additional compatible change but leave that second milestone local. Use the workspace guidance and retain the exact event identities you will need. Finish with VCS_A_LOCAL_READY repo:${repoPath}`,
+      `Work in ${repoPath}. Publish a small shared baseline, then make and commit one additional compatible change but leave that second milestone local. Use the workspace guidance and report when the repository is ready for a collaborator.`,
       "agent A publishes the base and keeps one local commit"
     );
     firstPhase = [...agentA.messages] as ChatMessage[];
@@ -50,13 +119,13 @@ async function orchestrateIncrementalIntegration(
     sessions.push({ role: "agent-b", session: agentB });
     await context.sendAndWait(
       agentB,
-      `A collaborator has published ${repoPath}. Make a distinct compatible change there, commit it, and publish it. Follow the workspace guidance and finish with VCS_B_PUBLISHED repo:${repoPath}`,
+      `A collaborator has published ${repoPath}. Make a distinct compatible change there, commit it, and publish it. Follow the workspace guidance and report what happened.`,
       "agent B advances main independently"
     );
 
     await context.sendAndWait(
       agentA,
-      `Main advanced while your compatible local commit remained unpublished. Bring the incoming semantic changes into your context one local decision at a time, commit the combined history, and publish it. Prove both collaborators' intent remains and finish with VCS_INTEGRATE_OK incoming:accounted local:preserved pushed:true event:`,
+      `Main advanced while your compatible local commit remained unpublished. Bring the incoming semantic changes into your context one local decision at a time, commit the combined history, and publish it. Verify that both collaborators' intent remains and report what happened.`,
       "agent A incrementally integrates and publishes"
     );
   } catch (cause) {
@@ -130,13 +199,11 @@ export const vcsTests: TestCase[] = [
     description: "Orient on committed, working, and protected-main state without mutation",
     category: "vcs",
     prompt:
-      "Use the workspace guidance to orient me in this editing context without changing it. Report whether it is clean, its exact committed and working identities, and how it relates to protected main. Finish with VCS_STATUS_OK clean:, committed:, working:, relation:.",
-    validate: (result) =>
-      checked(
-        result,
-        ["VCS_STATUS_OK", "clean:", "committed:", "working:", "relation:"],
-        ["vcs.status"]
-      ),
+      "Orient me in this editing context without changing it. Explain its current workspace state and relationship to protected main using exact identities where they matter.",
+    validate: (result) => {
+      const base = checked(result, ["vcs.status"]);
+      return base.passed ? requireCanonicalStatus(result) : base;
+    },
   },
   {
     name: "vcs-edit-whole-chain-commit",
@@ -144,13 +211,9 @@ export const vcsTests: TestCase[] = [
     category: "vcs",
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "In the disposable project, make two small related edits as separate local steps. Confirm both are visible before committing, then commit the complete local chain as one milestone. Use the workspace guidance and finish with VCS_COMMIT_OK changes:2 event: clean:true.",
+      "In the disposable project, make two small related edits as separate local steps, then preserve the complete local chain as one clean milestone. Report what happened.",
     validate: (result) => {
-      const base = checked(
-        result,
-        ["VCS_COMMIT_OK", "changes:2", "event:", "clean:true"],
-        ["vcs.edit", "vcs.commit", "vcs.status"]
-      );
+      const base = checked(result, ["vcs.edit", "vcs.commit", "vcs.status"]);
       return base.passed ? requireWholeChainCommitEvidence(result) : base;
     },
   },
@@ -161,13 +224,9 @@ export const vcsTests: TestCase[] = [
     resources: ["vcs:protected-main"],
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Make a distinctive small change in the disposable project, commit it, and publish that exact milestone to protected main. Verify main moved to the event you intended. Follow the workspace guidance and finish with VCS_PUSH_OK event: main: match:true.",
+      "Make a distinctive small change in the disposable project and publish that exact clean milestone to protected main. Verify it and explain what happened.",
     validate: (result) => {
-      const base = checked(
-        result,
-        ["VCS_PUSH_OK", "event:", "main:", "match:true"],
-        ["vcs.edit", "vcs.commit", "vcs.push"]
-      );
+      const base = checked(result, ["vcs.edit", "vcs.commit", "vcs.push"]);
       return base.passed ? requirePublishedCommitEvidence(result) : base;
     },
   },
@@ -180,12 +239,17 @@ export const vcsTests: TestCase[] = [
     prompt: "Harness-orchestrated two-context semantic integration.",
     orchestrate: orchestrateIncrementalIntegration,
     validate: (result) => {
-      const base = checked(
-        result,
-        ["VCS_INTEGRATE_OK", "incoming:accounted", "local:preserved", "pushed:true", "event:"],
-        ["vcs.compare", "vcs.integrate", "vcs.commit", "vcs.push"]
-      );
-      return base.passed ? requireIncrementalIntegrationEvidence(result) : base;
+      if (!hasAgentResponse(result)) return { passed: false, reason: "No agent response received" };
+      const invocations = noIncompleteInvocations(result);
+      if (!invocations.passed) return invocations;
+      const operations = requireVcsEvidence(result, [
+        "vcs.compare",
+        "vcs.integrate",
+        "vcs.commit",
+        "vcs.push",
+        "vcs.status",
+      ]);
+      return operations.passed ? requireIncrementalIntegrationEvidence(result) : operations;
     },
   },
 ];

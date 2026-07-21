@@ -275,11 +275,8 @@ export class ChannelClient {
   ): Promise<void> {
     await this.call("callMethod", callerPid, targetPid, callId, method, args, opts);
   }
-  async cancelCall(callId: string): Promise<void> {
-    await this.call("cancelMethodCall", callId);
-  }
-  async timeoutCall(callId: string, reason?: string): Promise<void> {
-    await this.call("timeoutMethodCall", callId, reason);
+  async cancelCall(participantId: string, callId: string): Promise<void> {
+    await this.call("cancelMethodCall", participantId, callId);
   }
   async getReplayAfter(request: ChannelReplayAfterRequest): Promise<ChannelReplayEnvelope> {
     return this.call("getReplayAfter", request) as Promise<ChannelReplayEnvelope>;

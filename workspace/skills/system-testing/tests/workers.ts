@@ -1,85 +1,80 @@
-import { CONTENT_WORKSPACE_REPO_FIXTURE, type TestCase } from "../types.js";
 import {
-  completedToolNames,
-  finalMessageHasAll,
-  finalMessageHasMarkerCount,
-  getToolCalls,
-  noIncompleteInvocations,
-} from "./_helpers.js";
+  BUILDABLE_WORKER_WORKSPACE_REPO_FIXTURE,
+  type TestCase,
+  type TestExecutionResult,
+} from "../types.js";
+import {
+  completedScenarioEvidence,
+  hasNonEmptyStructuredResult,
+  requireCodeOperations,
+  walkArrays,
+  walkRecords,
+} from "./_scenario-evidence.js";
 
-function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
-  const msg = finalMessageHasAll(result, tokens);
-  if (!msg.passed) return msg;
-  if (!completedToolNames(result).has("eval")) {
-    return { passed: false, reason: `Expected a completed eval call for ${tokens.join(", ")}` };
-  }
-  return noIncompleteInvocations(result);
-}
-
-function successfulEvalCode(result: Parameters<typeof finalMessageHasAll>[0]): string {
-  return getToolCalls(result)
-    .filter(
-      (call) =>
-        call.name === "eval" &&
-        call.execution?.status === "complete" &&
-        call.execution.isError !== true
-    )
-    .map((call) => (typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : ""))
-    .join("\n");
-}
-
-function requireEvalEvidence(
-  result: Parameters<typeof finalMessageHasAll>[0],
-  required: readonly string[],
-  anyPattern?: RegExp
+function lifecycleEvidence(
+  result: TestExecutionResult,
+  operations: readonly (readonly string[])[]
 ) {
-  const code = successfulEvalCode(result);
-  const missing = required.filter((token) => !code.includes(token));
-  if (missing.length > 0) {
-    return { passed: false, reason: `Successful eval did not exercise ${missing.join(", ")}` };
-  }
-  if (anyPattern && !anyPattern.test(code)) {
-    return { passed: false, reason: "Successful eval did not contain worker-side observation" };
-  }
-  return { passed: true };
-}
-
-function requireAnyEvalEvidence(
-  result: Parameters<typeof finalMessageHasAll>[0],
-  alternatives: readonly (readonly string[])[],
-  anyPattern?: RegExp
-) {
-  const code = successfulEvalCode(result);
-  const matched = alternatives.some((required) => required.every((token) => code.includes(token)));
-  if (!matched) {
-    return {
-      passed: false,
-      reason: `Successful eval did not exercise any supported path: ${alternatives
-        .map((tokens) => tokens.join(" + "))
-        .join(" or ")}`,
-    };
-  }
-  if (anyPattern && !anyPattern.test(code)) {
-    return { passed: false, reason: "Successful eval did not contain worker-side observation" };
-  }
-  return { passed: true };
-}
-
-function checkedOutcome(
-  result: Parameters<typeof finalMessageHasAll>[0],
-  okMarker: string,
-  failureMarker: string,
-  evidence: () => { passed: boolean; reason?: string }
-) {
-  if (finalMessageHasAll(result, [failureMarker]).passed) {
-    return {
-      passed: false,
-      reason: `Agent reported ${failureMarker}; ${okMarker} was not verified`,
-    };
-  }
-  const base = checked(result, [okMarker]);
+  const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
-  return evidence();
+  const exercised = requireCodeOperations(base.evidence.evalCode, operations);
+  if (!exercised.passed) return exercised;
+  return { passed: true as const, evidence: base.evidence };
+}
+
+function cleanupProved(values: readonly unknown[]): boolean {
+  return walkRecords(values).some((record) => {
+    const createdId = record["createdId"];
+    const retiredId = record["retiredId"] ?? record["destroyedId"];
+    const identityMatched =
+      typeof createdId === "string" && createdId.length > 0 && retiredId === createdId;
+    const before = record["before"];
+    const after = record["after"];
+    const inventoryRestored =
+      Array.isArray(before) &&
+      Array.isArray(after) &&
+      before.length === after.length &&
+      before.every((entry, index) => entry === after[index]);
+    return identityMatched || inventoryRestored;
+  });
+}
+
+function requireCleanup(values: readonly unknown[]) {
+  return cleanupProved(values)
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason: "Completed lifecycle results did not prove the created worker was retired",
+      };
+}
+
+function requireSqlPersistenceEvidence(result: TestExecutionResult) {
+  const base = lifecycleEvidence(result, [
+    ["workers.create", "workers.destroy"],
+    ["runtime.createEntity", "runtime.retireEntity"],
+  ]);
+  if (!base.passed) return base;
+  const code = base.evidence.evalCode;
+  const objectCalls =
+    code.match(/rpc\.call(?:<[^>]*>)?\s*\(\s*[^,\n]*(?:\.targetId|\btargetId\b)/gu)?.length ?? 0;
+  if (objectCalls < 2) {
+    return { passed: false, reason: "Completed eval did not make two separate object calls" };
+  }
+  if (
+    !/(?:this\.)?sql\.exec/u.test(code) ||
+    !/\bINSERT\b/iu.test(code) ||
+    !/\bSELECT\b/iu.test(code)
+  ) {
+    return { passed: false, reason: "Authored worker code did not persist and retrieve SQL rows" };
+  }
+  if (
+    !walkRecords(base.evidence.evalValues).some(
+      (record) => Array.isArray(record["rows"]) && record["rows"].length >= 2
+    )
+  ) {
+    return { passed: false, reason: "The second object call did not return the persisted rows" };
+  }
+  return requireCleanup(base.evidence.evalValues);
 }
 
 export const workerTests: TestCase[] = [
@@ -87,104 +82,109 @@ export const workerTests: TestCase[] = [
     name: "list-sources",
     description: "List available worker types",
     category: "workers",
-    prompt:
-      "Exercise listing worker sources. Finish with WORKER_SOURCES_OK followed by the numeric count.",
+    prompt: "Tell me which worker sources are available here.",
     validate: (result) => {
-      const msg = finalMessageHasMarkerCount(result, "WORKER_SOURCES_OK");
-      if (!msg.passed) return msg;
-      const base = checked(result, ["WORKER_SOURCES_OK"]);
+      const base = lifecycleEvidence(result, [["workers.listSources"]]);
       if (!base.passed) return base;
-      return requireEvalEvidence(result, ["workers.listSources"]);
+      return walkArrays(base.evidence.evalValues).some((value) => value.length > 0)
+        ? { passed: true, reason: undefined }
+        : { passed: false, reason: "The completed source listing returned no source rows" };
     },
   },
   {
     name: "create-worker",
     description: "Create a worker instance",
     category: "workers",
-    prompt:
-      "Exercise creating and cleaning up a worker. Finish with WORKER_CREATE_OK and destroyed.",
+    prompt: "Temporarily start a worker, confirm that it exists, and leave no instance behind.",
     validate: (result) => {
-      const base = checked(result, ["WORKER_CREATE_OK", "destroyed"]);
-      if (!base.passed) return base;
-      return requireAnyEvalEvidence(result, [
+      const base = lifecycleEvidence(result, [
         ["workers.create", "workers.destroy"],
         ["runtime.createEntity", "runtime.retireEntity"],
       ]);
+      return base.passed ? requireCleanup(base.evidence.evalValues) : base;
     },
   },
   {
     name: "list-workers",
     description: "List running worker instances",
     category: "workers",
-    prompt:
-      "Exercise listing running workers. Finish with WORKER_LIST_OK followed by the numeric count.",
+    prompt: "Inspect the worker instances that are currently running and summarize what you found.",
     validate: (result) => {
-      const msg = finalMessageHasMarkerCount(result, "WORKER_LIST_OK");
-      if (!msg.passed) return msg;
-      const base = checked(result, ["WORKER_LIST_OK"]);
-      if (!base.passed) return base;
-      return requireAnyEvalEvidence(result, [
+      const base = lifecycleEvidence(result, [
         ["workers.list"],
         ["runtime.listEntities"],
         ["workspace.units.list"],
       ]);
+      return base.passed && walkArrays(base.evidence.evalValues).length > 0
+        ? { passed: true, reason: undefined }
+        : base.passed
+          ? { passed: false, reason: "The completed worker listing returned no array" }
+          : base;
     },
   },
   {
     name: "create-destroy",
     description: "Create a worker and then destroy it",
     category: "workers",
-    prompt:
-      "Exercise worker destruction. Finish with WORKER_DESTROY_OK or WORKER_DESTROY_MISMATCH.",
-    validate: (result) =>
-      checkedOutcome(result, "WORKER_DESTROY_OK", "WORKER_DESTROY_MISMATCH", () =>
-        requireAnyEvalEvidence(result, [
-          ["workers.create", "workers.list", "workers.destroy"],
-          ["runtime.createEntity", "runtime.listEntities", "runtime.retireEntity"],
-        ])
-      ),
+    prompt: "Verify that a temporary worker can be started and fully retired.",
+    validate: (result) => {
+      const base = lifecycleEvidence(result, [
+        ["workers.create", "workers.list", "workers.destroy"],
+        ["runtime.createEntity", "runtime.listEntities", "runtime.retireEntity"],
+      ]);
+      return base.passed ? requireCleanup(base.evidence.evalValues) : base;
+    },
   },
   {
     name: "call-do-method",
     description: "Call a method on a Durable Object worker",
     category: "workers",
-    prompt:
-      "Exercise calling a worker Durable Object. Finish with WORKER_DO_OK or WORKER_DO_UNAVAILABLE.",
-    validate: (result) =>
-      checkedOutcome(result, "WORKER_DO_OK", "WORKER_DO_UNAVAILABLE", () =>
-        requireEvalEvidence(result, ["rpc.call"])
-      ),
+    prompt: "Call a harmless method on a worker Durable Object and report the observed result.",
+    validate: (result) => {
+      const base = lifecycleEvidence(result, [["rpc.call"]]);
+      if (!base.passed) return base;
+      return hasNonEmptyStructuredResult(base.evidence.evalValues)
+        ? { passed: true, reason: undefined }
+        : { passed: false, reason: "The completed object call returned no observable result" };
+    },
   },
   {
     name: "worker-do-sql-persistence",
     description: "A Durable Object's own storage persists data across separate calls",
     category: "workers",
+    workspaceRepoFixture: BUILDABLE_WORKER_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Demonstrate that a Durable Object app can persist data in its own storage: store a couple of rows through a DO's methods in one call, then read them back through a second, separate call to the same object and confirm they survived. Clean up anything you created. Finish with WORKER_DO_SQL_OK and rows:<count>, or WORKER_DO_SQL_UNAVAILABLE with the concrete blocking reason.",
-    validate: (result) =>
-      checkedOutcome(result, "WORKER_DO_SQL_OK", "WORKER_DO_SQL_UNAVAILABLE", () => {
-        const marker = finalMessageHasAll(result, ["rows:"]);
-        if (!marker.passed) return marker;
-        return requireEvalEvidence(result, ["rpc.call"]);
-      }),
+      "Create a tiny disposable Durable Object that stores a couple of rows, verify they persist into a later call, and clean up everything you started.",
+    validate: requireSqlPersistenceEvidence,
   },
   {
     name: "worker-env",
     description: "Create a worker with environment variables",
     category: "workers",
-    workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+    workspaceRepoFixture: BUILDABLE_WORKER_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Exercise worker environment configuration with a disposable worker you author in the harness-owned workspace namespace. Expose and call one fixed method that returns only the named non-secret probe binding, prove the running worker observed the configured value, and retire it. Finish with WORKER_ENV_OK or WORKER_ENV_UNOBSERVABLE.",
-    validate: (result) =>
-      checkedOutcome(result, "WORKER_ENV_OK", "WORKER_ENV_UNOBSERVABLE", () =>
-        requireAnyEvalEvidence(
-          result,
-          [
-            ["workers.create", "env", "workers.destroy"],
-            ["runtime.createEntity", "env", "runtime.retireEntity"],
-          ],
-          /rpc\.call(?:<[^>]*>)?\s*\(\s*[^,\n]*(?:\.targetId|targetId)\s*,|gatewayFetch\s*\(/
+      "Temporarily run a disposable worker with a non-secret probe setting, verify what the worker itself observes, and clean it up.",
+    validate: (result) => {
+      const base = lifecycleEvidence(result, [
+        ["workers.create", "env", "workers.destroy"],
+        ["runtime.createEntity", "env", "runtime.retireEntity"],
+      ]);
+      if (!base.passed) return base;
+      if (
+        !/rpc\.call(?:<[^>]*>)?\s*\(\s*[^,\n]*(?:\.targetId|targetId)\s*,|gatewayFetch\s*\(/u.test(
+          base.evidence.evalCode
         )
-      ),
+      ) {
+        return { passed: false, reason: "The worker-side probe was never observed" };
+      }
+      const observed = walkRecords(base.evidence.evalValues).some((record) => {
+        const value = record["observed"] ?? record["workerValue"];
+        return value !== undefined && value !== null && value !== "";
+      });
+      if (!observed) {
+        return { passed: false, reason: "The worker-side probe returned no evidence" };
+      }
+      return requireCleanup(base.evidence.evalValues);
+    },
   },
 ];

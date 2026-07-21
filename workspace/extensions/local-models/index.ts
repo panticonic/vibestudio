@@ -193,7 +193,10 @@ interface Ctx {
     degraded(detail: unknown): void;
     unhealthy(detail: unknown): void;
   };
-  invocation?: { current(): ExtensionInvocationLike | null };
+  invocation?: {
+    current(): ExtensionInvocationLike | null;
+    signal?(): AbortSignal | null;
+  };
   workspace?: { getInfo(): Promise<{ id: string }> };
   subscriptions?: { push(disposable: { dispose(): void }): void };
 }
@@ -473,6 +476,31 @@ export async function activate(ctx: Ctx) {
     return modelId.startsWith("local:") ? modelId.slice("local:".length) : modelId;
   }
 
+  /** Release this caller's wait when its RPC is cancelled. Model bootstrap is
+   * supervisor-owned and may still satisfy another caller; cancellation does
+   * not tear down that shared machine resource. */
+  async function awaitInvocation<T>(work: Promise<T>): Promise<T> {
+    const signal = ctx.invocation?.signal?.() ?? null;
+    if (!signal) return work;
+    const abortError = (): Error =>
+      signal.reason instanceof Error ? signal.reason : new Error("local-model invocation aborted");
+    if (signal.aborted) throw abortError();
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(abortError());
+      signal.addEventListener("abort", onAbort, { once: true });
+      void work.then(
+        (value) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        (error) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(error);
+        }
+      );
+    });
+  }
+
   // Fire-and-forget: activation must not block on engine install/probing. The
   // build-time activation smoke verifies the exported API against a synthetic
   // context; it must not install native engines or leave background processes.
@@ -495,15 +523,15 @@ export async function activate(ctx: Ctx) {
     modelId: string,
     options: { scheduleFallbackBenchmark?: boolean } = {}
   ): Promise<{ baseUrl: string }> {
-    await ensureBootstrap();
+    await awaitInvocation(ensureBootstrap());
     const slug = bareSlug(modelId);
     if (slug === FALLBACK_MODEL.slug) {
-      await library.ensureFallback();
+      await awaitInvocation(library.ensureFallback());
       if (options.scheduleFallbackBenchmark) {
         scheduleBenchmark(slug);
       }
     }
-    return supervisor.ensureLoaded(slug);
+    return awaitInvocation(supervisor.ensureLoaded(slug));
   }
 
   async function benchmarkModelInternal(
@@ -794,8 +822,8 @@ export async function activate(ctx: Ctx) {
 
     async getLoopbackAuth(): Promise<{ apiKey: string }> {
       assertLoopbackAuthCaller();
-      await ensureBootstrap();
-      return { apiKey: await supervisor.apiKey() };
+      await awaitInvocation(ensureBootstrap());
+      return { apiKey: await awaitInvocation(supervisor.apiKey()) };
     },
 
     async getHardwareProfile(refresh?: boolean): Promise<HardwareProfile> {

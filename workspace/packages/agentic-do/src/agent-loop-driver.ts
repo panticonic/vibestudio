@@ -73,6 +73,50 @@ interface ActiveEffectDispatch {
   resolveSettled: () => void;
 }
 
+function compareLocalToolOrder(left: OutboxRow, right: OutboxRow): number {
+  const leftDescriptor = left.descriptor;
+  const rightDescriptor = right.descriptor;
+  if (leftDescriptor.kind !== "local_tool" || rightDescriptor.kind !== "local_tool") return 0;
+  const leftSeq = leftDescriptor.invocationSeq ?? Number.MAX_SAFE_INTEGER;
+  const rightSeq = rightDescriptor.invocationSeq ?? Number.MAX_SAFE_INTEGER;
+  if (leftSeq !== rightSeq) return leftSeq - rightSeq;
+  if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
+  return left.effectId.localeCompare(right.effectId);
+}
+
+/**
+ * Select one durable local-tool execution wave.
+ *
+ * Parallel calls may share a wave until the first sequential barrier. A
+ * sequential call starts only after every earlier local invocation has a
+ * terminal outcome, and no later call can cross it while it is leased,
+ * deferred, backing off, or awaiting recovery. Because invocationSeq is the
+ * folded trajectory sequence, the same wave boundaries are reconstructed
+ * after eviction instead of depending on isolate-local promises.
+ */
+function localToolDispatchIsOrdered(
+  candidate: OutboxRow,
+  unresolved: readonly OutboxRow[]
+): boolean {
+  const descriptor = candidate.descriptor;
+  if (descriptor.kind !== "local_tool") return true;
+  const peers = unresolved.filter((row) => {
+    const peer = row.descriptor;
+    return (
+      row.branchId === candidate.branchId &&
+      peer.kind === "local_tool" &&
+      peer.turnId === descriptor.turnId &&
+      row.effectId !== candidate.effectId
+    );
+  });
+  const earlier = peers.filter((row) => compareLocalToolOrder(row, candidate) < 0);
+  if (descriptor.executionMode !== "parallel") return earlier.length === 0;
+  return !earlier.some((row) => {
+    const peer = row.descriptor;
+    return peer.kind === "local_tool" && peer.executionMode !== "parallel";
+  });
+}
+
 export interface DriverDeps {
   sql: SqlStorage;
   gad: GadPort;
@@ -1045,7 +1089,10 @@ export class AgentLoopDriver {
   async dispatchDue(): Promise<void> {
     const now = this.deps.now();
     const work: Array<Promise<void>> = [];
-    for (const row of this.outbox.due(now)) {
+    const unresolved = this.outbox.all();
+    for (const row of this.outbox
+      .due(now)
+      .filter((candidate) => localToolDispatchIsOrdered(candidate, unresolved))) {
       // A credential wait past its own expiresAt is a failure, not a
       // dispatch. (Before expiry, a due row is just the periodic redrive —
       // the executor idempotently re-publishes the card + interest.)

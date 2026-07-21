@@ -15,7 +15,7 @@ panel.
 
 | Document                                           | Content                                                                                                                                     |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| [EVAL.md](EVAL.md)                                 | Eval tool — run code, stream console, static imports, package loading                                                                       |
+| [EVAL.md](EVAL.md)                                 | Eval tool — run code, explicit timeout/recovery, stream console, static imports, package loading                                            |
 | [INLINE_UI.md](INLINE_UI.md)                       | Inline UI — persistent interactive components in chat                                                                                       |
 | [ACTION_BAR.md](ACTION_BAR.md)                     | Action bar — file-backed compact UI pinned above chat history                                                                               |
 | [CUSTOM_MESSAGES.md](CUSTOM_MESSAGES.md)           | Custom message types — register a renderer, publish typed instances with reducer updates                                                    |
