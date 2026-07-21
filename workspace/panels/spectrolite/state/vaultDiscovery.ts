@@ -4,8 +4,7 @@ import { contextId, vcs } from "@workspace/runtime";
 
 export interface VaultEntry {
   name: string;
-  relPath: string;
-  contextPath: string;
+  repoRoot: string;
 }
 
 export async function discoverVaults(): Promise<VaultEntry[]> {
@@ -27,12 +26,11 @@ export async function discoverVaults(): Promise<VaultEntry[]> {
     );
     for (const result of inspected) {
       if (result.node.kind !== "repository" || result.node.value.kind !== "present") continue;
-      const relPath = result.node.value.repoPath;
-      if (!relPath.startsWith("projects/")) continue;
+      const repoRoot = result.node.value.repoPath;
+      if (!repoRoot.startsWith("projects/")) continue;
       entries.push({
-        name: relPath.slice("projects/".length),
-        relPath,
-        contextPath: `/${relPath}`,
+        name: repoRoot.slice("projects/".length),
+        repoRoot,
       });
     }
     cursor = page.nextCursor ?? undefined;

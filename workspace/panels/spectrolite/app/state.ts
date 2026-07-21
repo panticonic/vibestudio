@@ -67,7 +67,7 @@ export interface SpectroliteState {
   pathsLoaded: boolean;
   /** User-facing failure from the most recent vault file listing. */
   pathsError: string | null;
-  /** User-facing failure while reopening a selected vault. */
+  /** User-facing failure while binding the selected vault repository. */
   vaultError: string | null;
   /** Vault currently being opened, used to make picker clicks visibly pending. */
   vaultPendingPath: string | null;

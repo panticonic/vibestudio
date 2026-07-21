@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelDORef } from "../bootstrap";
 import { createStore } from "./store";
 import { initialState } from "./state";
 import { SessionController } from "./sessionController";
@@ -18,8 +19,8 @@ const pubsubMocks = vi.hoisted(() => {
 });
 
 const bootstrapMocks = vi.hoisted(() => ({
-  createAndSubscribeAgent: vi.fn(async () => undefined),
-  getChannelDOParticipants: vi.fn(async () => []),
+  createAndSubscribeAgent: vi.fn(async () => ({})),
+  getChannelDOParticipants: vi.fn<() => Promise<ChannelDORef[]>>(async () => []),
   listAvailableAgents: vi.fn(async () => []),
   newAgentKey: vi.fn((handle: string) => `agent:${handle}`),
   newChannelName: vi.fn(() => "new-channel"),
@@ -58,7 +59,7 @@ describe("SessionController", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     bootstrapMocks.getChannelDOParticipants.mockResolvedValue([]);
-    bootstrapMocks.createAndSubscribeAgent.mockResolvedValue(undefined);
+    bootstrapMocks.createAndSubscribeAgent.mockResolvedValue({});
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -131,7 +132,7 @@ describe("SessionController", () => {
     );
     bootstrapMocks.createAndSubscribeAgent
       .mockRejectedValueOnce(new Error("transient"))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({});
     const session = new SessionController(store);
 
     await session.start();
@@ -140,5 +141,89 @@ describe("SessionController", () => {
     await vi.waitFor(() => {
       expect(bootstrapMocks.createAndSubscribeAgent).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("updates stable agents' repository focus without changing context", async () => {
+    const store = createStore(
+      initialState({
+        contextId: "ctx-panel",
+        channelName: "chan",
+        repoRoot: "projects/default",
+        openPath: null,
+        installedAgents: [
+          {
+            agentId: "SilentAgentWorker",
+            handle: "scribe",
+            key: "agent:scribe",
+            source: "workers/silent-agent-worker",
+            className: "SilentAgentWorker",
+          },
+        ],
+      })
+    );
+    bootstrapMocks.getChannelDOParticipants.mockResolvedValue([
+      {
+        source: "workers/silent-agent-worker",
+        className: "SilentAgentWorker",
+        objectKey: "agent:scribe",
+      },
+    ]);
+    const session = new SessionController(store);
+    await session.start();
+    expect(bootstrapMocks.createAndSubscribeAgent).not.toHaveBeenCalled();
+
+    store.setState({ repoRoot: "projects/second" });
+    session.onVaultSelected("projects/second");
+
+    await vi.waitFor(() => expect(bootstrapMocks.createAndSubscribeAgent).toHaveBeenCalledOnce());
+    expect(bootstrapMocks.createAndSubscribeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelContextId: "ctx-panel",
+        channelId: "chan",
+        key: "agent:scribe",
+        config: expect.objectContaining({
+          systemPrompt: expect.stringContaining("projects/second"),
+        }),
+      })
+    );
+  });
+
+  it("retires the exact launched entity when removing an agent", async () => {
+    const store = createStore(
+      initialState({
+        contextId: "ctx",
+        channelName: "chan",
+        repoRoot: "/projects/default",
+        openPath: null,
+        installedAgents: [
+          {
+            agentId: "TestAgentWorker",
+            entityId: "entity:test-agent",
+            handle: "test-agent",
+            key: "agent:test-agent",
+            source: "workers/test-agent-worker",
+            className: "TestAgentWorker",
+          },
+        ],
+      })
+    );
+    bootstrapMocks.getChannelDOParticipants.mockResolvedValue([
+      {
+        source: "workers/test-agent-worker",
+        className: "TestAgentWorker",
+        objectKey: "agent:test-agent",
+      },
+    ]);
+
+    await new SessionController(store).removeAgent("test-agent");
+
+    expect(bootstrapMocks.unsubscribeDOFromChannel).toHaveBeenCalledWith(
+      "workers/test-agent-worker",
+      "TestAgentWorker",
+      "agent:test-agent",
+      "chan",
+      "entity:test-agent"
+    );
+    expect(store.getState().installedAgents).toEqual([]);
   });
 });

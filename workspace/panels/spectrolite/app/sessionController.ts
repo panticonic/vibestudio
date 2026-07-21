@@ -13,7 +13,8 @@
  *      (fresh channel) or rehydrate persisted agents (host restart)
  *
  * Vault selection later calls `onVaultSelected()`, which runs step 5 and
- * notifies the resident agents that their workspace root moved.
+ * updates resident-agent subscriptions to the new repository without moving
+ * either the panel or agents to another workspace context.
  */
 
 import { connectViaRpc, type PubSubClient } from "@workspace/pubsub";
@@ -83,11 +84,12 @@ export class SessionController {
   private disposed = false;
   private started = false;
   /** Vault the agents were last scoped to; null until the first selection is observed. */
-  private agentVault: string | null = null;
+  private agentRepositoryFocus: string | null = null;
   private agentsEnsured = false;
   private agentsEnsureInFlight = false;
   private agentEnsureRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private agentEnsureRetryAttempt = 0;
+  private agentFocusUpdate: Promise<void> = Promise.resolve();
   private unsubscribeRoster: (() => void) | null = null;
 
   constructor(private readonly store: Store<SpectroliteState>) {}
@@ -106,7 +108,7 @@ export class SessionController {
     if (!channelName) {
       channelName = newChannelName();
       this.store.setState({ channelName });
-      void panel.stateArgs.set({ channelName, contextId, repoRoot: state.repoRoot ?? undefined });
+      void panel.stateArgs.set({ channelName, repoRoot: state.repoRoot ?? undefined });
     }
 
     const client = connectViaRpc<ChatParticipantMetadata>({
@@ -136,7 +138,7 @@ export class SessionController {
     // A vault may already be selected (persisted stateArgs / initPanels).
     const repoRoot = this.store.getState().repoRoot;
     if (repoRoot) {
-      this.agentVault = repoRoot;
+      this.agentRepositoryFocus = repoRoot;
       await this.ensureAgents();
     }
   }
@@ -154,14 +156,21 @@ export class SessionController {
   }
 
   /**
-   * The vault is bound (this panel runs under the vault's context). Ensure the
-   * resident scribe exists for this vault. Switching vault reopens the panel
-   * under a new context, so a single session only ever sees one vault.
+   * Update the resident agents' repository focus inside the unchanged panel
+   * context. This is prompt/UI focus, not an authorization scope: file access,
+   * context, channel, and agent identities all remain unchanged.
    */
   onVaultSelected(repoRoot: string): void {
-    if (this.agentVault === repoRoot) return;
-    this.agentVault = repoRoot;
-    void this.ensureAgents();
+    if (this.agentRepositoryFocus === repoRoot) return;
+    this.agentRepositoryFocus = repoRoot;
+    if (!this.started || this.disposed) return;
+    if (!this.agentsEnsured) {
+      void this.ensureAgents();
+      return;
+    }
+    this.agentFocusUpdate = this.agentFocusUpdate
+      .then(() => this.updateAgentRepositoryFocus(repoRoot))
+      .catch((err) => console.warn("[Spectrolite] agent repository focus update failed:", err));
   }
 
   async send(content: string, options?: { mentions?: string[] }): Promise<void> {
@@ -187,7 +196,7 @@ export class SessionController {
     if (!agent) return;
     const handle = `${agent.proposedHandle}-${crypto.randomUUID().slice(0, 4)}`;
     const key = newAgentKey(handle);
-    await createAndSubscribeAgent({
+    const launched = await createAndSubscribeAgent({
       source: agent.id,
       className: agent.className,
       key,
@@ -199,9 +208,16 @@ export class SessionController {
         className: agent.className,
       }),
     });
-    this.persistInstalled([
+    await this.persistInstalled([
       ...this.store.getState().installedAgents,
-      { agentId: agent.className, handle, key, source: agent.id, className: agent.className },
+      {
+        agentId: agent.className,
+        handle,
+        key,
+        source: agent.id,
+        className: agent.className,
+        ...(launched.entityId ? { entityId: launched.entityId } : {}),
+      },
     ]);
   }
 
@@ -218,13 +234,19 @@ export class SessionController {
       const record = state.installedAgents.find((a) => a.handle === handle);
       const match = record ? workers.find((w) => w.objectKey === record.key) : null;
       if (match) {
-        await unsubscribeDOFromChannel(match.source, match.className, match.objectKey, channelName);
+        await unsubscribeDOFromChannel(
+          match.source,
+          match.className,
+          match.objectKey,
+          channelName,
+          record?.entityId
+        );
       } else {
         console.warn(
           `[Spectrolite] no DO worker matches handle "${handle}" (key=${record?.key ?? "?"})`
         );
       }
-      this.persistInstalled(
+      await this.persistInstalled(
         this.store.getState().installedAgents.filter((a) => a.handle !== handle)
       );
     } catch (err) {
@@ -237,9 +259,44 @@ export class SessionController {
 
   // ---- internals ----
 
-  private persistInstalled(installed: InstalledAgentRecord[]): void {
+  private async persistInstalled(installed: InstalledAgentRecord[]): Promise<void> {
     this.store.setState({ installedAgents: installed });
-    void panel.stateArgs.set({ installedAgents: installed });
+    await panel.stateArgs.set({ installedAgents: installed });
+  }
+
+  /** Refresh each stable channel subscription with the selected repository. */
+  private async updateAgentRepositoryFocus(repoRoot: string): Promise<void> {
+    if (this.disposed) return;
+    const state = this.store.getState();
+    if (!state.channelName || !state.contextId) return;
+    if (state.installedAgents.length === 0) {
+      this.agentsEnsured = false;
+      await this.ensureAgents();
+      return;
+    }
+    for (const agent of state.installedAgents) {
+      const launched = await createAndSubscribeAgent({
+        source: agent.source,
+        className: agent.className,
+        key: agent.key,
+        channelId: state.channelName,
+        channelContextId: state.contextId,
+        config: buildAgentConfig({
+          handle: agent.handle,
+          repoRoot,
+          className: agent.className,
+        }),
+      });
+      if (launched.entityId && launched.entityId !== agent.entityId) {
+        await this.persistInstalled(
+          this.store
+            .getState()
+            .installedAgents.map((record) =>
+              record.key === agent.key ? { ...record, entityId: launched.entityId } : record
+            )
+        );
+      }
+    }
   }
 
   /**
@@ -268,9 +325,9 @@ export class SessionController {
           source: DEFAULT_WORKER_SOURCE,
           className: DEFAULT_CLASS_NAME,
         };
-        this.persistInstalled([defaultAgent]);
+        await this.persistInstalled([defaultAgent]);
         try {
-          await createAndSubscribeAgent({
+          const launched = await createAndSubscribeAgent({
             source: DEFAULT_WORKER_SOURCE,
             className: DEFAULT_CLASS_NAME,
             key: agentKey,
@@ -279,8 +336,17 @@ export class SessionController {
             config: buildAgentConfig({ handle: DEFAULT_HANDLE, repoRoot }),
             replay: true,
           });
+          if (launched.entityId) {
+            await this.persistInstalled(
+              this.store
+                .getState()
+                .installedAgents.map((agent) =>
+                  agent.key === agentKey ? { ...agent, entityId: launched.entityId } : agent
+                )
+            );
+          }
         } catch (err) {
-          this.persistInstalled(
+          await this.persistInstalled(
             this.store.getState().installedAgents.filter((a) => a.key !== agentKey)
           );
           console.warn("[Spectrolite] failed to subscribe default agent:", err);
@@ -305,7 +371,7 @@ export class SessionController {
       let failed = false;
       for (const agent of missing) {
         try {
-          await createAndSubscribeAgent({
+          const launched = await createAndSubscribeAgent({
             source: agent.source,
             className: agent.className,
             key: agent.key,
@@ -318,6 +384,15 @@ export class SessionController {
             }),
             replay: true,
           });
+          if (launched.entityId) {
+            await this.persistInstalled(
+              this.store
+                .getState()
+                .installedAgents.map((record) =>
+                  record.key === agent.key ? { ...record, entityId: launched.entityId } : record
+                )
+            );
+          }
         } catch (err) {
           failed = true;
           console.warn(`[Spectrolite] rehydrate failed for @${agent.handle}:`, err);

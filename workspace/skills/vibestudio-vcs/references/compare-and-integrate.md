@@ -13,6 +13,11 @@ again from the newly returned working head. The tool resolves and CAS-checks
 the current context state; causally bound direct service clients pass that state
 explicitly. An authorized direct CLI may integrate without fabricating an
 agent invocation; its causal walk ends honestly at the semantic command.
+The compact tool's result details are already the canonical compare result,
+including `target`, `changes`, `resolution`, and counts. Use those details;
+do not guess a second lower-level `vcs.compare` call. A direct service call is a
+different contract and requires the exact `target`, `view`, and `limit` shown by
+`docs_open("runtime:workerRuntime.vcs.compare")`.
 
 Each source change is classified as shared, already satisfied, actionable,
 accounted, or historical. An actionable change may be applicable, conflicting,
@@ -45,11 +50,40 @@ Do not treat `already-satisfied` as automatic consent. Validate that the target
 evidence truthfully satisfies the intent before reconciling it. Do not decline
 a source change whose effect remains live through another unaccounted path.
 
+The compact agent tool accepts path-based evidence and resolves its stable
+identities and hashes at the exact current working state. For example, after
+authoring a truthful merged file for a conflicting text change:
+
+```json
+{
+  "operation": "integrate",
+  "sourceEventId": "workspace-event:...",
+  "decision": {
+    "kind": "reconciled",
+    "sourceChangeIds": ["change:..."],
+    "evidence": [
+      {
+        "kind": "file-content",
+        "path": "projects/example/src/file.ts"
+      }
+    ],
+    "rationale": "The merged file retains both collaborators' intended behavior."
+  }
+}
+```
+
+Use `file-placement` with a workspace file path when placement is the relevant
+fact, or `repository-present` with a workspace repository path when repository
+presence is the relevant fact. Absence evidence necessarily names the stable
+`fileId` or `repositoryId` that is absent. Direct service clients use the
+canonical ID/hash evidence contract instead of these agent-path inputs.
+
 ## Handle conflicts and dependencies
 
-On `ConflictPresent`, inspect the cited source changes and their immediate
-neighbors. Author a truthful target edit first when reconciliation requires a
-new result, then reconcile against exact state evidence. On
+When compare classifies a change as `actionable/conflicting`, do not attempt to
+adopt it. Inspect the cited source changes and their immediate neighbors. Author
+a truthful target edit first when reconciliation requires a new result, then
+reconcile against exact state evidence. On
 `DependencyBlocked`, inspect `blockingChangeIds`, adopt or otherwise account for
 those changes in earlier local steps, and compare again. Do not batch a blocked
 change with its prerequisite or invent a dependency override.

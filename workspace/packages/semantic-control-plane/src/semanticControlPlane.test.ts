@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import {
+  createTestDO,
+  createTestDirectAuthority,
+} from "@workspace/runtime/worker/test-utils";
 import { AgentHealthInspectionSchema } from "@workspace/runtime/gad-schema";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
@@ -35,7 +38,17 @@ function setDoCaller(instance: GadWorkspaceDO, channelId: string): void {
   };
   internal._currentRpcCallerId = callerId;
   internal._currentRpcCallerKind = "do";
-  internal._currentVerifiedCaller = { callerId, callerKind: "do" };
+  internal._currentVerifiedCaller = {
+    callerId,
+    callerKind: "do",
+    authorization: createTestDirectAuthority({
+      callerKind: "do",
+      method: "putChannelMembership",
+      source: "vibestudio/internal",
+      className: "GadWorkspaceDO",
+      objectKey: "workspace-semantic-control-plane",
+    }),
+  };
 }
 
 function setServerCaller(instance: GadWorkspaceDO): void {
@@ -513,8 +526,8 @@ describe("GadWorkspaceDO unified log and semantic VCS schema", () => {
     ).rejects.toThrow("rawSql writes are disabled");
   });
 
-  // §3.1 — reopening a current-version schema must be non-destructive
-  it("can reopen a current schema without dropping or recreating destructively", async () => {
+  // §3.1 — reopening a current-version schema must not write schema state.
+  it("can reopen a current schema without rebuilding it", async () => {
     const first = await createTestDO(GadWorkspaceDO);
     await first.call("ensureBlob", "blob:one", 1, "text/plain");
 
@@ -528,21 +541,21 @@ describe("GadWorkspaceDO unified log and semantic VCS schema", () => {
     expect(rows.rows).toEqual([{ hash: "blob:one" }]);
   });
 
-  // §3.1 — a stale-version stamp upgrades cleanly (drop + recreate)
-  it("repairs a stamped older schema that is missing GAD tables", async () => {
+  it("rejects a schema older than the named v56 production baseline intact", async () => {
     const SQL = await initSqlJs();
     const db = new SQL.Database();
     db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     db.run(`INSERT INTO state (key, value) VALUES ('schema_version', ?)`, ["14"]);
 
-    const { call } = await createTestDO(GadWorkspaceDO, undefined, { db });
-    const tables = await call<{ rows: Array<{ name: string }> }>(
-      "query",
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'log_heads'",
-      []
+    await expect(createTestDO(GadWorkspaceDO, undefined, { db })).rejects.toThrow(
+      /predates production baseline 56 \(gad-semantic-workspace-v56\)/
     );
-
-    expect(tables.rows).toEqual([{ name: "log_heads" }]);
+    expect(db.exec(`SELECT value FROM state WHERE key = 'schema_version'`)[0]!.values).toEqual([
+      ["14"],
+    ]);
+    expect(
+      db.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'log_heads'`)
+    ).toEqual([]);
   });
 });
 

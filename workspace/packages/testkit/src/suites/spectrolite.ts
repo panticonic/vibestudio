@@ -16,7 +16,7 @@ function command(kind: string): string {
 function vaultPanelOptions(repoRoot: string, openPath: string, timeoutMs?: number) {
   return {
     contextId,
-    stateArgs: { contextId, repoRoot, openPath },
+    stateArgs: { repoRoot, openPath },
     ...(timeoutMs ? { timeoutMs } : {}),
   };
 }

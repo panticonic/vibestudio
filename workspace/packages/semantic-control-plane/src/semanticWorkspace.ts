@@ -788,9 +788,11 @@ export class SemanticWorkspace {
   private referenceStateReachable(contextIds: readonly string[], value: unknown): boolean {
     if (!value || typeof value !== "object") return false;
     const state = value as Row;
+    const readableEventRoots = new Set<string>();
     for (const contextId of contextIds) {
       const context = this.deps.store.context(contextId);
       if (!context) continue;
+      readableEventRoots.add(context.committed.ref.eventId);
       const workingApplicationId =
         context.working.ref.kind === "application" ? context.working.ref.applicationId : null;
       if (state["kind"] === "application" && typeof state["applicationId"] === "string") {
@@ -813,36 +815,36 @@ export class SemanticWorkspace {
             .toArray();
           if (inWorkingChain.length > 0) return true;
         }
-        const committedBy = this.deps.sql
-          .exec(
-            `SELECT event_id FROM gad_workspace_event_applications WHERE application_id = ?`,
-            applicationId
-          )
-          .toArray() as Row[];
-        if (
-          committedBy.some((row) =>
-            this.deps.store.isEventAncestor(
-              String(row["event_id"]),
-              context.committed.ref.eventId,
-              MAX_ANCESTRY_EDGES
-            )
-          )
-        ) {
-          return true;
-        }
       }
-      if (state["kind"] === "event" && typeof state["eventId"] === "string") {
-        const eventId = state["eventId"];
-        if (
-          this.deps.store.isEventAncestor(
-            eventId,
-            context.committed.ref.eventId,
-            MAX_ANCESTRY_EDGES
-          )
-        ) {
-          return true;
-        }
-      }
+    }
+    if (readableEventRoots.size === 0) return false;
+
+    // Protected main is the shared collaboration boundary. Publishing makes
+    // that exact event and its semantic ancestry readable to every valid
+    // context, while unpublished sibling branches remain private. Without
+    // this root, status can disclose that main advanced but the caller cannot
+    // compare, incrementally integrate, publish against, or walk the history
+    // it was explicitly told to reconcile.
+    const mainEventId = this.deps.store.mainEventId();
+    if (mainEventId) readableEventRoots.add(mainEventId);
+
+    if (state["kind"] === "application" && typeof state["applicationId"] === "string") {
+      const committedBy = this.deps.sql
+        .exec(
+          `SELECT event_id FROM gad_workspace_event_applications WHERE application_id = ?`,
+          state["applicationId"]
+        )
+        .toArray() as Row[];
+      return committedBy.some((row) =>
+        [...readableEventRoots].some((rootEventId) =>
+          this.deps.store.isEventAncestor(String(row["event_id"]), rootEventId, MAX_ANCESTRY_EDGES)
+        )
+      );
+    }
+    if (state["kind"] === "event" && typeof state["eventId"] === "string") {
+      return [...readableEventRoots].some((rootEventId) =>
+        this.deps.store.isEventAncestor(state["eventId"] as string, rootEventId, MAX_ANCESTRY_EDGES)
+      );
     }
     return false;
   }
@@ -1239,7 +1241,27 @@ export class SemanticWorkspace {
           ? { kind: "effects-pending", result: context, effects }
           : { kind: "complete", result: context };
       }
-      const context = this.deps.store.ensureContext(input.contextId, input.commandId);
+      // `ensureContext` is also the attachment path for runtime entities. A
+      // context may therefore already exist because a lifecycle operation
+      // (notably fork/clone/subagent creation) created and materialized its
+      // exact frontier first. In that case there is no semantic transition to
+      // project: the host verifies the recorded projection after this dispatch
+      // and derives an exact-basis repair if the disposable bytes are missing.
+      // Queuing another initialize effect here would falsely claim an absent
+      // materialization basis and collide with the fork's valid projection.
+      const existingContext = this.deps.store.context(input.contextId);
+      const context =
+        existingContext ?? this.deps.store.ensureContext(input.contextId, input.commandId);
+      if (existingContext) {
+        this.deps.store.finishCommand({
+          scopeKind: "context",
+          scopeId: input.contextId,
+          commandId: input.commandId,
+          result: context,
+          effectPending: false,
+        });
+        return { kind: "complete", result: context };
+      }
       const effect = this.queueMaterialization(
         input.contextId,
         input.commandId,
@@ -3124,6 +3146,10 @@ export class SemanticWorkspace {
     return {
       target: input.target,
       sourceEventId: input.sourceEventId,
+      resolution: {
+        complete: comparison.unaccountedChangeIds.length === 0,
+        remainingChangeCount: comparison.unaccountedChangeIds.length,
+      },
       counts,
       changes: input.view === "changes" ? rows.slice(offset, offset + input.limit) : [],
       nextCursor:
@@ -3327,6 +3353,7 @@ export class SemanticWorkspace {
     draft: MutationDraft,
     commandId: string
   ): {
+    commandId: string;
     contextId: string;
     workUnitId: string;
     applicationId: string;
@@ -3559,13 +3586,17 @@ export class SemanticWorkspace {
           return [];
         }
         relation = "incorporates";
-        mappings = mappingsForTextEdits({
-          childContentHash: child.contentHash,
-          childExtent: child.coordinateExtent,
-          parentContentHash: parentEndpoint.contentHash,
-          parentExtent: parentEndpoint.coordinateExtent,
-          edits: change.payload["edits"],
-        });
+        const counteractedChangeIds = this.counteractedChangeIds(change);
+        mappings =
+          counteractedChangeIds.length > 0
+            ? this.invertedCounteractionMappings(counteractedChangeIds, child, parentEndpoint)
+            : mappingsForTextEdits({
+                childContentHash: child.contentHash,
+                childExtent: child.coordinateExtent,
+                parentContentHash: parentEndpoint.contentHash,
+                parentExtent: parentEndpoint.coordinateExtent,
+                edits: change.payload["edits"],
+              });
       } else {
         return [];
       }
@@ -3622,6 +3653,7 @@ export class SemanticWorkspace {
     };
     const context = this.deps.store.applyApplication(plan);
     return {
+      commandId,
       contextId: input.contextId,
       workUnitId: workUnitIdValue,
       applicationId: applicationIdValue,
@@ -6697,10 +6729,13 @@ export class SemanticWorkspace {
     const terminal = (start: number, end: number): Row => ({
       start: segment.rootStart + (start - segment.currentStart),
       end: segment.rootStart + (end - segment.currentStart),
-      changeId: current.changeId,
-      appliedChangeId: current.appliedChangeId,
-      workUnitId: current.workUnitId,
-      commandId: current.commandId,
+      change: { kind: "change", changeId: current.changeId },
+      appliedChange: {
+        kind: "applied-change",
+        appliedChangeId: current.appliedChangeId,
+      },
+      workUnit: { kind: "work-unit", workUnitId: current.workUnitId },
+      command: { kind: "command", commandId: current.commandId },
       path: segment.path,
       stop: importTerminal ? "import-boundary" : "authored",
     });
@@ -6850,6 +6885,76 @@ export class SemanticWorkspace {
         )
         .toArray() as Row[]
     ).map(contentMappingFromRow);
+  }
+
+  /** A text counteraction restores the original base bytes, so its exact
+   * unchanged-coordinate lineage is the original text edge in reverse. The
+   * original edge is durable semantic evidence; reconstructing edit text or
+   * diffing blobs here would create a second, weaker source of truth. */
+  private invertedCounteractionMappings(
+    counteractedChangeIds: readonly string[],
+    child: {
+      contentHash: string;
+      coordinateKind: "utf16" | "byte";
+      coordinateExtent: number;
+    },
+    parent: {
+      contentHash: string;
+      coordinateKind: "utf16" | "byte";
+      coordinateExtent: number;
+    }
+  ): ContentMapping[] {
+    if (counteractedChangeIds.length !== 1) {
+      throw new SemanticVcsError(
+        "IntegrityFailure",
+        "A text counteraction must name exactly one original change"
+      );
+    }
+    const row = this.deps.sql
+      .exec(
+        `SELECT edge.content_edge_id
+           FROM gad_content_edges edge
+           JOIN gad_applied_changes applied
+             ON applied.applied_change_id = edge.child_applied_change_id
+          WHERE applied.change_id = ?
+            AND edge.relation = 'incorporates'
+            AND json_extract(applied.applied_result_json, '$.contentHash') = ?
+            AND json_extract(applied.applied_base_json, '$.contentHash') = ?
+          ORDER BY edge.content_edge_id
+          LIMIT 1`,
+        counteractedChangeIds[0],
+        parent.contentHash,
+        child.contentHash
+      )
+      .toArray()[0] as Row | undefined;
+    if (!row) {
+      throw new SemanticVcsError(
+        "IntegrityFailure",
+        `Counteracted text change ${counteractedChangeIds[0]} has no exact content lineage`
+      );
+    }
+    return this.contentMappings(String(row["content_edge_id"])).map((mapping) => {
+      if (
+        mapping.coordinateKind !== child.coordinateKind ||
+        mapping.coordinateKind !== parent.coordinateKind ||
+        mapping.childContentHash !== parent.contentHash ||
+        mapping.parentContentHash !== child.contentHash
+      ) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Counteracted text change ${counteractedChangeIds[0]} has mismatched content lineage`
+        );
+      }
+      return contentMapping({
+        coordinateKind: mapping.coordinateKind,
+        childContentHash: mapping.parentContentHash,
+        childStart: mapping.parentStart,
+        childEnd: mapping.parentEnd,
+        parentContentHash: mapping.childContentHash,
+        parentStart: mapping.childStart,
+        parentEnd: mapping.childEnd,
+      });
+    });
   }
 
   private latestAppliedChangeForFile(

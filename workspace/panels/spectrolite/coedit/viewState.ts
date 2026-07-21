@@ -7,7 +7,8 @@
  * nudge a canonical-byte change → a co-edit hunk → merge noise, and (worse) let
  * an agent's view of the doc churn on private UI fiddling. Here it lives in a
  * **panel-local store**, keyed by the document's vcs path, scoped to the vault
- * by the panel's storage partition (the panel runs under `ctx:vault-<hash>`).
+ * by the panel's storage partition. Vault paths remain repository-relative
+ * within the panel's existing semantic workspace context.
  * It is therefore private per viewer, never written into the worktree, and so
  * never produces a commit. Canonical bytes stay pure prose.
  *

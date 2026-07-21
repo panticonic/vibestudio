@@ -248,7 +248,7 @@ function PublishSummary() {
           {presentation.statusLabel}
         </Text>
         <Text size="1" color="gray">
-          Changes stay local to this vault context until you publish.
+          Changes stay local to this workspace branch until you publish.
         </Text>
       </Flex>
       <Button

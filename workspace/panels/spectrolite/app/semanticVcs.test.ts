@@ -65,6 +65,7 @@ describe("VaultSemanticVcs", () => {
         compare: async () => ({
           target: working,
           sourceEventId: "event:main",
+          resolution: { complete: false, remainingChangeCount: 1 },
           counts: {
             shared: 0,
             alreadySatisfied: 0,
@@ -96,14 +97,16 @@ describe("VaultSemanticVcs", () => {
   });
 
   it("authors text edits against the exact working state", async () => {
-    const edit = vi.fn(async () => ({
+    const edit = vi.fn(async (input: Parameters<VaultVcsPort["edit"]>[0]) => ({
       contextId: "ctx",
+      commandId: input.commandId,
       workUnitId: "work:edit",
       applicationId: "application:next",
       changeIds: ["change:edit"],
       changeCount: 1,
       incorporatedChangeIds: [],
       incorporatedChangeCount: 0,
+      decisionIds: [],
       workingHead: { kind: "application" as const, applicationId: "application:next" },
     }));
     const session = new VaultSemanticVcs(
@@ -151,8 +154,9 @@ describe("VaultSemanticVcs", () => {
   it("integrates applicable main changes locally and commits the integration parent", async () => {
     let currentStatus = status({ mainRelation: "behind", clean: true });
     let comparisonOrdinal = 0;
-    const integrate = vi.fn(async () => ({
+    const integrate = vi.fn(async (input: Parameters<VaultVcsPort["integrate"]>[0]) => ({
       contextId: "ctx",
+      commandId: input.commandId,
       workUnitId: "work:integration",
       applicationId: "application:integrated",
       decisionId: "decision:adopt",
@@ -160,6 +164,7 @@ describe("VaultSemanticVcs", () => {
       changeCount: 0,
       incorporatedChangeIds: ["change:source"],
       incorporatedChangeCount: 1,
+      decisionIds: ["decision:adopt"],
       workingHead: { kind: "application" as const, applicationId: "application:integrated" },
     }));
     const commit = vi.fn(async (_input: unknown) => ({
@@ -178,6 +183,10 @@ describe("VaultSemanticVcs", () => {
           return {
             target: working,
             sourceEventId: "event:main",
+            resolution: {
+              complete: !actionable,
+              remainingChangeCount: actionable ? 1 : 0,
+            },
             counts: {
               shared: 0,
               alreadySatisfied: 0,
@@ -233,11 +242,12 @@ describe("VaultSemanticVcs", () => {
   it("recompares after each local step so derived prerequisites clear naturally", async () => {
     let currentStatus = status({ mainRelation: "behind", clean: true });
     let comparisonOrdinal = 0;
-    const integrate = vi.fn(async (input: { decision: { sourceChangeIds: string[] } }) => {
+    const integrate = vi.fn(async (input: Parameters<VaultVcsPort["integrate"]>[0]) => {
       const changeId = input.decision.sourceChangeIds[0]!;
       const suffix = changeId.endsWith("first") ? "first" : "second";
       return {
         contextId: "ctx",
+        commandId: input.commandId,
         workUnitId: `work:${suffix}`,
         applicationId: `application:${suffix}`,
         decisionId: `decision:${suffix}`,
@@ -245,6 +255,7 @@ describe("VaultSemanticVcs", () => {
         changeCount: 0,
         incorporatedChangeIds: [changeId],
         incorporatedChangeCount: 1,
+        decisionIds: [`decision:${suffix}`],
         workingHead: {
           kind: "application" as const,
           applicationId: `application:${suffix}`,
@@ -295,6 +306,7 @@ describe("VaultSemanticVcs", () => {
       return {
         target: working,
         sourceEventId: "event:main",
+        resolution: { complete: changes.length === 0, remainingChangeCount: changes.length },
         counts: {
           shared: 0,
           alreadySatisfied: 0,

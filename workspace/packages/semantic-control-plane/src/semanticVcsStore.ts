@@ -54,6 +54,10 @@ export type SemanticVcsErrorCode =
   | "ScopeTooLarge";
 
 export class SemanticVcsError extends Error {
+  /** Schema-owned payload carried unchanged across workerd and RPC boundaries.
+   * Callers branch on this structure, never on the diagnostic message. */
+  readonly errorData: Row;
+
   constructor(
     readonly code: SemanticVcsErrorCode,
     message: string,
@@ -61,6 +65,7 @@ export class SemanticVcsError extends Error {
   ) {
     super(message);
     this.name = "SemanticVcsError";
+    this.errorData = { ...detail, code };
   }
 }
 

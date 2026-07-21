@@ -7,6 +7,107 @@ import { SemanticWorkspace } from "./semanticWorkspace.js";
 const timestamp = "2026-07-16T00:00:00.000Z";
 
 describe("SemanticWorkspace causal provenance reachability", () => {
+  it("shares protected-main history without exposing unpublished sibling branches", async () => {
+    const sql = await createInMemorySql();
+    createSemanticVcsSchema(sql);
+    const store = new SemanticVcsStore(sql, () => timestamp);
+    const initial = store.initializeWorkspace("context:own", "command:genesis");
+    const genesisEventId = initial.committed.ref.eventId;
+    const root = store.stateRoot(initial.committed.ref);
+
+    for (const [eventId, commandId] of [
+      ["event:own-private", "command:own-private"],
+      ["event:published", "command:published"],
+      ["event:foreign-private", "command:foreign-private"],
+    ]) {
+      sql.exec(
+        `INSERT INTO gad_workspace_events
+         (event_id, command_id, kind, result_workspace_fact_root_id, message, created_at)
+         VALUES (?, ?, 'commit', ?, NULL, ?)`,
+        eventId,
+        commandId,
+        root,
+        timestamp
+      );
+      sql.exec(
+        `INSERT INTO gad_workspace_event_parents (event_id, ordinal, parent_event_id)
+         VALUES (?, 0, ?)`,
+        eventId,
+        genesisEventId
+      );
+    }
+    sql.exec(
+      `UPDATE vcs_contexts SET committed_event_id = ?, updated_at = ? WHERE context_id = ?`,
+      "event:own-private",
+      timestamp,
+      "context:own"
+    );
+    sql.exec(
+      `UPDATE vcs_workspace_heads SET event_id = ?, updated_at = ? WHERE head = 'main'`,
+      "event:published",
+      timestamp
+    );
+    for (const [applicationId, workUnitId, eventId] of [
+      ["application:published", "work-unit:published", "event:published"],
+      ["application:foreign-private", "work-unit:foreign-private", "event:foreign-private"],
+    ]) {
+      sql.exec(
+        `INSERT INTO gad_work_unit_applications
+         (application_id, work_unit_id, basis_kind, basis_id,
+          result_workspace_fact_root_id, semantic_protocol)
+         VALUES (?, ?, 'event', ?, ?, 'semantic:test')`,
+        applicationId,
+        workUnitId,
+        genesisEventId,
+        root
+      );
+      sql.exec(
+        `INSERT INTO gad_workspace_event_applications (event_id, ordinal, application_id)
+         VALUES (?, 0, ?)`,
+        eventId,
+        applicationId
+      );
+    }
+
+    const semantic = new SemanticWorkspace({
+      workspaceId: "workspace:test",
+      sql,
+      store,
+      now: () => timestamp,
+      transaction: <T>(fn: () => T): T => fn(),
+    });
+    const reachable = (eventId: string, contextIds = ["context:own"]) =>
+      semantic.referencesReachable(contextIds, [{ kind: "event", value: eventId }]);
+
+    expect(reachable("event:own-private")).toBe(true);
+    expect(reachable("event:published")).toBe(true);
+    expect(reachable(genesisEventId)).toBe(true);
+    expect(reachable("event:foreign-private")).toBe(false);
+    expect(reachable("event:published", ["context:missing"])).toBe(false);
+    expect(
+      semantic.referencesReachable(
+        ["context:own"],
+        [
+          {
+            kind: "node",
+            value: { kind: "work-unit", workUnitId: "work-unit:published" },
+          },
+        ]
+      )
+    ).toBe(true);
+    expect(
+      semantic.referencesReachable(
+        ["context:own"],
+        [
+          {
+            kind: "node",
+            value: { kind: "work-unit", workUnitId: "work-unit:foreign-private" },
+          },
+        ]
+      )
+    ).toBe(false);
+  });
+
   it("follows only normalized command-to-invocation, turn, and trigger-message edges", async () => {
     const sql = await createInMemorySql();
     createSemanticVcsSchema(sql);

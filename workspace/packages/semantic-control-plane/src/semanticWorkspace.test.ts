@@ -1033,6 +1033,60 @@ describe("SemanticWorkspace repository counteractions", () => {
       },
     ]);
 
+    store.forkContext("context:test", "context:text-revert");
+    const revertedTextDispatch = await semantic.dispatch("revert", {
+      ingress,
+      input: {
+        contextId: "context:text-revert",
+        commandId: "command:revert-text-edit",
+        expectedWorkingHead: edited.workingHead,
+        changeIds: [editChangeId],
+      },
+    });
+    const revertedText = completedResult<{
+      workingHead: { kind: "application"; applicationId: string };
+      applicationId: string;
+      changeIds: string[];
+    }>(revertedTextDispatch);
+    acknowledgeMaterialization(revertedTextDispatch);
+    expect(
+      store.facts.file(store.stateRoot(revertedText.workingHead), copiedFileId)?.state
+    ).toMatchObject({ contentHash: nonAsciiContentHash });
+    expect(
+      sql
+        .exec(
+          `SELECT edge.relation, mapping.coordinate_kind,
+                  mapping.child_start, mapping.child_end,
+                  mapping.parent_start, mapping.parent_end
+             FROM gad_content_edges edge
+             JOIN gad_content_edge_mappings mapping
+               ON mapping.content_edge_id = edge.content_edge_id
+             JOIN gad_applied_changes applied
+               ON applied.applied_change_id = edge.child_applied_change_id
+            WHERE applied.application_id = ?
+            ORDER BY mapping.ordinal`,
+          revertedText.applicationId
+        )
+        .toArray()
+    ).toEqual([
+      {
+        relation: "incorporates",
+        coordinate_kind: "utf16",
+        child_start: 0,
+        child_end: 3,
+        parent_start: 0,
+        parent_end: 3,
+      },
+      {
+        relation: "incorporates",
+        coordinate_kind: "utf16",
+        child_start: 4,
+        child_end: 5,
+        parent_start: 4,
+        parent_end: 5,
+      },
+    ]);
+
     const editedBlameDispatch = await semantic.dispatch("blame", {
       ingress,
       input: {
@@ -1057,8 +1111,8 @@ describe("SemanticWorkspace repository counteractions", () => {
           start: 3,
           end: 4,
           stop: "authored",
-          changeId: editChangeId,
-          commandId: "command:edit-non-ascii-copy",
+          change: { kind: "change", changeId: editChangeId },
+          command: { kind: "command", commandId: "command:edit-non-ascii-copy" },
           path: [],
         },
         {
@@ -1071,16 +1125,13 @@ describe("SemanticWorkspace repository counteractions", () => {
     });
     const editedBlame = vcsBlameResultSchema.parse(editedBlameDispatch.result);
     for (const span of editedBlame.spans) {
-      expect(span.appliedChangeId).toMatch(/^applied-change:/);
-      const inspectedApplied = await inspect({
-        kind: "applied-change",
-        appliedChangeId: span.appliedChangeId!,
-      });
+      expect(span.appliedChange.appliedChangeId).toMatch(/^applied-change:/);
+      const inspectedApplied = await inspect(span.appliedChange);
       expect(inspectedApplied.node).toMatchObject({
         kind: "applied-change",
         value: {
-          appliedChangeId: span.appliedChangeId,
-          changeId: span.changeId,
+          appliedChangeId: span.appliedChange.appliedChangeId,
+          changeId: span.change.changeId,
         },
       });
       for (const edge of span.path) {

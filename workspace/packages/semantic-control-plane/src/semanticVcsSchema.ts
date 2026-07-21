@@ -1,14 +1,16 @@
 import type { SqlStorage } from "@workspace/runtime/worker/durable-base";
 
 /**
- * Destructive pre-release schema for the semantic workspace machine.
+ * Production baseline schema for the semantic workspace machine.
  *
  * A row is either an immutable semantic fact, an immediate graph edge, a
  * mutable context/head pointer, or a durable host-effect command. Derived
  * views never become stored authorities: there are no frontier wrappers,
  * source capabilities, certificates, ancestry closures, application
  * sequences, traversal continuations, packet proofs, outcomes/realizations,
- * or copied actor/authorship columns.
+ * or copied actor/authorship columns. Version 56 is the first supported
+ * production shape; older experimental epochs are rejected intact because no
+ * lossless historical translation exists.
  */
 export const SEMANTIC_VCS_REQUIRED_TABLES = [
   "vcs_repositories",

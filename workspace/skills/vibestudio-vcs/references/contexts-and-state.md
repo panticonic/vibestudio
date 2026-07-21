@@ -29,6 +29,18 @@ Concurrent work that needs an independent chain belongs in another context.
 
 ## Execute context code from the same working state
 
+A context is one workspace-wide branch across every repository in the
+workspace. It is not a repository, directory, vault, channel, panel, or agent.
+Selecting a repository or vault changes application focus inside the branch;
+it never creates or switches contexts.
+
+Every panel has one host-bound context. Agents launched by that panel and
+channels served by those agents use that same context. Panel state arguments
+cannot override it. Create an independent branch only through an explicit
+fork/clone/subagent operation. To display an already-created branch in a panel,
+open the panel with that `contextId` or use the panel's explicit context-switch
+operation; do not store a second context id in application state.
+
 Runtime-managed workers and Durable Objects follow their owning context's
 working head by default. Their code and durable state therefore share one
 semantic context boundary while work remains local. Pass `ref: "main"` only

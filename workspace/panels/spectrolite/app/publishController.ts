@@ -45,10 +45,18 @@ export class PublishController {
   private readonly listeners = new Set<() => void>();
 
   constructor(
-    private readonly session: VaultPublishingSession | null,
+    private session: VaultPublishingSession | null,
     private readonly onIntegrated?: () => void | Promise<void>,
     private readonly commitWorkingCopy?: CommitWorkingCopy
   ) {}
+
+  /** Bind publishing to one repository without changing the panel context. */
+  bindSession(session: VaultPublishingSession | null): void {
+    if (this.session === session) return;
+    this.session = session;
+    this.snap = EMPTY;
+    this.listeners.forEach((listener) => listener());
+  }
 
   getSnapshot(): PublishSnapshot {
     return this.snap;

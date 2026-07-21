@@ -73,9 +73,14 @@ make a direct operation appear agent-authored.
    `vcs({ operation: "compare", sourceEventId })` against its committed event,
    then call `vcs({ operation: "integrate", sourceEventId, decision })` once per
    small adopt, reconcile, or decline decision. Continue from every returned
-   working head and re-run `compare` until no effective source change remains
-   actionable, conflicting, or blocked; the final page should show each decided
-   change as `accounted` by the decision identity you just received.
+   working head and re-run `compare` until `resolution.complete` is true and
+   `resolution.remainingChangeCount` is zero. Adopted changes normally become
+   `shared` because the exact source identity is now live in the target;
+   reconciled or declined changes become `accounted` by the returned decision
+   identity. `accounted` is one narrow disposition, not the overall completion
+   signal. Never adopt a change classified as `actionable/conflicting`; author
+   the truthful merged target result, then reconcile it with path-based exact
+   evidence as shown in [compare and integrate](references/compare-and-integrate.md).
 5. Run relevant typechecks, tests, or explicit context builds while the work
    remains local. These checks are advisory observations, not publication
    authority.
