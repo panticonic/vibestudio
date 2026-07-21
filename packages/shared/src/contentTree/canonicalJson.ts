@@ -26,4 +26,3 @@ export function sortForCanonicalJson(value: unknown): unknown {
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(sortForCanonicalJson(value));
 }
-

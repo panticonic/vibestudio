@@ -89,9 +89,7 @@ describe("exact execution identity", () => {
     });
     expect(first.ref.artifactDigest).not.toBe(changedBytes.ref.artifactDigest);
     expect(first.ref.executionDigest).not.toBe(changedBytes.ref.executionDigest);
-    expect(codePrincipal(first.ref)).toBe(
-      `code:workers/example@${first.ref.executionDigest}`
-    );
+    expect(codePrincipal(first.ref)).toBe(`code:workers/example@${first.ref.executionDigest}`);
   });
 
   it("normalizes portable paths and rejects traversal and duplicate aliases", () => {
@@ -122,4 +120,3 @@ describe("exact execution identity", () => {
     ).toThrow("Duplicate artifact path");
   });
 });
-
