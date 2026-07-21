@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -142,6 +142,20 @@ describe("GovernanceLog", () => {
 
     log = new GovernanceLog({ databasePath });
     expect(await log.query()).toEqual([first]);
+  });
+
+  it("preserves and rejects databases from before the production baseline", async () => {
+    await log.append(approvalRecord());
+    await log.close();
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("PRAGMA user_version = 0");
+    raw.close();
+    const before = readFileSync(databasePath);
+
+    expect(() => new GovernanceLog({ databasePath })).toThrow(
+      /schema version 0 predates production baseline 1/
+    );
+    expect(readFileSync(databasePath)).toEqual(before);
   });
 
   it("rejects a structurally corrupt stored payload", async () => {

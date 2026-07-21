@@ -13,7 +13,7 @@ import type {
   UnitBatchEntry,
 } from "@vibestudio/shared/approvals";
 import { APPROVAL_DECISIONS } from "@vibestudio/shared/approvalContract";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 export const shellApprovalValuesSchema = z
@@ -512,7 +512,7 @@ export const shellApprovalMethods = defineServiceMethods({
     // `panel` is admitted here (the service-level policy is shell/app/server for
     // the trusted approval bar). Resolution is scoped to
     // (channelId, requestId, resolveToken).
-    policy: { allowed: ["panel", "shell", "app", "server"] },
+    authority: { principals: ["code", "user", "host"] },
     access: RESOLVE_ACCESS,
     examples: [
       {

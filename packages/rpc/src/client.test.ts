@@ -74,6 +74,25 @@ const flushMicrotasks = async (): Promise<void> => {
 };
 
 describe("createRpcClient", () => {
+  it("binds a caller signal to the original transport request", async () => {
+    let requestSignal: AbortSignal | undefined;
+    const transport: EnvelopeRpcTransport = {
+      async send(envelope, signal) {
+        if (envelope.message.type === "request") requestSignal = signal;
+      },
+      onMessage: () => () => {},
+    };
+    const rpc = createRpcClient({ selfId: "caller", callerKind: "worker", transport });
+    const controller = new AbortController();
+    const pending = rpc.call("server", "wait", [], { signal: controller.signal });
+    await flushMicrotasks();
+
+    expect(requestSignal).toBe(controller.signal);
+
+    controller.abort(new Error("activation released"));
+    await expect(pending).rejects.toThrow(/aborted/);
+  });
+
   it("automatically seals one exact causal parent onto scoped calls", async () => {
     const fake = controllableTransport();
     const rpc = createRpcClient({
@@ -119,6 +138,45 @@ describe("createRpcClient", () => {
 
     await expect(rpc.call("self", "add", [2, 5])).resolves.toBe(7);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("propagates unary call cancellation to the callee request signal", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "caller",
+      transport: inProcessTransport("caller", network),
+    });
+    const callee = createRpcClient({
+      selfId: "callee",
+      transport: inProcessTransport("callee", network),
+    });
+    let entered!: () => void;
+    const handlerEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let observedAbort = false;
+    callee.expose("wait", async (request) => {
+      entered();
+      await new Promise<void>((resolve) => {
+        request.signal.addEventListener(
+          "abort",
+          () => {
+            observedAbort = true;
+            resolve();
+          },
+          { once: true }
+        );
+      });
+      return null;
+    });
+
+    const controller = new AbortController();
+    const pending = caller.call("callee", "wait", [], { signal: controller.signal });
+    await handlerEntered;
+    controller.abort();
+
+    await expect(pending).rejects.toThrow(/aborted/);
+    await vi.waitFor(() => expect(observedAbort).toBe(true));
   });
 
   it("preserves structured error categories across unary and streaming calls", async () => {
@@ -329,6 +387,33 @@ describe("createRpcClient", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/plain");
     await expect(response.text()).resolves.toBe("hello");
+  });
+
+  it("unwraps the ordinary Response path when raw transport streaming is unavailable", async () => {
+    const network = createInProcessNetwork();
+    const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
+    const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
+
+    b.exposeStreaming("download", async (_req, sink) => {
+      await sink({
+        kind: "head",
+        status: 200,
+        statusText: "OK",
+        headerPairs: [["content-type", "text/plain"]],
+        finalUrl: "https://example.test/file",
+      });
+      await sink({ kind: "chunk", bytes: new TextEncoder().encode("hello") });
+      await sink({ kind: "end", bytesIn: 5 });
+    });
+
+    const response = await a.streamReadable("b", "download", []);
+    expect(response).toMatchObject({
+      status: 200,
+      statusText: "OK",
+      headers: [["content-type", "text/plain"]],
+      finalUrl: "https://example.test/file",
+    });
+    await expect(new Response(response.body).text()).resolves.toBe("hello");
   });
 
   it("allows a response body to remain idle after HEAD when explicitly unbounded", async () => {

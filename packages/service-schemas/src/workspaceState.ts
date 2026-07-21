@@ -4,15 +4,16 @@
  * registration and typed clients.
  *
  * Reads (slot.list/get/history, entity.resolveActive) are open to all runtime
- * kinds; writes (slot create / appendHistory / setCurrent / replaceHistory /
- * setParent / close) are gated to the shipped shell, approved shell app, and
+ * kinds; writes (slot create / commitPreparedNavigation / setParent / close)
+ * are gated to the shipped shell, approved shell app, and
  * server. Panels and workers manipulate slots via runtime.*, not directly
  * here.
  */
 
 import { z } from "zod";
-import type { ServicePolicy } from "@vibestudio/shared/servicePolicy";
+import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { UnitAuthorityManifestSchema } from "./build.js";
 
 export const SlotHistoryEntryInputSchema = z.object({
   entryKey: z.string(),
@@ -20,6 +21,24 @@ export const SlotHistoryEntryInputSchema = z.object({
   source: z.string(),
   contextId: z.string(),
   stateArgs: z.unknown().optional(),
+  options: z.unknown().optional(),
+});
+
+export const SlotCommitPreparedNavigationInputSchema = z.object({
+  slotId: z.string(),
+  expectedCurrentEntityId: z.string(),
+  mutation: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("append"), entry: SlotHistoryEntryInputSchema }),
+    z.object({ kind: z.literal("replace"), entry: SlotHistoryEntryInputSchema }),
+    z.object({ kind: z.literal("select"), entryKey: z.string() }),
+  ]),
+});
+
+export const SlotCommitPreparedNavigationResultSchema = z.object({
+  previousEntityId: z.string(),
+  currentEntityId: z.string(),
+  currentEntryKey: z.string(),
+  cursor: z.number().int().nonnegative(),
 });
 
 export const SlotCreateInputSchema = z.object({
@@ -29,14 +48,14 @@ export const SlotCreateInputSchema = z.object({
   initialEntry: SlotHistoryEntryInputSchema.optional(),
 });
 
-export const WORKSPACE_STATE_READ_POLICY: ServicePolicy = {
-  allowed: ["shell", "app", "server", "panel", "worker", "do"],
+export const WORKSPACE_STATE_READ_POLICY: ServiceAuthorityPolicy = {
+  principals: ["user", "code", "host"],
 };
-export const WORKSPACE_STATE_WRITE_POLICY: ServicePolicy = {
-  allowed: ["shell", "app", "server"],
+export const WORKSPACE_STATE_WRITE_POLICY: ServiceAuthorityPolicy = {
+  principals: ["user", "code", "host"],
 };
-export const WORKSPACE_STATE_LIFECYCLE_POLICY: ServicePolicy = {
-  allowed: ["server", "do"],
+export const WORKSPACE_STATE_LIFECYCLE_POLICY: ServiceAuthorityPolicy = {
+  principals: ["host", "code"],
 };
 
 export const LifecycleKeySchema = z.object({
@@ -108,6 +127,8 @@ export const EntityRecordSchema = z.object({
   id: z.string(),
   kind: z.enum(["panel", "app", "worker", "do", "session", "shell", "server"]),
   source: z.object({ repoPath: z.string(), effectiveVersion: z.string() }),
+  activeExecutionDigest: z.string().optional(),
+  activeAuthority: UnitAuthorityManifestSchema.optional(),
   contextId: z.string(),
   className: z.string().optional(),
   key: z.string(),
@@ -128,28 +149,28 @@ export const workspaceStateMethods = defineServiceMethods({
   "slot.list": {
     args: z.tuple([]),
     description: "List open slots.",
-    policy: WORKSPACE_STATE_READ_POLICY,
+    authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: z.array(SlotRowSchema),
   },
   "slot.get": {
     args: z.tuple([z.string()]),
     description: "Get a single slot row by id.",
-    policy: WORKSPACE_STATE_READ_POLICY,
+    authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: SlotRowSchema.nullable(),
   },
   "slot.history": {
     args: z.tuple([z.string()]),
     description: "Get the history for a slot.",
-    policy: WORKSPACE_STATE_READ_POLICY,
+    authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: z.array(SlotHistoryRowSchema),
   },
   "entity.resolveActive": {
     args: z.tuple([z.string()]),
     description: "Resolve a single active entity record by id.",
-    policy: WORKSPACE_STATE_READ_POLICY,
+    authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: EntityRecordSchema.nullable(),
   },
@@ -158,77 +179,64 @@ export const workspaceStateMethods = defineServiceMethods({
     description:
       "Resolve the OPEN slot id whose current entity is the given runtime-entity (nav) id, or null. " +
       "Durable nav→slot mapping used to nest launches under the owning panel's tree slot.",
-    policy: WORKSPACE_STATE_READ_POLICY,
+    authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: z.string().nullable(),
   },
   "slot.create": {
     args: z.tuple([SlotCreateInputSchema]),
     description: "Create a new slot row.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
-  "slot.appendHistory": {
-    args: z.tuple([z.string(), SlotHistoryEntryInputSchema]),
-    description: "Append a history entry to a slot.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+  "slot.commitPreparedNavigation": {
+    args: z.tuple([SlotCommitPreparedNavigationInputSchema]),
+    description:
+      "Atomically append, replace, or select history and swap current to a prepared panel incarnation.",
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
-    returns: z.number(),
-  },
-  "slot.setCurrent": {
-    args: z.tuple([z.string(), z.string()]),
-    description: "Move a slot's current pointer to an existing history entry.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
-    access: { sensitivity: "write" },
-    returns: z.void(),
+    returns: SlotCommitPreparedNavigationResultSchema,
   },
   "slot.updateCurrentStateArgs": {
     args: z.tuple([z.string(), z.unknown()]),
     description: "Mutate the stateArgs for a slot's current history entry.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
-    access: { sensitivity: "write" },
-    returns: z.void(),
-  },
-  "slot.replaceHistory": {
-    args: z.tuple([z.string(), z.array(SlotHistoryEntryInputSchema), z.number()]),
-    description: "Replace a slot's history with the given entries and cursor.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   "slot.setParent": {
     args: z.tuple([z.string(), z.string().nullable()]),
     description: "Reparent a slot.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   "slot.setPosition": {
     args: z.tuple([z.string(), z.string()]),
     description: "Update a slot's position rank.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   "slot.move": {
     args: z.tuple([z.string(), z.string().nullable(), z.string()]),
     description: "Atomically update a slot's parent and position.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   "slot.close": {
     args: z.tuple([z.string()]),
     description: "Mark a slot closed.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "destructive" },
     returns: z.void(),
   },
   "panel.search": {
     args: z.tuple([z.string(), z.number().optional()]),
     description: "FTS5 search over panel entities.",
-    policy: WORKSPACE_STATE_READ_POLICY,
+    authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: z.array(PanelSearchResultSchema),
   },
@@ -245,70 +253,70 @@ export const workspaceStateMethods = defineServiceMethods({
       }),
     ]),
     description: "Upsert a panel's search-metadata row.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   "panel.updateTitle": {
     args: z.tuple([z.string(), z.string()]),
     description: "Update the searchable title for a panel entity.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   "panel.incrementAccess": {
     args: z.tuple([z.string()]),
     description: "Bump the access counter for a panel entity.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   "panel.rebuildIndex": {
     args: z.tuple([]),
     description: "Rebuild the panel-search index from active panel entities.",
-    policy: WORKSPACE_STATE_WRITE_POLICY,
+    authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   lifecycleLeaseUpsert: {
     args: z.tuple([LifecycleLeaseSchema]),
     description: "Mark a Durable Object as having active checkpointable work.",
-    policy: WORKSPACE_STATE_LIFECYCLE_POLICY,
+    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   lifecycleLeaseClear: {
     args: z.tuple([LifecycleKeySchema]),
     description: "Clear a Durable Object active-work lease.",
-    policy: WORKSPACE_STATE_LIFECYCLE_POLICY,
+    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
     access: { sensitivity: "destructive" },
     returns: z.void(),
   },
   alarmSet: {
     args: z.tuple([AlarmSetSchema]),
     description: "Register/replace a Durable Object's server-driven wake time.",
-    policy: WORKSPACE_STATE_LIFECYCLE_POLICY,
+    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   alarmClear: {
     args: z.tuple([LifecycleKeySchema]),
     description: "Clear a Durable Object's pending server-driven alarm.",
-    policy: WORKSPACE_STATE_LIFECYCLE_POLICY,
+    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
     access: { sensitivity: "destructive" },
     returns: z.void(),
   },
   heartbeatRegister: {
     args: z.tuple([HeartbeatRegistryRowSchema]),
     description: "Register or update an agent heartbeat registry row.",
-    policy: WORKSPACE_STATE_LIFECYCLE_POLICY,
+    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   heartbeatRemove: {
     args: z.tuple([z.object({ name: z.string().min(1) })]),
     description: "Remove an agent heartbeat registry row.",
-    policy: WORKSPACE_STATE_LIFECYCLE_POLICY,
+    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
     access: { sensitivity: "destructive" },
     returns: z.void(),
   },

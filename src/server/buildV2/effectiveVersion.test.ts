@@ -6,6 +6,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setUserDataPath } from "@vibestudio/env-paths";
 import { PackageGraph, type GraphNode } from "./packageGraph.js";
 import {
   computeEffectiveVersions,
@@ -14,6 +15,8 @@ import {
   computeBuildKey,
   setBuildRootConfig,
   getRootDependencyFingerprintInfo,
+  loadPersistedEvState,
+  persistEvState,
   type ContentHashMap,
 } from "./effectiveVersion.js";
 
@@ -43,6 +46,37 @@ function graphOf(...nodes: GraphNode[]): PackageGraph {
 }
 
 describe("effectiveVersion", () => {
+  describe("persisted EV cache", () => {
+    it("rejects legacy truncated EVs and round-trips the versioned full-digest cache", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-ev-cache-"));
+      try {
+        setUserDataPath(dir);
+        fs.writeFileSync(
+          path.join(dir, "ev-state.json"),
+          JSON.stringify({
+            stateHash: `state:${"a".repeat(64)}`,
+            evMap: { unit: "b".repeat(16) },
+            contentHashes: { unit: "manifest:test" },
+          })
+        );
+        expect(loadPersistedEvState()).toBeNull();
+
+        persistEvState({
+          stateHash: `state:${"a".repeat(64)}`,
+          evMap: { unit: "b".repeat(64) },
+          contentHashes: { unit: "manifest:test" },
+        });
+        expect(loadPersistedEvState()).toEqual({
+          version: 2,
+          stateHash: `state:${"a".repeat(64)}`,
+          evMap: { unit: "b".repeat(64) },
+          contentHashes: { unit: "manifest:test" },
+        });
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
   describe("computeEffectiveVersions", () => {
     it("derives EVs bottom-up from injected content hashes", () => {
       const graph = graphOf(
@@ -54,8 +88,8 @@ describe("effectiveVersion", () => {
         "@workspace-panels/chat": "m2",
       };
       const { evMap } = computeEffectiveVersions(graph, hashes);
-      expect(evMap["@workspace/lib-a"]).toMatch(/^[0-9a-f]{16}$/);
-      expect(evMap["@workspace-panels/chat"]).toMatch(/^[0-9a-f]{16}$/);
+      expect(evMap["@workspace/lib-a"]).toMatch(/^[0-9a-f]{64}$/);
+      expect(evMap["@workspace-panels/chat"]).toMatch(/^[0-9a-f]{64}$/);
       expect(evMap["@workspace/lib-a"]).not.toBe(evMap["@workspace-panels/chat"]);
     });
 
@@ -339,7 +373,7 @@ describe("effectiveVersion", () => {
       ]);
       expect(info.files.every((f) => f.path.startsWith(dir))).toBe(true);
       expect(info.files.every((f) => f.present && f.contentHash)).toBe(true);
-      expect(info.value).toMatch(/^[0-9a-f]{16}$/);
+      expect(info.value).toMatch(/^[0-9a-f]{64}$/);
     });
   });
 });

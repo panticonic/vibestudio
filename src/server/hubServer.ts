@@ -80,6 +80,7 @@ import {
 } from "./hostCore/routedRoomStore.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { ServiceDispatcher, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { authorizeVerifiedCaller } from "./services/authorityRuntime.js";
 import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
@@ -1658,7 +1659,7 @@ function createDirectHubControlService(state: HubRuntimeState): ServiceDefinitio
   return {
     name: "hubControl",
     description: "Machine-level workspace and account control",
-    policy: { allowed: ["shell"] },
+    authority: { principals: ["user", "host"] },
     methods: hubControlMethods,
     handler: defineServiceHandler(
       "hubControl",
@@ -1678,6 +1679,16 @@ async function startHubControlTransport(
 
   const dispatcher = new ServiceDispatcher();
   dispatcher.registerService(createDirectHubControlService(state));
+  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+    authorizeVerifiedCaller(caller, {
+      workspaceId: "hub",
+      workspaceMember: true,
+      sessionId: `hub-control:${caller.runtime.id}`,
+      audience: "hub-control",
+      capability,
+      resourceKey,
+    })
+  );
   dispatcher.markInitialized();
   const { RpcServer } = await import("./rpcServer.js");
   const { createHubCredentialRedeemer } = await import("./services/authService.js");

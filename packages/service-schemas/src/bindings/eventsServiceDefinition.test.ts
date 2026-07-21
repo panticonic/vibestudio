@@ -50,6 +50,14 @@ async function open(
 }
 
 describe("events.watch", () => {
+  it("binds an event domain under an explicit endpoint name", () => {
+    const service = createEventsServiceDefinition(new EventService(), {
+      serviceName: "desktopEvents",
+    });
+
+    expect(service.name).toBe("desktopEvents");
+  });
+
   it("acknowledges the exact topic set before delivering events", async () => {
     const events = new EventService();
     const service = createEventsServiceDefinition(events);

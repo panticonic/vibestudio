@@ -162,8 +162,20 @@ describe("panel navigation: capability grants and retire hooks", () => {
       hooks: {
         prepareDurableObject: vi.fn(async () => ({ targetId: "t", effectiveVersion: "v" })),
         prepareWorker: vi.fn(async () => ({ targetId: "t", effectiveVersion: "v" })),
-        preparePanel: vi.fn(async () => ({ effectiveVersion: "ev-panel" })),
-        resolveAppEffectiveVersion: vi.fn(async () => "ev-app"),
+        preparePanel: vi.fn(async () => ({
+          effectiveVersion: "ev-panel",
+          buildKey: "b".repeat(64),
+          executionDigest: "e".repeat(64),
+          authorityRequests: [],
+          authorityDelegations: [],
+        })),
+        resolveAppExecution: vi.fn(async () => ({
+          effectiveVersion: "ev-app",
+          buildKey: "a".repeat(64),
+          executionDigest: "e".repeat(64),
+          authorityRequests: [],
+          authorityDelegations: [],
+        })),
         onRetire: async (record) => {
           retiredRecords.push(record);
         },

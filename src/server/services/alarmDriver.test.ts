@@ -2,7 +2,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AlarmDriver } from "./alarmDriver.js";
+import { LifecycleDriver } from "./lifecycleDriver.js";
 import type { DODispatch } from "../doDispatch.js";
+import type { WorkerdManager } from "../workerdManager.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 
 type Alarm = { source: string; className: string; objectKey: string; wakeAt: number };
@@ -174,6 +176,76 @@ describe("AlarmDriver", () => {
     await vi.advanceTimersByTimeAsync(150);
     expect(dispatchAlarm).toHaveBeenCalledTimes(2);
     driver.stop();
+  });
+
+  it("quiesces the owned alarm transport without consuming its wake, then permits lifecycle release", async () => {
+    vi.setSystemTime(0);
+    const due: Alarm = {
+      source: "workers/agent-worker",
+      className: "AiChatWorker",
+      objectKey: "agent-1",
+      wakeAt: 0,
+    };
+    const alarms = [due];
+    const durableMutations: string[] = [];
+    let alarmTransportActive = false;
+    let alarmSignal: AbortSignal | undefined;
+    const releaseActivation = vi.fn(async () => {
+      expect(alarmTransportActive).toBe(false);
+      return { status: "ready" as const, detail: { releasedEffects: 1 } };
+    });
+    const dispatch = vi.fn(async (_ref: DORef, method: string, ...args: unknown[]) => {
+      if (method === "alarmNextWakeAt") return alarms[0]?.wakeAt ?? null;
+      if (method === "alarmListDue") return [...alarms];
+      if (method === "alarmSet" || method === "alarmClear") {
+        durableMutations.push(method);
+        return undefined;
+      }
+      if (method === "lifecycleOpenEpoch") return "epoch-1";
+      if (method === "lifecycleListLeases") return [due];
+      if (method === "lifecycleRecordOp") return undefined;
+      throw new Error(`Unexpected workspace method ${method} (${JSON.stringify(args)})`);
+    });
+    const dispatchAlarm = vi.fn(
+      async (_ref: DORef, signal?: AbortSignal): Promise<{ nextAlarm: null }> => {
+        if (!signal) throw new Error("Alarm dispatch did not receive scheduler ownership signal");
+        alarmSignal = signal;
+        alarmTransportActive = true;
+        return await new Promise<{ nextAlarm: null }>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }).finally(() => {
+          alarmTransportActive = false;
+        });
+      }
+    );
+    const dispatchLifecycle = vi.fn(async () => releaseActivation());
+    const doDispatch = {
+      dispatch,
+      dispatchAlarm,
+      dispatchLifecycle,
+    } as unknown as DODispatch;
+    const driver = new AlarmDriver({ workspaceId: "ws-1", doDispatch });
+
+    driver.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatchAlarm).toHaveBeenCalledOnce();
+    expect(alarmTransportActive).toBe(true);
+
+    await driver.quiesce();
+    expect(alarmSignal?.aborted).toBe(true);
+    expect(alarmTransportActive).toBe(false);
+    expect(durableMutations).toEqual([]);
+    expect(alarms).toEqual([due]);
+
+    const lifecycle = new LifecycleDriver({
+      workspaceId: "ws-1",
+      doDispatch,
+      workerdManager: { getBootGeneration: () => 1 } as WorkerdManager,
+    });
+    await lifecycle.prepareForShutdown(1_000);
+    expect(dispatchLifecycle).toHaveBeenCalledOnce();
+    expect(releaseActivation).toHaveBeenCalledOnce();
+    expect(alarms).toEqual([due]);
   });
 });
 

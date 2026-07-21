@@ -1,9 +1,10 @@
 /**
- * One destructive pre-release epoch for the workspace system: semantic state,
- * host projections, and the workspace runtime contract advance together.
+ * Compatibility epoch for the workspace source/runtime ABI. It prevents a
+ * checkout authored for one host contract from running against another.
  *
- * A workspace manifest must declare this exact epoch. Older workspaces are
- * rejected at startup instead of mixing old userland runtime code with a new
- * host or carrying migration/compatibility paths during pre-release.
+ * This is deliberately separate from authoritative persistence versions:
+ * every durable store owns a production baseline and ordered migrations. A
+ * manifest mismatch requires a supported workspace-source upgrade; it never
+ * authorizes resetting persisted state.
  */
 export const WORKSPACE_SYSTEM_EPOCH = 56 as const;

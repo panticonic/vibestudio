@@ -5,11 +5,42 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import type { CapabilityScope } from "@vibestudio/rpc";
 
-// Access descriptors shared across the build method groups. `callers` is left
-// unset so the service-level `policy` remains the enforced gate.
+export const AuthorityResourceScopeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("exact"), key: z.string() }).strict(),
+  z.object({ kind: z.literal("prefix"), prefix: z.string() }).strict(),
+  z.object({ kind: z.literal("origin"), origin: z.string() }).strict(),
+  z.object({ kind: z.literal("domain"), domain: z.string() }).strict(),
+  z.object({ kind: z.literal("network"), value: z.literal("*") }).strict(),
+]);
+
+export const CapabilityScopeSchema = z
+  .object({
+    capability: z.string().min(1),
+    resource: AuthorityResourceScopeSchema,
+  })
+  .strict() satisfies z.ZodType<CapabilityScope>;
+
+export const EvalAuthorityDelegationSchema = z
+  .object({
+    audience: z.literal("eval"),
+    purpose: z.enum(["agentic-code-execution", "tool-eval", "test-eval"]),
+    capabilities: z.array(CapabilityScopeSchema),
+  })
+  .strict();
+
+export const UnitAuthorityManifestSchema = z
+  .object({
+    requests: z.array(CapabilityScopeSchema),
+    delegations: z.array(EvalAuthorityDelegationSchema),
+  })
+  .strict();
+
+// Access descriptors classify build operations; compositional authority is
+// declared independently by the service and its method overrides.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
@@ -46,10 +77,12 @@ export const buildMetadataSchema = z
   .object({
     kind: z.enum(["panel", "package", "worker", "extension", "app", "template"]),
     name: z.string(),
+    buildKey: z.string().min(1),
     ev: z.string(),
     sourceStateHash: z.string().nullable(),
     sourcemap: z.boolean(),
     framework: z.string().optional(),
+    authority: UnitAuthorityManifestSchema.optional(),
     details: z.object({ kind: z.string() }).passthrough(),
     builtAt: z.string(),
   })
@@ -59,11 +92,21 @@ export type BuildMetadataWire = z.infer<typeof buildMetadataSchema>;
 export const buildResultSchema = z
   .object({
     dir: z.string(),
+    buildKey: z.string().min(1),
     sourceStateHash: z.string().nullable(),
     metadata: buildMetadataSchema,
     artifacts: z.array(buildArtifactSchema),
   })
-  .strict();
+  .strict()
+  .superRefine((result, context) => {
+    if (result.buildKey !== result.metadata.buildKey) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["buildKey"],
+        message: "Build result key must match metadata.buildKey",
+      });
+    }
+  });
 export type BuildResultWire = z.infer<typeof buildResultSchema>;
 
 export const buildChangeSetSchema = z

@@ -450,6 +450,18 @@ export function getStandardActionCopy(
   };
 }
 
+/**
+ * The durable, code-identity-bound grant is the normal choice whenever the
+ * approval supports one. This keeps trusted versions from repeatedly
+ * interrupting the user while preserving once-only semantics for operations
+ * (such as force pushes) that deliberately cannot be trusted durably.
+ */
+export function getRecommendedStandardDecision(
+  approval: PendingCredentialApproval | PendingCapabilityApproval
+): "once" | "version" {
+  return getStandardActionCopy(approval).version ? "version" : "once";
+}
+
 export interface UnitBatchActionCopy {
   once: { label: string; description: string };
   session?: { label: string; description: string };
@@ -653,7 +665,7 @@ export function getApprovalCopy(approval: PendingApproval): {
       const owner = approval.details?.find((d) => d.label === "Owner")?.value;
       const target =
         approval.resource?.value ?? approval.operation?.object?.value ?? "another context";
-      const subject = owner ? `the file context owned by ${owner}` : `file context ${target}`;
+      const subject = owner ? `the workspace branch owned by ${owner}` : `workspace branch ${target}`;
       const fallbackTitle = contextBoundaryFallbackTitle(
         approval.operation?.verb ?? approval.title,
         subject
@@ -662,8 +674,8 @@ export function getApprovalCopy(approval: PendingApproval): {
         title: targetAwareGenericTitle(approval.title, fallbackTitle),
         summary:
           approval.description ??
-          `Requests access to ${subject}, which may include files or running work owned by another agent or panel.`,
-        warning: "This can affect files or running work owned by another agent or panel.",
+          `Requests access to ${subject}, including its repository state and running work.`,
+        warning: "This can affect another workspace branch and the work running in it.",
       };
     }
     if (approval.capability === "client-config-delete") {
@@ -839,25 +851,25 @@ function genericCapabilityTarget(approval: PendingCapabilityApproval): string {
 function contextBoundaryFallbackTitle(verb: string | undefined, subject: string): string {
   const normalized = verb?.trim().toLowerCase();
   if (normalized === "create do" || normalized === "create do in another context") {
-    return "Launch background process with different file access";
+    return "Launch background process in another workspace branch";
   }
   if (normalized === "create worker" || normalized === "create worker in another context") {
-    return "Launch background process with different file access";
+    return "Launch background process in another workspace branch";
   }
   if (normalized === "create panel" || normalized === "create panel in another context") {
-    return "Open panel with different file access";
+    return "Open panel in another workspace branch";
   }
   if (normalized === "open panel" || normalized === "open panel in another context") {
-    return "Open panel with different file access";
+    return "Open panel in another workspace branch";
   }
   if (normalized === "navigate panel" || normalized === "navigate panel in another context") {
-    return "Navigate panel with different file access";
+    return "Switch panel to another workspace branch";
   }
   if (normalized === "create app" || normalized === "create app in another context") {
-    return "Launch app with different file access";
+    return "Launch app in another workspace branch";
   }
   if (normalized === "create session" || normalized === "create session in another context") {
-    return "Start session with different file access";
+    return "Start session in another workspace branch";
   }
   return `Control ${subject}`;
 }

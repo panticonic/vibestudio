@@ -89,7 +89,13 @@ export class LifecycleDriver {
 
   private async handleRestartReady(event: RestartReadyEvent): Promise<void> {
     const epoch = this.restartEpochs.get(event.correlationId);
-    if (!epoch) return;
+    if (!epoch) {
+      // An unresponsive workerd cannot participate in graceful prepare. The
+      // manager therefore emits only a crash-style ready event after replacing
+      // the process; reconstruct leases directly from durable state.
+      if (event.reason === "crash") await this.recoverStartup("crash");
+      return;
+    }
     this.restartEpochs.delete(event.correlationId);
     const ops = await this.dispatchWorkspace<LifecycleOp[]>("lifecycleListOps", epoch);
     const targets = this.dedupe(

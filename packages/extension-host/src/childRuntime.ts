@@ -75,7 +75,12 @@ interface SerializedFileStats {
   mode: number;
 }
 
-const invocationStore = new AsyncLocalStorage<ExtensionInvocation>();
+interface ExtensionInvocationScope {
+  invocation: ExtensionInvocation;
+  signal: AbortSignal;
+}
+
+const invocationStore = new AsyncLocalStorage<ExtensionInvocationScope>();
 const fetchResponseBodies = new Map<string, FetchResponseBodyStream>();
 const STREAM_CHUNK_BYTES = 64 * 1024;
 
@@ -457,7 +462,8 @@ function createContext() {
       list: () => rpcCall("userlandApproval.list", []),
     },
     invocation: {
-      current: () => invocationStore.getStore() ?? null,
+      current: () => invocationStore.getStore()?.invocation ?? null,
+      signal: () => invocationStore.getStore()?.signal ?? null,
     },
     subscriptions: [] as Array<{ dispose(): void }>,
     log: {
@@ -534,7 +540,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
       if (ws.readyState !== WebSocket.OPEN) {
         throw new Error("Extension WebSocket RPC is not connected");
       }
-      const parentRequestId = invocationStore.getStore()?.requestId;
+      const parentRequestId = invocationStore.getStore()?.invocation.requestId;
       const stampedMessage =
         parentRequestId &&
         (envelope.message.type === "request" || envelope.message.type === "stream-request")
@@ -832,7 +838,7 @@ async function main(): Promise<void> {
   runtimeBridge.expose("extension.invoke", async (req) => {
     assertHostControlCaller(req, "extension.invoke");
     const [method, args, invocation] = req.args as [string, unknown[], ExtensionInvocation];
-    return invocationStore.run(invocation, async () => {
+    return invocationStore.run({ invocation, signal: req.signal }, async () => {
       const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
         ? apiObject[method]
         : undefined;
@@ -861,7 +867,7 @@ async function main(): Promise<void> {
       unknown[],
       ExtensionInvocation,
     ];
-    return invocationStore.run(invocation, async () => {
+    return invocationStore.run({ invocation, signal: req.signal }, async () => {
       const providerApi = Object.prototype.hasOwnProperty.call(providerApis, provider)
         ? providerApis[provider]
         : undefined;
@@ -891,7 +897,7 @@ async function main(): Promise<void> {
   runtimeBridge.exposeStreaming("extension.invokeStream", async (req, sink) => {
     assertHostControlCaller(req, "extension.invokeStream");
     const [method, methodArgs, invocation] = req.args as [string, unknown[], ExtensionInvocation];
-    await invocationStore.run(invocation, async () => {
+    await invocationStore.run({ invocation, signal: req.signal }, async () => {
       const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
         ? apiObject[method]
         : undefined;
@@ -937,7 +943,7 @@ async function main(): Promise<void> {
       err.code = "ENOFETCH";
       throw err;
     }
-    return invocationStore.run(invocation, async () => {
+    return invocationStore.run({ invocation, signal: req.signal }, async () => {
       const body = await requestBodyFromEnvelope(requestEnvelope.body);
       const request = new Request(requestEnvelope.url, {
         method: requestEnvelope.method,

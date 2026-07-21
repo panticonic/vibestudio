@@ -85,12 +85,12 @@ describe("requireContextBoundaryPermission", () => {
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         callerId: "panel:p1",
         grantResourceKey: contextBoundaryResourceKey("ctx-b", "panel:p1"),
-        title: "Open panel with different file access",
+        title: "Open panel in another workspace branch",
         description:
-          "This lets the requester open a panel that can use files in the file context owned by Agent X. That file context belongs to another agent or panel.",
+          "This lets the requester open a panel in the workspace branch owned by Agent X. It can read or modify the workspace state and running work in that branch.",
         details: [
           { label: "Owner", value: "Agent X" },
-          { label: "File context", value: "ctx-b" },
+          { label: "Workspace branch", value: "ctx-b" },
         ],
       })
     );
@@ -142,7 +142,7 @@ describe("requireContextBoundaryPermission", () => {
     });
     expect(deps.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Launch background process with different file access",
+        title: "Launch background process in another workspace branch",
         description: expect.stringContaining("start a background process"),
       })
     );

@@ -31,6 +31,11 @@ import {
   validateUnitManifest,
   isTerminalWorker,
 } from "@vibestudio/shared/unitManifest";
+import {
+  parseUnitAuthorityManifest,
+  type UnitAuthorityManifest,
+  withExtensionRuntimeAuthority,
+} from "@vibestudio/shared/authorityManifest";
 import * as buildStore from "./buildStore.js";
 import {
   contentTypeForPath,
@@ -1452,6 +1457,33 @@ function withRequestedSourceState(build: BuildResult, sourceStateHash: string): 
   return build.sourceStateHash === sourceStateHash ? build : { ...build, sourceStateHash };
 }
 
+const EMPTY_UNIT_AUTHORITY: UnitAuthorityManifest = Object.freeze({
+  requests: Object.freeze([]),
+  delegations: Object.freeze([]),
+});
+
+/**
+ * Seal the authority declaration from the same immutable source tree that is
+ * compiled. Missing declarations are the fail-closed empty envelope.
+ */
+function authorityFromMaterializedSource(
+  node: GraphNode,
+  sourceRoot: string
+): UnitAuthorityManifest {
+  const packageJsonPath = path.join(sourceRoot, node.relativePath, "package.json");
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+    vibestudio?: { authority?: unknown };
+  };
+  const authority = packageJson.vibestudio?.authority;
+  const declared =
+    authority === undefined
+      ? EMPTY_UNIT_AUTHORITY
+      : parseUnitAuthorityManifest(authority, `${node.name} vibestudio.authority`);
+  return node.kind === "extension"
+    ? withExtensionRuntimeAuthority(declared, `${node.name} effective extension authority`)
+    : declared;
+}
+
 async function doBuild(
   node: GraphNode,
   ev: string,
@@ -1473,6 +1505,7 @@ async function doBuild(
       stateRef,
       workspaceRoot
     );
+    const authority = authorityFromMaterializedSource(node, extracted.sourceRoot);
 
     if (options?.library) {
       if (!options.libraryTarget) {
@@ -1490,7 +1523,8 @@ async function doBuild(
         stateRef,
         options.externals ?? [],
         options.libraryEntrySubpath ?? ".",
-        conditionsForLibraryTarget(options.libraryTarget)
+        conditionsForLibraryTarget(options.libraryTarget),
+        authority
       );
     } else if (node.kind === "worker") {
       return await buildWorker(
@@ -1501,7 +1535,8 @@ async function doBuild(
         workspaceRoot,
         sourcemap,
         extracted.sourceRoot,
-        stateRef
+        stateRef,
+        authority
       );
     } else if (node.kind === "extension") {
       return await buildExtension(
@@ -1511,7 +1546,8 @@ async function doBuild(
         graph,
         workspaceRoot,
         extracted.sourceRoot,
-        stateRef
+        stateRef,
+        authority
       );
     } else if (node.kind === "app") {
       return await buildApp(
@@ -1522,7 +1558,8 @@ async function doBuild(
         workspaceRoot,
         sourcemap,
         extracted.sourceRoot,
-        stateRef
+        stateRef,
+        authority
       );
     } else if (node.kind === "template") {
       throw new Error(`Templates are not buildable: ${node.name}`);
@@ -1542,7 +1579,8 @@ async function doBuild(
         workspaceRoot,
         sourcemap,
         extracted.sourceRoot,
-        stateRef
+        stateRef,
+        authority
       );
     }
   } finally {
@@ -1634,15 +1672,19 @@ function storeSimpleBuild(
   ev: string,
   sourcemap: boolean,
   sourceStateHash: string | null,
+  authority: UnitAuthorityManifest,
   extraMetadata: Partial<BuildMetadata> = {}
 ): BuildResult {
   const artifacts = bundleArtifacts(bundle);
   const metadata: BuildMetadata = {
     kind: node.kind as BuildMetadata["kind"],
     name: node.name,
+    buildKey,
+    sourcePath: sourceStateHash === null ? null : node.relativePath,
     ev,
     sourceStateHash,
     sourcemap,
+    authority,
     details: { kind: "generic" },
     ...extraMetadata,
     builtAt: new Date().toISOString(),
@@ -1676,7 +1718,8 @@ async function buildPanel(
   workspaceRoot: string,
   sourcemap: boolean,
   sourceRoot: string,
-  sourceStateHash: string
+  sourceStateHash: string,
+  authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
   const { outdir, entryFile, nodePaths } = env;
@@ -1870,9 +1913,12 @@ async function buildPanel(
     const metadata: BuildMetadata = {
       kind: node.kind,
       name: node.name,
+      buildKey,
+      sourcePath: node.relativePath,
       ev,
       sourceStateHash,
       sourcemap,
+      authority,
       framework: resolved.framework,
       details:
         node.kind === "app"
@@ -2272,7 +2318,8 @@ async function buildWorker(
   workspaceRoot: string,
   sourcemap: boolean,
   sourceRoot: string,
-  sourceStateHash: string
+  sourceStateHash: string,
+  authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(
     node,
@@ -2394,16 +2441,19 @@ async function buildWorker(
       const metadata: BuildMetadata = {
         kind: node.kind as BuildMetadata["kind"],
         name: node.name,
+        buildKey,
+        sourcePath: node.relativePath,
         ev,
         sourceStateHash,
         sourcemap,
+        authority,
         details: { kind: "generic" },
         builtAt: new Date().toISOString(),
       };
       return buildStore.put(buildKey, artifacts, metadata);
     }
 
-    return storeSimpleBuild(buildKey, bundle, node, ev, sourcemap, sourceStateHash);
+    return storeSimpleBuild(buildKey, bundle, node, ev, sourcemap, sourceStateHash, authority);
   } finally {
     env.cleanup();
   }
@@ -2421,7 +2471,8 @@ async function buildApp(
   workspaceRoot: string,
   sourcemap: boolean,
   sourceRoot: string,
-  sourceStateHash: string
+  sourceStateHash: string,
+  authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
   const appSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(appSourcePath, "package.json");
@@ -2442,7 +2493,8 @@ async function buildApp(
       sourcemap,
       sourceRoot,
       appManifest,
-      sourceStateHash
+      sourceStateHash,
+      authority
     );
   }
   if (appManifest["target"] === "react-native") {
@@ -2476,9 +2528,12 @@ async function buildApp(
     const metadata: BuildMetadata = {
       kind: "app",
       name: node.name,
+      buildKey: providerBuildKey,
+      sourcePath: node.relativePath,
       ev,
       sourceStateHash,
       sourcemap,
+      authority,
       details: {
         kind: "app",
         target: "react-native",
@@ -2505,7 +2560,8 @@ async function buildApp(
     workspaceRoot,
     sourcemap,
     sourceRoot,
-    sourceStateHash
+    sourceStateHash,
+    authority
   );
 }
 
@@ -2518,7 +2574,8 @@ async function buildTerminalApp(
   sourcemap: boolean,
   sourceRoot: string,
   appManifest: Record<string, unknown>,
-  sourceStateHash: string
+  sourceStateHash: string,
+  authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
   const { outdir, nodePaths, resolveDir, sourcePath } = env;
@@ -2573,9 +2630,12 @@ async function buildTerminalApp(
       {
         kind: "app",
         name: node.name,
+        buildKey,
+        sourcePath: node.relativePath,
         ev,
         sourceStateHash,
         sourcemap,
+        authority,
         details: {
           kind: "app",
           target: "terminal",
@@ -2667,7 +2727,8 @@ async function buildExtension(
   graph: PackageGraph,
   workspaceRoot: string,
   sourceRoot: string,
-  sourceStateHash: string
+  sourceStateHash: string,
+  authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(
     node,
@@ -2755,13 +2816,17 @@ async function buildExtension(
     fs.writeFileSync(path.join(outdir, "package.json"), '{"type":"module"}');
     const smokeResult: BuildResult = {
       dir: outdir,
+      buildKey,
       sourceStateHash,
       metadata: {
         kind: "extension",
         name: node.name,
+        buildKey,
+        sourcePath: node.relativePath,
         ev,
         sourceStateHash,
         sourcemap: true,
+        authority,
         details: {
           kind: "extension",
           runtimeDepsKey: runtimeDeps.key,
@@ -2788,7 +2853,7 @@ async function buildExtension(
       dependencyDiagnostics,
     });
 
-    const result = storeSimpleBuild(buildKey, bundle, node, ev, true, sourceStateHash, {
+    const result = storeSimpleBuild(buildKey, bundle, node, ev, true, sourceStateHash, authority, {
       details: {
         kind: "extension",
         runtimeDepsKey: runtimeDeps.key,
@@ -3059,7 +3124,8 @@ async function buildLibraryBundle(
   sourceStateHash: string,
   externals: string[],
   entrySubpath = ".",
-  conditions: readonly string[]
+  conditions: readonly string[],
+  authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
   // prepareBuildEnv resolves the `.` entry with the target conditions, so an
   // imported package's worker/panel entry is picked for the right host (its deps
@@ -3098,7 +3164,7 @@ async function buildLibraryBundle(
     });
 
     const bundleContent = fs.readFileSync(outfile, "utf-8");
-    return storeSimpleBuild(buildKey, bundleContent, node, ev, false, sourceStateHash);
+    return storeSimpleBuild(buildKey, bundleContent, node, ev, false, sourceStateHash, authority);
   } finally {
     env.cleanup();
   }
@@ -3280,6 +3346,8 @@ async function doNpmBuild(
       const metadata: BuildMetadata = {
         kind: "panel",
         name: specifier,
+        buildKey,
+        sourcePath: null,
         ev: `npm:${version}`,
         sourceStateHash: null,
         sourcemap: false,
@@ -3381,6 +3449,8 @@ async function doPlatformBuild(
       const metadata: BuildMetadata = {
         kind: "package",
         name: specifier,
+        buildKey,
+        sourcePath: null,
         ev: buildKey,
         sourceStateHash: null,
         sourcemap: false,

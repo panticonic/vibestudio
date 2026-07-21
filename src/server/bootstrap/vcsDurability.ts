@@ -18,6 +18,10 @@ export interface VcsDurabilityBootstrapDeps {
     className: string;
     objectKey: string;
     effectiveVersion: string;
+    buildKey: string;
+    executionDigest: string;
+    authorityRequests: readonly import("@vibestudio/rpc").CapabilityScope[];
+    authorityDelegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
   }): void;
   activateSemanticWorkspace(workspaceVcs: WorkspaceVcs): Promise<void>;
 }
@@ -52,10 +56,10 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
 
   deps.container.registerManaged({
     name: "semanticWorkspace",
-    // The workspace workerd stage must be settled: it registers static internal
-    // DO services with a planned workerd restart, so semantic activation must
-    // not dispatch to GAD concurrently with that restart.
-    dependencies: ["vcsAttach", "workerdWorkspace"],
+    // Activation uses only the already-sealed semantic control-plane DO. The
+    // build system and remaining internal DO classes start afterward, so their
+    // planned workerd restart cannot race semantic initialization.
+    dependencies: ["vcsAttach"],
     async start(resolve) {
       const workspaceVcs = assertPresent(resolve<WorkspaceVcs>("vcsAttach"));
       await deps.activateSemanticWorkspace(workspaceVcs);

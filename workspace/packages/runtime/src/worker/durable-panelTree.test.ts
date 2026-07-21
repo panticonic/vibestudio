@@ -78,7 +78,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ callers: ["server", "panel", "do", "shell"] })
+      @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
       async probePanelTree(): Promise<{
         title: string | undefined;
         source: string | undefined;
@@ -164,7 +164,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ callers: ["server", "panel", "do", "shell"] })
+      @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
       async probePanelTree(): Promise<boolean> {
         return this.panelTree.get("slot-a").isLoaded();
       }
@@ -250,7 +250,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ callers: ["server", "panel", "do", "shell"] })
+      @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
       async probePanelTree(): Promise<{
         allIds: string[];
         childParentId: string | null | undefined;
@@ -331,7 +331,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelAliasProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ callers: ["server", "panel", "do", "shell"] })
+      @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
       async probePanelAliases(): Promise<{
         createdId: string;
         listedCount: number;
@@ -388,7 +388,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class ParentProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ callers: ["server", "panel", "do", "shell"] })
+      @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
       async probeParent(): Promise<{
         id: string;
         title: string | undefined;

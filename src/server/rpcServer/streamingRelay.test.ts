@@ -35,8 +35,11 @@ describe("StreamingRelay HTTP response ownership", () => {
     });
     const caller = createVerifiedCaller("shell:test", "shell");
     const dispatcher = {
-      getPolicy: () => ({ allowed: ["shell"] }),
-      getMethodPolicy: () => ({ allowed: ["shell"] }),
+      // Authority-native services intentionally have no legacy caller-kind
+      // policy. Streaming admission must be owned by dispatch(), exactly like
+      // unary RPC, or a registered service is misreported as unknown.
+      getPolicy: () => undefined,
+      getMethodPolicy: () => undefined,
       dispatch: vi.fn(async () => new Response(body)),
     } as unknown as ServiceDispatcher;
     const relay = new StreamingRelay({

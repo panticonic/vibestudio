@@ -42,19 +42,7 @@ const WorkspaceSourceRefSchema = z
   .object({ source: z.string(), ref: z.string().optional() })
   .strict();
 
-const WorkspaceServiceCallerKindSchema = z.enum([
-  "panel",
-  "app",
-  "shell",
-  "server",
-  "worker",
-  "do",
-  "extension",
-  "agent",
-  "system",
-  "user",
-  "external",
-]);
+const WorkspaceServicePrincipalSchema = z.enum(["host", "user", "device", "code", "entity"]);
 
 const WorkspaceServiceSchema = z.union([
   z
@@ -64,12 +52,11 @@ const WorkspaceServiceSchema = z.union([
       title: z.string().optional(),
       description: z.string().optional(),
       protocols: z.array(z.string()).optional(),
-      policy: z
+      authority: z
         .object({
-          allowed: z.array(WorkspaceServiceCallerKindSchema).optional(),
+          principals: z.array(WorkspaceServicePrincipalSchema).min(1),
         })
-        .strict()
-        .optional(),
+        .strict(),
       durableObject: z.object({ className: z.string() }).strict(),
     })
     .strict(),
@@ -80,12 +67,11 @@ const WorkspaceServiceSchema = z.union([
       title: z.string().optional(),
       description: z.string().optional(),
       protocols: z.array(z.string()).optional(),
-      policy: z
+      authority: z
         .object({
-          allowed: z.array(WorkspaceServiceCallerKindSchema).optional(),
+          principals: z.array(WorkspaceServicePrincipalSchema).min(1),
         })
-        .strict()
-        .optional(),
+        .strict(),
       worker: z.object({ routePath: z.string() }).strict(),
     })
     .strict(),

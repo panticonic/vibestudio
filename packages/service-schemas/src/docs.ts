@@ -30,7 +30,7 @@ export const catalogEntrySchema = z.object({
   parent: z.string().optional(),
   title: z.string(),
   description: z.string().optional(),
-  /** Access/restrictedness (callers, restrictedTo, sensitivity, approval, …). */
+  /** Access/restrictedness and authority-principal discovery metadata. */
   access: catalogAccessSchema.optional(),
   argsSchema: z.record(z.unknown()).optional(),
   returnsSchema: z.record(z.unknown()).optional(),
@@ -69,14 +69,14 @@ const READONLY_ACCESS = {
 // ── Serialized service-definition shapes (absorbed from the retired `meta`
 // service): the per-service view used by docs.listServices / docs.describeService
 // and by eval's help() + the CLI `services` command. ──
-const serializedPolicySchema = z.object({
-  allowed: z.array(z.string()),
+const serializedAuthoritySchema = z.object({
+  principals: z.array(z.enum(["host", "user", "device", "code", "entity"])),
   description: z.string().optional(),
 });
 
 export const serializedServiceMethodSchema = z.object({
   description: z.string().optional(),
-  policy: serializedPolicySchema.optional(),
+  authority: z.record(z.unknown()).optional(),
   access: z.record(z.unknown()).optional(),
   examples: z.array(z.unknown()).optional(),
   errors: z.array(z.unknown()).optional(),
@@ -88,7 +88,7 @@ export const serializedServiceMethodSchema = z.object({
 export const serializedServiceSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
-  policy: serializedPolicySchema,
+  authority: serializedAuthoritySchema,
   methods: z.record(serializedServiceMethodSchema),
 });
 export type SerializedServiceDefinition = z.infer<typeof serializedServiceSchema>;

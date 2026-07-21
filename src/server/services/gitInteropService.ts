@@ -80,7 +80,7 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
   return {
     name: "gitInterop",
     description: "External Git interop: declared remotes and remote project imports",
-    policy: { allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: gitInteropMethods,
     handler: defineServiceHandler("gitInterop", gitInteropMethods, {
       setSharedRemote: async (ctx, [repoPath, remoteInput]) => {

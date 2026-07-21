@@ -7,11 +7,13 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import { writeProductSeedSourceRecord } from "@vibestudio/shared/productSeedTrust";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { AppHost } from "./appHost.js";
 import { ServerUnitApprovalCoordinator } from "./unitApprovalCoordinator.js";
+import type { BuildMetadata } from "./buildV2/buildStore.js";
 
 const roots: string[] = [];
 const originalAppDevStatus = process.env["VIBESTUDIO_APP_DEV_STATUS"];
@@ -21,6 +23,17 @@ const REACT_NATIVE_PROVIDER = {
   activeBuildKey: "provider-build",
   contractVersion: "vibestudio-build-provider-v1",
 };
+const TEST_EXECUTION_IDENTITY: NonNullable<BuildMetadata["execution"]> = {
+  version: 1,
+  source: { repoPath: "apps/shell", effectiveVersion: "b".repeat(64) as never },
+  buildInputDigest: "c".repeat(64) as never,
+  artifactDigest: "d".repeat(64) as never,
+  executionDigest: "a".repeat(64) as never,
+};
+const TEST_SEALED_APP_BUILD_METADATA = {
+  execution: TEST_EXECUTION_IDENTITY,
+  authority: { requests: [], delegations: [] },
+} satisfies Pick<BuildMetadata, "execution" | "authority">;
 
 function publicationEvent(): ProtectedPublicationEvent {
   return {
@@ -138,8 +151,11 @@ function makeHarness(
     getBuild: vi.fn(async () => ({
       dir: path.join(root, "state", "builds", "app-key"),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
         sourceStateHash: "state:test",
+        execution: TEST_EXECUTION_IDENTITY,
+        authority: { requests: [], delegations: [] },
         details: { kind: "app", target: "electron", integrity: "sha256-app" },
       },
       artifacts: [artifact],
@@ -148,9 +164,15 @@ function makeHarness(
       key === "app-key"
         ? {
             dir: path.join(root, "state", "builds", "app-key"),
+            buildKey: undefined as string | undefined,
             metadata: {
+              ...TEST_SEALED_APP_BUILD_METADATA,
               ev: "ev-app",
               sourceStateHash: "state:test",
+              execution: TEST_EXECUTION_IDENTITY,
+              authority: { requests: [], delegations: [] } as NonNullable<
+                BuildMetadata["authority"]
+              >,
               details: { kind: "app", target: "electron", integrity: "sha256-app" },
             },
             artifacts: [artifact],
@@ -480,8 +502,14 @@ describe("AppHost", () => {
       id: "@workspace-apps/shell",
       kind: "app",
       source: { repoPath: "apps/shell", effectiveVersion: "ev-app" },
+      activeBuildKey: "app-key",
+      activeExecutionDigest: TEST_EXECUTION_IDENTITY.executionDigest,
+      activeAuthority: { requests: [], delegations: [] },
       status: "active",
     });
+    const connectionGrants = new ConnectionGrantService({ entityCache });
+    expect(() => connectionGrants.grant("@workspace-apps/shell", "desktop-shell")).not.toThrow();
+    connectionGrants.stop();
   });
 
   it("registers existing approved Electron apps when reusing the active build after restart", async () => {
@@ -555,6 +583,7 @@ describe("AppHost", () => {
     const changedBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key-2"),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app-2",
         sourceStateHash: "state:test",
         details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-app-2" },
@@ -617,6 +646,7 @@ describe("AppHost", () => {
         {
           dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key"),
           metadata: {
+            ...TEST_SEALED_APP_BUILD_METADATA,
             ev: "ev-app",
             sourceStateHash: "state:test",
             details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-app" },
@@ -637,6 +667,7 @@ describe("AppHost", () => {
         {
           dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key-2"),
           metadata: {
+            ...TEST_SEALED_APP_BUILD_METADATA,
             ev: "ev-app-2",
             sourceStateHash: "state:test",
             details: {
@@ -752,9 +783,49 @@ describe("AppHost", () => {
   });
 
   it("auto-selects and launches the canonical Electron shell when no host selection is stored", async () => {
-    const { host, eventService, graphNode } = makeHarness();
+    const { host, buildSystem, eventService, graphNode } = makeHarness();
     graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
     installApp(host, graphNode);
+    buildSystem.getBuildByKey.mockReturnValue({
+      dir: "/builds/app-key",
+      buildKey: "app-key",
+      metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
+        ev: "ev-app",
+        sourceStateHash: "state:test",
+        execution: TEST_EXECUTION_IDENTITY,
+        authority: {
+          requests: [
+            {
+              capability: "service:events.watch",
+              resource: { kind: "exact", key: "service:events.watch" },
+            },
+          ],
+          delegations: [
+            {
+              audience: "eval",
+              purpose: "agentic-code-execution",
+              capabilities: [
+                {
+                  capability: "runtime:entity.create",
+                  resource: { kind: "prefix", prefix: "panels/" },
+                },
+              ],
+            },
+          ],
+        },
+        details: { kind: "app", target: "electron", integrity: "sha256-app" },
+      },
+      artifacts: [
+        {
+          path: "index.html",
+          role: "html",
+          contentType: "text/html; charset=utf-8",
+          encoding: "utf8",
+          content: "<!doctype html><div>app</div>",
+        },
+      ],
+    });
 
     expect(host.getHostTargetSelection("electron")).toMatchObject({
       valid: true,
@@ -772,6 +843,25 @@ describe("AppHost", () => {
       target: "electron",
       source: "apps/shell",
       appId: "@workspace-apps/shell",
+      executionDigest: "a".repeat(64),
+      authorityRequests: [
+        {
+          capability: "service:events.watch",
+          resource: { kind: "exact", key: "service:events.watch" },
+        },
+      ],
+      authorityDelegations: [
+        {
+          audience: "eval",
+          purpose: "agentic-code-execution",
+          capabilities: [
+            {
+              capability: "runtime:entity.create",
+              resource: { kind: "prefix", prefix: "panels/" },
+            },
+          ],
+        },
+      ],
     });
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:available",
@@ -1054,6 +1144,7 @@ describe("AppHost", () => {
     const rnBuild = (ev: string) => ({
       dir: path.join(workspacePath, "..", "state", "builds", ev),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev,
         details: {
           kind: "app" as const,
@@ -1114,6 +1205,7 @@ describe("AppHost", () => {
     const pinnedBuild = {
       dir: path.join(root, "state", "builds", "pinned-ref-key"),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-pinned",
         sourceStateHash: "state:test",
         details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-pinned" },
@@ -1172,6 +1264,7 @@ describe("AppHost", () => {
         {
           dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key"),
           metadata: {
+            ...TEST_SEALED_APP_BUILD_METADATA,
             ev: "ev-app",
             sourceStateHash: "state:test",
             details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-app" },
@@ -1192,6 +1285,7 @@ describe("AppHost", () => {
         {
           dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key-2"),
           metadata: {
+            ...TEST_SEALED_APP_BUILD_METADATA,
             ev: "ev-app-2",
             sourceStateHash: "state:test",
             details: {
@@ -1263,9 +1357,31 @@ describe("AppHost", () => {
   });
 
   it("bakes only the active approved app build for dist packaging", () => {
-    const { host, graphNode } = makeHarness();
+    const { host, graphNode, buildSystem } = makeHarness();
     installApp(host, graphNode);
     const outDir = path.join(tempRoot(), "dist", "baked-app");
+    const activeBuild = buildSystem.getBuildByKey("app-key");
+    buildSystem.getBuildByKey.mockReturnValueOnce({
+      ...activeBuild,
+      artifacts: activeBuild?.artifacts?.map((artifact) => ({
+        ...artifact,
+        integrity: `sha256-${"a".repeat(64)}`,
+      })),
+      metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
+        ...activeBuild?.metadata,
+        buildKey: "app-key",
+        sourcePath: "apps/shell",
+        authority: { requests: [], delegations: [] },
+        execution: {
+          version: 1,
+          source: { repoPath: "apps/shell", effectiveVersion: "e".repeat(64) },
+          buildInputDigest: "b".repeat(64),
+          artifactDigest: "a".repeat(64),
+          executionDigest: "d".repeat(64),
+        },
+      },
+    } as never);
 
     const manifest = host.bakeDist("apps/shell", outDir);
 
@@ -1280,6 +1396,9 @@ describe("AppHost", () => {
         effectiveVersion: "ev-app",
         target: "electron",
         integrity: "sha256-app",
+        executionDigest: "d".repeat(64),
+        authorityRequests: [],
+        authorityDelegations: [],
       },
     });
     expect(fs.existsSync(path.join(outDir, "manifest.json"))).toBe(true);
@@ -1289,7 +1408,7 @@ describe("AppHost", () => {
   });
 
   it("registers device-scoped React Native app principals for native-held grants", async () => {
-    const { host, graphNode, entityCache } = makeHarness();
+    const { host, buildSystem, graphNode, entityCache } = makeHarness();
     installApp(host, graphNode);
     host.registry.patch(graphNode.name, {
       target: "react-native",
@@ -1298,6 +1417,22 @@ describe("AppHost", () => {
       activeBundleKey: "mobile-key",
       capabilities: ["notifications"],
     });
+    buildSystem.getBuildByKey.mockReturnValue({
+      dir: "/builds/mobile-key",
+      buildKey: "mobile-key",
+      metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
+        buildKey: "mobile-key",
+        sourcePath: "apps/mobile",
+        ev: "ev-mobile",
+        details: {
+          kind: "app",
+          target: "react-native",
+          integrity: "sha256-mobile",
+          rnHostAbi: "v1",
+        },
+      },
+    } as never);
 
     const callerId = host.reactNative.registerPrincipal("device-1");
 
@@ -1306,15 +1441,21 @@ describe("AppHost", () => {
       id: "app:apps/mobile:device-1",
       kind: "app",
       source: { repoPath: "apps/mobile", effectiveVersion: "ev-mobile" },
+      activeBuildKey: "mobile-key",
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: { requests: [], delegations: [] },
       status: "active",
     });
+    const connectionGrants = new ConnectionGrantService({ entityCache });
+    expect(() => connectionGrants.grant(callerId!, "native-mobile:device-1")).not.toThrow();
+    connectionGrants.stop();
 
     expect(host.reactNative.retirePrincipal("device-1")).toBe(1);
     expect(entityCache.resolveActive("app:apps/mobile:device-1")).toBeNull();
   });
 
   it("registers mobile app grants for the same canonical source used by bootstrap", async () => {
-    const { host, graphNode, entityCache } = makeHarness();
+    const { host, buildSystem, graphNode, entityCache } = makeHarness();
     installApp(host, graphNode);
     const base = host.registry.get(graphNode.name);
     if (!base) throw new Error("expected test app registry entry");
@@ -1325,6 +1466,26 @@ describe("AppHost", () => {
       activeBundleKey: "other-mobile-key",
       capabilities: ["notifications"],
     });
+    buildSystem.getBuildByKey.mockImplementation((key: string) =>
+      key === "mobile-key"
+        ? ({
+            dir: "/builds/mobile-key",
+            buildKey: "mobile-key",
+            metadata: {
+              ...TEST_SEALED_APP_BUILD_METADATA,
+              buildKey: "mobile-key",
+              sourcePath: "apps/mobile",
+              ev: "ev-mobile",
+              details: {
+                kind: "app",
+                target: "react-native",
+                integrity: "sha256-mobile",
+                rnHostAbi: "v1",
+              },
+            },
+          } as never)
+        : null
+    );
     host.registry.upsert({
       ...base,
       name: "@workspace-apps/mobile",
@@ -1342,6 +1503,22 @@ describe("AppHost", () => {
       source: { repoPath: "apps/mobile", effectiveVersion: "ev-mobile" },
     });
     expect(entityCache.resolveActive("app:apps/other-mobile:device-1")).toBeNull();
+  });
+
+  it("refuses to register an executable mobile principal without its exact sealed build", () => {
+    const { host, graphNode, entityCache } = makeHarness();
+    installApp(host, graphNode);
+    host.registry.patch(graphNode.name, {
+      target: "react-native",
+      source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
+      activeEv: "ev-mobile",
+      activeBundleKey: "missing-build",
+    });
+
+    expect(() => host.reactNative.registerPrincipal("device-1")).toThrow(
+      "immutable build missing-build is unavailable"
+    );
+    expect(entityCache.resolve("app:apps/mobile:device-1")).toBeNull();
   });
 
   it("authorizes app capabilities by installed app and device-scoped principals", () => {
@@ -1398,8 +1575,11 @@ describe("AppHost", () => {
     const terminalBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-terminal",
         sourceStateHash: "state:test",
+        execution: TEST_EXECUTION_IDENTITY,
+        authority: { requests: [], delegations: [] },
         details: {
           kind: "app",
           target: "terminal",
@@ -1476,8 +1656,11 @@ describe("AppHost", () => {
     const terminalBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-terminal",
         sourceStateHash: "state:test",
+        execution: TEST_EXECUTION_IDENTITY,
+        authority: { requests: [], delegations: [] },
         details: {
           kind: "app" as const,
           target: "terminal" as const,
@@ -1538,6 +1721,7 @@ describe("AppHost", () => {
             "terminal-key-1"
           ),
           metadata: {
+            ...TEST_SEALED_APP_BUILD_METADATA,
             ev: "ev-terminal-1",
             sourceStateHash: "state:test",
             details: {
@@ -1571,6 +1755,7 @@ describe("AppHost", () => {
             "terminal-key-2"
           ),
           metadata: {
+            ...TEST_SEALED_APP_BUILD_METADATA,
             ev: "ev-terminal-2",
             sourceStateHash: "state:test",
             details: {
@@ -1732,6 +1917,7 @@ describe("AppHost", () => {
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-app-key"),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
         sourceStateHash: "state:test",
         details: {
@@ -1927,6 +2113,7 @@ describe("AppHost", () => {
         "rn-provider-change-key"
       ),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
         sourceStateHash: "state:test",
         details: {
@@ -1959,8 +2146,25 @@ describe("AppHost", () => {
       ],
     };
     buildSystem.getBuild.mockResolvedValueOnce(providerChangeBuild as never);
+    const activeBuild = {
+      ...providerChangeBuild,
+      buildKey: "app-key",
+      metadata: {
+        ...providerChangeBuild.metadata,
+        buildKey: "app-key",
+        sourcePath: "apps/shell",
+        details: {
+          ...providerChangeBuild.metadata.details,
+          provider: oldProvider,
+        },
+      },
+    };
     buildSystem.getBuildByKey.mockImplementation((key: string) =>
-      key === "rn-provider-change-key" ? (providerChangeBuild as never) : null
+      key === "rn-provider-change-key"
+        ? (providerChangeBuild as never)
+        : key === "app-key"
+          ? (activeBuild as never)
+          : null
     );
 
     const readiness = await host.reactNative.ensureReady(graphNode.relativePath);
@@ -2044,6 +2248,7 @@ describe("AppHost", () => {
         "rn-preflight-key"
       ),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
         sourceStateHash: "state:test",
         details: {
@@ -2119,6 +2324,7 @@ describe("AppHost", () => {
         "rn-existing-key"
       ),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
         sourceStateHash: "state:test",
         details: {
@@ -2181,6 +2387,7 @@ describe("AppHost", () => {
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-ready-key"),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
         sourceStateHash: "state:test",
         details: {
@@ -2244,6 +2451,7 @@ describe("AppHost", () => {
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-delayed-key"),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
         sourceStateHash: "state:test",
         details: {
@@ -2304,6 +2512,7 @@ describe("AppHost", () => {
               "rn-platformless-key"
             ),
             metadata: {
+              ...TEST_SEALED_APP_BUILD_METADATA,
               ev: "ev-mobile",
               sourceStateHash: "state:test",
               details: {
@@ -2354,6 +2563,7 @@ describe("AppHost", () => {
               "rn-android-only-key"
             ),
             metadata: {
+              ...TEST_SEALED_APP_BUILD_METADATA,
               ev: "ev-mobile",
               sourceStateHash: "state:test",
               details: {
@@ -2415,6 +2625,7 @@ describe("AppHost", () => {
               "rn-no-provider-key"
             ),
             metadata: {
+              ...TEST_SEALED_APP_BUILD_METADATA,
               ev: "ev-mobile",
               sourceStateHash: "state:test",
               details: {
@@ -2466,6 +2677,7 @@ describe("AppHost", () => {
         "rn-no-provider-key"
       ),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
         sourceStateHash: "state:test",
         details: {
@@ -2525,6 +2737,7 @@ describe("AppHost", () => {
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-bad-key"),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
         sourceStateHash: "state:test",
         details: {
@@ -2580,6 +2793,7 @@ describe("AppHost", () => {
         "rn-android-only-key"
       ),
       metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
         sourceStateHash: "state:test",
         details: {

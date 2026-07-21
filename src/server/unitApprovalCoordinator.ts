@@ -31,8 +31,16 @@ interface PendingBatch {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+interface ActiveRequest {
+  entries: UnitBatchEntry[];
+  settlement: Promise<void>;
+}
+
+type UnitApprovalEntrySelector = (entry: UnitBatchEntry) => boolean;
+
 export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<UnitBatchEntry> {
   private pending = new Map<"startup" | "meta-change", PendingBatch>();
+  private active = new Map<"startup" | "meta-change", Set<ActiveRequest>>();
 
   constructor(
     private readonly deps: {
@@ -56,7 +64,11 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
       batch = { trigger: request.trigger, requests: [], timer: null };
       this.pending.set(request.trigger, batch);
       batch.timer = setTimeout(() => {
-        void this.flush(request.trigger);
+        void this.publishPending(request.trigger).catch(() => {
+          // Every enqueued request receives the same error through its own
+          // promise. Avoid a second unhandled rejection from the timer-owned
+          // publication promise.
+        });
       }, this.deps.delayMs ?? 0);
     }
     return new Promise<void>((resolve, reject) => {
@@ -64,25 +76,42 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
     });
   }
 
-  publishPending(trigger?: "startup" | "meta-change"): void {
-    const triggers = trigger ? [trigger] : Array.from(this.pending.keys());
-    for (const candidate of triggers) {
-      void this.flush(candidate);
-    }
+  publishPending(
+    trigger?: "startup" | "meta-change",
+    matches?: UnitApprovalEntrySelector
+  ): Promise<void> {
+    const triggers = trigger
+      ? [trigger]
+      : Array.from(new Set([...this.pending.keys(), ...this.active.keys()]));
+
+    // Starting a batch is deliberately synchronous through approvalQueue.request:
+    // callers may inspect the queue immediately after this method returns to
+    // distinguish a human decision from unattended activation. The returned
+    // promise represents only matching unit applications, not unrelated work
+    // which happened to share the same startup trigger.
+    for (const candidate of triggers) this.startPendingBatch(candidate);
+
+    const settlements = triggers.flatMap((candidate) =>
+      [...(this.active.get(candidate) ?? [])]
+        .filter((request) => !matches || request.entries.some(matches))
+        .map((request) => request.settlement)
+    );
+    return Promise.all(settlements).then(() => undefined);
   }
 
-  private async flush(trigger: "startup" | "meta-change"): Promise<void> {
+  private startPendingBatch(trigger: "startup" | "meta-change"): void {
     const batch = this.pending.get(trigger);
     if (!batch) return;
     this.pending.delete(trigger);
     if (batch.timer) clearTimeout(batch.timer);
     const requests = batch.requests;
+    const units = requests.flatMap((request) => request.entries);
+    let decision: Promise<UnitApprovalDecision>;
     try {
-      const units = requests.flatMap((request) => request.entries);
-      const decision =
+      decision =
         trigger === "startup" && this.deps.autoApproveStartupUnits
-          ? "once"
-          : await this.deps.approvalQueue.request({
+          ? Promise.resolve("once")
+          : this.deps.approvalQueue.request({
               kind: "unit-batch",
               callerId: "system:units",
               callerKind: "system",
@@ -94,19 +123,38 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
               units,
               configWrite: null,
             });
-      if (decision === "deny") {
-        for (const request of requests) request.applyDenied();
-      } else {
-        // Kick off extension requests first but apply all requests
-        // concurrently: awaiting each host batch in turn made every app build
-        // wait for every extension to finish. An app that builds through a
-        // provider extension may transiently fail while its provider is still
-        // activating; the app host re-applies it on provider registration.
-        await Promise.all(applyOrder(requests).map((request) => request.applyApproved()));
-      }
-      for (const request of requests) request.resolve();
-    } catch (err) {
-      for (const request of requests) request.reject(err);
+    } catch (error) {
+      decision = Promise.reject(error);
+    }
+
+    const active = this.active.get(trigger) ?? new Set<ActiveRequest>();
+    this.active.set(trigger, active);
+    for (const request of applyOrder(requests)) {
+      const tracked: ActiveRequest = {
+        entries: request.entries,
+        settlement: Promise.resolve(decision)
+          .then(async (resolvedDecision) => {
+            if (resolvedDecision === "deny") request.applyDenied();
+            else await request.applyApproved();
+            request.resolve();
+          })
+          .catch((error: unknown) => {
+            request.reject(error);
+            throw error;
+          }),
+      };
+      active.add(tracked);
+      void tracked.settlement
+        .finally(() => {
+          active.delete(tracked);
+          if (active.size === 0 && this.active.get(trigger) === active) {
+            this.active.delete(trigger);
+          }
+        })
+        .catch(() => {
+          // The publication promise and the enqueue promise independently
+          // expose the same failure to their respective owners.
+        });
     }
   }
 }

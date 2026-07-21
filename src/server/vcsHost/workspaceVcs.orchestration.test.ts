@@ -6,7 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
 import { EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { ensureLayout, mirrorWorktreeTree, putBytes } from "../services/blobstoreService.js";
+import {
+  ensureLayout,
+  getBytes,
+  mirrorWorktreeTree,
+  putBytes,
+} from "../services/blobstoreService.js";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
@@ -54,6 +59,28 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("keeps cached composed workspace views rooted during content GC", async () => {
+    const { blobsDir, vcs } = await harness();
+    const cached = await putBytes(blobsDir, Buffer.from("cached-composed-view"));
+    const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
+    await vcs.attachGad({
+      call: vi.fn(async (method: string) => {
+        if (method !== "vcsContentGcRoots") throw new Error(`unexpected ${method}`);
+        return { contentRoots: [], contentHashes: [] };
+      }),
+    } as never);
+    vi.spyOn(vcs.repositories, "collectCachedReachableDigests").mockResolvedValue({
+      treeDigests: [],
+      contentDigests: [cached.digest],
+    });
+
+    await expect(vcs.runGc({ minAgeMs: 0 })).resolves.toMatchObject({ swept: 1 });
+    await expect(getBytes(blobsDir, cached.digest)).resolves.toEqual(
+      Buffer.from("cached-composed-view")
+    );
+    await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
+  });
+
   it("reuses one stable context-initialization command across host instances", async () => {
     const { vcs, deps } = await harness();
     const restarted = new WorkspaceVcs(deps);

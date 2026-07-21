@@ -3,22 +3,26 @@
  *
  * Provides:
  * - listSources: launchable worker sources (including manifest entry + durable classes)
- * - listServices: workspace-authored services declared in the manifest
+ * - listServices: product-owned and workspace-authored services available here
  * - resolveService: workspace-authored services plus product-sealed workspace services
  */
 
 import { z } from "zod";
+import type { PrincipalKind } from "@vibestudio/rpc";
+import { PRODUCT_WORKSPACE_SERVICES } from "@vibestudio/shared/productWorkspaceServices.mjs";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import type { BuildSystemV2 } from "../buildV2/index.js";
+import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import { findReviewedInternalDurableObjectTarget } from "../reviewedInternalDurableObjectTargets.js";
 import { resolveWorkspaceService, type ResolvedWorkspaceService } from "../workspaceServices.js";
-import { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 
 type ServiceListRow =
   | {
+      origin: "product" | "workspace";
       name: string;
       title?: string;
       description?: string;
@@ -29,6 +33,7 @@ type ServiceListRow =
       defaultObjectKey: string | null;
     }
   | {
+      origin: "workspace";
       name: string;
       title?: string;
       description?: string;
@@ -43,6 +48,13 @@ type ScopedDeclarations = {
   scope: "main" | "context";
   contextId?: string;
   buildRef?: string;
+};
+
+type ScopedDurableObject = ScopedDeclarations & {
+  authority: Array<{
+    capability: string;
+    principals: readonly PrincipalKind[];
+  }>;
 };
 
 const WorkerSourceSchema = z
@@ -66,16 +78,54 @@ export function createWorkerService(deps: {
   workspaceDecls: WorkspaceDeclarations;
   getCallerContextId?: (callerId: string) => string | null;
   loadContextDeclarations?: (contextId: string) => Promise<WorkspaceDeclarations | null>;
+  // Resolution makes a declared target available; it does not create ownership.
+  // The resolving subject remains the caller of its subsequent RPC unchanged.
   activateDurableObject?: (args: {
     source: string;
     className: string;
     objectKey: string;
     contextId?: string;
     buildRef?: string;
-    ownerUserId?: string;
   }) => Promise<void>;
 }): ServiceDefinition {
   const { buildSystem, workspaceDecls } = deps;
+  const dynamicWorkspaceServiceLeaf = {
+    capability: "workspace-service:*",
+    requirement: {
+      kind: "selected" as const,
+      principals: ["host", "user", "code", "entity"] as const,
+    },
+    evalAcquisition: { kind: "baseline" as const },
+  };
+  const reviewedInternalTargetLeaf = {
+    capability: "service:workers.resolveDurableObject",
+    requirement: {
+      kind: "selected" as const,
+      principals: ["code"] as const,
+    },
+    evalAcquisition: { kind: "baseline" as const },
+  };
+  const preparedResolutionAuthority = (method: "resolveService" | "resolveDurableObject") => {
+    const capability = `service:workers.${method}`;
+    return {
+      // Resolution is a prerequisite for invoking a declared workspace
+      // service. Entity-bound agents/DOs must be able to reach this preparer;
+      // the selected service leaf below still enforces whether that exact
+      // service admits the entity principal.
+      requirement: requirementForPrincipals(["user", "host", "code", "entity"], capability),
+      resource: { kind: "literal" as const, key: capability },
+      prepared: {
+        resolver:
+          method === "resolveService"
+            ? "workers.resolveService.workspace-service"
+            : "workers.resolveDurableObject.target",
+        leaves:
+          method === "resolveDurableObject"
+            ? [dynamicWorkspaceServiceLeaf, reviewedInternalTargetLeaf]
+            : [dynamicWorkspaceServiceLeaf],
+      },
+    };
+  };
 
   const methods = {
     listSources: {
@@ -83,26 +133,64 @@ export function createWorkerService(deps: {
         "List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers)",
       args: z.tuple([]),
       returns: z.array(WorkerSourceSchema),
+      access: { sensitivity: "read" as const },
     },
     listServices: {
-      description: "List workspace-authored services declared in the manifest",
+      description: "List product-owned and workspace-authored services available here",
       args: z.tuple([]),
+      access: { sensitivity: "read" as const },
     },
     resolveService: {
       description: "Resolve a workspace service by name or protocol",
       args: z.tuple([z.string(), z.string().nullable().optional()]),
+      access: { sensitivity: "read" as const },
+      authority: preparedResolutionAuthority("resolveService"),
     },
     resolveDurableObject: {
       description: "Resolve a Durable Object RPC target by source/class/key",
       args: z.tuple([z.string(), z.string(), z.string()]),
+      access: { sensitivity: "read" as const },
+      authority: preparedResolutionAuthority("resolveDurableObject"),
     },
   };
 
   return {
     name: "workers",
     description: "Worker discovery and workspace service resolution",
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
+    authority: { principals: ["user", "host", "code"] },
     methods,
+    authorityPreparation: {
+      "workers.resolveService.workspace-service": async (ctx, [query, objectKey]) => {
+        const { service } = await resolveWorkspaceServiceForCaller(
+          ctx,
+          String(query),
+          objectKey == null ? null : String(objectKey)
+        );
+        const capability = `workspace-service:${service.name}`;
+        return [
+          {
+            capability,
+            resourceKey:
+              service.kind === "durable-object" ? service.targetId : service.routeBasePath,
+            requirement: requirementForPrincipals(service.authority.principals, capability),
+          },
+        ];
+      },
+      "workers.resolveDurableObject.target": async (ctx, [source, className, objectKey]) => {
+        const scoped = await resolveDurableObjectForCaller(
+          ctx,
+          String(source),
+          String(className),
+          String(objectKey)
+        );
+        const targetId = `do:${String(source)}:${String(className)}:${String(objectKey)}`;
+        return scoped.authority.map(({ capability, principals }) => ({
+          capability,
+          resourceKey: targetId,
+          requirement: requirementForPrincipals(principals, capability),
+        }));
+      },
+    },
     handler: defineServiceHandler("workers", methods, {
       listSources: () => {
         const graph = buildSystem.getGraph();
@@ -119,10 +207,13 @@ export function createWorkerService(deps: {
           }));
       },
       listServices: async (ctx) => {
-        const mainRows = listServiceRows(workspaceDecls);
+        const mainRows = [...listProductServiceRows(), ...listServiceRows(workspaceDecls)];
         const scopedContext = await declarationsForCallerContext(ctx);
         if (!scopedContext) return mainRows;
-        const seen = serviceQueryKeys(workspaceDecls);
+        const seen = new Set([
+          ...PRODUCT_WORKSPACE_SERVICES.flatMap((service) => [service.name, ...service.protocols]),
+          ...serviceQueryKeys(workspaceDecls),
+        ]);
         return [
           ...mainRows,
           ...listServiceRows(scopedContext.decls).filter((row) => {
@@ -134,7 +225,6 @@ export function createWorkerService(deps: {
       resolveService: async (ctx, [query, objectKey]) => {
         const scoped = await resolveWorkspaceServiceForCaller(ctx, query, objectKey);
         const service = scoped.service;
-        assertWorkspaceServiceAccess(service.name, service.policy, ctx.caller.runtime.kind);
         if (service.kind === "durable-object") {
           const singleton = scoped.decls.singletons.find(service.source, service.className);
           const contextId = singleton?.contextId ?? scoped.contextId;
@@ -147,13 +237,12 @@ export function createWorkerService(deps: {
             objectKey: service.objectKey,
             ...(contextId ? { contextId } : {}),
             ...(buildRef ? { buildRef } : {}),
-            ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}),
           });
         }
         return service;
       },
       resolveDurableObject: async (ctx, [source, className, objectKey]) => {
-        const scoped = await resolveDurableObjectForCaller(ctx, source, className);
+        const scoped = await resolveDurableObjectForCaller(ctx, source, className, objectKey);
         const targetId = `do:${source}:${className}:${objectKey}`;
         const singleton = scoped.decls.singletons.find(source, className);
         const contextId = singleton?.contextId ?? scoped.contextId;
@@ -166,7 +255,6 @@ export function createWorkerService(deps: {
           objectKey,
           ...(contextId ? { contextId } : {}),
           ...(buildRef ? { buildRef } : {}),
-          ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}),
         });
         return { kind: "durable-object", source, className, objectKey, targetId };
       },
@@ -214,25 +302,42 @@ export function createWorkerService(deps: {
   async function resolveDurableObjectForCaller(
     ctx: ServiceContext,
     source: string,
-    className: string
-  ): Promise<ScopedDeclarations> {
+    className: string,
+    objectKey: string
+  ): Promise<ScopedDurableObject> {
+    if (source === INTERNAL_DO_SOURCE) {
+      const reviewed = findReviewedInternalDurableObjectTarget(source, className, objectKey);
+      if (!reviewed) throw new Error(missingDurableObjectMessage(source, className));
+      return {
+        decls: workspaceDecls,
+        scope: "main",
+        authority: [
+          {
+            capability: reviewed.authority.capability,
+            principals: reviewed.authority.principals,
+          },
+        ],
+      };
+    }
+
     try {
-      assertDurableObjectExists(
-        buildSystem,
-        workspaceDecls,
-        source,
-        className,
-        ctx.caller.runtime.kind
-      );
-      return { decls: workspaceDecls, scope: "main" };
+      assertDurableObjectExists(buildSystem, workspaceDecls, source, className);
+      return {
+        decls: workspaceDecls,
+        scope: "main",
+        authority: durableObjectAuthority(workspaceDecls, source, className),
+      };
     } catch (err) {
       if (!isMissingDurableObjectError(err, source, className)) throw err;
     }
 
     const scoped = await declarationsForCallerContext(ctx);
     if (!scoped) throw new Error(missingDurableObjectMessage(source, className));
-    assertDurableObjectDeclared(scoped.decls, source, className, ctx.caller.runtime.kind);
-    return scoped;
+    assertDurableObjectDeclared(scoped.decls, source, className);
+    return {
+      ...scoped,
+      authority: durableObjectAuthority(scoped.decls, source, className),
+    };
   }
 }
 
@@ -257,9 +362,25 @@ function serviceQueryKeys(decls: WorkspaceDeclarations): Set<string> {
   return keys;
 }
 
+function durableObjectAuthority(
+  decls: WorkspaceDeclarations,
+  source: string,
+  className: string
+): ScopedDurableObject["authority"] {
+  return decls.services
+    .filter(
+      (service) => service.source === source && service.durableObject?.className === className
+    )
+    .map((service) => ({
+      capability: `workspace-service:${service.name}`,
+      principals: service.authority.principals,
+    }));
+}
+
 function listServiceRows(decls: WorkspaceDeclarations): ServiceListRow[] {
   return decls.services.map((service) => {
     const base = {
+      origin: "workspace" as const,
       name: service.name,
       title: service.title,
       description: service.description,
@@ -283,27 +404,32 @@ function listServiceRows(decls: WorkspaceDeclarations): ServiceListRow[] {
   });
 }
 
+function listProductServiceRows(): ServiceListRow[] {
+  return PRODUCT_WORKSPACE_SERVICES.map((service) => ({
+    origin: "product" as const,
+    name: service.name,
+    title: service.title,
+    description: service.description,
+    protocols: [...service.protocols],
+    source: service.source,
+    kind: "durable-object" as const,
+    className: service.durableObject.className,
+    defaultObjectKey: service.durableObject.objectKey,
+  }));
+}
+
 function assertDurableObjectExists(
   buildSystem: BuildSystemV2,
   workspaceDecls: WorkspaceDeclarations,
   source: string,
-  className: string,
-  callerKind: CallerKind
+  className: string
 ): void {
-  if (
-    source === INTERNAL_DO_SOURCE &&
-    (INTERNAL_DO_CLASSES as readonly string[]).includes(className)
-  ) {
-    return;
-  }
-
   const worker = buildSystem
     .getGraph()
     .allNodes()
     .find((node) => node.kind === "worker" && node.relativePath === source);
   const classes = worker?.manifest.durable?.classes ?? [];
   if (classes.some((entry) => entry.className === className)) {
-    assertDurableObjectBackingServiceAccess(workspaceDecls, source, className, callerKind);
     return;
   }
 
@@ -313,8 +439,7 @@ function assertDurableObjectExists(
 function assertDurableObjectDeclared(
   decls: WorkspaceDeclarations,
   source: string,
-  className: string,
-  callerKind: CallerKind
+  className: string
 ): void {
   const declared =
     decls.singletons.find(source, className) ||
@@ -325,46 +450,4 @@ function assertDurableObjectDeclared(
       (route) => route.source === source && route.durableObject?.className === className
     );
   if (!declared) throw new Error(missingDurableObjectMessage(source, className));
-  assertDurableObjectBackingServiceAccess(decls, source, className, callerKind);
-}
-
-function assertDurableObjectBackingServiceAccess(
-  decls: WorkspaceDeclarations,
-  source: string,
-  className: string,
-  callerKind: CallerKind
-): void {
-  const backingPolicies = decls.services
-    .filter(
-      (service) => service.source === source && service.durableObject?.className === className
-    )
-    .map((service) => ({
-      name: service.name,
-      policy: service.policy as { allowed?: CallerKind[] } | undefined,
-    }));
-  for (const service of backingPolicies) {
-    assertWorkspaceServiceAccess(service.name, service.policy, callerKind);
-  }
-}
-
-function assertWorkspaceServiceAccess(
-  serviceName: string,
-  policy: { allowed?: CallerKind[] } | undefined,
-  callerKind: CallerKind
-): void {
-  const allowed = policy?.allowed;
-  if (!allowed || allowed.length === 0) {
-    const err = new Error(
-      `Workspace service '${serviceName}' has no access policy`
-    ) as NodeJS.ErrnoException;
-    err.code = "EACCES";
-    throw err;
-  }
-  if (!callerKindAllowedByPolicy(callerKind, allowed)) {
-    const err = new Error(
-      `Caller kind '${callerKind}' cannot resolve workspace service '${serviceName}'`
-    ) as NodeJS.ErrnoException;
-    err.code = "EACCES";
-    throw err;
-  }
 }

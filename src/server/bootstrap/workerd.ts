@@ -1,7 +1,7 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { FsService } from "@vibestudio/shared/fsService";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import { randomBytes } from "node:crypto";
@@ -10,6 +10,7 @@ import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { EgressProxy } from "../services/egressProxy.js";
 import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
 import type { RouteRegistry } from "../routeRegistry.js";
+import { attestDirectRpc } from "../services/authorityRuntime.js";
 import { SEMANTIC_CONTROL_PLANE } from "../internalDOs/controlPlane.js";
 import type { WorkerdManager, WorkerdWorkspaceProvider } from "../workerdManager.js";
 
@@ -156,6 +157,21 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         return `http://127.0.0.1:${port}`;
       });
       dispatch.setGetDispatchSecret(() => manager.getDispatchSecret());
+      dispatch.setAuthorityAttester((ref, method) =>
+        attestDirectRpc({
+          caller: createHostCaller("main", "server", {
+            userId: "system",
+            handle: "system",
+          }),
+          source: ref.source,
+          className: ref.className,
+          objectKey: ref.objectKey,
+          method,
+          workspaceId: deps.workspaceId,
+          workspaceMember: true,
+          sessionId: `host:${method}`,
+        })
+      );
       return dispatch;
     },
   });

@@ -6,13 +6,13 @@
  * Direct-address events are delivered by the authenticated RPC transport and
  * broadcast events are delivered by the owned watch response.
  */
-import type { RpcCaller } from "@vibestudio/rpc";
+import type { RpcCaller, RpcClient } from "@vibestudio/rpc";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import { readEventWatchRecords } from "@vibestudio/service-schemas/events";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 
 type Listener<E extends EventName> = (payload: EventPayloads[E]) => void;
-type EventsRpc = Pick<RpcCaller, "stream">;
+type EventsRpc = Pick<RpcCaller, "stream"> & Partial<Pick<RpcClient, "streamReadable">>;
 
 interface ActiveWatch {
   generation: number;
@@ -21,14 +21,30 @@ interface ActiveWatch {
   settled: boolean;
 }
 
+function createWatchId(): string {
+  const cryptoObject = globalThis.crypto as
+    | {
+        randomUUID?: () => string;
+        getRandomValues?: <T extends ArrayBufferView | null>(array: T) => T;
+      }
+    | undefined;
+  if (typeof cryptoObject?.randomUUID === "function") return cryptoObject.randomUUID();
+  if (typeof cryptoObject?.getRandomValues === "function") {
+    const bytes = cryptoObject.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 export class EventsClient {
   private readonly rpc: EventsRpc;
+  private readonly serviceName: string;
   private readonly subscriptions = new Set<EventName>();
   private readonly listeners = new Map<EventName, Set<(payload: unknown) => void>>();
   private active: ActiveWatch | null = null;
   private pending: ActiveWatch | null = null;
   private generation = 0;
-  private readonly watchId = crypto.randomUUID();
+  private readonly watchId = createWatchId();
   private serverEpoch: string | null = null;
   private readonly lastSequenceByEvent = new Map<EventName, number>();
   private refreshQueue: Promise<void> = Promise.resolve();
@@ -40,9 +56,11 @@ export class EventsClient {
     recoveryCoordinator?: Pick<
       RecoveryCoordinator,
       "registerResubscribeHandler" | "registerColdRecoverHandler"
-    >
+    >,
+    serviceName = "events"
   ) {
     this.rpc = rpc;
+    this.serviceName = serviceName;
     const recover = () => this.queueRefresh();
     recoveryCoordinator?.registerResubscribeHandler("events-client", recover);
     recoveryCoordinator?.registerColdRecoverHandler("events-client", recover);
@@ -137,12 +155,12 @@ export class EventsClient {
     };
     const terminal = (async () => {
       try {
-        const response = await this.rpc.stream(
-          "main",
-          "events.watch",
-          [[...this.subscriptions].sort(), this.watchId],
-          { signal: controller.signal, bodyIdleTimeoutMs: null }
-        );
+        const args = [[...this.subscriptions].sort(), this.watchId];
+        const options = { signal: controller.signal, bodyIdleTimeoutMs: null };
+        const response =
+          typeof this.rpc.streamReadable === "function"
+            ? await this.rpc.streamReadable("main", `${this.serviceName}.watch`, args, options)
+            : await this.rpc.stream("main", `${this.serviceName}.watch`, args, options);
         for await (const record of readEventWatchRecords(response)) {
           if (record.kind === "watching") {
             if (acknowledged) throw new Error("Event watch sent more than one ACK");

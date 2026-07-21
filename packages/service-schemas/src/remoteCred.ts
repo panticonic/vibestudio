@@ -1,7 +1,7 @@
 /** Electron-owned persistence and connection actions for a paired WebRTC device. */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 const readAccess: MethodAccessDescriptor = { sensitivity: "read" };

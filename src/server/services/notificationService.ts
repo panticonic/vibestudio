@@ -87,7 +87,7 @@ export function createNotificationService(deps: { eventService: EventService }):
   const definition: ServiceDefinition = {
     name: "notification",
     description: "Push notifications to the shell chrome area",
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "extension", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: notificationMethods,
     handler: defineServiceHandler("notification", notificationMethods, {
       show: (ctx, [opts]) => {

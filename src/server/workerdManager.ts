@@ -33,6 +33,7 @@ import {
 } from "@vibestudio/shared/runtimePaths";
 import {
   getInternalDOBundle,
+  internalDOExecutionIdentity,
   isInternalDOSource,
   type InternalDOBundle,
 } from "./internalDOs/internalDoLoader.js";
@@ -232,6 +233,8 @@ export interface WorkerInstance {
   bindings: Record<string, WorkerBinding>;
   stateArgs?: Record<string, unknown>;
   buildKey?: string;
+  /** Immutable artifact identity used for code principals. */
+  executionDigest?: string;
   /** Signed effective version of the bound image — the identity egress/approval
    *  scoping must use (buildKey is the artifact key, not the signed EV). */
   effectiveVersion?: string;
@@ -371,6 +374,10 @@ export class WorkerdManager {
   private requestedEpoch = 0;
   private appliedEpoch = 0;
   private restartRunning: Promise<void> | null = null;
+  /** Permanently closes process-start admission once shutdown begins. */
+  private shuttingDown = false;
+  /** Coalesces host watchdogs that observe the same unresponsive workerd. */
+  private unresponsiveRecovery: Promise<void> | null = null;
   private configDir: string;
   private port: number | null = null;
   private inspectorPort: number | null = null;
@@ -485,8 +492,26 @@ export class WorkerdManager {
       unitName: binding.unitName,
       stateHash: binding.stateHash,
       buildKey: binding.buildKey,
+      executionDigest: binding.executionDigest,
+      authorityRequests: binding.authorityRequests,
+      authorityDelegations: binding.authorityDelegations,
       effectiveVersion: binding.effectiveVersion,
       ...(scopeRef ? { scopeRef } : {}),
+    });
+  }
+
+  private persistInternalRuntimeImage(imageId: string, className: string): RuntimeImageRecord {
+    const identity = internalDOExecutionIdentity(this.internalDOBundle(), className);
+    return this.runtimeImages.upsert({
+      id: imageId,
+      source: identity.source,
+      unitName: identity.unitName,
+      stateHash: identity.stateHash,
+      buildKey: identity.buildKey,
+      executionDigest: identity.executionDigest,
+      authorityRequests: identity.authorityRequests,
+      authorityDelegations: identity.authorityDelegations,
+      effectiveVersion: identity.effectiveVersion,
     });
   }
 
@@ -710,7 +735,14 @@ export class WorkerdManager {
     key: string;
     contextId: string;
     stateArgs?: unknown;
-  }): Promise<{ targetId: string; effectiveVersion: string }> {
+  }): Promise<{
+    targetId: string;
+    effectiveVersion: string;
+    buildKey: string;
+    executionDigest: string;
+    authorityRequests: RuntimeImageRecord["authorityRequests"];
+    authorityDelegations: RuntimeImageRecord["authorityDelegations"];
+  }> {
     if (!this.isSemanticControlPlane(args.source, args.className, args.key)) {
       this.requireWorkspaceProvider("Durable Object entity activation");
     }
@@ -737,7 +769,19 @@ export class WorkerdManager {
     const image =
       this.runtimeImages.get(targetId) ??
       (svc.imageId ? this.runtimeImages.get(svc.imageId) : null);
-    return { targetId, effectiveVersion: image?.effectiveVersion ?? svc.buildKey };
+    if (!image) {
+      throw new Error(
+        `ensureDurableObjectEntity: no sealed runtime image for concrete object ${targetId}`
+      );
+    }
+    return {
+      targetId,
+      effectiveVersion: image.effectiveVersion,
+      buildKey: image.buildKey,
+      executionDigest: image.executionDigest,
+      authorityRequests: image.authorityRequests,
+      authorityDelegations: image.authorityDelegations,
+    };
   }
 
   /**
@@ -754,7 +798,14 @@ export class WorkerdManager {
     stateArgs?: unknown;
     env?: Record<string, string>;
     parent?: { parentId: string; parentEntityId: string; parentKind?: "panel" | "worker" | "do" };
-  }): Promise<{ targetId: string; effectiveVersion: string }> {
+  }): Promise<{
+    targetId: string;
+    effectiveVersion: string;
+    buildKey: string;
+    executionDigest: string;
+    authorityRequests: RuntimeImageRecord["authorityRequests"];
+    authorityDelegations: RuntimeImageRecord["authorityDelegations"];
+  }> {
     this.requireWorkspaceProvider("worker start");
     const targetId = canonicalEntityId({ kind: "worker", source: args.source, key: args.key });
     const name = args.key.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -782,9 +833,19 @@ export class WorkerdManager {
         existingInstance.runtimeImageId === targetId &&
         existingInstance.contextId === args.contextId
       ) {
+        const image = this.runtimeImages.get(existingInstance.runtimeImageId);
+        if (!image) {
+          throw new Error(
+            `Worker ${targetId} is running without its sealed runtime image; restart it to rebind`
+          );
+        }
         return {
           targetId,
-          effectiveVersion: existingInstance.effectiveVersion ?? existingInstance.buildKey ?? "",
+          effectiveVersion: image.effectiveVersion,
+          buildKey: image.buildKey,
+          executionDigest: image.executionDigest,
+          authorityRequests: image.authorityRequests,
+          authorityDelegations: image.authorityDelegations,
         };
       }
       throw new Error(
@@ -836,6 +897,7 @@ export class WorkerdManager {
       ]);
       instance.scopeRef = image.scopeRef;
       instance.buildKey = image.buildKey;
+      instance.executionDigest = image.executionDigest;
       instance.effectiveVersion = image.effectiveVersion;
       this.advanceWorkerCodeVersion(instance, image.generation);
       // Register egress AFTER bind so the caller carries the signed effective
@@ -870,7 +932,14 @@ export class WorkerdManager {
         }
       }
 
-      return { targetId, effectiveVersion: image.effectiveVersion };
+      return {
+        targetId,
+        effectiveVersion: image.effectiveVersion,
+        buildKey: image.buildKey,
+        executionDigest: image.executionDigest,
+        authorityRequests: image.authorityRequests,
+        authorityDelegations: image.authorityDelegations,
+      };
     } catch (error) {
       instance.status = "error";
       this.instances.delete(name);
@@ -1089,6 +1158,37 @@ export class WorkerdManager {
   onRestartReady(fn: (event: RestartReadyEvent) => Promise<void> | void): () => void {
     this.restartReadyHooks.add(fn);
     return () => this.restartReadyHooks.delete(fn);
+  }
+
+  /**
+   * Recover an unresponsive sandbox without first asking workerd-hosted
+   * lifecycle targets to prepare. A synchronous unsafe-eval loop prevents
+   * those RPCs from running, so graceful restart would deadlock before it
+   * reached the process boundary. Durable objects reconcile from SQLite after
+   * the replacement process starts, and listeners receive a crash-style ready
+   * event so runtime leases are resumed from durable state.
+   */
+  async recoverUnresponsiveSandbox(reason: string): Promise<void> {
+    if (this.unresponsiveRecovery) return this.unresponsiveRecovery;
+    const recovery = (async () => {
+      const correlationId = crypto.randomUUID();
+      const previousGeneration = this.bootGeneration === 0 ? null : this.bootGeneration;
+      log.error(`recovering unresponsive workerd sandbox: ${reason}`);
+      await this.stopWorkerd(`unresponsive-sandbox:${reason}`);
+      await this.restartWorkerd();
+      await this.emitRestartReady({
+        correlationId,
+        generation: this.bootGeneration,
+        previousGeneration,
+        reason: "crash",
+      });
+    })();
+    this.unresponsiveRecovery = recovery;
+    try {
+      await recovery;
+    } finally {
+      if (this.unresponsiveRecovery === recovery) this.unresponsiveRecovery = null;
+    }
   }
 
   getDispatchSecret(): string {
@@ -1717,12 +1817,16 @@ export class WorkerdManager {
    * propagate to all current waiters (no infinite retry loop).
    */
   private restartWorkerd(): Promise<void> {
+    if (this.shuttingDown) {
+      return Promise.reject(new Error("WorkerdManager is shutting down"));
+    }
     const myEpoch = ++this.requestedEpoch;
     return this.ensureRestartAtLeast(myEpoch);
   }
 
   private async ensureRestartAtLeast(epoch: number): Promise<void> {
     while (this.appliedEpoch < epoch) {
+      if (this.shuttingDown) return;
       if (this.restartRunning) {
         await this.restartRunning;
         continue;
@@ -1741,6 +1845,7 @@ export class WorkerdManager {
   }
 
   private async _restartWorkerdInner(): Promise<void> {
+    if (this.shuttingDown) return;
     const correlationId = crypto.randomUUID();
     const previousGeneration = this.bootGeneration === 0 ? null : this.bootGeneration;
     const nextGeneration = this.bootGeneration + 1;
@@ -1754,13 +1859,21 @@ export class WorkerdManager {
     }
     await this.stopWorkerd("planned-restart");
 
+    if (this.shuttingDown) return;
+
     if (this.instances.size === 0 && this.doServices.size === 0) return;
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
+      if (this.shuttingDown) return;
       try {
         this.pendingBootGeneration = nextGeneration;
         await this.startWorkerdOnce();
+        if (this.shuttingDown) {
+          this.pendingBootGeneration = null;
+          await this.stopWorkerd("shutdown-during-restart");
+          return;
+        }
         this.bootGeneration = nextGeneration;
         this.pendingBootGeneration = null;
         this.writeBootGeneration(this.bootGeneration);
@@ -1776,6 +1889,10 @@ export class WorkerdManager {
       } catch (err) {
         lastError = err;
         this.pendingBootGeneration = null;
+        if (this.shuttingDown) {
+          await this.stopWorkerd("shutdown-during-restart");
+          return;
+        }
         const detail = this.formatWorkerdStartupError(err);
         if (attempt < 3) {
           log.warn(
@@ -1839,11 +1956,14 @@ export class WorkerdManager {
   }
 
   private async startWorkerdOnce(): Promise<void> {
+    if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
     const config = await this.generateConfig();
+    if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
     const configPath = path.join(this.configDir, "config.capnp");
     const capnpText = this.toCapnpText(config as Record<string, unknown>);
     await this.flushConfigWrites();
     await fs.promises.writeFile(configPath, capnpText);
+    if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
 
     const binary = this.findWorkerdBinary();
     if (!this.inspectorPort && workerdInspectorEnabled()) {
@@ -2116,23 +2236,21 @@ export class WorkerdManager {
       }
       const imageId = `do-service:${serviceKey}`;
       const image = isInternalDOSource(source)
-        ? null
+        ? this.persistInternalRuntimeImage(imageId, className)
         : await this.bindRuntimeImage(imageId, source, undefined);
-      const buildKey = isInternalDOSource(source)
-        ? this.internalDOBundle().buildKey
-        : assertPresent(image).buildKey;
+      const buildKey = image.buildKey;
       const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
       const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
       this.doServices.set(serviceKey, {
         buildKey,
         className,
-        ...(image ? { imageId: image.id } : {}),
+        imageId: image.id,
         serviceName,
         source,
       });
       if (!isInternalDOSource(source)) {
         this.registerRoutesForDoClass(source, className);
-        this.registerDoEgressCaller(source, className, assertPresent(image).effectiveVersion);
+        this.registerDoEgressCaller(source, className, image.effectiveVersion);
       } else {
         internalAdded = true;
       }
@@ -2226,7 +2344,8 @@ export class WorkerdManager {
         throw new Error(`DO source path must be exactly 2 segments, got: "${source}"`);
       }
       if (isInternalDOSource(source)) {
-        buildKey = this.internalDOBundle().buildKey;
+        image = this.persistInternalRuntimeImage(`do-service:${serviceKey}`, className);
+        buildKey = image.buildKey;
       } else {
         image = await this.bindRuntimeImage(`do-service:${serviceKey}`, source, opts.scopeRef);
         buildKey = image.buildKey;
@@ -2427,6 +2546,10 @@ export class WorkerdManager {
   // =========================================================================
 
   async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    await this.restartRunning?.catch((error) => {
+      log.warn("in-flight workerd restart failed while shutdown was taking ownership:", error);
+    });
     await this.stopWorkerd("shutdown");
 
     // Cleanup all instances
@@ -2493,6 +2616,9 @@ export class WorkerdManager {
         unitName: completed.metadata.name,
         stateHash: trigger.workspaceStateHash,
         buildKey: completedBuildKey,
+        executionDigest: assertPresent(completed.metadata.execution).executionDigest,
+        authorityRequests: assertPresent(completed.metadata.authority).requests,
+        authorityDelegations: assertPresent(completed.metadata.authority).delegations,
         effectiveVersion: completed.metadata.ev,
         ...(scopeRef ? { scopeRef } : {}),
       });

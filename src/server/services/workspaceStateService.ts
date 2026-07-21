@@ -3,7 +3,7 @@
  *
  * Replaces the old workspace-sync op-log service. Reads (slot.list/get/history,
  * entity.resolveActive) are open to all runtime kinds; writes (slot create /
- * appendHistory / setCurrent / replaceHistory / setParent / close) are gated to
+ * commitPreparedNavigation / setParent / close) are gated to
  * the shipped shell, approved shell app, and server. Panels and workers
  * manipulate slots via runtime.*, not directly here.
  */
@@ -58,7 +58,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
   return {
     name: "workspace-state",
     description: "Workspace slot/entity state (WorkspaceDO).",
-    policy: READ_POLICY,
+    authority: READ_POLICY,
     methods: workspaceStateMethods,
     handler: defineServiceHandler("workspace-state", workspaceStateMethods, {
       "slot.list": () => dispatch<unknown>("slotListOpen", []),
@@ -74,21 +74,13 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         ]);
         deps.onSlotStateChanged?.();
       },
-      "slot.appendHistory": async (_ctx, [slotId, entry]) => {
-        const result = await dispatch<number>("slotAppendHistory", [slotId, entry]);
+      "slot.commitPreparedNavigation": async (_ctx, [input]) => {
+        const result = await dispatch<unknown>("slotCommitPreparedNavigation", [input]);
         deps.onSlotStateChanged?.();
         return result;
       },
-      "slot.setCurrent": async (_ctx, [slotId, entryKey]) => {
-        await dispatch<undefined>("slotSetCurrent", [slotId, entryKey]);
-        deps.onSlotStateChanged?.();
-      },
       "slot.updateCurrentStateArgs": async (_ctx, [slotId, stateArgs]) => {
         await dispatch<undefined>("slotUpdateCurrentStateArgs", [slotId, stateArgs]);
-        deps.onSlotStateChanged?.();
-      },
-      "slot.replaceHistory": async (_ctx, [slotId, entries, cursor]) => {
-        await dispatch<undefined>("slotReplaceHistory", [slotId, entries, cursor]);
         deps.onSlotStateChanged?.();
       },
       "slot.setParent": async (_ctx, [slotId, parentSlotId]) => {

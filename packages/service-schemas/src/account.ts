@@ -1,12 +1,15 @@
 /** Canonical child-workspace contract for read-only live account projections. */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor, ServicePolicy } from "@vibestudio/shared/servicePolicy";
+import type {
+  MethodAccessDescriptor,
+  ServiceAuthorityPolicy,
+} from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { HANDLE_PATTERN, RESERVED_HANDLES } from "@vibestudio/identity/types";
 
-const ACCOUNT_READ_POLICY: ServicePolicy = {
-  allowed: ["server", "shell", "app", "panel", "worker", "do", "extension", "agent"],
+const ACCOUNT_READ_POLICY: ServiceAuthorityPolicy = {
+  principals: ["host", "user", "code", "entity"],
 };
 
 const READ_ACCESS: MethodAccessDescriptor = { sensitivity: "read" };
@@ -68,7 +71,7 @@ export const accountMethods = defineServiceMethods({
       "Resolve one account's live profile (defaults to the caller's own subject). Returns null for an unknown userId.",
     args: z.tuple([z.string().optional()]),
     returns: accountProfileSchema.nullable(),
-    policy: ACCOUNT_READ_POLICY,
+    authority: ACCOUNT_READ_POLICY,
     access: READ_ACCESS,
   },
   resolveProfiles: {
@@ -76,7 +79,7 @@ export const accountMethods = defineServiceMethods({
       "Batch-resolve userIds to live profiles for rendering user participants. Unknown ids are absent from the result.",
     args: z.tuple([z.array(z.string())]),
     returns: z.record(z.string(), accountProfileSchema),
-    policy: ACCOUNT_READ_POLICY,
+    authority: ACCOUNT_READ_POLICY,
     access: READ_ACCESS,
   },
   isMember: {
@@ -84,7 +87,7 @@ export const accountMethods = defineServiceMethods({
       "Return whether a user belongs to this child server's bound workspace. The workspace is host-bound, never caller-selected.",
     args: z.tuple([z.string().min(1)]),
     returns: z.boolean(),
-    policy: ACCOUNT_READ_POLICY,
+    authority: ACCOUNT_READ_POLICY,
     access: READ_ACCESS,
   },
   listWorkspaceMembers: {
@@ -92,7 +95,7 @@ export const accountMethods = defineServiceMethods({
       "List live account profiles for this child server's bound workspace, including implicit root membership.",
     args: z.tuple([]),
     returns: z.array(accountProfileSchema),
-    policy: ACCOUNT_READ_POLICY,
+    authority: ACCOUNT_READ_POLICY,
     access: READ_ACCESS,
   },
 });

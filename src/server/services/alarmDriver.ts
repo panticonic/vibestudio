@@ -46,6 +46,8 @@ export class AlarmDriver {
   /** A failed scheduler operation owns the timer until its bounded retry. */
   private failureRetryOperation: "refresh" | "fire" | null = null;
   private consecutiveFailures = 0;
+  /** Transport attempts currently owned by this scheduler activation. */
+  private readonly activeDispatches = new Set<AbortController>();
 
   constructor(deps: AlarmDriverDeps) {
     this.deps = deps;
@@ -73,6 +75,19 @@ export class AlarmDriver {
     this.fireRequested = false;
     this.failureRetryOperation = null;
     this.consecutiveFailures = 0;
+    const reason = new Error("alarm scheduler quiesced");
+    for (const controller of this.activeDispatches) controller.abort(reason);
+  }
+
+  /**
+   * Close admission, cancel scheduler-owned transports, and wait until the one
+   * driving operation has relinquished ownership. Interrupted alarms are not
+   * acknowledged or re-armed here: their existing durable rows are recovered
+   * by the next scheduler activation.
+   */
+  async quiesce(): Promise<void> {
+    this.stop();
+    await this.driving;
   }
 
   /** Re-evaluate the next wake time. Call after any alarm set/clear. */
@@ -171,14 +186,17 @@ export class AlarmDriver {
           objectKey: target.objectKey,
         };
         let result: Awaited<ReturnType<AlarmDoDispatcher["dispatchAlarm"]>>;
+        const controller = new AbortController();
+        this.activeDispatches.add(controller);
         try {
-          result = await this.deps.doDispatch.dispatchAlarm(ref);
+          result = await this.deps.doDispatch.dispatchAlarm(ref, controller.signal);
           if (!isDoAlarmDispatchResult(result)) {
             throw new Error(
               `Invalid alarm dispatch result for ${target.source}:${target.className}`
             );
           }
         } catch (err) {
+          if (this.stopped && controller.signal.aborted) return;
           // The original due row remains until this replacement succeeds.
           // Re-arm with a short backoff; a destroyed DO keeps its cheap retry
           // row until entity cleanup instead of losing its only wake.
@@ -193,6 +211,8 @@ export class AlarmDriver {
             wakeAt: Date.now() + 5_000,
           });
           return;
+        } finally {
+          this.activeDispatches.delete(controller);
         }
         // Persist the successful handler outcome outside the dispatch catch.
         // An acknowledgement failure is a storage failure, not a second

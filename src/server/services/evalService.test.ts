@@ -164,10 +164,16 @@ describe("createEvalService", () => {
           contextId: "ctx_1",
           className: "EvalDO",
           key: objectKey,
+          ownerUserId: undefined,
+          agentBinding: undefined,
           // The EvalDO's launch parent IS its owner — bridges the lineage so entities spawned FROM an
           // eval (e.g. headless sub-agents) resolve up through the owner to the owner's panel.
           parentId: "session:default",
-          stateArgs: { ownerPrincipalId: "session:default", subKey: "default" },
+          stateArgs: {
+            ownerPrincipalId: "session:default",
+            subKey: "default",
+            authorityDelegationPurpose: "tool-eval",
+          },
         },
       ],
     });
@@ -181,6 +187,9 @@ describe("createEvalService", () => {
         }),
       ],
     });
+    expect(
+      (calls.find((c) => c.method === "run")?.args[0] as { timeoutMs?: number }).timeoutMs
+    ).toBeUndefined();
   });
 
   it("keeps entity callers bound to their verified runtime owner", async () => {
@@ -198,7 +207,11 @@ describe("createEvalService", () => {
         expect.objectContaining({
           contextId: "ctx_agent",
           key: objectKey,
-          stateArgs: { ownerPrincipalId: ownerId, subKey: "chan_1" },
+          stateArgs: {
+            ownerPrincipalId: ownerId,
+            subKey: "chan_1",
+            authorityDelegationPurpose: "agentic-code-execution",
+          },
         }),
       ],
     });
@@ -376,6 +389,9 @@ describe("createEvalService", () => {
         }),
       ],
     });
+    expect(
+      (calls.find((c) => c.method === "startRun")?.args[0] as { timeoutMs?: number }).timeoutMs
+    ).toBeUndefined();
 
     // The held run + completion push run on a background task — let them settle.
     await new Promise((r) => setTimeout(r, 10));
@@ -400,6 +416,21 @@ describe("createEvalService", () => {
     expect(ret.runId).toBeTruthy();
     expect(calls.find((c) => c.method === "startRun")).toMatchObject({
       args: [expect.objectContaining({ runId: ret.runId })],
+    });
+  });
+
+  it("preserves an explicit agent eval deadline", async () => {
+    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
+    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
+
+    await service.handler(
+      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
+      "startRun",
+      [{ subKey: "chan_1", code: "return 1;", timeoutMs: 12_345 }]
+    );
+
+    expect(calls.find((c) => c.method === "startRun")?.args[0]).toMatchObject({
+      timeoutMs: 12_345,
     });
   });
 
@@ -486,11 +517,24 @@ describe("createEvalService", () => {
 function createHeldFailHarness(opts: {
   contextId: string;
   getRunResponse: { status: string; result?: unknown };
+  heldMode?: "reject" | "hang" | "cooperative-timeout";
+  recoveryResult?: { status: string; result?: unknown };
+  recoveryDelayMs?: number;
 }) {
   const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
+  let getRunResponse = opts.getRunResponse;
+  let rejectHeld: ((error: Error) => void) | undefined;
   const doDispatch = {
     async dispatchHeld(_ref: unknown, method: string, ..._args: unknown[]) {
       if (method === "executeRun") {
+        if (opts.heldMode === "cooperative-timeout") {
+          return { success: false, console: "", error: "eval timed out after 5ms" };
+        }
+        if (opts.heldMode === "hang") {
+          return new Promise<never>((_resolve, reject) => {
+            rejectHeld = reject;
+          });
+        }
         throw new Error("held connection dropped (server restart)");
       }
       // run (the synchronous held path) is not exercised here.
@@ -504,7 +548,7 @@ function createHeldFailHarness(opts: {
       if (method === "slotResolveByEntity") return null;
       if (method === "startRun")
         return { runId: (args[0] as { runId: string }).runId, status: "pending" };
-      if (method === "getRun") return opts.getRunResponse;
+      if (method === "getRun") return getRunResponse;
       if (method === "onEvalComplete") return undefined;
       throw new Error(`unexpected dispatch ${method}`);
     },
@@ -536,17 +580,83 @@ function createHeldFailHarness(opts: {
     _onRetire() {},
   } as unknown as EntityCache;
   const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
+  const recoverUnresponsiveSandbox = vi.fn(async () => {
+    // Model the real recovery race: killing workerd rejects the held request
+    // before the replacement runtime has restored the durable run state.
+    rejectHeld?.(new Error("held connection dropped during sandbox recovery"));
+    if (opts.recoveryDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, opts.recoveryDelayMs));
+    }
+    if (opts.recoveryResult) getRunResponse = opts.recoveryResult;
+  });
   const service = createEvalService({
     doDispatch,
     entityStore,
     tokenManager: {
       ensureToken: (id: string) => `tok:${id}`,
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
+    recoverUnresponsiveSandbox,
+    watchdogGraceMs: 1,
   });
-  return { service, calls, ownerId };
+  return { service, calls, ownerId, recoverUnresponsiveSandbox };
 }
 
 describe("createEvalService — F2 held-run failure reconciliation", () => {
+  it("accepts a cooperative synchronous timeout without invoking process recovery", async () => {
+    const { service, calls, ownerId, recoverUnresponsiveSandbox } = createHeldFailHarness({
+      contextId: "ctx_agent",
+      getRunResponse: { status: "running" },
+      heldMode: "cooperative-timeout",
+    });
+
+    await service.handler(
+      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
+      "startRun",
+      [{ subKey: "chan_1", code: "while (true) {}", runId: "inv-cooperative", timeoutMs: 5 }]
+    );
+    await new Promise((resolve) => setTimeout(resolve, 15));
+
+    expect(recoverUnresponsiveSandbox).not.toHaveBeenCalled();
+    expect(calls.find((call) => call.method === "onEvalComplete")?.args[0]).toMatchObject({
+      runId: "inv-cooperative",
+      result: { success: false, error: "eval timed out after 5ms" },
+    });
+  });
+
+  it("recycles an unresponsive synchronous sandbox at its host deadline and delivers the reconciled terminal", async () => {
+    const interrupted = {
+      success: false,
+      console: "",
+      error: "eval interrupted by restart",
+    };
+    const { service, calls, ownerId, recoverUnresponsiveSandbox } = createHeldFailHarness({
+      contextId: "ctx_agent",
+      getRunResponse: { status: "running" },
+      heldMode: "hang",
+      recoveryResult: { status: "done", result: interrupted },
+      recoveryDelayMs: 5,
+    });
+
+    await service.handler(
+      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
+      "startRun",
+      [{ subKey: "chan_1", code: "while (true) {}", runId: "inv-watchdog", timeoutMs: 5 }]
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(recoverUnresponsiveSandbox).toHaveBeenCalledOnce();
+    expect(recoverUnresponsiveSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "inv-watchdog", timeoutMs: 5 })
+    );
+    expect(calls.find((call) => call.method === "getRun")).toMatchObject({
+      args: ["inv-watchdog"],
+    });
+    expect(calls.find((call) => call.method === "onEvalComplete")?.args[0]).toMatchObject({
+      runId: "inv-watchdog",
+      result: interrupted,
+    });
+  });
+
   it("pushes onEvalComplete with the reconciled getRun result when the held run died but completed (done)", async () => {
     const result = { success: true, console: "ok", returnValue: 7 };
     const { service, calls, ownerId } = createHeldFailHarness({
@@ -588,10 +698,11 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
     expect((push!.args[0] as { runId: string }).runId).toBe("inv-h2");
   });
 
-  it("does NOT push a terminal when the run is still in flight (running) — never bounds a long eval", async () => {
-    const { service, calls, ownerId } = createHeldFailHarness({
+  it("does not arm host recovery when the caller omits a deadline", async () => {
+    const { service, calls, ownerId, recoverUnresponsiveSandbox } = createHeldFailHarness({
       contextId: "ctx_agent",
       getRunResponse: { status: "running" },
+      heldMode: "hang",
     });
 
     await service.handler(
@@ -601,8 +712,8 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
     );
     await new Promise((r) => setTimeout(r, 10));
 
-    // The run is genuinely still running elsewhere → leave it alone (its own completion push covers
-    // it); forcing a terminal here would cut a legitimately long-running eval short.
+    expect(recoverUnresponsiveSandbox).not.toHaveBeenCalled();
+    expect(calls.some((c) => c.method === "getRun")).toBe(false);
     expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
   });
 

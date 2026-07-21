@@ -16,13 +16,12 @@ import { PanelManager } from "@vibestudio/shell-core/panelManager";
 import type {
   RuntimeClient,
   SlotCreateInput,
-  SlotHistoryEntryInput,
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
 } from "@vibestudio/shell-core/workspaceStateClient";
 import {
-  createVerifiedCaller,
+  createHostCaller,
   type ServiceContext,
   type ServiceDispatcher,
   type VerifiedCaller,
@@ -340,17 +339,16 @@ export async function createServerPanelTreeBridge(
   (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown>
 > {
   const registry = new PanelRegistry({});
-  const serverCtx: ServiceContext = { caller: createVerifiedCaller("server", "server") };
+  const serverCtx: ServiceContext = { caller: createHostCaller("server") };
+  const callerContext = new AsyncLocalStorage<VerifiedCaller>();
   const call = <T>(service: string, method: string, args: unknown[]) =>
-    deps.dispatcher.dispatch(serverCtx, service, method, args) as Promise<T>;
-  const runtimeCaller = new AsyncLocalStorage<VerifiedCaller>();
-  const callRuntime = <T>(method: string, args: unknown[]) =>
     deps.dispatcher.dispatch(
-      { caller: runtimeCaller.getStore() ?? serverCtx.caller },
-      "runtime",
+      { caller: callerContext.getStore() ?? serverCtx.caller },
+      service,
       method,
       args
     ) as Promise<T>;
+  const callRuntime = <T>(method: string, args: unknown[]) => call<T>("runtime", method, args);
   const workspaceState: WorkspaceStateClient = {
     listSlots: () => call<SlotRow[]>("workspace-state", "slot.list", []),
     getSlot: (slotId) => call<SlotRow | null>("workspace-state", "slot.get", [slotId]),
@@ -361,14 +359,10 @@ export async function createServerPanelTreeBridge(
       call<string | null>("workspace-state", "slot.resolveByEntity", [entityId]),
     createSlot: (input: SlotCreateInput) =>
       call<undefined>("workspace-state", "slot.create", [input]),
-    appendSlotHistory: (slotId, entry: SlotHistoryEntryInput) =>
-      call<number>("workspace-state", "slot.appendHistory", [slotId, entry]),
-    setSlotCurrent: (slotId, entryKey) =>
-      call<undefined>("workspace-state", "slot.setCurrent", [slotId, entryKey]),
+    commitPreparedNavigation: (input) =>
+      call("workspace-state", "slot.commitPreparedNavigation", [input]),
     updateCurrentStateArgs: (slotId, stateArgs) =>
       call<undefined>("workspace-state", "slot.updateCurrentStateArgs", [slotId, stateArgs]),
-    replaceSlotHistory: (slotId, entries, cursor) =>
-      call<undefined>("workspace-state", "slot.replaceHistory", [slotId, entries, cursor]),
     setSlotParent: (slotId, parentSlotId) =>
       call<undefined>("workspace-state", "slot.setParent", [slotId, parentSlotId]),
     setSlotPosition: (slotId, positionId) =>
@@ -420,12 +414,39 @@ export async function createServerPanelTreeBridge(
 
   let panelTreeLoaded = false;
   let panelTreeLoadPromise: Promise<void> | null = null;
+  const hydrateExecutionAuthority = async (): Promise<void> => {
+    await Promise.all(
+      registry.listPanels().map(async ({ panelId }) => {
+        const panel = registry.getPanel(panelId);
+        if (!panel?.runtimeEntityId || panel.snapshot.source.startsWith("browser:")) return;
+        const record = await workspaceState.resolveActiveEntity(panel.runtimeEntityId);
+        const authority = record?.activeAuthority;
+        panel.buildKey = record?.activeBuildKey ?? null;
+        panel.executionDigest = record?.activeExecutionDigest ?? null;
+        panel.authorityRequests = authority?.requests;
+        panel.authorityDelegations = authority?.delegations;
+        if (!record?.activeBuildKey || !record.activeExecutionDigest || !authority) {
+          panel.artifacts = {
+            ...panel.artifacts,
+            buildState: "error",
+            error:
+              "Panel execution identity is incomplete. The workspace state is incompatible or corrupt and cannot be loaded.",
+            buildProgress: "Panel unavailable — invalid execution identity",
+          };
+        }
+      })
+    );
+  };
   const sync = async (options: { force?: boolean } = {}) => {
     if (panelTreeLoaded && !options.force) return;
+    log.verbose(`Synchronizing authoritative tree (force=${options.force === true})`);
     panelTreeLoadPromise ??= panelManager
       .loadTree()
-      .then(() => {
+      .then(async () => {
+        log.verbose("Authoritative slot tree loaded; hydrating execution authority");
+        await hydrateExecutionAuthority();
         panelTreeLoaded = true;
+        log.verbose("Authoritative tree synchronization complete");
       })
       .finally(() => {
         panelTreeLoadPromise = null;
@@ -508,13 +529,33 @@ export async function createServerPanelTreeBridge(
   });
   const withRuntimeEntity = async <T extends { panelId: string }>(
     item: T
-  ): Promise<T & { runtimeEntityId: string; effectiveVersion?: string | null }> => {
+  ): Promise<
+    T & {
+      runtimeEntityId: string;
+      effectiveVersion?: string | null;
+      buildKey?: string | null;
+      executionDigest?: string | null;
+      authorityRequests?: readonly import("@vibestudio/rpc").CapabilityScope[];
+      authorityDelegations?: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
+    }
+  > => {
     const slotId = asPanelSlotId(item.panelId);
-    const source = await panelManager.getCurrentEntitySource(slotId);
+    const runtimeEntityId = await panelManager.getCurrentEntityId(slotId);
+    const record = await workspaceState.resolveActiveEntity(runtimeEntityId);
+    const executionDigest = record?.activeExecutionDigest ?? null;
+    const authority = record?.activeAuthority;
     return {
       ...item,
-      runtimeEntityId: await panelManager.getCurrentEntityId(slotId),
-      effectiveVersion: source?.effectiveVersion ?? null,
+      runtimeEntityId,
+      effectiveVersion: record?.source.effectiveVersion ?? null,
+      buildKey: record?.activeBuildKey ?? null,
+      executionDigest,
+      ...(authority
+        ? {
+            authorityRequests: authority.requests,
+            authorityDelegations: authority.delegations,
+          }
+        : {}),
     };
   };
   const panelToListItem = (
@@ -678,6 +719,10 @@ export async function createServerPanelTreeBridge(
           effectiveVersion:
             (await panelManager.getCurrentEntitySource(asPanelSlotId(panelId)))?.effectiveVersion ??
             null,
+          buildKey: panel.buildKey ?? null,
+          executionDigest: panel.executionDigest ?? null,
+          authorityRequests: panel.authorityRequests,
+          authorityDelegations: panel.authorityDelegations,
           contextId: getPanelContextId(panel),
           ref: snapshot.options.ref,
           privileged: snapshot.privileged === true,
@@ -752,6 +797,10 @@ export async function createServerPanelTreeBridge(
           source: created.source,
           runtimeEntityId,
           effectiveVersion: entitySource?.effectiveVersion ?? null,
+          buildKey: registry.getPanel(created.panelId)?.buildKey ?? null,
+          executionDigest: registry.getPanel(created.panelId)?.executionDigest ?? null,
+          authorityRequests: registry.getPanel(created.panelId)?.authorityRequests,
+          authorityDelegations: registry.getPanel(created.panelId)?.authorityDelegations,
         };
       }
       case "focus": {
@@ -915,7 +964,7 @@ export async function createServerPanelTreeBridge(
           server: import("./rpcServer.js").RpcServer;
         }>("rpcServer");
         try {
-          return await rpcServer.callTarget(runtimeEntityId, "_agent.snapshot");
+          return await rpcServer.callTarget(runtimeEntityId, "_agent.snapshot", []);
         } catch {
           // Not every workspace panel exposes an in-process agent API. The
           // accessibility tree is the universal readable snapshot surface.
@@ -934,7 +983,7 @@ export async function createServerPanelTreeBridge(
           return await rpcServer.callTarget(
             runtimeEntityId,
             agentMethod,
-            ...(Array.isArray(args[2]) ? args[2] : [])
+            Array.isArray(args[2]) ? args[2] : []
           );
         } catch (error) {
           // The built-in inspection contract is a property of a hosted panel,
@@ -1021,18 +1070,18 @@ export async function createServerPanelTreeBridge(
   // Every bridge request runs on the shared op-chain so mutations and the
   // self-heal reload never interleave (prevents mirror oscillation).
   return (request) => {
-    // Panel-tree mutation is host-mediated, but runtime entity attribution must
-    // retain the verified acting user and the originating runtime id. Using a
-    // server-kind caller preserves host authority while recording the real
-    // parent id/owner instead of synthetic `server` lineage.
-    const mediatedCaller = createVerifiedCaller(
-      request.callerId,
-      "server",
-      null,
-      null,
-      request.subject
-    );
-    return serialize(() => runtimeCaller.run(mediatedCaller, () => handleBridgeRequest(request)));
+    // The panelTree service has already authorized the external caller. Its
+    // bridge is a trusted product deputy for lower-level workspace-state and
+    // runtime operations, so it must carry genuine host attestation rather
+    // than relying on the cosmetic "server" caller kind. Preserve the acting
+    // user separately for durable ownership attribution.
+    const mediatedCaller = createHostCaller(request.callerId, "server", request.subject);
+    return serialize(async () => {
+      log.verbose(`Handling ${request.method} for ${request.callerId}`);
+      const result = await callerContext.run(mediatedCaller, () => handleBridgeRequest(request));
+      log.verbose(`Handled ${request.method} for ${request.callerId}`);
+      return result;
+    });
   };
 }
 

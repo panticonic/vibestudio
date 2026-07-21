@@ -4,14 +4,13 @@
 
 import { z } from "zod";
 import type { NotificationPayload } from "@vibestudio/shared/events";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 export type NotificationShowRequest = Omit<NotificationPayload, "id"> & { id?: string };
 
-// Access descriptor shared across the notification service's mutator methods.
-// `callers` is left unset (the service-level policy remains the gate); this
-// carries doc/safety metadata for the catalog.
+// Access descriptors carry sensitivity metadata beside the compositional
+// principal requirements declared by the service or method.
 const WRITE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
@@ -131,7 +130,7 @@ export const notificationMethods = defineServiceMethods({
       "Notify every live session for one host-verified account that its durable userland inbox changed.",
     args: z.tuple([z.string().min(1)]),
     returns: z.boolean(),
-    policy: { allowed: ["do", "server"] },
+    authority: { principals: ["code", "host"] },
     access: USER_INBOX_SIGNAL_ACCESS,
     examples: [{ args: ["usr_alice"] }],
   },

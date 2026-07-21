@@ -35,9 +35,9 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(out!.methods["readFile"]).toBe(fsService.readFile);
   });
 
-  it("documents the runtime-only blobstore.putBytes helper without inventing a wire method", () => {
+  it("documents the runtime-only blobstore byte helpers without inventing wire methods", () => {
     const putBase64Schema = { description: "wire base64 method", argsSchema: {} };
-    const out = describeEvalBindingSurface("blobstore", ["putBase64", "putBytes"], {
+    const out = describeEvalBindingSurface("blobstore", ["putBase64", "putBytes", "getBytes"], {
       putBase64: putBase64Schema,
     });
 
@@ -46,6 +46,10 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     const description = (out!.methods["putBytes"] as { description: string }).description;
     expect(description).toContain("Uint8Array | ArrayBuffer");
     expect(description).toContain("MIME metadata");
+    expect(out!.methods["getBytes"]).toBe(EVAL_RUNTIME_METHOD_NOTES["blobstore.getBytes"]);
+    expect((out!.methods["getBytes"] as { description: string }).description).toContain(
+      "Uint8Array | null"
+    );
   });
 
   it("uses the canonical semantic VCS schema and documents the runtime commit wrapper", () => {

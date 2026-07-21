@@ -21,6 +21,9 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         kind TEXT NOT NULL,
         source_repo_path TEXT NOT NULL,
         source_effective_version TEXT NOT NULL,
+        active_build_key TEXT,
+        active_execution_digest TEXT,
+        active_authority TEXT,
         context_id TEXT NOT NULL,
         class_name TEXT,
         key TEXT NOT NULL,
@@ -144,17 +147,6 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         wake_at INTEGER NOT NULL,
         PRIMARY KEY (source, class_name, object_key)
       )
-    `);
-    sql.exec(`
-      DELETE FROM do_alarms
-       WHERE EXISTS (
-         SELECT 1 FROM entities
-          WHERE entities.kind = 'do'
-            AND entities.status = 'retired'
-            AND entities.source_repo_path = do_alarms.source
-            AND entities.class_name = do_alarms.class_name
-            AND entities.key = do_alarms.object_key
-       )
     `);
     sql.exec(`
       CREATE TABLE IF NOT EXISTS recurring_jobs (

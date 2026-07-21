@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.6",
+    "@sinclair/typebox": "^0.27.8",
     "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/trajectory-identity": "workspace:*",

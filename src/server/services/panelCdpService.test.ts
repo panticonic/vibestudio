@@ -634,10 +634,14 @@ describe("panelCdpService", () => {
       kind: "shell",
     });
     expect(getTarget).not.toHaveBeenCalled();
-    expect(service.methods["hostProvider.open"]?.policy).toEqual({ allowed: ["shell", "server"] });
-    expect(service.methods["hostProvider.send"]?.policy).toEqual({ allowed: ["shell", "server"] });
-    expect(service.methods["hostProvider.close"]?.policy).toEqual({
-      allowed: ["shell", "server"],
+    expect(service.methods["hostProvider.open"]?.authority).toEqual({
+      principals: ["user", "host"],
+    });
+    expect(service.methods["hostProvider.send"]?.authority).toEqual({
+      principals: ["user", "host"],
+    });
+    expect(service.methods["hostProvider.close"]?.authority).toEqual({
+      principals: ["user", "host"],
     });
   });
 });

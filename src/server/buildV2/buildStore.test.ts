@@ -20,13 +20,17 @@ import {
 function build(overrides: Partial<BuildResult> = {}): BuildResult {
   return {
     dir: "/tmp/build",
-    sourceStateHash: "state:test",
+    buildKey: "build-key",
+    sourceStateHash: null,
     metadata: {
       kind: "worker",
       name: "workers/a",
+      buildKey: "build-key",
+      sourcePath: null,
       ev: "ev-worker",
-      sourceStateHash: "state:test",
+      sourceStateHash: null,
       sourcemap: false,
+      authority: { requests: [], delegations: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -131,10 +135,58 @@ describe("build artifact helpers", () => {
       const expected = `sha256-${createHash("sha256").update("hello").digest("hex")}`;
 
       expect(result.artifacts[0]).toMatchObject({ integrity: expected });
+      expect(result.buildKey).toBe("build-key");
+      expect(result.metadata.buildKey).toBe(result.buildKey);
+      expect(Object.isFrozen(result.metadata.authority)).toBe(true);
       expect(get("build-key")?.artifacts[0]).toMatchObject({ integrity: expected });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("rejects tampered cached bytes and ambiguous artifact paths", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
+    try {
+      setUserDataPath(root);
+      const result = put("build-key", { entries: build().artifacts }, build().metadata);
+      fs.writeFileSync(path.join(result.dir, "worker.js"), "tampered");
+      expect(get("build-key")).toBeNull();
+
+      for (const artifactPath of ["", ".", "assets\\chunk.js", "assets//chunk.js"]) {
+        expect(() =>
+          put(
+            `invalid-${artifactPath}`,
+            { entries: [{ ...build().artifacts[0]!, path: artifactPath }] },
+            { ...build().metadata, buildKey: `invalid-${artifactPath}` }
+          )
+        ).toThrow(/artifact path/i);
+      }
+      expect(() =>
+        put(
+          "duplicates",
+          { entries: [build().artifacts[0]!, build().artifacts[0]!] },
+          { ...build().metadata, buildKey: "duplicates" }
+        )
+      ).toThrow(/Duplicate build artifact path/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsealed or mismatched workspace build identities", () => {
+    const artifacts = { entries: build().artifacts };
+    expect(() =>
+      put("other-key", artifacts, { ...build().metadata, buildKey: "build-key" })
+    ).toThrow(/does not match content-addressed store key/);
+    expect(() =>
+      put("missing-authority", artifacts, {
+        ...build().metadata,
+        buildKey: "missing-authority",
+        sourcePath: "workers/a",
+        authority: undefined,
+        sourceStateHash: `state:${"c".repeat(64)}`,
+      })
+    ).toThrow(/missing sealed authority metadata/);
   });
 
   it("computes app build integrity from the stored artifact manifest", () => {
@@ -143,6 +195,7 @@ describe("build artifact helpers", () => {
       setUserDataPath(root);
       const metadata = {
         ...build().metadata,
+        buildKey: "app-build-key",
         kind: "app" as const,
         details: {
           kind: "app" as const,
@@ -185,6 +238,61 @@ describe("build artifact helpers", () => {
     }
   });
 
+  it("seals a full execution digest from source, build inputs, and exact artifacts", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-identity-"));
+    const buildKey = "a".repeat(64);
+    const workspaceMetadata = {
+      ...build().metadata,
+      buildKey,
+      sourcePath: "workers/a",
+      ev: "b".repeat(64),
+      sourceStateHash: `state:${"c".repeat(64)}`,
+    };
+    const store = (dir: string, metadata = workspaceMetadata, content = "one") => {
+      setUserDataPath(path.join(root, dir));
+      return put(
+        metadata.buildKey,
+        {
+          entries: [
+            {
+              path: "worker.js",
+              role: "primary" as const,
+              contentType: "text/javascript; charset=utf-8",
+              encoding: "utf8" as const,
+              content,
+            },
+          ],
+        },
+        metadata
+      );
+    };
+
+    try {
+      const first = store("first");
+      const same = store("same");
+      const changedArtifact = store("artifact", workspaceMetadata, "two");
+      const changedInputs = store("inputs", { ...workspaceMetadata, buildKey: "d".repeat(64) });
+      const changedSource = store("source", { ...workspaceMetadata, ev: "e".repeat(64) });
+
+      expect(first.metadata.execution?.executionDigest).toMatch(/^[0-9a-f]{64}$/);
+      expect(same.metadata.execution).toEqual(first.metadata.execution);
+      expect(changedArtifact.metadata.execution?.executionDigest).not.toBe(
+        first.metadata.execution?.executionDigest
+      );
+      expect(changedInputs.metadata.execution?.executionDigest).not.toBe(
+        first.metadata.execution?.executionDigest
+      );
+      expect(changedSource.metadata.execution?.executionDigest).not.toBe(
+        first.metadata.execution?.executionDigest
+      );
+      expect(get(workspaceMetadata.buildKey)?.metadata.execution).toEqual(
+        changedSource.metadata.execution
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects build directories without an artifact manifest", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     try {
@@ -219,6 +327,44 @@ describe("build artifact helpers", () => {
     }
   });
 
+  it("replaces a legacy workspace cache entry without sealed execution identity", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-legacy-"));
+    const buildKey = "a".repeat(64);
+    const metadata = {
+      ...build().metadata,
+      buildKey,
+      sourcePath: "workers/a",
+      ev: "b".repeat(64),
+      sourceStateHash: `state:${"c".repeat(64)}`,
+    };
+    try {
+      setUserDataPath(root);
+      const dir = path.join(root, "builds", buildKey);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "worker.js"), "legacy");
+      fs.writeFileSync(
+        path.join(dir, "artifacts.json"),
+        JSON.stringify([
+          {
+            path: "worker.js",
+            role: "primary",
+            contentType: "text/javascript; charset=utf-8",
+            encoding: "utf8",
+            integrity: `sha256-${createHash("sha256").update("legacy").digest("hex")}`,
+          },
+        ])
+      );
+      fs.writeFileSync(path.join(dir, "metadata.json"), JSON.stringify(metadata));
+      expect(get(buildKey)).toBeNull();
+
+      const rebuilt = put(buildKey, { entries: build().artifacts }, metadata);
+      expect(rebuilt.metadata.execution?.executionDigest).toMatch(/^[0-9a-f]{64}$/);
+      expect(rebuilt.artifacts[0]?.content).toBe("export default {};");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("deduplicates artifact bytes across workspace-local build stores", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     const previousPool = process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
@@ -229,24 +375,38 @@ describe("build artifact helpers", () => {
       process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"] = pool;
 
       setUserDataPath(stateA);
+      const buildA = "a".repeat(64);
+      const buildB = "b".repeat(64);
       const resultA = put(
-        "build-a",
+        buildA,
         { entries: build().artifacts },
-        { ...build().metadata, sourceStateHash: "state:a" }
+        {
+          ...build().metadata,
+          buildKey: buildA,
+          sourcePath: "workers/a",
+          ev: "d".repeat(64),
+          sourceStateHash: `state:${"1".repeat(64)}`,
+        }
       );
       setUserDataPath(stateB);
       const resultB = put(
-        "build-b",
+        buildB,
         { entries: build().artifacts },
-        { ...build().metadata, sourceStateHash: "state:b" }
+        {
+          ...build().metadata,
+          buildKey: buildB,
+          sourcePath: "workers/a",
+          ev: "e".repeat(64),
+          sourceStateHash: `state:${"2".repeat(64)}`,
+        }
       );
 
       const artifactA = fs.statSync(path.join(resultA.dir, "worker.js"));
       const artifactB = fs.statSync(path.join(resultB.dir, "worker.js"));
       expect(artifactA.ino).toBe(artifactB.ino);
       expect(artifactA.nlink).toBeGreaterThanOrEqual(3);
-      expect(resultA.sourceStateHash).toBe("state:a");
-      expect(resultB.sourceStateHash).toBe("state:b");
+      expect(resultA.sourceStateHash).toBe(`state:${"1".repeat(64)}`);
+      expect(resultB.sourceStateHash).toBe(`state:${"2".repeat(64)}`);
       expect(fs.statSync(path.join(resultA.dir, "metadata.json")).ino).not.toBe(
         fs.statSync(path.join(resultB.dir, "metadata.json")).ino
       );
@@ -267,20 +427,27 @@ describe("build artifact helpers", () => {
       process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = sharedCache;
 
       setUserDataPath(stateA);
+      const buildKey = "a".repeat(64);
       const original = put(
-        "same-build-key",
+        buildKey,
         { entries: build().artifacts },
-        { ...build().metadata, sourceStateHash: "state:a" }
+        {
+          ...build().metadata,
+          buildKey,
+          sourcePath: "workers/a",
+          ev: "d".repeat(64),
+          sourceStateHash: `state:${"1".repeat(64)}`,
+        }
       );
-      expect(original.dir).toBe(path.join(stateA, "builds", "same-build-key"));
+      expect(original.dir).toBe(path.join(stateA, "builds", buildKey));
 
       setUserDataPath(stateB);
-      expect(has("same-build-key")).toBe(true);
-      const reused = get("same-build-key");
+      expect(has(buildKey)).toBe(true);
+      const reused = get(buildKey);
 
       expect(reused).toMatchObject({
-        dir: path.join(sharedCache, "same-build-key"),
-        sourceStateHash: "state:a",
+        dir: path.join(sharedCache, buildKey),
+        sourceStateHash: `state:${"1".repeat(64)}`,
       });
       expect(reused?.artifacts[0]?.content).toBe("export default {};");
       expect(fs.existsSync(path.join(stateB, "builds", "same-build-key"))).toBe(false);
@@ -302,9 +469,23 @@ describe("build artifact helpers", () => {
       const stateA = path.join(root, "a");
       const stateB = path.join(root, "b");
       setUserDataPath(stateA);
-      const resultA = put("build-a", { entries: build().artifacts }, build().metadata);
+      const resultA = put(
+        "build-a",
+        { entries: build().artifacts },
+        {
+          ...build().metadata,
+          buildKey: "build-a",
+        }
+      );
       setUserDataPath(stateB);
-      const resultB = put("build-b", { entries: build().artifacts }, build().metadata);
+      const resultB = put(
+        "build-b",
+        { entries: build().artifacts },
+        {
+          ...build().metadata,
+          buildKey: "build-b",
+        }
+      );
       const fileA = path.join(resultA.dir, "worker.js");
       const fileB = path.join(resultB.dir, "worker.js");
       expect(fs.statSync(fileA).ino).not.toBe(fs.statSync(fileB).ino);

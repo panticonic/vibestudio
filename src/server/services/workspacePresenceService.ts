@@ -231,7 +231,7 @@ export function createWorkspacePresenceService(
       "Who is connected to this workspace (WP8 §4 host presence — session-derived, zero channel coupling)",
     // Human-driven surfaces read presence (the panel-forest UI, WP3). Attribution
     // for a mutually-trusting team, not a security gate.
-    policy: { allowed: ["server", "shell", "app", "panel"] },
+    authority: { principals: ["host", "user", "code"] },
     methods: workspacePresenceMethods,
     handler: defineServiceHandler("workspacePresence", workspacePresenceMethods, {
       list: () => list(),

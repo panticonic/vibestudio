@@ -5,12 +5,48 @@ import {
   type CodeIdentityCallerKind,
 } from "@vibestudio/shared/principalKinds";
 import type { UserSubject } from "@vibestudio/identity/types";
+import type { EvalDelegationPurpose } from "@vibestudio/shared/authorityManifest";
+
+const INTERNAL_DO_SOURCE = "vibestudio/internal";
+const EVAL_DO_CLASS = "EvalDO";
+
+function evalOwnerDelegationPurpose(record: {
+  source: { repoPath: string };
+  className?: string;
+  parentId?: string;
+  stateArgs?: unknown;
+}): { ownerId: string; purpose: EvalDelegationPurpose } | null {
+  if (record.source.repoPath !== INTERNAL_DO_SOURCE || record.className !== EVAL_DO_CLASS) {
+    return null;
+  }
+  if (
+    !record.stateArgs ||
+    typeof record.stateArgs !== "object" ||
+    Array.isArray(record.stateArgs)
+  ) {
+    return null;
+  }
+  const stateArgs = record.stateArgs as Record<string, unknown>;
+  const ownerId = stateArgs["ownerPrincipalId"];
+  const purpose = stateArgs["authorityDelegationPurpose"];
+  if (
+    typeof ownerId !== "string" ||
+    record.parentId !== ownerId ||
+    (purpose !== "agentic-code-execution" && purpose !== "tool-eval" && purpose !== "test-eval")
+  ) {
+    return null;
+  }
+  return { ownerId, purpose };
+}
 
 export interface ResolvedCodeIdentity {
   callerId: string;
   callerKind: CodeIdentityCallerKind;
   repoPath: string;
   effectiveVersion: string;
+  executionDigest: string;
+  requested: readonly import("@vibestudio/rpc").CapabilityScope[];
+  delegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
 }
 
 /**
@@ -26,14 +62,55 @@ export function resolveCodeIdentity(
 ): ResolvedCodeIdentity | null {
   const record = entityCache.resolveActive(callerId);
   if (!record) return null;
+  const evalOwner = evalOwnerDelegationPurpose(record);
+  if (evalOwner) {
+    const owner = entityCache.resolveActive(evalOwner.ownerId);
+    if (
+      !owner ||
+      !isCodeIdentityCallerKind(owner.kind) ||
+      !owner.activeBuildKey ||
+      !owner.activeExecutionDigest ||
+      !/^[0-9a-f]{64}$/.test(owner.activeExecutionDigest) ||
+      !owner.activeAuthority
+    ) {
+      return null;
+    }
+    const requested = owner.activeAuthority.delegations
+      .filter(
+        (delegation) => delegation.audience === "eval" && delegation.purpose === evalOwner.purpose
+      )
+      .flatMap((delegation) => delegation.capabilities);
+    if (requested.length === 0) return null;
+    return {
+      // Runtime attribution remains the concrete EvalDO. Only the code digest
+      // and request ceiling come from its immutable, host-recorded owner chain.
+      callerId,
+      callerKind: "do",
+      repoPath: owner.source.repoPath,
+      effectiveVersion: owner.source.effectiveVersion,
+      executionDigest: owner.activeExecutionDigest,
+      requested,
+      // An eval cannot re-delegate its owner's authority. A child installed
+      // unit must establish its own sealed identity and authority manifest.
+      delegations: [],
+    };
+  }
   if (!isCodeIdentityCallerKind(record.kind)) return null;
   const callerKind = callerKindForPrincipalKind(record.kind);
   if (!isCodeIdentityCallerKind(callerKind)) return null;
+  if (!record.activeBuildKey) return null;
+  if (!record.activeExecutionDigest || !/^[0-9a-f]{64}$/.test(record.activeExecutionDigest)) {
+    return null;
+  }
+  if (!record.activeAuthority) return null;
   return {
     callerId,
     callerKind,
     repoPath: record.source.repoPath,
     effectiveVersion: record.source.effectiveVersion,
+    executionDigest: record.activeExecutionDigest,
+    requested: record.activeAuthority.requests,
+    delegations: record.activeAuthority.delegations,
   };
 }
 

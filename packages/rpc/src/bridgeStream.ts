@@ -1,5 +1,5 @@
 /**
- * §1.6 upload hop for PANEL SHELL BRIDGES.
+ * First-class streaming hop for PANEL SHELL BRIDGES.
  *
  * A panel lives in a webview and reaches its server through the shell bridge
  * (`__vibestudioShell` — Electron `contextBridge` on desktop, the React-Native
@@ -14,7 +14,7 @@
  * binary — Electron structured clone — and base64 strings where it is
  * string-only — RN `postMessage` / `injectJavaScript`):
  *
- *   panel → host  streamOpen       { opId, envelope, bodyId }
+ *   panel → host  streamOpen       { opId, envelope, bodyId? }
  *   panel → host  streamBodyChunk  { bodyId, seq, chunk } | { bodyId, seq, done } | { bodyId, seq, error }
  *   panel → host  streamAbort      (opId)                — caller abort / response-body cancel
  *   panel → host  streamAck        (opId, seq)           — response chunk consumed
@@ -32,11 +32,8 @@
  *    watermark. Caps mirror the WebRTC transport's (8 MiB receive cap,
  *    256 KiB max chunk).
  *
- * This hop is UPLOAD-ONLY: body-less panel streams keep the duplex
- * stream-request/stream-frame envelope path byte-identical (the host's panel
- * session may be a plain loopback WS with no first-class stream at all). A
- * bridge/session that cannot carry a body throws loudly — never a silent
- * fallback (plan §1.6).
+ * Body-less subscriptions use the same response plane without a `bodyId`;
+ * uploads additionally pump their request body through sequenced chunks.
  */
 
 import type { RpcEnvelope } from "./types.js";
@@ -52,13 +49,13 @@ export type BridgeChunkEncoding = "binary" | "base64";
 /** Binary where the bridge passes it (Electron); base64 where it is string-only (RN). */
 export type BridgeChunkPayload = Uint8Array | string;
 
-/** Panel → host: open one upload stream (the bridge's stream-request message). */
+/** Panel → host: open one stream, optionally with a request body. */
 export interface BridgeStreamOpen {
   opId: string;
   /** The `stream-request` envelope; host bridges stamp the authenticated panel identity. */
   envelope: RpcEnvelope;
-  /** Key the request-body chunks arrive under. REQUIRED — this hop is upload-only. */
-  bodyId: string;
+  /** Key the request-body chunks arrive under. Absent for body-less streams. */
+  bodyId?: string;
 }
 
 /** Panel → host: one sequenced request-body message. Exactly one of
@@ -236,13 +233,12 @@ export function createBridgeBodyReassembler(
 export interface BridgeStreamRelayDeps {
   /**
    * Open the panel session's first-class stream (the WebRTC session's
-   * `streamReadable`). MUST throw when the session has no body-capable stream
-   * path (plain loopback WS) — uploads then fail loudly, never silently.
+   * `streamReadable`). `body` is null for subscriptions and downloads.
    */
   openStream: (
     envelope: RpcEnvelope,
     signal: AbortSignal,
-    body: ReadableStream<Uint8Array>
+    body: ReadableStream<Uint8Array> | null
   ) => Promise<DecodedFramedStream>;
   /** Deliver one host→panel stream message over the bridge. */
   sendToPanel: (msg: BridgeStreamMessage) => void;
@@ -253,7 +249,7 @@ export interface BridgeStreamRelayDeps {
 }
 
 export interface BridgeStreamRelay {
-  /** Register + fire one upload stream. Throws on a malformed/duplicate open. */
+  /** Register and fire one stream. Throws on a malformed/duplicate open. */
   open(msg: BridgeStreamOpen): void;
   /** Push one request-body message; the returned promise is the backpressure ack. */
   pushBodyChunk(msg: BridgeBodyChunk): Promise<void>;
@@ -269,10 +265,10 @@ export interface BridgeStreamRelay {
 
 interface RelayOp {
   opId: string;
-  bodyId: string;
+  bodyId?: string;
   nextBodySeq: number;
   controller: AbortController;
-  body: BridgeBodyReassembler;
+  body: BridgeBodyReassembler | null;
   acks: Map<number, { resolve: () => void; reject: (err: Error) => void }>;
 }
 
@@ -284,16 +280,16 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
 
   function cleanup(op: RelayOp): void {
     if (ops.get(op.opId) === op) ops.delete(op.opId);
-    if (opsByBodyId.get(op.bodyId) === op) opsByBodyId.delete(op.bodyId);
+    if (op.bodyId && opsByBodyId.get(op.bodyId) === op) opsByBodyId.delete(op.bodyId);
     const error = new Error(`bridge stream ${op.opId} closed`);
-    op.body.fail(error);
+    op.body?.fail(error);
     for (const waiter of op.acks.values()) waiter.reject(error);
     op.acks.clear();
   }
 
   async function run(op: RelayOp, envelope: RpcEnvelope): Promise<void> {
     try {
-      const decoded = await deps.openStream(envelope, op.controller.signal, op.body.stream);
+      const decoded = await deps.openStream(envelope, op.controller.signal, op.body?.stream ?? null);
       if (op.controller.signal.aborted) return;
       deps.sendToPanel({
         kind: "head",
@@ -346,7 +342,7 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
 
   function abortOp(op: RelayOp, reason: string): void {
     const error = new Error(reason);
-    op.body.fail(error);
+    op.body?.fail(error);
     for (const waiter of op.acks.values()) waiter.reject(error);
     op.acks.clear();
     // No abort reason: React Native's AbortController types take none.
@@ -379,26 +375,20 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
       if (!envelope || typeof envelope !== "object" || messageType !== "stream-request") {
         throw new Error("bridge stream-open requires a stream-request envelope");
       }
-      if (typeof msg.bodyId !== "string" || msg.bodyId.length === 0) {
-        // Upload-only hop: body-less streams ride the duplex envelope path.
-        throw new Error(
-          "bridge stream-open: missing bodyId — body-less streams ride the duplex envelope path"
-        );
-      }
       if (ops.has(msg.opId)) throw new Error(`bridge stream-open: duplicate opId ${msg.opId}`);
-      if (opsByBodyId.has(msg.bodyId)) {
+      if (msg.bodyId && opsByBodyId.has(msg.bodyId)) {
         throw new Error(`bridge stream-open: duplicate bodyId ${msg.bodyId}`);
       }
       const op: RelayOp = {
         opId: msg.opId,
-        bodyId: msg.bodyId,
+        ...(msg.bodyId ? { bodyId: msg.bodyId } : {}),
         nextBodySeq: 1,
         controller: new AbortController(),
-        body: createBridgeBodyReassembler({ maxBufferedBytes: maxBuffered }),
+        body: msg.bodyId ? createBridgeBodyReassembler({ maxBufferedBytes: maxBuffered }) : null,
         acks: new Map(),
       };
       ops.set(op.opId, op);
-      opsByBodyId.set(op.bodyId, op);
+      if (op.bodyId) opsByBodyId.set(op.bodyId, op);
       void run(op, envelope);
     },
 
@@ -417,13 +407,14 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
         return Promise.reject(error);
       }
       if (typeof msg.error === "string") {
-        op.body.fail(new Error(`panel request body failed: ${msg.error}`));
+        op.body?.fail(new Error(`panel request body failed: ${msg.error}`));
         return Promise.resolve();
       }
       if (msg.done === true) {
-        op.body.end();
+        op.body?.end();
         return Promise.resolve();
       }
+      if (!op.body) return Promise.reject(new Error(`bridge stream ${op.opId} has no request body`));
       return op.body.push(decodeBridgeChunk(msg.chunk));
     },
 
@@ -469,8 +460,7 @@ export interface BridgeStreamShellSurface {
   streamChunkFormat?: BridgeChunkEncoding;
 }
 
-/** Feature-detect the upload surface on a shell bridge (null = bridge cannot
- * carry a body; the RPC core then throws the §1.6 error). */
+/** Feature-detect the first-class stream surface on a shell bridge. */
 export function bridgeStreamSurfaceOf(shell: unknown): BridgeStreamShellSurface | null {
   const s = shell as Partial<BridgeStreamShellSurface> | null | undefined;
   if (
@@ -494,21 +484,20 @@ function constructibleResponseStatus(status: number): number {
 }
 
 /**
- * Open one upload stream over the shell bridge: pump `body` across as awaited
- * chunk messages and assemble the host's head/chunk/end messages into a
- * `Response`. This is the panel transport's `streamBody` implementation.
+ * Open one stream over the shell bridge. When `body` is present it is pumped
+ * across as awaited chunks; response messages become a browser `Response`.
  */
-export async function openBridgeUploadStream(
+export async function openBridgeStream(
   surface: BridgeStreamShellSurface,
   envelope: RpcEnvelope,
   signal: AbortSignal | null | undefined,
-  body: ReadableStream<Uint8Array>
+  body: ReadableStream<Uint8Array> | null
 ): Promise<Response> {
   const abortReason = (): Error => new Error("bridge upload stream aborted");
   if (signal?.aborted) throw abortReason();
 
   const opId = generateOpId();
-  const bodyId = `${opId}#body`;
+  const bodyId = body ? `${opId}#body` : undefined;
   const encoding: BridgeChunkEncoding =
     surface.streamChunkFormat === "binary" ? "binary" : "base64";
 
@@ -643,7 +632,7 @@ export async function openBridgeUploadStream(
   signal?.addEventListener("abort", onAbort);
 
   try {
-    await surface.streamOpen({ opId, envelope, bodyId });
+    await surface.streamOpen({ opId, envelope, ...(bodyId ? { bodyId } : {}) });
   } catch (error) {
     teardown(error instanceof Error ? error : new Error(String(error)), { notifyHost: false });
     throw error;
@@ -651,7 +640,7 @@ export async function openBridgeUploadStream(
 
   // Pump the caller's body across the bridge. Every send is awaited: the host
   // resolves it only while its reassembly buffer has room.
-  void (async () => {
+  if (body && bodyId) void (async () => {
     const reader = body.getReader();
     let seq = 0;
     try {
@@ -716,4 +705,13 @@ export async function openBridgeUploadStream(
     statusText: head.statusText,
     headers: head.headers,
   });
+}
+
+export function openBridgeUploadStream(
+  surface: BridgeStreamShellSurface,
+  envelope: RpcEnvelope,
+  signal: AbortSignal | null | undefined,
+  body: ReadableStream<Uint8Array>
+): Promise<Response> {
+  return openBridgeStream(surface, envelope, signal, body);
 }

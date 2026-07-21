@@ -12,7 +12,7 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/pi-ai@0.80.6':
-    hash: 9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c
+    hash: 1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8
     path: packages/harness/patches/@earendil-works__pi-ai@0.80.6.patch
   re2@1.24.0:
     hash: a4a166273fe3817fd493cfc042f1d966f4ada60f1234330cd306e798259b549b
@@ -945,7 +945,10 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(ws@8.21.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)
+      '@sinclair/typebox':
+        specifier: ^0.27.8
+        version: 0.27.10
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../../../packages/content-addressing
@@ -1068,6 +1071,9 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      acorn:
+        specifier: ^8.17.0
+        version: 8.17.0
       sucrase:
         specifier: ^3.35.0
         version: 3.35.1
@@ -1106,7 +1112,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(ws@8.21.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -1275,7 +1281,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(ws@8.21.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)
       ignore:
         specifier: 7.0.5
         version: 7.0.5
@@ -1372,6 +1378,9 @@ importers:
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../../../packages/credential-client
+      '@vibestudio/durable':
+        specifier: workspace:*
+        version: link:../../../packages/durable
       '@vibestudio/extension':
         specifier: workspace:*
         version: link:../../../packages/extension
@@ -2043,7 +2052,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(ws@8.21.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)
       '@vibestudio/trajectory-identity':
         specifier: workspace:*
         version: link:../../../packages/trajectory-identity
@@ -2103,7 +2112,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(ws@8.21.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
@@ -2183,6 +2192,12 @@ importers:
       zod:
         specifier: ^3.24.0
         version: 3.25.76
+
+  workers/system-test-runner:
+    dependencies:
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
 
   workers/terminal-chat:
     dependencies:
@@ -8339,7 +8354,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(ws@8.21.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0

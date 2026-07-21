@@ -138,8 +138,11 @@ async function handlePanelRequest(
 }
 
 describe("PanelHttpServer build cache", () => {
+  const BUILD_KEY = "b".repeat(64);
   const buildResult = {
     dir: "/tmp/build",
+    buildKey: BUILD_KEY,
+    sourceStateHash: "state-hash",
     artifacts: [
       {
         path: "index.html",
@@ -163,7 +166,17 @@ describe("PanelHttpServer build cache", () => {
         content: "body{}",
       },
     ],
-    metadata: { entryPoint: "index.tsx", outputSize: 100, buildDuration: 50 },
+    metadata: {
+      kind: "panel",
+      name: "my-app",
+      buildKey: BUILD_KEY,
+      sourcePath: "panels/my-app",
+      ev: "ev-1",
+      sourceStateHash: "state-hash",
+      sourcemap: true,
+      details: { kind: "panel", target: "electron" },
+      builtAt: "2026-07-21T00:00:00.000Z",
+    },
   } as unknown as import("./buildV2/buildStore.js").BuildResult;
 
   it("storeBuild caches by source, hasBuild returns true", () => {
@@ -228,6 +241,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete,
       getBuild: vi.fn(),
+      getBuildByKey: vi.fn(() => buildResult),
     });
 
     server.storeBuild("panels/my-app", buildResult);
@@ -240,6 +254,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild,
+      getBuildByKey: vi.fn(() => buildResult),
     });
 
     await handlePanelRequest(
@@ -256,6 +271,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild,
+      getBuildByKey: vi.fn(() => buildResult),
     });
 
     const loader = await handlePanelRequest(server, "/panels/my-app/__loader.js");
@@ -274,6 +290,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild,
+      getBuildByKey: vi.fn(() => buildResult),
     });
 
     await handlePanelRequest(server, "/panels/my-app/?contextId=ctx-panel&ref=state:abc123");
@@ -291,6 +308,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild: vi.fn(async () => buildResult),
+      getBuildByKey: vi.fn(() => buildResult),
     });
     server.primeBuild("panels/my-app", undefined, getBuild);
 
@@ -311,6 +329,7 @@ describe("PanelHttpServer build cache", () => {
       getBuild: vi.fn(async () => {
         throw new Error("broken build");
       }),
+      getBuildByKey: vi.fn(() => null),
     });
 
     const response = await handlePanelRequest(server, "/panels/my-app/");
@@ -320,6 +339,67 @@ describe("PanelHttpServer build cache", () => {
     expect(body).toContain("--error-bg: #fff1f2");
     expect(body).toContain("@media (prefers-color-scheme: dark)");
     expect(body).toContain("broken build");
+  });
+
+  it("serves an activated panel strictly from its immutable build key", async () => {
+    const server = new PanelHttpServer();
+    const getBuild = vi.fn(async () => buildResult);
+    const getBuildByKey = vi.fn(() => buildResult);
+    server.setCallbacks({ onBuildComplete: vi.fn(), getBuild, getBuildByKey });
+
+    const response = await handlePanelRequest(
+      server,
+      `/panels/my-app/?contextId=ctx-panel&buildKey=${BUILD_KEY}`
+    );
+
+    expect(response.statusCodeWritten).toBe(200);
+    expect(getBuildByKey).toHaveBeenCalledWith(BUILD_KEY);
+    expect(getBuild).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when an activated build is missing or belongs to another panel", async () => {
+    const server = new PanelHttpServer();
+    let exactBuild: import("./buildV2/buildStore.js").BuildResult | null = null;
+    const getBuildByKey = vi.fn(() => exactBuild);
+    server.setCallbacks({
+      onBuildComplete: vi.fn(),
+      getBuild: vi.fn(async () => buildResult),
+      getBuildByKey,
+    });
+
+    const missing = await handlePanelRequest(
+      server,
+      `/panels/my-app/?contextId=ctx-panel&buildKey=${BUILD_KEY}`
+    );
+    expect(missing.statusCodeWritten).toBe(410);
+
+    exactBuild = {
+      ...buildResult,
+      metadata: { ...buildResult.metadata, sourcePath: "panels/other" },
+    };
+    const mismatched = await handlePanelRequest(
+      server,
+      `/panels/my-app/?contextId=ctx-panel&buildKey=${BUILD_KEY}`
+    );
+    expect(mismatched.statusCodeWritten).toBe(403);
+  });
+
+  it("pins subresources to the build key carried by their document referer", async () => {
+    const server = new PanelHttpServer();
+    const getBuildByKey = vi.fn(() => buildResult);
+    server.setCallbacks({
+      onBuildComplete: vi.fn(),
+      getBuild: vi.fn(async () => buildResult),
+      getBuildByKey,
+    });
+
+    const response = await handlePanelRequest(server, "/panels/my-app/bundle.js", {
+      referer: `http://localhost/panels/my-app/?contextId=ctx-panel&buildKey=${BUILD_KEY}`,
+    });
+
+    expect(response.statusCodeWritten).toBe(200);
+    expect(response.body).toBe("console.log('hi')");
+    expect(getBuildByKey).toHaveBeenCalledWith(BUILD_KEY);
   });
 
   it("does not serve a main entry artifact for a referer-less ref-pinned asset path", async () => {

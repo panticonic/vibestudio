@@ -223,7 +223,7 @@ describe("ServiceContainer", () => {
       name: "myRpc",
       methods: {},
       handler: vi.fn(),
-      policy: { allowed: ["shell" as const] },
+      authority: { principals: ["user" as const] },
     };
     container.registerManaged({
       name: "a",
@@ -269,7 +269,7 @@ describe("ServiceContainer", () => {
       name: "myRpc",
       methods: {},
       handler: vi.fn(),
-      policy: { allowed: ["shell" as const] },
+      authority: { principals: ["user" as const] },
     };
     container.registerManaged({
       name: "noStart",
@@ -372,7 +372,7 @@ describe("ServiceContainer", () => {
       name: "events",
       methods: {},
       handler: vi.fn(),
-      policy: { allowed: ["shell" as const] },
+      authority: { principals: ["user" as const] },
     };
 
     // registerRpc orders the service after its declared dependency and

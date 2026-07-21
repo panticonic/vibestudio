@@ -87,5 +87,11 @@ export function isDoAlarmDispatchResult(value: unknown): value is DoAlarmDispatc
 }
 
 export interface AlarmDoDispatcher extends DoDispatcher {
-  dispatchAlarm(ref: DORef): Promise<DoAlarmDispatchResult>;
+  /**
+   * Deliver one scheduler-owned alarm invocation. The optional signal cancels
+   * only this transport attempt when the scheduler is quiesced; the durable
+   * alarm row remains the source of truth until a completed result is
+   * acknowledged.
+   */
+  dispatchAlarm(ref: DORef, signal?: AbortSignal): Promise<DoAlarmDispatchResult>;
 }

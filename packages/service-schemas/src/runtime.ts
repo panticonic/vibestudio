@@ -3,11 +3,15 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor, ServicePolicy } from "@vibestudio/shared/servicePolicy";
+import type {
+  MethodAccessDescriptor,
+  ServiceAuthorityPolicy,
+} from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { CapabilityScopeSchema, EvalAuthorityDelegationSchema } from "./build.js";
 
 // Access descriptors carry sensitivity metadata; caller-kind authorization
-// belongs exclusively to the service/method `policy`.
+// belongs exclusively to the service/method `authority`.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
@@ -23,8 +27,8 @@ const TITLE_ACCESS: MethodAccessDescriptor = {
 // deliberately omits `agent` — mutating/lifecycle methods (createEntity,
 // retireEntity, cloneContext, destroyContext, …) stay agent-denied — so the
 // agent grant is opted into per read method here (still a subset of `do`).
-const RUNTIME_AGENT_READ_POLICY: ServicePolicy = {
-  allowed: ["app", "do", "panel", "server", "shell", "worker", "agent"],
+const RUNTIME_AGENT_READ_POLICY: ServiceAuthorityPolicy = {
+  principals: ["code", "host", "user", "entity"],
 };
 
 export const RuntimeEntityHandleSchema = z
@@ -42,6 +46,23 @@ export const RuntimeEntityHandleSchema = z
       })
       .strict()
       .describe("Resolved source identity (repo path + effective version)."),
+    buildKey: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional()
+      .describe("Content-addressed BuildV2 artifact selected for this incarnation."),
+    executionDigest: z
+      .string()
+      .optional()
+      .describe("Immutable execution artifact digest selected for this incarnation."),
+    authorityRequests: z
+      .array(CapabilityScopeSchema)
+      .optional()
+      .describe("Reviewed capability requests embedded in the selected execution artifact."),
+    authorityDelegations: z
+      .array(EvalAuthorityDelegationSchema)
+      .optional()
+      .describe("Reviewed eval delegations embedded in the selected execution artifact."),
     contextId: z.string().describe("Semantic workspace context this entity belongs to."),
     targetId: z
       .string()
@@ -255,12 +276,12 @@ export const runtimeMethods = defineServiceMethods({
       restrictedTo: [
         {
           when: "spec.kind is 'app'",
-          callers: ["shell", "server"],
+          principals: ["host", "user"],
           reason: "app runtime entities are host-managed",
         },
         {
           when: "spec.kind is 'session'",
-          callers: ["shell", "server", "extension"],
+          principals: ["host", "user", "code"],
           reason:
             "session entities are host-managed, except a launch-orchestrator extension may create a source-tagged session",
         },
@@ -322,7 +343,7 @@ export const runtimeMethods = defineServiceMethods({
       })
     ),
     access: READ_ACCESS,
-    policy: RUNTIME_AGENT_READ_POLICY,
+    authority: RUNTIME_AGENT_READ_POLICY,
     examples: [{ args: [] }, { args: [{ kind: "session" }] }],
   },
   resolveContext: {
@@ -331,7 +352,7 @@ export const runtimeMethods = defineServiceMethods({
     args: z.tuple([z.string().describe("Canonical entity id to resolve.")]),
     returns: z.string().nullable(),
     access: READ_ACCESS,
-    policy: RUNTIME_AGENT_READ_POLICY,
+    authority: RUNTIME_AGENT_READ_POLICY,
   },
   setTitle: {
     description:
@@ -348,12 +369,10 @@ export const runtimeMethods = defineServiceMethods({
         .optional(),
     ]),
     returns: z.void(),
-    // Single source of truth for setTitle's access: only an entity that HAS a title
-    // (panel/app/worker/do) may set its own. The dispatcher checks this per-method
-    // policy first (checkServiceAccess → getMethodPolicy), so it is the sole gate —
-    // the handler performs NO caller-kind rejection. This narrows the service-level
-    // policy (which keeps shell/server for createEntity/retireEntity) for setTitle only.
-    policy: { allowed: ["panel", "app", "worker", "do"] },
+    // Single source of truth for setTitle's access: executable view/worker code
+    // may title its own runtime. The compositional dispatcher enforces this exact
+    // code-principal requirement; the handler performs no duplicate kind check.
+    authority: { principals: ["code"] },
     access: TITLE_ACCESS,
     examples: [{ args: ["Workspace Shell", { explicit: true }] }],
   },
@@ -370,7 +389,6 @@ export const runtimeMethods = defineServiceMethods({
     ]),
     returns: WorkspaceContextSchema,
     access: { sensitivity: "write" },
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
     examples: [{ args: [{}] }, { args: [{ contextId: "agent-branch-1" }] }],
   },
   cloneContext: {
@@ -476,7 +494,7 @@ export const runtimeMethods = defineServiceMethods({
       })
       .strict(),
     access: READ_ACCESS,
-    policy: RUNTIME_AGENT_READ_POLICY,
+    authority: RUNTIME_AGENT_READ_POLICY,
     examples: [{ args: [{ contextId: "ctx-abc", kind: "lifecycle" }] }],
   },
   recordContextEdge: {
@@ -495,7 +513,7 @@ export const runtimeMethods = defineServiceMethods({
     ]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     examples: [
       {
         args: [{ contextId: "ctx-child", ownerContextId: "ctx-parent", kind: "lifecycle" }],
@@ -516,7 +534,6 @@ export const runtimeMethods = defineServiceMethods({
     ]),
     returns: z.object({ contextId: z.string() }).strict(),
     access: { sensitivity: "write" },
-    policy: { allowed: ["shell", "server", "panel", "worker", "do"] },
     examples: [
       {
         args: [

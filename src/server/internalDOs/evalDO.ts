@@ -286,6 +286,24 @@ export class EvalDO extends DurableObjectBase {
     this.reconcileOrphanedRuns();
   }
 
+  /**
+   * EvalDO executes owner-authorized code and is reachable only through the
+   * server eval service. Event delivery remains open for subscriptions, but a
+   * method call must retain the legacy server-only receiver boundary even when
+   * the method also carries `@rpc` authority metadata.
+   */
+  protected override assertInboundAllowed(
+    caller: AuthenticatedCaller | null,
+    kind: "call" | "event"
+  ): void {
+    if (kind === "event") return;
+    if (caller?.callerKind !== "server") {
+      throw new Error(
+        `eval: EvalDO is server-only (dispatched by the eval service); refusing caller kind ${caller?.callerKind ?? "unknown"}`
+      );
+    }
+  }
+
   protected createTables(): void {
     // The base `state` table is created by ensureReady(). The scope table (`repl_scopes`)
     // is created lazily by SqlScopePersistence on first run; user `db` tables are created
@@ -452,54 +470,13 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /**
-   * Per-object runtime id so the server resolves THIS EvalDO's registered entity (and thus
-   * the owner's context) for fs/git/vcs — the shared `do-service:<source>:<class>` id can't
-   * distinguish owners. Authorized by the internal-DO service bearer, which covers the
-   * `do:vibestudio/internal:EvalDO:*` prefix (rpcServer.isRuntimeIdForServiceToken).
-   */
-  protected override get rpcSelfId(): string {
-    const source = String(this.env["WORKER_SOURCE"] ?? "");
-    const className = String(this.env["WORKER_CLASS_NAME"] ?? "");
-    return `do:${source}:${className}:${this.objectKey}`;
-  }
-
-  /**
    * Keep the inbound `respond()` watchdog disabled explicitly: `executeRun` is a HELD handler that
-   * legitimately runs for the eval's whole duration (the eval service holds the connection with a
-   * no-`headersTimeout` dispatcher). An opt-in `timeoutMs` bounds a run, and a dropped connection
+   * legitimately runs for the eval's whole duration (the eval service holds the connection with
+   * held-call diagnostics). An opt-in `timeoutMs` bounds a run, and a dropped connection
    * (server restart) ends it (reconciled on boot). Quick methods (startRun/getRun) resolve at once.
    */
   protected override get respondTimeoutMs(): number {
     return 0;
-  }
-
-  /**
-   * The EvalDO's METHOD-CALL surface is server-ONLY: the eval service is the sole
-   * dispatcher (callerKind "server"; it derives the objectKey from the verified
-   * caller and registers the owner context). The generic DO relay is open
-   * (rpcServer.checkRelayAuth) AND `exposeAll` reflects every method — including
-   * TS-private helpers like `runLocked` (runs arbitrary owner code) and
-   * execution-context construction (arbitrary `main` calls as the owner), which are
-   * runtime-public. So we reject EVERY non-server inbound CALL as a blanket guard.
-   *
-   * Event DELIVERIES are different: the EvalDO (or eval code) subscribes to topics
-   * /channels (vcs.subscribeHead, channel messages), and the publisher — the
-   * server event-push (caller "server") OR a PubSubChannel DO (caller "do") —
-   * pushes events to it. Those are opt-in notifications routed to `rpc.on`
-   * handlers (owner-scoped, non-privileged), NOT method invocations, so we accept
-   * them regardless of caller. Blocking them broke channel delivery to a
-   * subscribed EvalDO ("DO RPC relay failed (500): EvalDO is server-only").
-   */
-  protected override assertInboundAllowed(
-    caller: AuthenticatedCaller | null,
-    kind: "call" | "event"
-  ): void {
-    if (kind === "event") return;
-    if (caller?.callerKind !== "server") {
-      throw new Error(
-        `eval: EvalDO is server-only (dispatched by the eval service); refusing caller kind ${caller?.callerKind ?? "unknown"}`
-      );
-    }
   }
 
   // ── public RPC methods (dispatched by the server `eval` service) ──────────────
@@ -509,7 +486,7 @@ export class EvalDO extends DurableObjectBase {
    * insert + execute in this held handler, return the result in one response. The CALLER holds its
    * own leg; the server holds the EvalDO leg. workerd does not cap a held request.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   async run(args: RunArgs): Promise<RunResult> {
     const runId = args.runId ?? crypto.randomUUID();
     await this.startRun({ ...args, runId });
@@ -521,7 +498,7 @@ export class EvalDO extends DurableObjectBase {
    * service awaits this before returning `runId` to an async (agent) caller, so the row exists for
    * `getRun`. Idempotent on `run_id`: a replayed run returns the existing row, never a duplicate.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   async startRun(args: RunArgs & { runId: string }): Promise<{ runId: string; status: string }> {
     const runId = args.runId;
     const existing = this.sql
@@ -559,7 +536,7 @@ export class EvalDO extends DurableObjectBase {
    * rather than starting a second sandbox run — so a deferRedrive that races the first dispatch can
    * never double-run the eval (which would double-spawn headless agents).
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "write" })
   async executeRun(runId: string): Promise<RunResult> {
     const inFlight = this.inFlightRuns.get(runId);
     if (inFlight) return inFlight;
@@ -624,10 +601,12 @@ export class EvalDO extends DurableObjectBase {
           timer.unref?.();
         }
       }
-      const ran = this.runChain.then(() => this.runLocked(args, controller.signal, runId));
+      const ran = this.runChain.then(() =>
+        this.runLocked(args, controller.signal, runId, deadlineAt)
+      );
       this.runChain = ran.catch(() => undefined);
       result = await ran;
-      if (controller.signal.aborted && result.success) {
+      if (controller.signal.aborted && deadlineAt !== null) {
         result = {
           success: false,
           console: result.console,
@@ -678,7 +657,7 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /** Poll backstop: a run's status + result (`status` is 'pending'|'running'|'done'|'cancelled'|'unknown'). */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   getRun(runId: string): { status: string; result?: RunResult; progress?: unknown } {
     const row = this.sql
       .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
@@ -702,7 +681,7 @@ export class EvalDO extends DurableObjectBase {
    * scope. Reads join `runChain`, so they observe every prior eval's persisted
    * mutations and cannot race a later eval that overwrites the same key.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "read" })
   async readScopeTextPage(
     key: string,
     offset: number,
@@ -736,7 +715,7 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /** Persistently remove one temporary large-result cache key. */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "destructive" })
   async deleteScopeValue(key: string): Promise<{ ok: boolean; existed: boolean }> {
     const remove = this.runChain.then(async () => {
       const execution = this.infrastructureExecution();
@@ -786,7 +765,7 @@ export class EvalDO extends DurableObjectBase {
 
   /** Reset the eval context: cancel in-flight runs, then wipe user tables + scope
    *  while preserving the durable queue and its progress rows. */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "destructive" })
   async reset(): Promise<{ ok: boolean }> {
     // Cancel queued + in-flight runs FIRST so a run finishing normally can't CAS itself `done`
     // (executeRun's write requires status='running'); then abort any live run.
@@ -822,7 +801,7 @@ export class EvalDO extends DurableObjectBase {
    * Then abort the run's controller so a run wedged on an outbound rpc.call unwinds (the signal is
    * threaded into every outbound call in `runLocked`). A no-op for an already-terminal run.
    */
-  @rpc
+  @rpc({ principals: ["host"], sensitivity: "destructive" })
   async cancel(runId: string): Promise<{ ok: boolean }> {
     this.sql.exec(
       `UPDATE runs SET status = 'cancelled' WHERE run_id = ? AND status IN ('pending', 'running')`,
@@ -922,7 +901,12 @@ export class EvalDO extends DurableObjectBase {
 
   // ── internals ─────────────────────────────────────────────────────────────────
 
-  private async runLocked(args: RunArgs, signal?: AbortSignal, runId?: string): Promise<RunResult> {
+  private async runLocked(
+    args: RunArgs,
+    signal?: AbortSignal,
+    runId?: string,
+    deadlineAt?: number | null
+  ): Promise<RunResult> {
     const execution = this.createExecutionContext(args, signal);
     const engine = await this.ensureEngine(execution);
     const support = await this.ensureRuntimeSupport(execution);
@@ -1175,8 +1159,12 @@ export class EvalDO extends DurableObjectBase {
           throw new Error(`Module "${id}" not available in EvalDO; use the imports parameter.`);
         },
         // Opt-in deadline (timeoutMs) → AbortSignal. Best-effort: the engine may not honor it
-        // mid-synchronous-CPU; it fires reliably at await points.
+        // inside native code; authored loops/functions also receive cooperative
+        // checkpoints so ordinary synchronous code settles inside this EvalDO.
         signal,
+        ...(deadlineAt !== null && deadlineAt !== undefined && args.timeoutMs !== undefined
+          ? { deadline: { atMs: deadlineAt, timeoutMs: args.timeoutMs } }
+          : {}),
         onConsole: (formatted: string) => {
           consoleOutput += (consoleOutput ? "\n" : "") + formatted;
           streamer?.push(formatted);

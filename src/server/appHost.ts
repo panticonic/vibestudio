@@ -75,6 +75,10 @@ import {
   isBuildProviderDetailsLike,
   type AppBuildProviderDetails,
 } from "./reactNativeAppAdapter.js";
+import {
+  requireActiveExecutionIdentity,
+  type ActiveExecutionIdentity,
+} from "./runtimeExecutionIdentity.js";
 
 export type { ReactNativeAppBootstrap, ReactNativeHostReadiness } from "./reactNativeAppAdapter.js";
 
@@ -156,6 +160,9 @@ interface AppAvailablePayload {
   capabilities: AppCapability[];
   buildKey: string | null;
   effectiveVersion: string | null;
+  executionDigest: string | null;
+  authorityRequests: readonly import("@vibestudio/rpc").CapabilityScope[];
+  authorityDelegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
   previousBuildKey: string | null;
   previousEffectiveVersion: string | null;
   canRollback: boolean;
@@ -222,6 +229,7 @@ interface AppBuildArtifactLike {
 
 export interface AppBuildResultLike {
   dir: string;
+  buildKey?: string;
   sourceStateHash?: string | null;
   metadata: AppBuildMetadataLike;
   artifacts?: AppBuildArtifactLike[];
@@ -240,8 +248,12 @@ interface AppGraphNode {
 }
 
 interface AppBuildMetadataLike {
+  buildKey?: string;
+  sourcePath?: string | null;
   ev: string;
   sourceStateHash?: string | null;
+  execution?: BuildMetadata["execution"];
+  authority?: BuildMetadata["authority"];
   details?:
     | {
         kind: "app";
@@ -422,6 +434,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       workspaceId: deps.workspaceId,
       registry: this.registry,
       buildSystem: deps.buildSystem,
+      resolveActiveBuild: (entry) => this.resolveActiveAppBuild(entry),
       approvalCoordinator: deps.approvalCoordinator,
       entityCache: deps.entityCache,
       getArtifactBaseUrl: () => deps.getReactNativeAppArtifactBaseUrl(),
@@ -696,9 +709,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     } else {
       entry = this.registry.patch(entry.name, { lastErrorDetails: null, activationTrust: trust });
     }
-    this.activateAppEntity(entry);
+    this.activateAppEntity(entry, build);
     await this.terminal.sync(entry, previous);
-    this.emitAvailable(this.registry.get(entry.name) ?? entry);
+    this.emitAvailable(this.registry.get(entry.name) ?? entry, {}, build);
     return {
       buildKey: path.basename(build.dir),
       effectiveVersion: build.metadata.ev,
@@ -779,9 +792,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       if (!this.terminal.isRunningBuild(entry.name, entry.activeBundleKey)) {
         await this.terminal.start(entry);
       }
-      return launchReadyResult(target, entry);
+      return launchReadyResult(target, entry, this.emitAvailable(entry));
     }
-    return launchReadyResult(target, entry);
+    return launchReadyResult(target, entry, this.emitAvailable(entry));
   }
 
   private async prepareHostTargetForLaunch(target: HostTarget): Promise<{
@@ -911,14 +924,18 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         ? appVersionHistory([current, ...remaining])
         : appVersionHistory(remaining),
     });
-    this.activateAppEntity(updated);
+    this.activateAppEntity(updated, build);
     await this.terminal.sync(updated, entry);
     const activated = this.registry.get(updated.name) ?? updated;
-    this.emitAvailable(activated, {
-      lifecycleType: "rolled-back",
-      previousBuildKey: entry.activeBundleKey ?? null,
-      notify: true,
-    });
+    this.emitAvailable(
+      activated,
+      {
+        lifecycleType: "rolled-back",
+        previousBuildKey: entry.activeBundleKey ?? null,
+        notify: true,
+      },
+      build
+    );
     return activated;
   }
 
@@ -1342,15 +1359,19 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         await this.rollbackAppVersion(entry.name, pinnedSelection.buildKey);
         return;
       }
-      this.activateAppEntity(entry);
+      this.activateAppEntity(entry, build);
       await this.terminal.sync(entry, previous);
       entry = this.registry.get(entry.name) ?? entry;
-      this.emitAvailable(entry, {
-        lifecycleType: previousRecord ? "update-available" : "available",
-        previousBuildKey: previous?.activeBundleKey ?? null,
-        previousEffectiveVersion: previous?.activeEv ?? null,
-        notify: !!previousRecord,
-      });
+      this.emitAvailable(
+        entry,
+        {
+          lifecycleType: previousRecord ? "update-available" : "available",
+          previousBuildKey: previous?.activeBundleKey ?? null,
+          previousEffectiveVersion: previous?.activeEv ?? null,
+          notify: !!previousRecord,
+        },
+        build
+      );
     } catch (err) {
       if (err && typeof err === "object") {
         (err as { appUpdateDiagnostic?: AppUpdateErrorDiagnostic }).appUpdateDiagnostic =
@@ -1373,11 +1394,13 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       previousBuildKey?: string | null;
       previousEffectiveVersion?: string | null;
       notify?: boolean;
-    } = {}
+    } = {},
+    activatedBuild?: AppBuildResultLike
   ): AppAvailablePayload {
-    this.activateAppEntity(entry);
+    this.activateAppEntity(entry, activatedBuild);
     const buildKey = entry.activeBundleKey ?? "";
-    const build = buildKey ? this.deps.buildSystem.getBuildByKey?.(buildKey) : null;
+    const build =
+      activatedBuild ?? (buildKey ? this.deps.buildSystem.getBuildByKey?.(buildKey) : null);
     const artifactRefs = (build?.artifacts ?? []).map((artifact) => {
       const url = this.getAppArtifactUrl(buildKey, entry.target, artifact.path);
       return {
@@ -1415,6 +1438,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       capabilities: this.effectiveCapabilities(entry),
       buildKey: entry.activeBundleKey,
       effectiveVersion: entry.activeEv,
+      executionDigest: build?.metadata.execution?.executionDigest ?? null,
+      authorityRequests: build?.metadata.authority?.requests ?? [],
+      authorityDelegations: build?.metadata.authority?.delegations ?? [],
       previousBuildKey: opts.previousBuildKey ?? null,
       previousEffectiveVersion: opts.previousEffectiveVersion ?? null,
       canRollback: entry.previousVersions.length > 0,
@@ -1758,8 +1784,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     return this.hostTargetSelections.selectedSource(target);
   }
 
-  private activateAppEntity(entry: AppRegistryEntry): void {
+  private activateAppEntity(entry: AppRegistryEntry, selectedBuild?: AppBuildResultLike): void {
     if (!this.deps.entityCache || !entry.activeEv) return;
+    const activeBuild = this.resolveActiveAppBuild(entry, selectedBuild);
     const existing = this.deps.entityCache.resolve(entry.name);
     const sourceRepo = normalizeRepoPath(entry.source.repo);
     // WP3 §6: the shared workspace app is ONE instance every member reads and
@@ -1777,6 +1804,8 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       id: entry.name,
       kind: "app",
       source: { repoPath: sourceRepo, effectiveVersion: entry.activeEv },
+      activeBuildKey: activeBuild.buildKey,
+      ...activeBuild.identity,
       contextId,
       key: entry.name,
       createdAt: existing?.createdAt ?? Date.now(),
@@ -1784,6 +1813,75 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       cleanupComplete: true,
     };
     this.deps.entityCache._onActivate(record);
+  }
+
+  /**
+   * Resolve the exact immutable artifact selected by an active app entry and
+   * cross the sealed-build → executable-principal boundary. Every app runtime,
+   * including device-scoped native principals, uses this same decision.
+   */
+  private resolveActiveAppBuild(
+    entry: AppRegistryEntry,
+    selectedBuild?: AppBuildResultLike
+  ): {
+    buildKey: string;
+    build: AppBuildResultLike;
+    identity: ActiveExecutionIdentity;
+  } {
+    if (!entry.activeEv) {
+      throw new Error(`Cannot activate app ${entry.name} without an effective version`);
+    }
+    if (!entry.activeBundleKey) {
+      throw new Error(`Cannot activate app ${entry.name} without an immutable build key`);
+    }
+    const build = selectedBuild ?? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    if (!build) {
+      throw new Error(
+        `Cannot activate app ${entry.name}: immutable build ${entry.activeBundleKey} is unavailable`
+      );
+    }
+    if (build.metadata.ev !== entry.activeEv) {
+      throw new Error(
+        `Cannot activate app ${entry.name}: build ${entry.activeBundleKey} has effective version ${build.metadata.ev}, expected ${entry.activeEv}`
+      );
+    }
+    if (build.buildKey && build.buildKey !== entry.activeBundleKey) {
+      throw new Error(
+        `Cannot activate app ${entry.name}: build store returned ${build.buildKey} for ${entry.activeBundleKey}`
+      );
+    }
+    if (build.metadata.buildKey && build.metadata.buildKey !== entry.activeBundleKey) {
+      throw new Error(
+        `Cannot activate app ${entry.name}: build metadata names ${build.metadata.buildKey} instead of ${entry.activeBundleKey}`
+      );
+    }
+    if (
+      build.metadata.sourcePath &&
+      normalizeRepoPath(build.metadata.sourcePath) !== normalizeRepoPath(entry.source.repo)
+    ) {
+      throw new Error(
+        `Cannot activate app ${entry.name}: build ${entry.activeBundleKey} belongs to ${build.metadata.sourcePath}`
+      );
+    }
+    if (!isAppBuildDetailsLike(build.metadata.details)) {
+      throw new Error(
+        `Cannot activate app ${entry.name}: build ${entry.activeBundleKey} is not an app artifact`
+      );
+    }
+    if (build.metadata.details.target !== entry.target) {
+      throw new Error(
+        `Cannot activate app ${entry.name}: build ${entry.activeBundleKey} targets ${build.metadata.details.target}, expected ${entry.target}`
+      );
+    }
+    const identity = requireActiveExecutionIdentity(
+      {
+        executionDigest: build.metadata.execution?.executionDigest,
+        authorityRequests: build.metadata.authority?.requests,
+        authorityDelegations: build.metadata.authority?.delegations,
+      },
+      `app ${entry.name} build ${entry.activeBundleKey}`
+    );
+    return { buildKey: entry.activeBundleKey, build, identity };
   }
 
   private retireAppEntity(name: string): boolean {
@@ -2198,11 +2296,22 @@ function buildProviderIdentityValue(provider: AppBuildProviderDetails): string {
 function launchReadyResult(
   target: HostTarget,
   entry: AppRegistryEntry,
-  available?: Pick<
+  available: Pick<
     AppAvailablePayload,
-    "artifactRoute" | "capabilities" | "effectiveVersion" | "adoptionPolicy"
+    | "artifactRoute"
+    | "capabilities"
+    | "effectiveVersion"
+    | "executionDigest"
+    | "authorityRequests"
+    | "authorityDelegations"
+    | "adoptionPolicy"
   >
 ): HostTargetLaunchResult {
+  if (!available.executionDigest) {
+    throw new Error(
+      `Host target ${target} cannot launch ${entry.name} without a sealed execution identity`
+    );
+  }
   return {
     status: "ready",
     launched: true,
@@ -2210,14 +2319,13 @@ function launchReadyResult(
     source: entry.source.repo,
     appId: entry.name,
     buildKey: entry.activeBundleKey ?? "",
-    ...(available
-      ? {
-          artifactRoute: available.artifactRoute,
-          capabilities: available.capabilities,
-          effectiveVersion: available.effectiveVersion,
-          adoptionPolicy: available.adoptionPolicy,
-        }
-      : {}),
+    artifactRoute: available.artifactRoute,
+    capabilities: available.capabilities,
+    effectiveVersion: available.effectiveVersion,
+    executionDigest: available.executionDigest,
+    authorityRequests: available.authorityRequests,
+    authorityDelegations: available.authorityDelegations,
+    adoptionPolicy: available.adoptionPolicy,
   };
 }
 
@@ -2251,16 +2359,27 @@ function appBuildMetadataForDist(
   entry: AppRegistryEntry,
   metadata: AppBuildMetadataLike
 ): BuildMetadata {
+  const buildKey = metadata.buildKey ?? entry.activeBundleKey;
+  if (!buildKey) {
+    throw new Error(`Active build for ${entry.name} has no canonical build key`);
+  }
   const details = metadata.details;
   if (!isAppBuildDetailsLike(details)) {
     throw new Error(`Active build for ${entry.name} is not an app build`);
   }
+  if (metadata.sourcePath === undefined) {
+    throw new Error(`Active build for ${entry.name} is missing its sealed source path`);
+  }
   return {
     kind: "app",
     name: entry.name,
+    buildKey,
+    sourcePath: metadata.sourcePath,
     ev: metadata.ev,
     sourceStateHash: entry.activeSourceHash,
     sourcemap: true,
+    ...(metadata.authority ? { authority: metadata.authority } : {}),
+    ...(metadata.execution ? { execution: metadata.execution } : {}),
     details: {
       kind: "app",
       target: details.target,
@@ -2288,6 +2407,7 @@ function appArtifactsForDist(
     contentType: string;
     encoding: string;
     platform?: string;
+    integrity?: string;
     content: string;
   }>
 ): Array<BuildArtifactManifestEntry & { content: string }> {
@@ -2306,6 +2426,7 @@ function appArtifactsForDist(
       contentType: artifact.contentType,
       encoding: artifact.encoding,
       ...(artifact.platform ? { platform: artifact.platform } : {}),
+      ...(artifact.integrity ? { integrity: artifact.integrity } : {}),
       content: artifact.content,
     };
   });

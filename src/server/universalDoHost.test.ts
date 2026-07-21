@@ -68,15 +68,20 @@ export class CounterDO extends DurableObject {
 export default { fetch() { return new Response("counter host"); } };`;
 
 function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
+  const buildKey = `build:${source}:${ev}`;
   return {
     dir: "/tmp/test-build",
+    buildKey,
     sourceStateHash: "state:test",
     metadata: {
       kind: "worker",
       name: source,
+      buildKey,
+      sourcePath: source,
       ev,
       sourceStateHash: "state:test",
       sourcemap: false,
+      authority: { requests: [], delegations: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -142,6 +147,9 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
         stateHash: ref?.startsWith("state:") ? ref : "state:test",
         effectiveVersion: b.metadata.ev,
         buildKey: `build:${source}:${b.metadata.ev}`,
+        executionDigest: "a".repeat(64),
+        authorityRequests: [],
+        authorityDelegations: [],
       };
     },
     getBuildByKey: (key: string) => {

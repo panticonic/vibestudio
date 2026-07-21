@@ -72,7 +72,7 @@ export function createShellApprovalService(deps: {
   return {
     name: "shellApproval",
     description: "Shell-owned consent approval queue",
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: shellApprovalMethods,
     handler: defineServiceHandler(serviceName, shellApprovalMethods, {
       resolve: async (ctx, [approvalId, decision]) => {

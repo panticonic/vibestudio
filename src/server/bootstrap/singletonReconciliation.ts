@@ -1,3 +1,36 @@
+import type { EntityActivateInput } from "../workspaceEntityStore.js";
+import {
+  requireActiveExecutionIdentity,
+  type PreparedExecutionIdentity,
+} from "../runtimeExecutionIdentity.js";
+
+export interface SingletonActivationPlan {
+  source: string;
+  className: string;
+  key: string;
+  contextId: string;
+}
+
+export function singletonEntityActivationInput(
+  plan: SingletonActivationPlan,
+  prepared: PreparedExecutionIdentity & { buildKey: string; effectiveVersion: string },
+  ownerUserId: string
+): EntityActivateInput {
+  return {
+    kind: "do",
+    source: { repoPath: plan.source, effectiveVersion: prepared.effectiveVersion },
+    activeBuildKey: prepared.buildKey,
+    ...requireActiveExecutionIdentity(
+      prepared,
+      `singleton ${plan.source}:${plan.className}:${plan.key}`
+    ),
+    contextId: plan.contextId,
+    className: plan.className,
+    key: plan.key,
+    ownerUserId,
+  };
+}
+
 export async function reconcileSingletons<TItem, TPrepared, TRecord>(input: {
   items: readonly TItem[];
   prepare(item: TItem): Promise<TPrepared>;

@@ -34,14 +34,17 @@ export function createWorkerdInspectorService(
   deps: WorkerdInspectorServiceDeps
 ): ServiceDefinition {
   const methods = {
-    listTargets: { args: z.tuple([]) },
-    getEndpoint: { args: z.tuple([z.string()]) },
+    listTargets: { args: z.tuple([]), access: { sensitivity: "read" as const } },
+    getEndpoint: {
+      args: z.tuple([z.string()]),
+      access: { sensitivity: "admin" as const },
+    },
   };
 
   return {
     name: "workerdInspector",
     description: "Approval-gated workerd V8 inspector access for profiling workers and DOs",
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
+    authority: { principals: ["user", "host", "code"] },
     methods,
     handler: defineServiceHandler("workerdInspector", methods, {
       listTargets: () => deps.listTargets(),

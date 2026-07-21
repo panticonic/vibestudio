@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "classes": {
+    "WebhookStoreDO": {
+      "requests": [
+        {
+          "capability": "service:workspace-state.alarmClear",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        {
+          "capability": "service:workspace-state.alarmSet",
+          "resource": { "kind": "prefix", "prefix": "" }
+        }
+      ],
+      "delegations": []
+    },
+    "WorkspaceDO": {
+      "requests": [
+        {
+          "capability": "service:workspace-state.alarmClear",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        {
+          "capability": "service:workspace-state.alarmSet",
+          "resource": { "kind": "prefix", "prefix": "" }
+        }
+      ],
+      "delegations": []
+    },
+    "BrowserDataDO": {
+      "requests": [
+        {
+          "capability": "service:workspace-state.alarmClear",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        {
+          "capability": "service:workspace-state.alarmSet",
+          "resource": { "kind": "prefix", "prefix": "" }
+        }
+      ],
+      "delegations": []
+    },
+    "EvalDO": {
+      "requests": [
+        {
+          "capability": "service:blobstore.getText",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        {
+          "capability": "service:blobstore.putText",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        {
+          "capability": "service:eval.beginCleanup",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        { "capability": "service:eval.renew", "resource": { "kind": "prefix", "prefix": "" } },
+        {
+          "capability": "service:events.unsubscribeAll",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        {
+          "capability": "service:runtime.cleanupEvalOwnedContext",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        {
+          "capability": "service:workspace-state.alarmClear",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        {
+          "capability": "service:workspace-state.alarmSet",
+          "resource": { "kind": "prefix", "prefix": "" }
+        }
+      ],
+      "delegations": []
+    },
+    "GadWorkspaceDO": {
+      "requests": [
+        {
+          "capability": "service:notification.signalUserInbox",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        {
+          "capability": "service:workspace-state.alarmClear",
+          "resource": { "kind": "prefix", "prefix": "" }
+        },
+        {
+          "capability": "service:workspace-state.alarmSet",
+          "resource": { "kind": "prefix", "prefix": "" }
+        }
+      ],
+      "delegations": []
+    }
+  }
+}

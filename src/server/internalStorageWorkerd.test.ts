@@ -105,6 +105,9 @@ async function createWorkerdHarness(
         stateHash: ref?.startsWith("state:") ? ref : "state:test",
         effectiveVersion: build.metadata.ev,
         buildKey,
+        executionDigest: "a".repeat(64),
+        authorityRequests: [],
+        authorityDelegations: [],
       };
     },
     getBuildByKey: (key: string) => builds.get(key) ?? null,
@@ -240,15 +243,20 @@ async function bundleWorker(source: string, entryPoint: string, ev: string): Pro
 }
 
 function buildResult(source: string, ev: string, bundle: string): BuildResult {
+  const buildKey = `build:${source}:${ev}`;
   return {
     dir: `/tmp/vibestudio-${ev}-build`,
+    buildKey,
     sourceStateHash: "state:test",
     metadata: {
       kind: "worker",
       name: source,
+      buildKey,
+      sourcePath: source,
       ev,
       sourceStateHash: "state:test",
       sourcemap: false,
+      authority: { requests: [], delegations: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },

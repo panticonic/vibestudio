@@ -149,6 +149,11 @@ interface BuildSystemLike {
 interface ExtensionBuildMetadataLike {
   ev: string;
   sourceStateHash?: string | null;
+  execution?: { executionDigest: string };
+  authority?: {
+    requests: readonly import("@vibestudio/rpc").CapabilityScope[];
+    delegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
+  };
   details?:
     | {
         kind: "extension";
@@ -175,7 +180,12 @@ interface ExtensionReadyState {
 }
 
 interface ExtensionTransportLike {
-  call(name: string, method: string, ...args: unknown[]): Promise<unknown>;
+  call(
+    name: string,
+    method: string,
+    args: unknown[],
+    options?: { signal?: AbortSignal }
+  ): Promise<unknown>;
   streamCallTarget?(name: string, method: string, ...args: unknown[]): Promise<Response>;
 }
 
@@ -571,13 +581,17 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     return {
       name: "extensions",
       description: "Installed extension management and invocation",
-      policy: { allowed: ["panel", "app", "worker", "do", "shell", "server", "extension"] },
+      authority: { principals: ["code", "user", "host"] },
       methods: extensionsMethods,
       handler: defineServiceHandler("extensions", extensionsMethods, {
-        invoke: (ctx, [name, method, args]) => this.invoke(ctx, name, method, args),
-        invokeProvider: (ctx, [provider, method, args]) => {
+        // JavaScript extension methods naturally use `undefined` for successful
+        // command-style calls. `undefined` is not a JSON value, so represent
+        // that single no-result state as JSON `null` at the public RPC boundary.
+        invoke: async (ctx, [name, method, args]) =>
+          (await this.invoke(ctx, name, method, args)) ?? null,
+        invokeProvider: async (ctx, [provider, method, args]) => {
           this.assertPublicProviderInvocationAllowed(provider, method);
-          return this.invokeProvider(ctx, provider, method, args);
+          return (await this.invokeProvider(ctx, provider, method, args)) ?? null;
         },
         invokeStream: (ctx, [name, method, args]) => this.invokeStream(ctx, name, method, args),
         streamingMethods: (_ctx, [name]) => this.streamingMethodsFor(name),
@@ -611,9 +625,8 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       return this.deps.extensionTransport.call(
         entry.name,
         "extension.invoke",
-        method,
-        args,
-        invocation
+        [method, args, invocation],
+        ...(ctx.signal ? [{ signal: ctx.signal }] : [])
       );
     });
   }
@@ -711,10 +724,8 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         return this.deps.extensionTransport.call(
           entry.name,
           "extension.invokeProvider",
-          provider,
-          method,
-          args,
-          invocation
+          [provider, method, args, invocation],
+          ...(ctx.signal ? [{ signal: ctx.signal }] : [])
         );
       }
     );
@@ -927,11 +938,18 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   resolveCodeIdentity(extensionName: string): VerifiedCodeIdentity | null {
     const entry = this.registry.get(extensionName);
     if (!entry?.activeBundleKey || !entry.activeEv) return null;
+    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const executionDigest = build?.metadata.execution?.executionDigest;
+    const authority = build?.metadata.authority;
+    if (!executionDigest || !authority) return null;
     return {
       callerId: entry.name,
       callerKind: "extension",
       repoPath: entry.source.repo,
       effectiveVersion: entry.activeEv,
+      executionDigest,
+      requested: authority.requests,
+      delegations: authority.delegations,
     };
   }
 
@@ -1059,12 +1077,10 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         headers: headersToRecord(req.headers),
         ...(body !== undefined ? { body } : {}),
       };
-      const response = await this.deps.extensionTransport.call(
-        name,
-        "extension.fetch",
+      const response = await this.deps.extensionTransport.call(name, "extension.fetch", [
         requestEnvelope,
-        invocation
-      );
+        invocation,
+      ]);
       const typedResponse = response as {
         status: number;
         headers: Record<string, string>;
@@ -1137,7 +1153,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         const next = (await this.deps.extensionTransport.call(
           extensionName,
           "extension.fetchResponseBodyChunk",
-          body.id
+          [body.id]
         )) as StreamChunkEnvelope;
         if (next.done) break;
         if (next.chunk) {
@@ -1149,7 +1165,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       await finished;
     } finally {
       await this.deps.extensionTransport
-        .call(extensionName, "extension.fetchResponseBodyClose", body.id)
+        .call(extensionName, "extension.fetchResponseBodyClose", [body.id])
         .catch(() => {});
     }
   }
@@ -1513,13 +1529,11 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
               callerKind: "server",
             },
           };
-          const output = await this.deps.extensionTransport.call(
-            entry.name,
-            "extension.invoke",
+          const output = await this.deps.extensionTransport.call(entry.name, "extension.invoke", [
             "build",
             [input],
-            invocation
-          );
+            invocation,
+          ]);
           return assertBuildProviderOutput(entry.name, target, output);
         },
         streamArtifact: async (artifact, input) => {

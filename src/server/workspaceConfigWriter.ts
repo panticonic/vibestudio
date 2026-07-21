@@ -5,7 +5,7 @@ import YAML from "yaml";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import { parseWorkspaceConfigContent } from "@vibestudio/workspace/loader";
+import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
 import type {
   VcsCommitResult,
   VcsInspectResult,
@@ -59,7 +59,8 @@ function sameState(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
 const SYSTEM_CAUSE: RpcCausalParent | null = null;
 
 export function createWorkspaceConfigMainWriter(deps: {
-  workspacePath: string;
+  /** Hub-owned workspace identity. Never derive authority from a mutable checkout path. */
+  workspaceId: string;
   vcs: WorkspaceVcs;
 }): WorkspaceConfigMainWriter {
   let mutationQueue = Promise.resolve();
@@ -147,7 +148,7 @@ export function createWorkspaceConfigMainWriter(deps: {
       repositoryId,
       fileId,
       text: content.content.text,
-      config: parseWorkspaceConfigContent(content.content.text, deps.workspacePath),
+      config: parseWorkspaceConfigContentWithId(content.content.text, deps.workspaceId),
     };
   };
 
@@ -171,7 +172,7 @@ export function createWorkspaceConfigMainWriter(deps: {
       nextConfig,
       nextContent: isDeepStrictEqual(nextConfig, current)
         ? currentContent
-        : renderWorkspaceConfigYaml(currentContent, nextConfig, deps.workspacePath),
+        : renderWorkspaceConfigYaml(currentContent, nextConfig, deps.workspaceId),
     };
   };
 
@@ -254,10 +255,15 @@ export function createWorkspaceConfigMainWriter(deps: {
 export function renderWorkspaceConfigYaml(
   currentContent: string,
   nextConfig: WorkspaceConfig,
-  workspacePath: string
+  workspaceId: string
 ): string {
   const beforeParsed = (YAML.parse(currentContent) as Record<string, unknown> | null) ?? {};
-  const nextContent = YAML.stringify({ ...beforeParsed, ...nextConfig });
-  parseWorkspaceConfigContent(nextContent, workspacePath);
+  // `WorkspaceConfig.id` is resolved host state, not manifest content. Older
+  // writers could accidentally persist a checkout-derived id; omit it from
+  // both sides so every real mutation also repairs that stale projection.
+  const { id: _persistedId, ...beforeManifest } = beforeParsed;
+  const { id: _resolvedId, ...nextManifest } = nextConfig;
+  const nextContent = YAML.stringify({ ...beforeManifest, ...nextManifest });
+  parseWorkspaceConfigContentWithId(nextContent, workspaceId);
   return nextContent;
 }

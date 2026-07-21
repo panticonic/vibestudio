@@ -27,18 +27,25 @@ export type {
   LifecycleResumeInput,
 } from "@vibestudio/shared/doDispatcher";
 import {
+  DIRECT_AUTHORITY_ACCEPTED_AT_HEADER,
   collectExposableMethods,
   createConnectionlessRpcClient,
   envelopeFromMessage,
   rpcExposedMethodNames,
   rpcErrorDataOf,
   rpcErrorKindOf,
-  rpcMethodPolicy,
+  rpcMethodAuthority,
   type ConnectionlessRpcClient,
   type DeferrableRpcClient,
   type RpcEnvelope,
   type RpcRequest,
 } from "@vibestudio/rpc";
+import type { AuthorizationContext } from "@vibestudio/rpc";
+import {
+  bindMethodCapability,
+  evaluateAuthority,
+  requirementForPrincipals,
+} from "@vibestudio/shared/authorization";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
 import { _initFsWithRpc } from "./fs.js";
@@ -52,6 +59,15 @@ import {
 import type { AuthenticatedCaller, RpcClient } from "@vibestudio/rpc";
 import type { RuntimeFs } from "../types.js";
 import type { PanelHandle } from "../core/index.js";
+import {
+  migrateDurableObjectSchema,
+  type DurableObjectSchemaBaseline,
+  type DurableObjectSchemaMigration,
+} from "@vibestudio/durable/schema";
+export type {
+  DurableObjectSchemaBaseline,
+  DurableObjectSchemaMigration,
+} from "@vibestudio/durable/schema";
 
 // ---------------------------------------------------------------------------
 // Console bridge — forwards DO console.* output to the server terminal.
@@ -70,6 +86,17 @@ import type { PanelHandle } from "../core/index.js";
 // ---------------------------------------------------------------------------
 
 let consoleBridgeInstalled = false;
+
+function directAuthorityAcceptedAt(request: Request): number {
+  const raw = request.headers.get(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER);
+  if (raw !== null) {
+    const acceptedAt = Number(raw);
+    if (Number.isFinite(acceptedAt) && acceptedAt > 0) return acceptedAt;
+  }
+  // Direct unit harnesses do not run through the authenticated workerd router;
+  // retaining receipt-time evaluation keeps that path strictly shorter-lived.
+  return Date.now();
+}
 
 function installConsoleBridge(rpc: Pick<RpcClient, "call">): void {
   if (consoleBridgeInstalled) return;
@@ -167,10 +194,6 @@ export interface DORef {
   objectKey: string;
 }
 
-function quoteSqlIdentifier(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
-}
-
 // (RPC exposure is now opt-in via `@rpc` + `rpcExposedMethodNames` — no reserved deny-list needed;
 // framework/lifecycle methods are simply never `@rpc`-marked, and the base-proto boundary backstops.)
 
@@ -208,6 +231,16 @@ export abstract class DurableObjectBase {
   /** Subclasses define their SQL tables here. Called during schema init. */
   protected abstract createTables(): void;
 
+  /** Explicit persisted-state upgrades. Fresh databases never replay these. */
+  protected schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [];
+  }
+
+  /** Oldest production schema shape this class can open without data loss. */
+  protected schemaProductionBaseline(): DurableObjectSchemaBaseline | undefined {
+    return undefined;
+  }
+
   /** Tables that must exist before a schema version is recorded as ready. */
   protected requiredTables(): readonly string[] {
     return [];
@@ -238,83 +271,15 @@ export abstract class DurableObjectBase {
   }
 
   private ensureSchema(): void {
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-
-    let currentVersion = 0;
-    try {
-      const row = this.sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).toArray();
-      if (row.length > 0) currentVersion = parseInt(row[0]!["value"] as string, 10) || 0;
-    } catch {
-      /* table might not have the row yet */
-    }
-
-    const targetVersion = (this.constructor as typeof DurableObjectBase).schemaVersion;
-    if (currentVersion > targetVersion) {
-      throw new Error(
-        `${this.constructor.name} schema version ${currentVersion} is newer than supported version ${targetVersion}`
-      );
-    }
-
-    if (currentVersion === 0) {
-      this.createTables();
-      this.validateSchema();
-      this.sql.exec(
-        `INSERT OR REPLACE INTO state (key, value) VALUES ('schema_version', ?)`,
-        String(targetVersion)
-      );
-    } else if (currentVersion < targetVersion) {
-      this.resetPersistenceForSchemaEpoch();
-      this.createTables();
-      this.validateSchema();
-      this.sql.exec(
-        `INSERT OR REPLACE INTO state (key, value) VALUES ('schema_version', ?)`,
-        String(targetVersion)
-      );
-    } else {
-      this.createTables();
-      this.validateSchema();
-    }
-  }
-
-  /**
-   * Pre-release schema epochs are hard cuts. A Durable Object owns every
-   * non-framework SQLite object in its database, so an older epoch is replaced
-   * wholesale instead of interpreted by compatibility code. Virtual tables are
-   * dropped before ordinary tables so SQLite can remove their shadow tables.
-   * The old epoch stamp remains until the exact current schema validates, making
-   * an interrupted reset repeat safely on the next activation.
-   */
-  private resetPersistenceForSchemaEpoch(): void {
-    const rows = this.sql
-      .exec(
-        `SELECT type, name, sql FROM sqlite_master
-         WHERE type IN ('table', 'view')
-           AND name <> 'state'
-           AND name NOT LIKE 'sqlite_%'`
-      )
-      .toArray() as Array<{ type: string; name: string; sql?: unknown }>;
-    const isVirtual = (row: { sql?: unknown }): boolean =>
-      typeof row.sql === "string" && /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(row.sql);
-
-    for (const row of rows) {
-      if (row.type === "view") {
-        this.sql.exec(`DROP VIEW IF EXISTS ${quoteSqlIdentifier(row.name)}`);
-      }
-    }
-    for (const row of rows) {
-      if (row.type === "table" && isVirtual(row)) {
-        this.sql.exec(`DROP TABLE IF EXISTS ${quoteSqlIdentifier(row.name)}`);
-      }
-    }
-    for (const row of rows) {
-      if (row.type !== "table" || isVirtual(row)) continue;
-      const stillExists =
-        this.sql
-          .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, row.name)
-          .toArray().length > 0;
-      if (stillExists) this.sql.exec(`DROP TABLE IF EXISTS ${quoteSqlIdentifier(row.name)}`);
-    }
-    this.sql.exec(`DELETE FROM state WHERE key <> 'schema_version'`);
+    migrateDurableObjectSchema({
+      className: this.constructor.name,
+      targetVersion: (this.constructor as typeof DurableObjectBase).schemaVersion,
+      storage: this.ctx.storage,
+      migrations: this.schemaMigrations(),
+      productionBaseline: this.schemaProductionBaseline(),
+      createSchema: () => this.createTables(),
+      validateSchema: () => this.validateSchema(),
+    });
   }
 
   // --- State KV (generic, always available) ---
@@ -369,6 +334,11 @@ export abstract class DurableObjectBase {
                 ? { callerPanelId: record["callerPanelId"] }
                 : {}),
               ...(typeof record["userId"] === "string" ? { userId: record["userId"] } : {}),
+              ...(record["authorization"] && typeof record["authorization"] === "object"
+                ? {
+                    authorization: record["authorization"] as AuthenticatedCaller["authorization"],
+                  }
+                : {}),
             } as AuthenticatedCaller,
           };
         }
@@ -474,6 +444,11 @@ export abstract class DurableObjectBase {
       callerKind: (this._currentRpcCallerKind as AuthenticatedCaller["callerKind"]) ?? "unknown",
       ...(this._currentRpcCallerPanelId ? { callerPanelId: this._currentRpcCallerPanelId } : {}),
     };
+  }
+
+  /** Complete host-attested facts for the active direct dispatch. */
+  protected get authorization(): AuthorizationContext | null {
+    return this.caller?.authorization?.context ?? null;
   }
 
   protected get rpcCallerPanelId(): string | null {
@@ -834,7 +809,7 @@ export abstract class DurableObjectBase {
         const previousVerifiedCaller = this._currentVerifiedCaller;
         this._currentVerifiedCaller = verifiedCallerFromBody;
         try {
-          if (this.caller?.callerKind !== "server") {
+          if (this.inboundHostControlDenial(method)) {
             return new Response(
               JSON.stringify({ error: "Lifecycle calls require server caller" }),
               {
@@ -864,7 +839,7 @@ export abstract class DurableObjectBase {
         const previousVerifiedCaller = this._currentVerifiedCaller;
         this._currentVerifiedCaller = verifiedCallerFromBody;
         try {
-          if (this.caller?.callerKind !== "server") {
+          if (this.inboundHostControlDenial(method)) {
             return new Response(JSON.stringify({ error: "Alarm calls require server caller" }), {
               status: 403,
               headers: { "Content-Type": "application/json" },
@@ -901,7 +876,10 @@ export abstract class DurableObjectBase {
           args,
         },
       });
-      const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
+      const responseEnvelope = await this.dispatchInboundEnvelope(
+        envelope,
+        directAuthorityAcceptedAt(request)
+      );
       const responseMessage = responseEnvelope?.message;
       if (responseMessage?.type === "response" && "error" in responseMessage) {
         if (responseMessage.error.startsWith('Method "')) {
@@ -910,6 +888,10 @@ export abstract class DurableObjectBase {
             headers: { "Content-Type": "application/json" },
           });
         }
+        const status =
+          responseMessage.errorCode === "EACCES" || responseMessage.errorCode === "EVAL_READ_ONLY"
+            ? 403
+            : 500;
         return new Response(
           JSON.stringify({
             error: responseMessage.error,
@@ -920,7 +902,7 @@ export abstract class DurableObjectBase {
               : {}),
           }),
           {
-            status: 500,
+            status,
             headers: { "Content-Type": "application/json" },
           }
         );
@@ -955,6 +937,7 @@ export abstract class DurableObjectBase {
   private async handleInboundEnvelope(request: Request): Promise<Response> {
     const envelope = (await request.json()) as RpcEnvelope;
     const message = envelope.message;
+    const authorityAcceptedAt = directAuthorityAcceptedAt(request);
     if (message?.type !== "request" && message?.type !== "stream-request") {
       this.connectionlessClient().deliver(envelope);
       return new Response(JSON.stringify({}), {
@@ -962,10 +945,13 @@ export abstract class DurableObjectBase {
       });
     }
     if (message.type === "stream-request") {
-      const responseEnvelope = await this.dispatchInboundEnvelope({
-        ...envelope,
-        message: { ...message, type: "request" } satisfies RpcRequest,
-      });
+      const responseEnvelope = await this.dispatchInboundEnvelope(
+        {
+          ...envelope,
+          message: { ...message, type: "request" } satisfies RpcRequest,
+        },
+        authorityAcceptedAt
+      );
       const responseMessage = responseEnvelope?.message;
       if (responseMessage?.type === "response" && "result" in responseMessage) {
         if (responseMessage.result instanceof Response) return responseMessage.result;
@@ -984,32 +970,88 @@ export abstract class DurableObjectBase {
         { status: 500, headers: { "Content-Type": "application/json" } }
       );
     }
-    const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
+    const responseEnvelope = await this.dispatchInboundEnvelope(envelope, authorityAcceptedAt);
     return new Response(JSON.stringify(responseEnvelope ?? {}), {
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  /**
-   * Default-deny inbound caller gate (workspace realm, Layer A). Every relay-reachable `@rpc`
-   * method must declare an `@rpc({ callers })` policy admitting the caller's kind; a method with no
-   * policy, or a caller (including an unattributed/null caller) whose kind is not listed, is refused.
-   * Identity-level tightening ("this agent's own EvalDO", a specific PubSubChannel/agent DO) stays as
-   * an inline check inside the method — this is the coarse kind floor beneath it. Returns an error
-   * string to refuse, or null to allow. Events (owner-scoped pushes) are delivered via `deliver`, not
-   * through here, so they are unaffected.
-   */
+  /** Evaluate the method's complete declaration against fresh host mediation. */
   protected inboundCallerDenial(
     method: string | undefined,
-    caller: AuthenticatedCaller | null
+    caller: AuthenticatedCaller | null,
+    authorityAcceptedAt: number
   ): string | null {
     if (!method) return null;
-    const policy = rpcMethodPolicy(this, method);
-    const kind = caller?.callerKind;
-    if (policy && kind && (policy.callers as readonly string[]).includes(kind)) return null;
-    return policy
-      ? `${method}: caller kind "${kind ?? "unattributed"}" is not permitted (allowed: ${policy.callers.join(", ")})`
-      : `${method}: refused — no @rpc({ callers }) policy declared (workspace DOs are default-deny over the relay)`;
+    const declaration = rpcMethodAuthority(this, method);
+    if (!declaration) {
+      return `${method}: refused — no direct authority declaration (workspace RPC is default-deny)`;
+    }
+    const attestation = caller?.authorization;
+    if (!attestation) return `${method}: fresh host authority attestation is required`;
+    const now = authorityAcceptedAt;
+    const audience = this.directAuthorityAudience();
+    const resourceKey = this.directAuthorityResource();
+    if (
+      attestation.audience !== audience ||
+      attestation.method !== method ||
+      attestation.resourceKey !== resourceKey
+    ) {
+      return (
+        `${method}: host authority attestation is bound to another invocation ` +
+        `(expected audience=${audience} method=${method} resource=${resourceKey}; ` +
+        `received audience=${attestation.audience} method=${attestation.method} resource=${attestation.resourceKey})`
+      );
+    }
+    if (attestation.issuedAt > now || attestation.expiresAt <= now) {
+      return (
+        `${method}: host authority attestation was stale at trusted dispatch ingress ` +
+        `(issuedAt=${attestation.issuedAt} expiresAt=${attestation.expiresAt} acceptedAt=${now})`
+      );
+    }
+    if (attestation.readOnly === true && declaration.sensitivity !== "read") {
+      return `${method}: EVAL_READ_ONLY — direct method is ${declaration.sensitivity ?? "unclassified"}`;
+    }
+    const decision = evaluateAuthority({
+      context: attestation.context,
+      requirement:
+        declaration.requires !== undefined
+          ? bindMethodCapability(declaration.requires, this.directAuthorityCapability(method))
+          : requirementForPrincipals(
+              declaration.principals,
+              this.directAuthorityCapability(method)
+            ),
+      resourceKey,
+      grants: attestation.grants,
+      now,
+    });
+    return decision.allowed ? null : `${method}: ${decision.reason} (${decision.code})`;
+  }
+
+  private directAuthorityAudience(): string {
+    return `do:${String(this.env["WORKER_SOURCE"])}:${String(this.env["WORKER_CLASS_NAME"])}:${this.objectKey}`;
+  }
+
+  private directAuthorityResource(): string {
+    return this.directAuthorityAudience();
+  }
+
+  private directAuthorityCapability(method: string): string {
+    return `rpc:${method}`;
+  }
+
+  private inboundHostControlDenial(method: string): string | null {
+    const attestation = this.caller?.authorization;
+    const now = Date.now();
+    return attestation &&
+      attestation.audience === this.directAuthorityAudience() &&
+      attestation.method === method &&
+      attestation.resourceKey === this.directAuthorityResource() &&
+      attestation.context.host !== null &&
+      attestation.issuedAt <= now &&
+      attestation.expiresAt > now
+      ? null
+      : `${method}: live host principal is required`;
   }
 
   /**
@@ -1017,7 +1059,10 @@ export abstract class DurableObjectBase {
    * (`respond` → `handleEnvelope` → `exposeAll`'d method), with the DO's
    * caller-context getters bound to `envelope.delivery.caller` for the duration.
    */
-  private async dispatchInboundEnvelope(envelope: RpcEnvelope): Promise<RpcEnvelope | null> {
+  private async dispatchInboundEnvelope(
+    envelope: RpcEnvelope,
+    authorityAcceptedAt: number
+  ): Promise<RpcEnvelope | null> {
     const connectionless = this.connectionlessClient();
     // An unattributed method-path call carries a synthetic empty caller; surface
     // it as a null caller context (matching the pre-convergence behavior) rather
@@ -1040,14 +1085,19 @@ export abstract class DurableObjectBase {
     this._currentRpcRequestId = message?.requestId ?? null;
     this._currentRpcIdempotencyKey = envelope.delivery.idempotencyKey ?? null;
     try {
-      const denial = this.inboundCallerDenial(message?.method, caller);
+      const denial = this.inboundCallerDenial(message?.method, caller, authorityAcceptedAt);
       if (denial) {
         return {
           from: envelope.target,
           target: envelope.from,
           delivery: { caller: caller ?? { callerId: "", callerKind: "unknown" } },
           provenance: envelope.provenance ?? [],
-          message: { type: "response", requestId: message?.requestId ?? "", error: denial },
+          message: {
+            type: "response",
+            requestId: message?.requestId ?? "",
+            error: denial,
+            errorCode: denial.includes("EVAL_READ_ONLY") ? "EVAL_READ_ONLY" : "EACCES",
+          },
         } as RpcEnvelope;
       }
       return await connectionless.respond(envelope);

@@ -11,17 +11,20 @@ import type {
 } from "@vibestudio/shared/panel/panelLease";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { SchemaCoversType } from "@vibestudio/shared/schemaTypeGuard";
-import type { MethodAccessDescriptor, ServicePolicy } from "@vibestudio/shared/servicePolicy";
+import type {
+  MethodAccessDescriptor,
+  ServiceAuthorityPolicy,
+} from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 // Access descriptors shared across the read/write method groups add
-// documentation and safety metadata. Method/service policy is the enforced
-// caller-kind gate.
+// documentation and safety metadata. Method/service authority is the enforced
+// principal gate.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
-const USERLAND_READ_POLICY: ServicePolicy = {
-  allowed: ["shell", "app", "server", "panel", "worker", "do"],
+const USERLAND_READ_POLICY: ServiceAuthorityPolicy = {
+  principals: ["user", "code", "entity", "host"],
 };
 const REGISTER_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
@@ -155,7 +158,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     description: "Get the current lease snapshot (version + all active panel runtime leases).",
     args: z.tuple([]),
     returns: runtimeLeaseSnapshotSchema,
-    policy: USERLAND_READ_POLICY,
+    authority: USERLAND_READ_POLICY,
     access: READ_ACCESS,
   },
   acquire: {

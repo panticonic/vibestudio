@@ -13,6 +13,7 @@ import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDis
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import {
   parseVcsSemanticRequest,
   vcsMethods,
@@ -95,6 +96,31 @@ function callerContextAuthorities(ctx: ServiceContext, deps: VcsServiceDeps): st
 
 function privileged(ctx: ServiceContext, deps: VcsServiceDeps): boolean {
   return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
+}
+
+function isCallerTrajectoryRoot(
+  ctx: ServiceContext,
+  deps: VcsServiceDeps,
+  reference: { kind: string; value: unknown }
+): boolean {
+  if (reference.kind !== "node" || !isRecord(reference.value)) return false;
+  const rootKind = reference.value["kind"];
+  if (
+    rootKind !== "trajectory" &&
+    rootKind !== "trajectory-invocation" &&
+    rootKind !== "trajectory-turn" &&
+    rootKind !== "trajectory-message"
+  ) {
+    return false;
+  }
+  const binding = verifiedAgentBinding(ctx, deps);
+  if (!binding) return false;
+  const own = channelTrajectoryFor(binding.channelId);
+  return reference.value["logId"] === own.logId && reference.value["head"] === own.head;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function authorizeContext(
@@ -216,9 +242,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     const exactRoots = parsed.references
       .filter(({ kind }) => kind === "state-node" || kind === "event" || kind === "node")
       .map(({ kind, value }) => ({ kind, value }));
-    if (exactRoots.length > 0 && !privileged(ctx, deps)) {
+    const guardedRoots = exactRoots.filter(
+      (reference) => !isCallerTrajectoryRoot(ctx, deps, reference)
+    );
+    if (guardedRoots.length > 0 && !privileged(ctx, deps)) {
       const contextIds = await reachableContextAuthorities(ctx, deps);
-      if (!(await deps.workspaceVcs.referencesReachable(contextIds, exactRoots))) {
+      if (!(await deps.workspaceVcs.referencesReachable(contextIds, guardedRoots))) {
         const message = "An exact semantic root is outside the caller's reachable context graph";
         throw new ServiceError("vcs", method, message, "EACCES", undefined, "access", {
           code: "Unauthorized",
@@ -240,9 +269,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     name: "vcs",
     description:
       "One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.",
-    policy: {
-      allowed: ["shell", "panel", "app", "server", "worker", "do", "extension", "agent"],
-    },
+    authority: { principals: ["user", "code", "host", "entity"] },
     methods: vcsMethods,
     handler: defineServiceHandler("vcs", vcsMethods, handlers),
   };

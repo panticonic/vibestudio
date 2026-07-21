@@ -39,7 +39,7 @@ export function createGovernanceService(deps: {
   return {
     name: "governance",
     description: "Host governance log — approval provenance + membership events (read-only)",
-    policy: { allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"] },
+    authority: { principals: ["user", "code", "host"] },
     methods,
     handler: defineServiceHandler("governance", methods, {
       list: async (_ctx, [input]) => {

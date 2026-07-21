@@ -57,7 +57,7 @@ export function createPhoneProvisioningProxyService(
     const callerId = connection.caller.runtime.id;
     const bridge = deps.getClientBridge(callerId);
     if (!bridge) throw new Error("The selected desktop disconnected");
-    return await bridge.call(callerId, `phoneProvisioning.${method}`, args);
+    return await bridge.call(callerId, `desktopPhoneProvider.${method}`, args);
   }
 
   async function providers(userId: string): Promise<PhoneProvider[]> {
@@ -104,7 +104,7 @@ export function createPhoneProvisioningProxyService(
   return {
     name: "phoneProvisioning",
     description: "Account-scoped proxy to phone capabilities on connected desktop clients",
-    policy: { allowed: ["agent", "panel", "app", "shell"] },
+    authority: { principals: ["entity", "code", "user"] },
     methods: phoneProvisioningMethods,
     handler: async (ctx, method, args) => {
       const userId = requireUserId(ctx);

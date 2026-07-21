@@ -36,8 +36,17 @@ import type { DeferralRegistry } from "./services/deferralRegistry.js";
 function makeRecord(
   id: string,
   kind: EntityKind,
-  opts?: { contextId?: string; repoPath?: string; effectiveVersion?: string }
+  opts?: {
+    contextId?: string;
+    repoPath?: string;
+    effectiveVersion?: string;
+    agentBinding?: EntityRecord["agentBinding"];
+    activeBuildKey?: string;
+    activeExecutionDigest?: string;
+    activeAuthority?: EntityRecord["activeAuthority"];
+  }
 ): EntityRecord {
+  const executable = kind === "panel" || kind === "app" || kind === "worker" || kind === "do";
   return {
     id,
     kind,
@@ -46,6 +55,22 @@ function makeRecord(
       effectiveVersion: opts?.effectiveVersion ?? "",
     },
     contextId: opts?.contextId ?? "",
+    ...(opts?.agentBinding ? { agentBinding: opts.agentBinding } : {}),
+    ...(opts?.activeBuildKey
+      ? { activeBuildKey: opts.activeBuildKey }
+      : executable
+        ? { activeBuildKey: `build:${id}` }
+        : {}),
+    ...(opts?.activeExecutionDigest
+      ? { activeExecutionDigest: opts.activeExecutionDigest }
+      : executable
+        ? { activeExecutionDigest: "a".repeat(64) }
+        : {}),
+    ...(opts?.activeAuthority
+      ? { activeAuthority: opts.activeAuthority }
+      : executable
+        ? { activeAuthority: { requests: [], delegations: [] } }
+        : {}),
     key: id,
     createdAt: Date.now(),
     status: "active",
@@ -55,6 +80,7 @@ function makeRecord(
 
 type MockDispatcher = ServiceDispatcher & {
   dispatch: ReturnType<typeof vi.fn>;
+  assertAuthority: ReturnType<typeof vi.fn>;
   getPolicy: ReturnType<typeof vi.fn>;
   getMethodPolicy: ReturnType<typeof vi.fn>;
 };
@@ -104,6 +130,16 @@ type TestRpcServer = {
     args: unknown[]
   ): Promise<unknown>;
   streamCallTarget(targetId: string, method: string, ...args: unknown[]): Promise<Response>;
+  relayTargetStream(
+    caller: ReturnType<typeof createVerifiedCaller>,
+    envelope: RpcEnvelope,
+    request: Extract<RpcMessage, { type: "stream-request" }>,
+    causalParent: import("@vibestudio/rpc").RpcCausalParent | undefined,
+    signal: AbortSignal
+  ): Promise<Response>;
+  streamingRelay: {
+    cancel(client: WsClientState, requestId: string): void;
+  };
   checkRelayAuth(
     callerId: string,
     callerKind: string,
@@ -133,6 +169,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
 
   const dispatcher = {
     dispatch: vi.fn(),
+    assertAuthority: vi.fn().mockResolvedValue(undefined),
     getPolicy: vi.fn(),
     getMethodPolicy: vi.fn(),
   } as unknown as MockDispatcher;
@@ -157,6 +194,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
     server: new RpcServer({
       tokenManager,
       dispatcher,
+      workspaceId: "test-workspace",
       entityCache,
       connectionGrants,
       runtimeCoordinator,
@@ -1124,7 +1162,7 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
-  it("rejects a forged WS stream relay to an extension host-control method before delivery", () => {
+  it("rejects a forged WS stream relay to an extension host-control method before delivery", async () => {
     const { server, grantPanel } = createServer();
     const extensionId = "@workspace-extensions/git-bridge";
     const sourceWs = createTestWs();
@@ -1151,15 +1189,26 @@ describe("RpcServer relay behavior", () => {
     });
 
     expect(target.ws.send).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(
+        sourceWs.send.mock.calls
+          .map(([raw]) => JSON.parse(String(raw)))
+          .find(
+            (message) =>
+              message.type === "ws:rpc" &&
+              message.envelope?.message?.requestId === "stream-host-control"
+          )
+      ).toBeDefined()
+    );
     const rejection = sourceWs.send.mock.calls
       .map(([raw]) => JSON.parse(String(raw)))
       .find(
         (message) =>
-          message.type === "ws:routed" &&
+          message.type === "ws:rpc" &&
           message.envelope?.message?.requestId === "stream-host-control"
       );
     expect(rejection).toMatchObject({
-      type: "ws:routed",
+      type: "ws:rpc",
       envelope: {
         message: {
           type: "stream-frame",
@@ -1847,6 +1896,114 @@ describe("RpcServer relay behavior", () => {
     expect(body).toContain("world");
   });
 
+  it("dispatches a routed DO stream through the canonical streaming relay", async () => {
+    const { server } = createServer();
+    const client = createClient();
+    const relayTargetStream = vi
+      .spyOn(testServer(server), "relayTargetStream")
+      .mockResolvedValue(new Response("streamed", { status: 200 }));
+    const request: RpcMessage = {
+      type: "stream-request",
+      requestId: "routed-stream-1",
+      fromId: "panel:nav-a",
+      method: "channel.subscribe",
+      args: [],
+    };
+
+    await handleRoute(server, client, "do:workers/pubsub-channel:PubSubChannel:chat-a", request);
+
+    expect(relayTargetStream).toHaveBeenCalledOnce();
+    expect(relayTargetStream.mock.calls[0]?.[1].target).toBe(
+      "do:workers/pubsub-channel:PubSubChannel:chat-a"
+    );
+    const frames = (client.ws.send as ReturnType<typeof vi.fn>).mock.calls
+      .map(([raw]) => JSON.parse(String(raw)))
+      .filter((message) => message.envelope?.message?.type === "stream-frame")
+      .map((message) => message.envelope.message as { frameType: number; payload: string });
+    expect(frames.map((frame) => frame.frameType)).toEqual([FRAME_HEAD, FRAME_DATA, FRAME_END]);
+    expect(Buffer.from(frames[1]!.payload, "base64").toString()).toBe("streamed");
+  });
+
+  it("retains the admission-bound sealed panel identity for a routed DO stream", async () => {
+    const { server, entityCache } = createServer();
+    const targetId = "do:workers/pubsub-channel:PubSubChannel:chat-a";
+    entityCache._onActivate(
+      makeRecord("panel:nav-a", "panel", {
+        repoPath: "panels/chat",
+        effectiveVersion: "ev-chat",
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: {
+          requests: [{ capability: "rpc:subscribe", resource: { kind: "prefix", prefix: "" } }],
+          delegations: [],
+        },
+      })
+    );
+    entityCache._onActivate(
+      makeRecord(targetId, "do", {
+        repoPath: "workers/pubsub-channel",
+        effectiveVersion: "ev-channel",
+      })
+    );
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+    const fetchMock = vi.fn().mockResolvedValue(new Response("streamed", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createClient();
+    client.caller = createVerifiedCaller("panel:nav-a", "panel", {
+      callerId: "panel:nav-a",
+      callerKind: "panel",
+      repoPath: "panels/chat",
+      effectiveVersion: "ev-chat",
+      executionDigest: "a".repeat(64),
+      requested: [{ capability: "rpc:subscribe", resource: { kind: "prefix", prefix: "" } }],
+      delegations: [],
+    });
+    const request = {
+      type: "stream-request" as const,
+      requestId: "routed-stream-authority-1",
+      fromId: "panel:nav-a",
+      method: "subscribe",
+      args: ["panel:tree/slot-a", { contextId: "ctx-a" }],
+    };
+    await handleRoute(server, client, targetId, request);
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const relayed = JSON.parse(String((init as RequestInit).body)) as RpcEnvelope;
+    expect(relayed.delivery.caller.authorization).toMatchObject({
+      audience: targetId,
+      method: "subscribe",
+      resourceKey: targetId,
+      context: {
+        authorizingOrigin: {
+          kind: "code",
+          principal: `code:panels/chat@${"a".repeat(64)}`,
+        },
+      },
+      grants: [
+        expect.objectContaining({
+          subject: `code:panels/chat@${"a".repeat(64)}`,
+          capability: "rpc:subscribe",
+        }),
+      ],
+    });
+  });
+
+  it("cancels a routed stream in the same caller-owned streaming relay", async () => {
+    const { server } = createServer();
+    const client = createClient();
+    const cancel = vi.spyOn(testServer(server).streamingRelay, "cancel");
+
+    await handleRoute(server, client, "do:workers/pubsub-channel:PubSubChannel:chat-a", {
+      type: "stream-cancel",
+      requestId: "routed-stream-1",
+      fromId: "panel:nav-a",
+    });
+
+    expect(cancel).toHaveBeenCalledWith(client, "routed-stream-1");
+    expect(client.ws.send).not.toHaveBeenCalled();
+  });
+
   it("routes stable panel slot events to the current runtime entity connection", () => {
     const { server, runtimeCoordinator } = createServer();
     runtimeCoordinator.acquire("panel:nav-b", {
@@ -2072,7 +2229,7 @@ describe("RpcServer live caller gate", () => {
 
 describe("RpcServer caller identity", () => {
   it("accepts an existing exact causal parent only for the presenter's bound trajectory", async () => {
-    const { server } = createServer();
+    const { server, entityCache } = createServer();
     const binding = {
       entityId: "entity:agent",
       contextId: "context:agent",
@@ -2104,6 +2261,23 @@ describe("RpcServer caller identity", () => {
         causalParent,
       })
     ).rejects.toThrow(/host-bound agent trajectory/);
+
+    const vesselId = "do:workers/agent-worker:AiChatWorker:headless-one";
+    entityCache._onActivate(
+      makeRecord(vesselId, "do", {
+        contextId: binding.contextId,
+        agentBinding: {
+          entityId: binding.entityId,
+          contextId: binding.contextId,
+          channelId: binding.channelId,
+        },
+      })
+    );
+    await expect(
+      testServer(server).resolveCausalParent(createVerifiedCaller(vesselId, "do"), {
+        causalParent,
+      })
+    ).resolves.toEqual(causalParent);
   });
 
   it("fails closed when exact causal invocation evidence is unavailable or missing", async () => {
@@ -2503,12 +2677,13 @@ describe("RpcServer caller identity", () => {
     const { server } = createServer();
     const client = createClient("worker-1");
     client.caller = createVerifiedCaller("worker-1", "worker");
-    testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["server"] });
-    testServer(server).dispatcher.getMethodPolicy.mockReturnValue({ allowed: ["shell"] });
+    testServer(server).dispatcher.dispatch.mockRejectedValue(
+      new Error("Service 'internal' is not accessible to worker callers")
+    );
 
     await handleRpc(server, client, rpcRequest("req-3", "internal.shellOnly"));
 
-    expect(testServer(server).dispatcher.dispatch).not.toHaveBeenCalled();
+    expect(testServer(server).dispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(sentResponse(client).envelope.message.error).toContain(
       "not accessible to worker callers"
     );
@@ -2617,6 +2792,45 @@ describe("RpcServer caller identity", () => {
       caller: { runtime: { id: "@workspace-extensions/tools", kind: "extension" } },
       causalParent,
     });
+  });
+
+  it("propagates an authenticated WebSocket unary cancellation to the service context", async () => {
+    const { server } = createServer();
+    const client = createClient("panel:cancel-source");
+    client.caller = createVerifiedCaller("panel:cancel-source", "panel");
+    const dispatcher = testServer(server).dispatcher;
+    dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
+    dispatcher.getMethodPolicy.mockReturnValue(undefined);
+    let resolveEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    let observedAbort = false;
+    dispatcher.dispatch.mockImplementation(
+      async (ctx: { signal?: AbortSignal }) =>
+        new Promise((resolve) => {
+          resolveEntered();
+          ctx.signal?.addEventListener(
+            "abort",
+            () => {
+              observedAbort = true;
+              resolve(null);
+            },
+            { once: true }
+          );
+        })
+    );
+    const pending = handleRpc(server, client, rpcRequest("cancel-me", "docs.listServices"));
+    await entered;
+
+    await handleRpc(server, client, {
+      type: "request-cancel",
+      requestId: "cancel-me",
+      fromId: client.caller.runtime.id,
+    });
+    await pending;
+
+    expect(observedAbort).toBe(true);
   });
 });
 

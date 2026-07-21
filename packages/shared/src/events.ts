@@ -375,10 +375,17 @@ export function encodeEventWatchRecord(record: EventWatchRecord): Uint8Array {
   return eventWatchEncoder.encode(`${JSON.stringify(record)}\n`);
 }
 
+export interface EventWatchResponse {
+  status: number;
+  body: ReadableStream<Uint8Array> | null;
+}
+
 export async function* readEventWatchRecords(
-  response: Response
+  response: EventWatchResponse
 ): AsyncGenerator<EventWatchRecord, void, void> {
-  if (!response.ok) throw new Error(`Event watch failed with HTTP ${response.status}`);
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Event watch failed with HTTP ${response.status}`);
+  }
   if (!response.body) throw new Error("Event watch returned no response body");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

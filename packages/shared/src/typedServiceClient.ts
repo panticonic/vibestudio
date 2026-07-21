@@ -19,7 +19,55 @@
  */
 
 import type { z } from "zod";
-import type { ServicePolicy, MethodAccessDescriptor } from "./servicePolicy.js";
+import type { MethodAccessDescriptor, ServiceAuthorityPolicy } from "./serviceAuthority.js";
+import type { AuthorityRequirement, PrincipalKind } from "./authorization.js";
+
+export type AuthorityResourceDerivation =
+  | { kind: "literal"; key: string }
+  | {
+      kind: "argument";
+      index: number;
+      path?: readonly (string | number)[];
+      prefix?: string;
+      transform?: "url-origin" | "external-url-scope";
+    };
+
+export type EvalCapabilityAcquisition =
+  | { kind: "baseline" }
+  | {
+      kind: "approval";
+      title: string;
+      description: string;
+      operation: { kind: string; verb: string };
+      severity?: "standard" | "severe";
+      grantScopes: readonly ("run" | "session" | "version")[];
+    }
+  | { kind: "closed"; reason: string };
+
+export type PreparedAuthorityRequirement =
+  | AuthorityRequirement
+  | { kind: "selected"; principals: readonly PrincipalKind[] };
+
+export interface MethodAuthorityDescriptor {
+  requirement: AuthorityRequirement;
+  resource: AuthorityResourceDerivation;
+  additional?: readonly {
+    capability: string;
+    requirement: AuthorityRequirement;
+    resource: AuthorityResourceDerivation;
+    when?: { origins: readonly ("code" | "user" | "host" | "device" | "entity")[] };
+    evalAcquisition: EvalCapabilityAcquisition;
+  }[];
+  prepared?: {
+    resolver: string;
+    leaves: readonly {
+      capability: string;
+      requirement: PreparedAuthorityRequirement;
+      evalAcquisition: EvalCapabilityAcquisition;
+    }[];
+  };
+  evalAcquisition?: EvalCapabilityAcquisition;
+}
 
 /** A worked example for a method. Realistic values allowed (hand-authored or
  *  redacted-from-real-usage); flows to the capability catalog and JIT errors. */
@@ -52,8 +100,8 @@ export interface MethodSchema {
    *  Defaults to true. Set false for implementation transports that remain
    *  callable by typed runtime clients but have a higher-level public API. */
   agentFacing?: boolean;
-  /** Enforced caller-kind gate. Overrides the service policy for this method. */
-  policy?: ServicePolicy;
+  /** Complete compositional authority contract for this method. */
+  authority?: ServiceAuthorityPolicy | MethodAuthorityDescriptor;
   /** Unified access & restrictedness descriptor (caller kinds, conditional
    *  restrictions, sensitivity, side-effects, approval/grant gates). */
   access?: MethodAccessDescriptor;

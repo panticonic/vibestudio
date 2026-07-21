@@ -202,6 +202,20 @@ export interface EntityRecord {
   id: string;
   kind: EntityKind;
   source: EntitySource;
+  /** Content-addressed BuildV2 artifact selected for this active incarnation. */
+  activeBuildKey?: string;
+  /** Exact immutable build selected for the active incarnation. */
+  activeExecutionDigest?: string;
+  /**
+   * Authority envelope sealed into the exact build selected for the active
+   * incarnation. This is durable runtime state, not a projection of the
+   * disposable build cache: callers must be able to restore an incarnation's
+   * authority after cache eviction or process restart.
+   *
+   * Absent only on non-executable entities. Executable incarnations are invalid
+   * unless this identity is present; a missing value is never inferred.
+   */
+  activeAuthority?: import("../authorityManifest.js").UnitAuthorityManifest;
   contextId: string;
   className?: string;
   key: string;
@@ -232,6 +246,29 @@ export interface EntityRecord {
   retiredAt?: number;
   cleanupComplete: boolean;
   error?: string;
+}
+
+/**
+ * Complete durable input for one runtime incarnation activation.
+ *
+ * This wire contract is shared by the host-side WorkspaceEntityStore and the
+ * WorkspaceDO write boundary. Keeping it beside EntityRecord prevents an
+ * intermediate adapter from silently dropping the immutable build identity
+ * that executable principals need after cache eviction or restart.
+ */
+export interface EntityActivationInput {
+  kind: EntityKind;
+  source: EntitySource;
+  activeBuildKey?: string;
+  activeExecutionDigest?: string;
+  activeAuthority?: import("../authorityManifest.js").UnitAuthorityManifest;
+  contextId: string;
+  className?: string;
+  key: string;
+  stateArgs?: unknown;
+  agentBinding?: RuntimeAgentBinding;
+  parentId?: string;
+  ownerUserId?: string;
 }
 
 /**
@@ -298,6 +335,11 @@ export interface RuntimeEntityHandle {
   id: string;
   kind: "panel" | "app" | "worker" | "do" | "session";
   source: EntitySource;
+  /** Content-addressed BuildV2 artifact selected for this incarnation. */
+  buildKey?: string;
+  executionDigest?: string;
+  authorityRequests?: readonly import("@vibestudio/rpc").CapabilityScope[];
+  authorityDelegations?: readonly import("../authorityManifest.js").EvalAuthorityDelegation[];
   contextId: string;
   targetId: string;
 }

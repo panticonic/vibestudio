@@ -66,6 +66,23 @@ function toOptionsRecord(input: unknown): Record<string, unknown> {
     : {};
 }
 
+function assertContextIsNotPanelState(method: string, args: unknown[]): void {
+  const stateArgs =
+    method === "setStateArgs"
+      ? toOptionsRecord(args[1])
+      : method === "create"
+        ? toOptionsRecord(toOptionsRecord(args[1])["stateArgs"])
+        : method === "navigate"
+          ? toOptionsRecord(toOptionsRecord(args[2])["stateArgs"])
+          : null;
+  if (stateArgs && Object.hasOwn(stateArgs, "contextId")) {
+    throw new Error(
+      `panelTree.${method}: stateArgs.contextId cannot select a workspace branch; ` +
+        "pass contextId as a panel create/navigation option"
+    );
+  }
+}
+
 export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefinition {
   async function bridge(ctx: ServiceContext, method: string, args: unknown[]): Promise<unknown> {
     return deps.bridge({
@@ -157,6 +174,7 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     args: unknown[]
   ): Promise<unknown> {
     assertAllowedAgentMethod(method, args);
+    assertContextIsNotPanelState(method, args);
     await validatePanelSourceBeforeMutation(method, args);
     const op = operationFor(method, args);
     if (op) {
@@ -214,7 +232,7 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     // Authorized chrome gets full access through requirePanelAccessPermission.
     // Runtime callers (panel/worker/do/app) may also reach this service but are
     // scoped by resource grants unless they hold the chrome capability.
-    policy: { allowed: ["panel", "worker", "do", "shell", "server", "app"] },
+    authority: { principals: ["code", "user", "host"] },
     methods: panelTreeMethods,
     handler: defineServiceHandler("panelTree", panelTreeMethods, {
       ensureLoaded: (ctx, args) => dispatch(ctx, "ensureLoaded", args),

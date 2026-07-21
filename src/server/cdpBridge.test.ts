@@ -653,6 +653,46 @@ describe("CdpBridge authentication", () => {
     expect(harness.bridge.isTargetRegistered("stale-panel")).toBe(false);
   });
 
+  it("does not evict a live provider target when the authoritative lookup fails", async () => {
+    let lookupCount = 0;
+    let firstLookupObserved: () => void = () => {};
+    const firstLookup = new Promise<void>((resolve) => {
+      firstLookupObserved = resolve;
+    });
+    const harness = await createHarness({
+      isPanelKnown: async () => {
+        lookupCount += 1;
+        if (lookupCount === 1) {
+          firstLookupObserved();
+          throw new Error("workspace-state unavailable");
+        }
+        return true;
+      },
+    });
+    const provider = await connectHostProviderOnly(harness, "desktop-host");
+    const brokerFrames: Array<Record<string, unknown>> = [];
+    provider.on("message", (data) => {
+      brokerFrames.push(JSON.parse(data.toString()) as Record<string, unknown>);
+    });
+
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/panel-1", tabId: 123 })
+    );
+    await firstLookup;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(brokerFrames).not.toContainEqual(
+      expect.objectContaining({ type: "cdp:register-rejected", reason: "unknown_panel" })
+    );
+    expect(harness.bridge.isTargetRegistered("panel:tree/panel-1")).toBe(false);
+
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/panel-1", tabId: 123 })
+    );
+    await waitForTargetRegistered(harness, "panel:tree/panel-1");
+    expect(lookupCount).toBe(2);
+  });
+
   it("preserves provider message order while panel-known checks are pending", async () => {
     let resolveKnown: (known: boolean) => void = () => {};
     const known = new Promise<boolean>((resolve) => {
@@ -701,14 +741,26 @@ describe("CdpBridge authentication", () => {
     const known = new Promise<boolean>((resolve) => {
       resolveKnown = resolve;
     });
+    let lookupStarted: () => void = () => {};
+    const lookupHasStarted = new Promise<void>((resolve) => {
+      lookupStarted = resolve;
+    });
+    const isPanelKnown = vi.fn(() => {
+      lookupStarted();
+      return known;
+    });
     const harness = await createHarness({
-      isPanelKnown: () => known,
+      isPanelKnown,
     });
     const provider = await connectHostProviderOnly(harness, "desktop-host");
 
     provider.send(
       JSON.stringify({ type: "cdp:register", targetId: "panel:tree/panel-1", tabId: 123 })
     );
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/panel-2", tabId: 124 })
+    );
+    await lookupHasStarted;
     provider.close();
     await waitForClose(provider);
     resolveKnown(true);
@@ -716,6 +768,8 @@ describe("CdpBridge authentication", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(harness.bridge.isTargetRegistered("panel:tree/panel-1")).toBe(false);
+    expect(harness.bridge.isTargetRegistered("panel:tree/panel-2")).toBe(false);
+    expect(isPanelKnown).toHaveBeenCalledTimes(1);
   });
 
   it("rejects target registration when the lease resolver has no CDP-capable holder", async () => {

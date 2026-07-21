@@ -30,6 +30,7 @@
   "dependencies": {
     "@vibestudio/browser-data": "workspace:*",
     "@vibestudio/credential-client": "workspace:*",
+    "@vibestudio/durable": "workspace:*",
     "@vibestudio/extension": "workspace:*",
     "@vibestudio/git": "workspace:*",
     "@workspace/harness": "workspace:*",

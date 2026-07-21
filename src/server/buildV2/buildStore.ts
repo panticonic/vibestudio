@@ -16,6 +16,17 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { getCentralDataPath, getUserDataPath } from "@vibestudio/env-paths";
+import {
+  parseUnitAuthorityManifest,
+  type UnitAuthorityManifest,
+} from "@vibestudio/shared/authorityManifest";
+import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import {
+  canonicalArtifactPath,
+  domainHash,
+  parseSha256,
+  type Sha256,
+} from "@vibestudio/shared/execution/identity";
 import { assertPresent } from "../../lintHelpers";
 import {
   blobCasPath,
@@ -55,6 +66,25 @@ export interface BuildArtifactManifestEntry {
 }
 
 export type BuildArtifactWithContent = BuildArtifactManifestEntry & { content: string };
+
+/**
+ * Immutable executable identity sealed at the build-store boundary.
+ *
+ * `buildInputDigest` is the full BuildV2 input hash used as the cache key. It
+ * identifies source closure + recipe inputs, while `artifactDigest` identifies
+ * the exact emitted manifest and bytes. `executionDigest` combines both under
+ * a separate domain and is the only member suitable for code principals.
+ */
+export interface BuildExecutionIdentity {
+  version: 1;
+  source: {
+    repoPath: string;
+    effectiveVersion: Sha256;
+  };
+  buildInputDigest: Sha256;
+  artifactDigest: Sha256;
+  executionDigest: Sha256;
+}
 
 export type BuildMetadataDetails =
   | {
@@ -96,11 +126,19 @@ export type BuildMetadataDetails =
 export interface BuildMetadata {
   kind: "panel" | "package" | "worker" | "extension" | "app" | "template";
   name: string;
+  /** Canonical identity of this exact immutable executable artifact. */
+  buildKey: string;
+  /** Workspace-relative repository path; null for external library builds. */
+  sourcePath: string | null;
   ev: string;
   /** Workspace state this artifact was materialized from; null for non-workspace builds. */
   sourceStateHash: string | null;
   sourcemap: boolean;
   framework?: string;
+  /** Authority sealed from the exact materialized source manifest. */
+  authority?: UnitAuthorityManifest;
+  /** Derived by the store from immutable inputs; callers may not supply it. */
+  execution?: BuildExecutionIdentity;
   details: BuildMetadataDetails;
   builtAt: string;
 }
@@ -108,6 +146,8 @@ export interface BuildMetadata {
 export interface BuildResult {
   /** Absolute path to the build directory */
   dir: string;
+  /** Full BuildV2 input digest used only as the immutable cache locator. */
+  buildKey: string;
   /** Workspace state resolved for this build request; null for non-workspace builds. */
   sourceStateHash: string | null;
   /** Build metadata */
@@ -288,6 +328,22 @@ function artifactIntegrity(entry: BuildArtifactInput): string {
   return `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+function assertCanonicalArtifactManifestPaths(
+  entries: readonly Pick<BuildArtifactManifestEntry, "path">[]
+): void {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const canonical = canonicalArtifactPath(entry.path);
+    if (canonical !== entry.path) {
+      throw new Error(`Build artifact path is not canonical: ${JSON.stringify(entry.path)}`);
+    }
+    if (seen.has(canonical)) {
+      throw new Error(`Duplicate build artifact path: ${canonical}`);
+    }
+    seen.add(canonical);
+  }
+}
+
 function integrityHex(integrity: string): string | null {
   const match = /^sha256-([a-f0-9]{64})$/.exec(integrity);
   return match?.[1] ?? null;
@@ -360,35 +416,136 @@ function metadataForEntries(
   };
 }
 
-export function has(key: string): boolean {
-  if (fs.existsSync(path.join(getBuildDir(key), "metadata.json"))) return true;
-  const sharedDir = getSharedBuildDir(key);
-  return sharedDir !== null && fs.existsSync(path.join(sharedDir, "metadata.json"));
+function canonicalSourcePath(input: string): string {
+  const value = input.replace(/\\/g, "/").normalize("NFC");
+  if (!value || value.startsWith("/") || value.includes("\0")) {
+    throw new Error(`Invalid build source path: ${JSON.stringify(input)}`);
+  }
+  const parts = value.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) {
+    throw new Error(`Invalid build source path: ${JSON.stringify(input)}`);
+  }
+  return value;
 }
 
-function readBuildDir(dir: string): BuildResult | null {
+function computeArtifactDigest(entries: readonly BuildArtifactManifestEntry[]): Sha256 {
+  const exactManifest = entries
+    .map((entry) => ({
+      path: entry.path.replace(/\\/g, "/").normalize("NFC"),
+      role: entry.role,
+      contentType: entry.contentType,
+      encoding: entry.encoding,
+      platform: entry.platform ?? null,
+      integrity: entry.integrity ?? null,
+    }))
+    .sort((a, b) =>
+      `${a.path}\0${a.platform ?? ""}`.localeCompare(`${b.path}\0${b.platform ?? ""}`)
+    );
+  return domainHash("vibestudio/build-v2-artifacts/v1", canonicalJson(exactManifest));
+}
+
+function createBuildExecutionIdentity(
+  metadata: BuildMetadata,
+  entries: readonly BuildArtifactManifestEntry[]
+): BuildExecutionIdentity | undefined {
+  if (metadata.sourceStateHash === null) return undefined;
+  if (!metadata.sourcePath) {
+    throw new Error(`Workspace build ${metadata.buildKey} is missing its source path`);
+  }
+  const source = {
+    repoPath: canonicalSourcePath(metadata.sourcePath),
+    effectiveVersion: parseSha256(metadata.ev, "build effective version"),
+  };
+  const buildInputDigest = parseSha256(metadata.buildKey, "BuildV2 build input digest");
+  const artifactDigest = computeArtifactDigest(entries);
+  const executionDigest = domainHash(
+    "vibestudio/build-v2-execution/v1",
+    canonicalJson({
+      version: 1,
+      source,
+      buildInputDigest,
+      artifactDigest,
+    })
+  );
+  return {
+    version: 1,
+    source,
+    buildInputDigest,
+    artifactDigest,
+    executionDigest,
+  };
+}
+
+function verifiedExecutionIdentity(
+  metadata: BuildMetadata,
+  entries: readonly BuildArtifactManifestEntry[]
+): BuildExecutionIdentity | undefined {
+  const expected = createBuildExecutionIdentity(metadata, entries);
+  if (!expected) {
+    if (metadata.execution !== undefined) {
+      throw new Error("External build metadata unexpectedly carries an execution identity");
+    }
+    return undefined;
+  }
+  if (canonicalJson(metadata.execution) !== canonicalJson(expected)) {
+    throw new Error(`Build ${metadata.buildKey} execution identity does not match its artifacts`);
+  }
+  return expected;
+}
+
+export function has(key: string): boolean {
+  // Cache presence means a fully verified immutable build, not merely a
+  // metadata sentinel. This is especially important during cache-schema
+  // migrations: state triggers must not announce legacy entries as complete.
+  return get(key) !== null;
+}
+
+function readBuildDir(dir: string, expectedBuildKey: string): BuildResult | null {
   const metadataPath = path.join(dir, "metadata.json");
 
   if (!fs.existsSync(metadataPath)) return null;
 
   try {
-    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8")) as BuildMetadata;
+    const rawMetadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8")) as BuildMetadata;
     if (
-      !("sourceStateHash" in metadata) ||
-      (metadata.sourceStateHash !== null && typeof metadata.sourceStateHash !== "string")
+      !("sourceStateHash" in rawMetadata) ||
+      (rawMetadata.sourceStateHash !== null && typeof rawMetadata.sourceStateHash !== "string") ||
+      rawMetadata.buildKey !== expectedBuildKey
     ) {
       return null;
     }
+    const authority =
+      rawMetadata.authority === undefined
+        ? undefined
+        : parseUnitAuthorityManifest(
+            rawMetadata.authority,
+            `build ${expectedBuildKey} metadata.authority`
+          );
+    // Every workspace-derived build must carry authority from the exact source
+    // state. Only library builds with no workspace source coordinate may omit it.
+    if (rawMetadata.sourceStateHash !== null && authority === undefined) return null;
+    const metadata: BuildMetadata = { ...rawMetadata, ...(authority ? { authority } : {}) };
     const manifestPath = path.join(dir, "artifacts.json");
     if (!fs.existsSync(manifestPath)) return null;
-    const artifacts = (
-      JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as BuildArtifactManifestEntry[]
-    )
-      .filter((entry) => fs.existsSync(path.join(dir, entry.path)))
-      .map((entry) => ({ ...entry, content: readArtifactContent(dir, entry) }));
+    const storedManifest = JSON.parse(
+      fs.readFileSync(manifestPath, "utf-8")
+    ) as BuildArtifactManifestEntry[];
+    assertCanonicalArtifactManifestPaths(storedManifest);
+    const artifacts = storedManifest.map((entry) => {
+      if (!fs.existsSync(path.join(dir, entry.path))) {
+        throw new Error(`Build artifact is missing: ${entry.path}`);
+      }
+      const artifact = { ...entry, content: readArtifactContent(dir, entry) };
+      if (entry.integrity !== artifactIntegrity(artifact)) {
+        throw new Error(`Build artifact integrity mismatch: ${entry.path}`);
+      }
+      return artifact;
+    });
     const artifactManifest = artifacts.map(({ content: _content, ...entry }) => entry);
+    verifiedExecutionIdentity(metadata, artifactManifest);
     return {
       dir,
+      buildKey: expectedBuildKey,
       sourceStateHash: metadata.sourceStateHash,
       metadata: metadataForEntries(metadata, artifactManifest),
       artifacts,
@@ -402,7 +559,7 @@ const reportedSharedBuildHits = new Set<string>();
 
 export function get(key: string): BuildResult | null {
   const localDir = getBuildDir(key);
-  const local = readBuildDir(localDir);
+  const local = readBuildDir(localDir, key);
   if (local) {
     publishSharedBuild(key, localDir);
     return local;
@@ -410,7 +567,7 @@ export function get(key: string): BuildResult | null {
 
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return null;
-  const shared = readBuildDir(sharedDir);
+  const shared = readBuildDir(sharedDir, key);
   if (shared && !reportedSharedBuildHits.has(key)) {
     reportedSharedBuildHits.add(key);
     console.info(`[BuildCache] Reused shared build ${shared.metadata.name} (${key.slice(0, 12)})`);
@@ -473,6 +630,24 @@ export function primaryArtifactFilePath(
 }
 
 export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetadata): BuildResult {
+  if (metadata.execution !== undefined) {
+    throw new Error("Build execution identity is derived by the store and cannot be supplied");
+  }
+  if (metadata.buildKey !== key) {
+    throw new Error(
+      `Build metadata key ${metadata.buildKey} does not match content-addressed store key ${key}`
+    );
+  }
+  if (metadata.sourceStateHash !== null && metadata.authority === undefined) {
+    throw new Error(`Workspace build ${key} is missing sealed authority metadata`);
+  }
+  const sealedMetadata: BuildMetadata =
+    metadata.authority === undefined
+      ? metadata
+      : {
+          ...metadata,
+          authority: parseUnitAuthorityManifest(metadata.authority, `build ${key} authority`),
+        };
   const dir = getBuildDir(key);
   const metadataPath = path.join(dir, "metadata.json");
   const artifactPoolDir = getSharedArtifactPoolDir();
@@ -483,8 +658,6 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
   // symlink before our mkdirSync, redirecting our writes).
   const tmpDir = `${dir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
 
-  fs.mkdirSync(tmpDir, { recursive: true });
-
   const entries = artifacts.entries.map((entry) => ({
     ...entry,
     encoding: entry.encoding ?? "utf8",
@@ -493,15 +666,20 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
   if (entries.length === 0) {
     throw new Error(`Build ${key} has no artifact entries`);
   }
+  assertCanonicalArtifactManifestPaths(entries);
+  const artifactManifest = entries.map(manifestForEntry);
+  const metadataWithEntries = metadataForEntries(sealedMetadata, artifactManifest);
+  const execution = createBuildExecutionIdentity(metadataWithEntries, artifactManifest);
+  const storedMetadata: BuildMetadata = {
+    ...metadataWithEntries,
+    ...(execution ? { execution } : {}),
+  };
+
+  fs.mkdirSync(tmpDir, { recursive: true });
   for (const entry of entries) {
-    if (path.isAbsolute(entry.path) || entry.path.split(/[\\/]/).includes("..")) {
-      throw new Error(`Invalid build artifact path: ${entry.path}`);
-    }
     const targetPath = path.join(tmpDir, entry.path);
     writeArtifactFile(targetPath, entry, artifactPoolDir);
   }
-  const artifactManifest = entries.map(manifestForEntry);
-  const storedMetadata = metadataForEntries(metadata, artifactManifest);
 
   // Ensure Node.js treats bundle.js as ESM.
   if (storedMetadata.kind === "worker" || storedMetadata.kind === "extension") {
@@ -518,16 +696,24 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
     fs.renameSync(tmpDir, dir);
   } catch (err: unknown) {
     if (isFileSystemErrorCode(err, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) {
-      // Another build won the race — verify their sentinel, use their result
+      // Another build may have won the race. Accept it only after the same
+      // integrity + execution-identity verification used by normal reads.
+      // Legacy or corrupt cache directories also have a metadata sentinel, so
+      // sentinel presence alone must never prevent the current build replacing
+      // them during an identity-schema migration.
       if (fs.existsSync(metadataPath)) {
-        try {
-          fs.rmSync(tmpDir, { recursive: true, force: true });
-        } catch (cleanupError) {
-          warnCleanupFailure(tmpDir, cleanupError);
+        const winner = get(key);
+        if (winner) {
+          try {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          } catch (cleanupError) {
+            warnCleanupFailure(tmpDir, cleanupError);
+          }
+          return winner;
         }
-        return assertPresent(get(key));
       }
-      // Winner incomplete — remove stale dir, retry rename
+      // Winner incomplete, corrupt, or from an obsolete identity schema —
+      // remove the disposable cache entry and promote the verified build.
       try {
         fs.rmSync(dir, { recursive: true, force: true });
         fs.renameSync(tmpDir, dir);
@@ -555,7 +741,7 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
     }
   }
 
-  const stored = assertPresent(readBuildDir(dir));
+  const stored = assertPresent(readBuildDir(dir, key));
   publishSharedBuild(key, dir);
   return stored;
 }

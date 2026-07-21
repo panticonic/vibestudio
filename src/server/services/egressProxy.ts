@@ -1330,8 +1330,21 @@ export class EgressProxy {
     if (!identity) {
       throw new ForwardRejection(403, `Unknown caller identity: ${callerId}`, "unknown-caller");
     }
+    if (!identity.executionDigest || !identity.requested || !identity.delegations) {
+      throw new ForwardRejection(
+        403,
+        `Caller has no sealed execution authority: ${callerId}`,
+        "unknown-caller"
+      );
+    }
     return {
-      ...identity,
+      callerId: identity.callerId,
+      callerKind: identity.callerKind,
+      repoPath: identity.repoPath,
+      effectiveVersion: identity.effectiveVersion,
+      executionDigest: identity.executionDigest,
+      requested: identity.requested,
+      delegations: identity.delegations,
       policyKey: `${identity.repoPath}:${identity.callerId}`,
     };
   }

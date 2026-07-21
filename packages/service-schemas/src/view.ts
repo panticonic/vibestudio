@@ -6,13 +6,11 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
-// Access descriptors shared across the view method groups. `callers` mirror the
-// service policy (`["shell", "app"]`); the `policy` field is left unchanged so
-// it remains the enforced gate. Almost every method mutates native window/view
-// state, so these carry `sensitivity: "write"`.
+// Access descriptors classify native window/view mutations. The Electron view
+// service definition separately declares the required principals.
 
 const VIEW_BOUNDS_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",

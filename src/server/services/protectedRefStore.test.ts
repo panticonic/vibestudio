@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
-import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import {
   createProtectedRefStore,
   RefBasisConflictError,
@@ -86,6 +85,8 @@ describe("ProtectedRefStore", () => {
       "utf8"
     );
     expect(persisted).not.toContain("hostRefsDigest");
+    expect(JSON.parse(persisted)).toMatchObject({ version: 6 });
+    expect(JSON.parse(persisted)).not.toHaveProperty("systemEpoch");
   });
 
   it("replays the exact publication after restart without approving or emitting twice", async () => {
@@ -325,7 +326,7 @@ describe("ProtectedRefStore", () => {
     expect(replayGate).not.toHaveBeenCalled();
   });
 
-  it("rejects protected refs from another destructive workspace epoch", async () => {
+  it("migrates the exact v5 store to v6 without losing refs or publication evidence", async () => {
     const { statePath, store } = await makeStore();
     await store.updateMains({
       entries: [{ repoPath: "packages/a", expectedOld: null, next: A }],
@@ -338,38 +339,46 @@ describe("ProtectedRefStore", () => {
     });
     const filePath = path.join(statePath, "protected-publication-state.json");
     const persisted = JSON.parse(await fsp.readFile(filePath, "utf8")) as Record<string, unknown>;
-    await fsp.writeFile(
-      filePath,
-      JSON.stringify({ ...persisted, systemEpoch: WORKSPACE_SYSTEM_EPOCH - 1 })
-    );
+    await fsp.writeFile(filePath, JSON.stringify({ ...persisted, version: 5, systemEpoch: 56 }));
 
-    expect(() => createProtectedRefStore({ statePath, gate: async () => undefined })).toThrow(
-      /epoch .* is incompatible with host epoch .*recreate this pre-release workspace/
-    );
+    const migrated = createProtectedRefStore({ statePath, gate: async () => undefined });
+
+    expect(migrated.readMain("packages/a")).toMatchObject({ contentRoot: A });
+    expect(migrated.readAppliedPublication("publication:old-epoch")).toMatchObject({
+      publishedEventId: "event:old-after",
+    });
+    const v6 = JSON.parse(await fsp.readFile(filePath, "utf8"));
+    expect(v6).toMatchObject({ version: 6, mains: [{ repoPath: "packages/a", contentRoot: A }] });
+    expect(v6).not.toHaveProperty("systemEpoch");
   });
 
-  it("refuses legacy or partial persistence shapes", async () => {
+  it("rejects unsupported, future, and corrupt persistence without modifying it", async () => {
     const { statePath } = await makeStore();
-    await fsp.writeFile(
-      path.join(statePath, "protected-publication-state.json"),
-      JSON.stringify({ version: 1, mains: [] })
-    );
-    expect(() => createProtectedRefStore({ statePath, gate: async () => undefined })).toThrow(
-      "Unsupported or corrupt"
-    );
-    await fsp.writeFile(
-      path.join(statePath, "protected-publication-state.json"),
-      JSON.stringify({
-        version: 4,
-        systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+    const filePath = path.join(statePath, "protected-publication-state.json");
+    for (const persisted of [
+      { version: 1, mains: [] },
+      {
+        version: 5,
+        systemEpoch: 56,
         headPublicationId: null,
         mainEventId: "event:orphan",
         mains: [],
         appliedPublications: [],
-      })
-    );
-    expect(() => createProtectedRefStore({ statePath, gate: async () => undefined })).toThrow(
-      "Unsupported or corrupt"
-    );
+      },
+      {
+        version: 7,
+        headPublicationId: null,
+        mainEventId: null,
+        mains: [],
+        appliedPublications: [],
+      },
+    ]) {
+      const original = JSON.stringify(persisted);
+      await fsp.writeFile(filePath, original);
+      expect(() => createProtectedRefStore({ statePath, gate: async () => undefined })).toThrow(
+        /without risking data loss/
+      );
+      expect(await fsp.readFile(filePath, "utf8")).toBe(original);
+    }
   });
 });

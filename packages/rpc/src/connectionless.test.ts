@@ -4,7 +4,7 @@ import {
   createConnectionlessRpcClient,
   rpc,
   rpcExposedMethodNames,
-  rpcMethodPolicy,
+  rpcMethodAuthority,
 } from "./connectionless.js";
 import type { RpcEnvelope } from "./types.js";
 
@@ -196,14 +196,14 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
   });
 });
 
-// Declarative caller policy: `@rpc({ callers })` registers BOTH exposure and a caller-kind floor.
+// Direct authority declarations register both exposure and their compositional requirement.
 class PolicyBase {
-  @rpc({ callers: ["server"] }) async serverOnly() {
+  @rpc({ principals: ["host"], sensitivity: "write" }) async serverOnly() {
     return "s"; // decorated on a base → policy lands on the concrete class too
   }
 }
 class PolicyDO extends PolicyBase {
-  @rpc({ callers: ["panel", "do"] }) async broad() {
+  @rpc({ principals: ["user", "code", "entity"], sensitivity: "read" }) async broad() {
     return "b";
   }
   @rpc async noPolicy() {
@@ -211,15 +211,21 @@ class PolicyDO extends PolicyBase {
   }
 }
 
-describe("@rpc({ callers }) declarative policy", () => {
-  it("rpcMethodPolicy returns the policy for `@rpc({callers})` (own + inherited), undefined for bare `@rpc`", () => {
+describe("@rpc direct authority declaration", () => {
+  it("returns the complete declaration for own and inherited methods, and undefined for bare @rpc", () => {
     const inst = new PolicyDO();
-    expect(rpcMethodPolicy(inst, "broad")).toEqual({ callers: ["panel", "do"] });
-    expect(rpcMethodPolicy(inst, "serverOnly")).toEqual({ callers: ["server"] }); // inherited
-    expect(rpcMethodPolicy(inst, "noPolicy")).toBeUndefined(); // bare @rpc
+    expect(rpcMethodAuthority(inst, "broad")).toEqual({
+      principals: ["user", "code", "entity"],
+      sensitivity: "read",
+    });
+    expect(rpcMethodAuthority(inst, "serverOnly")).toEqual({
+      principals: ["host"],
+      sensitivity: "write",
+    });
+    expect(rpcMethodAuthority(inst, "noPolicy")).toBeUndefined();
   });
 
-  it("the factory form `@rpc({callers})` still registers exposure", () => {
+  it("the factory form still registers exposure", () => {
     expect([...rpcExposedMethodNames(new PolicyDO())].sort()).toEqual([
       "broad",
       "noPolicy",

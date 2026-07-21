@@ -1,26 +1,27 @@
-import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
-import {
-  GAD_WORKSPACE_SERVICE_PROTOCOL,
-  type DORefParam,
-} from "@vibestudio/shared/workspaceServiceRpc";
+import type { PrincipalKind } from "@vibestudio/rpc";
+import type { DORefParam } from "@vibestudio/shared/workspaceServiceRpc";
 import type {
   WorkspaceDeclarations,
   SingletonRegistry,
 } from "@vibestudio/workspace/singletonRegistry";
 import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
-import { SEMANTIC_CONTROL_PLANE } from "./internalDOs/controlPlane.js";
+import {
+  findProductWorkspaceService,
+  PRODUCT_WORKSPACE_SERVICES,
+} from "@vibestudio/shared/productWorkspaceServices.mjs";
 
-export interface WorkspaceServicePolicy {
-  allowed?: CallerKind[];
+export interface WorkspaceServiceAuthority {
+  principals: PrincipalKind[];
 }
 
 export interface WorkspaceServiceResolution {
+  origin: "product" | "workspace";
   name: string;
   title?: string;
   description?: string;
   protocols: string[];
   source: string;
-  policy?: WorkspaceServicePolicy;
+  authority: WorkspaceServiceAuthority;
 }
 
 export interface DurableObjectServiceResolution extends WorkspaceServiceResolution {
@@ -37,6 +38,21 @@ export interface WorkerServiceResolution extends WorkspaceServiceResolution {
 }
 
 export type ResolvedWorkspaceService = DurableObjectServiceResolution | WorkerServiceResolution;
+
+export function assertNoProductWorkspaceServiceCollisions(decls: WorkspaceDeclarations): void {
+  const productKeys = new Set(
+    PRODUCT_WORKSPACE_SERVICES.flatMap((service) => [service.name, ...service.protocols])
+  );
+  for (const service of decls.services) {
+    for (const key of [service.name, ...(service.protocols ?? [])]) {
+      if (productKeys.has(key)) {
+        throw new Error(
+          `Workspace service ${service.name} collides with product-owned service key ${key}`
+        );
+      }
+    }
+  }
+}
 
 /**
  * Resolve a workspace service by name or protocol. Product-sealed services
@@ -55,8 +71,9 @@ export function resolveWorkspaceService(
   query: string,
   objectKey?: string | null
 ): ResolvedWorkspaceService {
-  const controlPlane = resolveSemanticControlPlane(query, objectKey);
-  if (controlPlane) return controlPlane;
+  assertNoProductWorkspaceServiceCollisions(decls);
+  const productService = resolveProductWorkspaceService(query, objectKey);
+  if (productService) return productService;
   for (const service of decls.services) {
     const protocols = service.protocols ?? [];
     if (service.name !== query && !protocols.includes(query)) continue;
@@ -65,31 +82,31 @@ export function resolveWorkspaceService(
   throw new Error(`No workspace service registered for ${query}`);
 }
 
-function resolveSemanticControlPlane(
+function resolveProductWorkspaceService(
   query: string,
   objectKey: string | null | undefined
 ): DurableObjectServiceResolution | null {
-  const isGad = query === "gad.workspace" || query === GAD_WORKSPACE_SERVICE_PROTOCOL;
-  if (!isGad) return null;
-  if (objectKey != null && objectKey !== SEMANTIC_CONTROL_PLANE.objectKey) {
+  const service = findProductWorkspaceService(query);
+  if (!service) return null;
+  const { className, objectKey: sealedObjectKey } = service.durableObject;
+  if (objectKey != null && objectKey !== sealedObjectKey) {
     throw new Error(
-      `The semantic control plane has one sealed object key (${SEMANTIC_CONTROL_PLANE.objectKey}); ` +
+      `Product workspace service ${service.name} has one sealed object key (${sealedObjectKey}); ` +
         `caller-supplied key ${JSON.stringify(objectKey)} is not permitted`
     );
   }
   return {
     kind: "durable-object",
-    name: "gad.workspace",
-    title: "GAD workspace graph",
-    description: "Product-sealed semantic workspace authority",
-    protocols: [GAD_WORKSPACE_SERVICE_PROTOCOL],
-    source: SEMANTIC_CONTROL_PLANE.source,
-    policy: {
-      allowed: ["app", "panel", "shell", "server", "worker", "do"],
-    },
-    className: SEMANTIC_CONTROL_PLANE.className,
-    objectKey: SEMANTIC_CONTROL_PLANE.objectKey,
-    targetId: `do:${SEMANTIC_CONTROL_PLANE.source}:${SEMANTIC_CONTROL_PLANE.className}:${SEMANTIC_CONTROL_PLANE.objectKey}`,
+    origin: "product",
+    name: service.name,
+    title: service.title,
+    description: service.description,
+    protocols: [...service.protocols],
+    source: service.source,
+    authority: { principals: [...service.authority.principals] },
+    className,
+    objectKey: sealedObjectKey,
+    targetId: `do:${service.source}:${className}:${sealedObjectKey}`,
   };
 }
 
@@ -100,7 +117,7 @@ function buildResolution(
   routes: WorkspaceDeclarations["routes"]
 ): ResolvedWorkspaceService {
   const protocols = service.protocols ?? [];
-  const policy = service.policy as WorkspaceServicePolicy | undefined;
+  const authority = service.authority as WorkspaceServiceAuthority;
   const source = service.source;
 
   if (service.durableObject) {
@@ -115,12 +132,13 @@ function buildResolution(
     }
     return {
       kind: "durable-object",
+      origin: "workspace",
       name: service.name,
       title: service.title,
       description: service.description,
       protocols,
       source,
-      policy,
+      authority,
       className,
       objectKey: resolvedObjectKey,
       targetId: `do:${source}:${className}:${resolvedObjectKey}`,
@@ -142,12 +160,13 @@ function buildResolution(
   }
   return {
     kind: "worker",
+    origin: "workspace",
     name: service.name,
     title: service.title,
     description: service.description,
     protocols,
     source,
-    policy,
+    authority,
     routePath,
     routeBasePath: `/_r/w/${source}${routePath === "/" ? "" : routePath}`,
   };

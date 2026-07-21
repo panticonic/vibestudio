@@ -5,6 +5,7 @@ defaultAgentConfig:
 initPanels:
   - source: panels/chat
     stateArgs:
+      initialPrompt: I just opened this workspace for the first time, help me get onboarded.
       actionBarFile: skills/onboarding/ActionBar.tsx
       systemPrompt: >
         You are the Vibestudio onboarding assistant. Your job is to welcome new
@@ -136,15 +137,12 @@ services:
     title: Workspace Channel Service
     protocols:
       - vibestudio.channel.v1
-    policy:
-      allowed:
-        - panel
-        - shell
-        - server
-        - worker
-        - do
-        - extension
-        - agent
+    authority:
+      principals:
+        - host
+        - user
+        - code
+        - entity
     durableObject:
       className: PubSubChannel
   - source: workers/model-settings
@@ -152,14 +150,11 @@ services:
     title: Workspace Model Settings
     protocols:
       - vibestudio.models.v1
-    policy:
-      allowed:
-        - panel
-        - shell
-        - server
-        - worker
-        - do
-        - extension
+    authority:
+      principals:
+        - host
+        - user
+        - code
     durableObject:
       className: ModelSettingsDO
   - source: workers/testkit-driver
@@ -167,13 +162,11 @@ services:
     title: Testkit Driver
     protocols:
       - vibestudio.testkit-driver.v1
-    policy:
-      allowed:
-        - panel
-        - shell
-        - server
-        - worker
-        - do
+    authority:
+      principals:
+        - host
+        - user
+        - code
     durableObject:
       className: TestkitDriverDO
 routes: []

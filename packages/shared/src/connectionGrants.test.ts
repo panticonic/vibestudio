@@ -8,6 +8,9 @@ function makePanelRecord(id: string): EntityRecord {
     id,
     kind: "panel",
     source: { repoPath: "", effectiveVersion: "" },
+    activeBuildKey: "1".repeat(64),
+    activeExecutionDigest: "a".repeat(64),
+    activeAuthority: { requests: [], delegations: [] },
     contextId: "",
     key: id,
     createdAt: Date.now(),
@@ -21,6 +24,9 @@ function makeAppRecord(id: string): EntityRecord {
     id,
     kind: "app",
     source: { repoPath: "apps/example", effectiveVersion: "1.0.0" },
+    activeBuildKey: "2".repeat(64),
+    activeExecutionDigest: "b".repeat(64),
+    activeAuthority: { requests: [], delegations: [] },
     contextId: "device-1",
     key: "device-1",
     createdAt: Date.now(),
@@ -33,6 +39,45 @@ describe("ConnectionGrantService", () => {
   it("throws when granting an unregistered principal", () => {
     const grants = new ConnectionGrantService({ entityCache: new EntityCache() });
     expect(() => grants.grant("panel:missing", "shell:test")).toThrow(/unregistered/);
+    grants.stop();
+  });
+
+  it("refuses to mint an executable connection before a sealed incarnation exists", () => {
+    const entityCache = new EntityCache();
+    const incomplete = makePanelRecord("panel:incomplete");
+    delete incomplete.activeExecutionDigest;
+    delete incomplete.activeAuthority;
+    entityCache._onActivate(incomplete);
+    const grants = new ConnectionGrantService({ entityCache });
+
+    expect(() => grants.grant(incomplete.id, "shell:test")).toThrow(/sealed active incarnation/);
+    grants.stop();
+  });
+
+  it("refuses an executable record whose selected immutable build was dropped", () => {
+    const entityCache = new EntityCache();
+    const incomplete = makeAppRecord("app:apps/example:device-1");
+    delete incomplete.activeBuildKey;
+    entityCache._onActivate(incomplete);
+    const grants = new ConnectionGrantService({ entityCache });
+
+    expect(() => grants.grant(incomplete.id, "native-mobile:device-1")).toThrow(
+      /sealed active incarnation/
+    );
+    grants.stop();
+  });
+
+  it("invalidates a grant when the active executable incarnation changes", () => {
+    const entityCache = new EntityCache();
+    const record = makePanelRecord("panel:one");
+    entityCache._onActivate(record);
+    const grants = new ConnectionGrantService({ entityCache });
+    const { token } = grants.grant(record.id, "shell:test");
+
+    entityCache._onActivate({ ...record, activeExecutionDigest: "c".repeat(64) });
+
+    expect(grants.redeem(token)).toBeNull();
+    expect(grants.validate(token)).toBeNull();
     grants.stop();
   });
 

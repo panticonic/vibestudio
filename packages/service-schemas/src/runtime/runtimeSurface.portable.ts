@@ -126,7 +126,12 @@ export const VCS_DESCRIPTION =
 
 export const GAD_MEMBERS = [...GAD_RUNTIME_METHOD_NAMES];
 
-export const BLOBSTORE_MEMBERS = [...Object.keys(blobstoreMethods), "putBytes", "readText"];
+export const BLOBSTORE_MEMBERS = [
+  ...Object.keys(blobstoreMethods),
+  "putBytes",
+  "getBytes",
+  "readText",
+];
 
 export const WEBHOOKS_MEMBERS = [
   "createSubscription",
@@ -205,7 +210,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   blobstore: namespaceEntry(
     BLOBSTORE_MEMBERS,
-    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string | null. Runtime-only putBytes(Uint8Array | ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees.",
+    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string | null. Runtime-only putBytes(Uint8Array | ArrayBuffer) and getBytes(digest) losslessly bridge the wire's base64 representation; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees.",
     "blobstore"
   ),
   webhooks: namespaceEntry(

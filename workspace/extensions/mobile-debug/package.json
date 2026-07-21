@@ -8,8 +8,46 @@
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {
-      "activationEvents": ["*"],
-      "streamingMethods": ["logcat", "shell"]
+      "activationEvents": [
+        "*"
+      ],
+      "streamingMethods": [
+        "logcat",
+        "shell"
+      ]
+    },
+    "authority": {
+      "requests": [
+        {
+          "capability": "service:extensions.health",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.ready",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:userlandApproval.request",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:workspace.getInfo",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        }
+      ],
+      "delegations": []
     }
   },
   "dependencies": {}

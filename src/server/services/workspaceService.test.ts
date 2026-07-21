@@ -215,14 +215,14 @@ describe("workspace service ↔ client contract", () => {
 describe("workspace service policy", () => {
   it("allows panel callers (the regression target)", () => {
     const service = makeService();
-    expect(service.policy.allowed).toContain("panel");
+    expect(service.authority.principals).toContain("code");
   });
 
   it("allows worker, shell, and server callers as well", () => {
     const service = makeService();
-    expect(service.policy.allowed).toContain("worker");
-    expect(service.policy.allowed).toContain("shell");
-    expect(service.policy.allowed).toContain("server");
+    expect(service.authority.principals).toContain("code");
+    expect(service.authority.principals).toContain("user");
+    expect(service.authority.principals).toContain("host");
   });
 });
 

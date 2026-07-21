@@ -164,6 +164,18 @@ export interface RpcStreamCancel {
 }
 
 /**
+ * Cancel an in-flight unary RPC. This is a transport-level ownership signal:
+ * once the caller abandons the request, the callee's `RpcRequestContext.signal`
+ * is aborted so nested work can release cooperatively. The request id is
+ * scoped by the authenticated caller/connection at trust boundaries.
+ */
+export interface RpcRequestCancel {
+  type: "request-cancel";
+  requestId: string;
+  fromId: string;
+}
+
+/**
  * Union type for all RPC messages.
  */
 export type RpcMessage =
@@ -172,7 +184,8 @@ export type RpcMessage =
   | RpcEvent
   | RpcStreamRequest
   | RpcStreamFrameMessage
-  | RpcStreamCancel;
+  | RpcStreamCancel
+  | RpcRequestCancel;
 
 export type ExposedMethods = Record<string, (...args: unknown[]) => unknown | Promise<unknown>>;
 
@@ -245,6 +258,12 @@ export interface AuthenticatedCaller {
    * enumerated pre-identity bootstrap principals and `"unknown"` delivery paths.
    */
   userId?: string;
+  /**
+   * Fresh, exact-target authority facts stamped by the host relay. Receivers
+   * never accept this field from an originating client envelope; the relay
+   * replaces it after authenticating the transport caller.
+   */
+  authorization?: import("./authority.js").DirectAuthorityAttestation;
 }
 
 export type CallerKind =
@@ -373,7 +392,13 @@ export interface RpcEnvelope {
 }
 
 export interface EnvelopeRpcTransport {
-  send(envelope: RpcEnvelope): Promise<void>;
+  /**
+   * Deliver one envelope. Connectionless transports bind `signal` to the
+   * physical request so cancellation cannot overtake admission on a second
+   * connection. Ordered transports may ignore it and consume the subsequent
+   * `request-cancel` envelope in channel order.
+   */
+  send(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void>;
   onMessage(handler: (envelope: RpcEnvelope) => void): () => void;
   status?: () => RpcConnectionStatus;
   ready?: () => Promise<void>;

@@ -287,6 +287,44 @@ describe("canonical vcsService", () => {
     expect(semanticCall).not.toHaveBeenCalled();
   });
 
+  it("lets an agent inspect its own channel trajectory before it has VCS commands", async () => {
+    const trajectory = channelTrajectoryFor("channel:own");
+    const ctx = agentContext("channel:own");
+    ctx.causalParent = {
+      kind: "trajectory-invocation",
+      logId: trajectory.logId,
+      head: trajectory.head,
+      invocationId: "invocation:provenance",
+    };
+    const { definition, semanticCall } = service({ referencesReachable: false });
+
+    await definition.handler(ctx, "inspect", [
+      { node: { kind: "trajectory", logId: trajectory.logId, head: trajectory.head } },
+    ]);
+
+    expect(semanticCall).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat a foreign trajectory as the agent's own", async () => {
+    const own = channelTrajectoryFor("channel:own");
+    const foreign = channelTrajectoryFor("channel:foreign");
+    const ctx = agentContext("channel:own");
+    ctx.causalParent = {
+      kind: "trajectory-invocation",
+      logId: own.logId,
+      head: own.head,
+      invocationId: "invocation:provenance",
+    };
+    const { definition, semanticCall } = service({ referencesReachable: false });
+
+    await expect(
+      definition.handler(ctx, "inspect", [
+        { node: { kind: "trajectory", logId: foreign.logId, head: foreign.head } },
+      ])
+    ).rejects.toThrow(/outside the caller's reachable context graph/);
+    expect(semanticCall).not.toHaveBeenCalled();
+  });
+
   it("lets a non-privileged caller walk only its causally reachable intent chain", async () => {
     const appliedChange = {
       kind: "applied-change" as const,

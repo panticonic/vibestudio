@@ -50,7 +50,4 @@ export const RPC_METHODS = {
     register: "push.register",
     unregister: "push.unregister",
   },
-  shellPresence: {
-    heartbeat: "shellPresence.heartbeat",
-  },
 } as const;

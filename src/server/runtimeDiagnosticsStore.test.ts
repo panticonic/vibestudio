@@ -127,4 +127,28 @@ describe("RuntimeDiagnosticsStore", () => {
     expect(resumed.entries.map((entry) => entry.message)).toEqual(["d"]);
     expect(resumed.entries[0]?.seq).toBe(4);
   });
+
+  it("uses a fixed-size storage key for arbitrarily long entity IDs", () => {
+    const statePath = tempStatePath();
+    const store = new RuntimeDiagnosticsStore({ statePath });
+    const entityId = `panel:tree/${"about~new/nested-panel/".repeat(100)}`;
+
+    store.record({
+      entityId,
+      kind: "panel",
+      level: "info",
+      message: "deep panel mounted",
+      source: "lifecycle",
+    });
+
+    const diagnosticsDir = path.join(statePath, "runtime-diagnostics");
+    const files = fs.readdirSync(diagnosticsDir);
+    expect(files).toEqual([expect.stringMatching(/^sha256-[0-9a-f]{64}\.json$/)]);
+    expect(files[0]!.length).toBe(76);
+
+    const reloaded = new RuntimeDiagnosticsStore({ statePath });
+    expect(reloaded.history(entityId).entries.map((entry) => entry.message)).toEqual([
+      "deep panel mounted",
+    ]);
+  });
 });

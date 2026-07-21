@@ -205,39 +205,15 @@ export type { CdpAutomation, CdpEndpoint } from "./cdpAutomation.js";
 
 // --- Panel-only affordances under the `panel` namespace (panel target only) ---
 import { getStateArgs, setStateArgs, setStateArgsForPanel } from "./stateArgs.js";
+import { createPanelSelfNavigation } from "./selfNavigation.js";
 
-/**
- * Reopen THIS panel in place under a (possibly new) context + state args — a
- * snapshot replacement, not a child. The canonical way to rebind a panel to a
- * different durable semantic context (e.g. switching vault →
- * `ctx:vault-<hash>`):
- * unlike `panel.stateArgs.set`, this moves the panel's `contextId`, which fixes
- * which exact context working head every subsequent `vcs.*` / agent spawn resolves
- * against.
- * Defaults `source` to the current panel's source.
- */
-async function reopen(
-  opts: { source?: string; contextId?: string; stateArgs?: Record<string, unknown> } = {}
-): Promise<{ id: string; title: string }> {
-  let source = opts.source;
-  if (!source) {
-    const meta = await rpc.call<{ source?: string } | null>("main", "panelTree.metadata", [
-      _slotId,
-    ]);
-    source = meta?.source ?? undefined;
-    if (!source) throw new Error("reopen: could not resolve the current panel source");
-  }
-  return rpc.call<{ id: string; title: string }>("main", "panelTree.navigate", [
-    _slotId,
-    source,
-    { contextId: opts.contextId, stateArgs: opts.stateArgs },
-  ]);
-}
+const { reopen, switchContext } = createPanelSelfNavigation({ rpc, slotId: _slotId });
 
 export const panel = helpfulNamespace("panel", {
   entityId: _entityId,
   slotId: _slotId,
   parentId: runtimeParentId,
+  contextId,
   env: _env,
   getInfo: runtime.getInfo,
   focusPanel: runtime.focusPanel,
@@ -253,6 +229,7 @@ export const panel = helpfulNamespace("panel", {
   onChildCreated: _onChildCreated,
   onChildCreationError: _onChildCreationError,
   reopen,
+  switchContext,
   stateArgs: helpfulNamespace("panel.stateArgs", {
     get: getStateArgs,
     set: setStateArgs,

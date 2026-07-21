@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { z } from "zod";
 import { WebSocket } from "ws";
 import { RpcServer } from "./rpcServer.js";
 import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
@@ -6,15 +7,21 @@ import { Gateway } from "./gateway.js";
 import type {
   ServiceDispatcher,
   ServiceContext,
-  CallerKind,
 } from "../../packages/shared/src/serviceDispatcher.js";
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { EntityCache } from "../../packages/shared/src/runtime/entityCache.js";
 import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.js";
 import type { UserSubject } from "../../packages/identity/src/types.js";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
+import { createTestServiceDispatcher } from "../../packages/shared/src/serviceDispatcherTestUtils.js";
+import type { ServiceDefinition } from "../../packages/shared/src/serviceDefinition.js";
 
-function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): EntityRecord {
+function makeDoRecord(
+  id: string,
+  repoPath: string,
+  effectiveVersion: string,
+  requestedMethods: string[] = ["credentials.listStoredCredentials"]
+): EntityRecord {
   return {
     id,
     kind: "do",
@@ -24,6 +31,18 @@ function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): E
     createdAt: Date.now(),
     status: "active",
     cleanupComplete: true,
+    activeExecutionDigest: "a".repeat(64),
+    activeAuthority: {
+      requests: requestedMethods.map((method) => ({
+        capability: `service:${method}`,
+        resource: {
+          kind: "exact" as const,
+          key:
+            method === "credentials.listStoredCredentials" ? "workspace:test" : `service:${method}`,
+        },
+      })),
+      delegations: [],
+    },
   };
 }
 
@@ -54,31 +73,43 @@ function createTestSetup(opts?: {
     args: unknown[];
   }> = [];
 
-  const dispatcher = {
-    dispatch: vi.fn(
-      async (ctx: ServiceContext, service: string, method: string, args: unknown[]) => {
-        dispatched.push({ ctx, service, method, args });
-        // When the caller opted into deferral (ctx.deferral present), park the
-        // call — return the sentinel so the server acks {deferred,requestId}.
-        const deferral = (ctx as { deferral?: { run: (w: () => Promise<unknown>) => unknown } })
-          .deferral;
-        if (deferral) return deferral.run(async () => ({ deferredResolved: true }));
-        const key = `${service}.${method}`;
-        if (dispatchResults.has(key)) return dispatchResults.get(key);
-        return { ok: true };
-      }
-    ),
-    getPolicy: vi.fn((service: string) => {
-      if (service === "credentials")
-        return { allowed: ["shell", "panel", "worker"] as CallerKind[] };
-      if (service === "automation") return { allowed: ["server", "worker"] as CallerKind[] };
-      if (service === "build")
-        return { allowed: ["panel", "shell", "server", "worker"] as CallerKind[] };
-      return undefined;
-    }),
-    getMethodPolicy: vi.fn(() => undefined),
-    initialized: true,
-  } as unknown as ServiceDispatcher;
+  const dispatcher = createTestServiceDispatcher();
+  const handler: ServiceDefinition["handler"] = async (ctx, method, args) => {
+    const service = serviceForMethod(method);
+    dispatched.push({ ctx, service, method, args });
+    // When the caller opted into deferral (ctx.deferral present), park the
+    // call — return the sentinel so the server acks {deferred,requestId}.
+    const deferral = (ctx as { deferral?: { run: (w: () => Promise<unknown>) => unknown } })
+      .deferral;
+    if (deferral) return deferral.run(async () => ({ deferredResolved: true }));
+    const key = `${service}.${method}`;
+    if (dispatchResults.has(key)) return dispatchResults.get(key);
+    return { ok: true };
+  };
+  registerRpcTestService(
+    dispatcher,
+    "credentials",
+    ["user", "code"],
+    {
+      listStoredCredentials: "read",
+      resolveCredential: "write",
+      proxyFetch: "write",
+    },
+    handler
+  );
+  registerRpcTestService(dispatcher, "automation", ["code"], { spawn: "write" }, handler);
+  registerRpcTestService(
+    dispatcher,
+    "build",
+    ["user", "code", "host"],
+    {
+      recompute: "write",
+      status: "read",
+    },
+    handler
+  );
+  dispatcher.markInitialized();
+  vi.spyOn(dispatcher, "dispatch");
 
   const server = new RpcServer({
     tokenManager,
@@ -102,6 +133,30 @@ function createTestSetup(opts?: {
     dispatched,
     dispatchResults,
   };
+}
+
+function registerRpcTestService(
+  dispatcher: ServiceDispatcher,
+  name: string,
+  principals: Array<"user" | "code" | "host" | "entity">,
+  methods: Record<string, "read" | "write">,
+  handler: ServiceDefinition["handler"] = async () => ({ ok: true })
+): void {
+  const methodEntries = Object.fromEntries(
+    Object.entries(methods).map(([method, sensitivity]) => [
+      method,
+      { args: z.tuple([]).rest(z.unknown()), access: { sensitivity } },
+    ])
+  ) as ServiceDefinition["methods"];
+  dispatcher.registerService({ name, authority: { principals }, methods: methodEntries, handler });
+}
+
+function serviceForMethod(method: string): string {
+  if (["listStoredCredentials", "resolveCredential", "proxyFetch"].includes(method)) {
+    return "credentials";
+  }
+  if (method === "spawn") return "automation";
+  return "build";
 }
 
 /**
@@ -314,7 +369,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       const callerId = "do:workers/model-settings:ModelSettingsDO:workspace-model-settings";
       const entityCache = new EntityCache();
       entityCache._onActivate(
-        makeDoRecord(callerId, "workers/model-settings", "model-settings-version")
+        makeDoRecord(callerId, "workers/model-settings", "model-settings-version", ["build.status"])
       );
       setup = createTestSetup({
         entityCache,
@@ -416,7 +471,8 @@ describe("RpcServer HTTP POST /rpc", () => {
         makeDoRecord(
           "do:workers/agent-worker:AiChatWorker:agent-1",
           "workers/agent-worker",
-          "hash-1"
+          "hash-1",
+          ["build.status"]
         )
       );
       setup = createTestSetup({ entityCache });
@@ -489,7 +545,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         serviceToken,
         {
           targetId: "main",
-          method: "build.status",
+          method: "credentials.listStoredCredentials",
           args: [],
         },
         {
@@ -508,6 +564,14 @@ describe("RpcServer HTTP POST /rpc", () => {
           callerKind: "do",
           repoPath: "workers/agent-worker",
           effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
+          requested: [
+            {
+              capability: "service:credentials.listStoredCredentials",
+              resource: { kind: "exact", key: "workspace:test" },
+            },
+          ],
+          delegations: [],
         },
       });
     });
@@ -705,7 +769,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [{}],
       });
 
-      expect(body["error"]).toContain("not accessible");
+      expect(body["error"]).toContain("authenticated code principal is required");
       expect(setup.dispatched).toHaveLength(0);
     });
 
@@ -991,23 +1055,14 @@ describe("RpcServer HTTP POST /rpc", () => {
     });
 
     it("denies a caller-kind not in the credentials service policy", async () => {
-      // Set up an RpcServer whose dispatcher only allows `shell` on
-      // `credentials`. A worker token should be rejected by
-      // `validateStreamingProxyFetch` BEFORE any frames are emitted.
+      // Set up a real dispatcher whose credentials method requires a user
+      // principal. A worker's code principal must be rejected before frames.
       const tokenManager = new TokenManager();
       const workerToken = tokenManager.ensureToken("do:test:Worker:obj1", "worker");
       const stubEgress = { forwardProxyFetchStream: vi.fn() };
-      const dispatcher = {
-        dispatch: vi.fn(),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["shell"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
-        initialized: true,
-      } as unknown as ServiceDispatcher;
+      const dispatcher = createTestServiceDispatcher();
+      registerRpcTestService(dispatcher, "credentials", ["user"], { proxyFetch: "write" });
+      dispatcher.markInitialized();
       const server = new RpcServer({ tokenManager, dispatcher, egressProxy: stubEgress });
       server.initHandlers();
       const gw = new Gateway({
@@ -1043,23 +1098,9 @@ describe("RpcServer HTTP POST /rpc", () => {
       const tokenManager = new TokenManager();
       const workerToken = tokenManager.ensureToken("do:test:Worker:obj1", "worker");
       const stubEgress = { forwardProxyFetchStream: vi.fn() };
-      const dispatcher = {
-        dispatch: vi.fn(),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
-        getMethodSchema: vi.fn((service: string, method: string) => {
-          if (service === "credentials" && method === "proxyFetch") {
-            return { access: { sensitivity: "write" } };
-          }
-          return undefined;
-        }),
-        initialized: true,
-      } as unknown as ServiceDispatcher;
+      const dispatcher = createTestServiceDispatcher();
+      registerRpcTestService(dispatcher, "credentials", ["code"], { proxyFetch: "write" });
+      dispatcher.markInitialized();
       const server = new RpcServer({ tokenManager, dispatcher, egressProxy: stubEgress });
       server.initHandlers();
       const gw = new Gateway({
@@ -1125,7 +1166,8 @@ describe("RpcServer HTTP POST /rpc", () => {
         makeDoRecord(
           "do:workers/agent-worker:AiChatWorker:agent-1",
           "workers/agent-worker",
-          "hash-1"
+          "hash-1",
+          ["credentials.proxyFetch"]
         )
       );
       const stubEgress = {
@@ -1144,17 +1186,9 @@ describe("RpcServer HTTP POST /rpc", () => {
           }
         ),
       };
-      const dispatcher = {
-        dispatch: vi.fn(),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["shell", "panel", "worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
-        initialized: true,
-      } as unknown as ServiceDispatcher;
+      const dispatcher = createTestServiceDispatcher();
+      registerRpcTestService(dispatcher, "credentials", ["code"], { proxyFetch: "write" });
+      dispatcher.markInitialized();
       const server = new RpcServer({
         tokenManager,
         dispatcher,
@@ -1198,6 +1232,17 @@ describe("RpcServer HTTP POST /rpc", () => {
                 callerKind: "do",
                 repoPath: "workers/agent-worker",
                 effectiveVersion: "hash-1",
+                executionDigest: "a".repeat(64),
+                requested: [
+                  {
+                    capability: "service:credentials.proxyFetch",
+                    resource: {
+                      kind: "exact",
+                      key: "service:credentials.proxyFetch",
+                    },
+                  },
+                ],
+                delegations: [],
               },
             },
           }),
@@ -1216,17 +1261,16 @@ describe("RpcServer HTTP POST /rpc", () => {
       const stubEgress = {
         forwardProxyFetchStream: vi.fn(),
       };
-      const dispatcher = {
-        dispatch: vi.fn(async () => ({ ok: true })),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
-        initialized: true,
-      } as unknown as ServiceDispatcher;
+      const dispatcher = createTestServiceDispatcher();
+      registerRpcTestService(
+        dispatcher,
+        "credentials",
+        ["code"],
+        { listStoredCredentials: "read" },
+        async () => ({ ok: true })
+      );
+      dispatcher.markInitialized();
+      vi.spyOn(dispatcher, "dispatch");
       const server = new RpcServer({
         tokenManager,
         dispatcher,
@@ -1267,24 +1311,21 @@ describe("RpcServer HTTP POST /rpc", () => {
     it("streams generic service Response methods over HTTP", async () => {
       const tokenManager = new TokenManager();
       const workerToken = tokenManager.ensureToken("do:test:Worker:obj1", "worker");
-      const dispatcher = {
-        dispatch: vi.fn(
-          async () =>
-            new Response("hello stream", {
-              status: 201,
-              statusText: "Created",
-              headers: { "content-type": "text/plain" },
-            })
-        ),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "extensions") {
-            return { allowed: ["worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
-        initialized: true,
-      } as unknown as ServiceDispatcher;
+      const dispatcher = createTestServiceDispatcher();
+      registerRpcTestService(
+        dispatcher,
+        "extensions",
+        ["code"],
+        { invokeStream: "write" },
+        async () =>
+          new Response("hello stream", {
+            status: 201,
+            statusText: "Created",
+            headers: { "content-type": "text/plain" },
+          })
+      );
+      dispatcher.markInitialized();
+      vi.spyOn(dispatcher, "dispatch");
       const server = new RpcServer({
         tokenManager,
         dispatcher,
@@ -1369,17 +1410,9 @@ describe("RpcServer HTTP POST /rpc", () => {
           }
         ),
       };
-      const dispatcher = {
-        dispatch: vi.fn(),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["shell", "panel", "worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
-        initialized: true,
-      } as unknown as ServiceDispatcher;
+      const dispatcher = createTestServiceDispatcher();
+      registerRpcTestService(dispatcher, "credentials", ["code"], { proxyFetch: "write" });
+      dispatcher.markInitialized();
       const server = new RpcServer({
         tokenManager,
         dispatcher,
@@ -1451,17 +1484,9 @@ describe("RpcServer HTTP POST /rpc", () => {
           throw error;
         }),
       };
-      const dispatcher = {
-        dispatch: vi.fn(),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["shell", "panel", "worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
-        initialized: true,
-      } as unknown as ServiceDispatcher;
+      const dispatcher = createTestServiceDispatcher();
+      registerRpcTestService(dispatcher, "credentials", ["code"], { proxyFetch: "write" });
+      dispatcher.markInitialized();
       const server = new RpcServer({
         tokenManager,
         dispatcher,

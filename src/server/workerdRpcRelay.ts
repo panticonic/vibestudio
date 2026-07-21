@@ -4,6 +4,7 @@ import {
   RemoteRpcError,
   type AuthenticatedCaller,
   type CallerKind,
+  type DirectAuthorityAttestation,
   type RpcEnvelope,
   type RpcCausalParent,
   type RpcResponse,
@@ -14,11 +15,12 @@ import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 export type DORef = DORefParam;
 
 /**
- * Dispatcher for HELD DO calls (the EvalDO's `executeRun`): no `headersTimeout`/`bodyTimeout`, so the
- * Node→workerd fetch isn't cut at undici's ~300s default while the DO holds the response for a long
- * (possibly 30-min) run. Used only when `deps.heldConnection` is set; all other calls use the default.
+ * Dispatcher for the process-local Node→workerd transport. A DO method owns
+ * its semantic lifetime; Undici's response-header/body defaults must not turn
+ * into an undocumented method deadline. Callers retain cancellation through
+ * AbortSignal, while the dispatch owners report slow-call liveness.
  */
-export const HELD_CONNECTION_DISPATCHER = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+export const WORKERD_CONNECTION_DISPATCHER = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 
 export function doRefKey(ref: DORef): string {
   return `${ref.source}:${ref.className}/${ref.objectKey}`;
@@ -54,6 +56,8 @@ export interface DurableObjectRelayDeps {
   callerPanelId?: string;
   /** Host-verified owning account projected into the userland caller envelope. */
   userId?: string;
+  /** Fresh host mediation bound to this exact method and DO object. */
+  authorization?: DirectAuthorityAttestation;
   /** Correlation id for this call; lets the DO match a later deferred reply. */
   requestId?: string;
   /** Optional dedup key, propagated so reissued calls collapse server-side. */
@@ -62,12 +66,6 @@ export interface DurableObjectRelayDeps {
   readOnly?: boolean;
   /** Exact upstream invocation coordinate; provenance only, never authorization. */
   causalParent?: RpcCausalParent;
-  /**
-   * Held-connection call (the EvalDO's `executeRun`): use a no-`headersTimeout` undici dispatcher so
-   * the fetch isn't reaped at undici's ~300s default while the DO holds the response for a long run.
-   * The DO side disables its own `respond` reaper too (see `respondTimeoutMs`).
-   */
-  heldConnection?: boolean;
 }
 
 function generateRequestId(): string {
@@ -81,6 +79,7 @@ function callerFromDeps(deps: DurableObjectRelayDeps): AuthenticatedCaller {
     callerKind: (deps.callerKind as CallerKind | undefined) ?? "server",
     ...(deps.callerPanelId ? { callerPanelId: deps.callerPanelId } : {}),
     ...(deps.userId ? { userId: deps.userId } : {}),
+    ...(deps.authorization ? { authorization: deps.authorization } : {}),
   };
 }
 
@@ -137,7 +136,7 @@ async function fetchEnvelopeFromDO(
       },
       body: JSON.stringify(envelope),
       ...(signal ? { signal } : {}),
-      ...(deps.heldConnection ? { dispatcher: HELD_CONNECTION_DISPATCHER } : {}),
+      dispatcher: WORKERD_CONNECTION_DISPATCHER,
     } as RequestInit);
   } catch (error) {
     const wrapped = new Error(

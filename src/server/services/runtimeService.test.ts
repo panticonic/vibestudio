@@ -14,7 +14,8 @@ import {
   type EntityRecord,
   type RuntimeEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { DODispatch } from "../doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
@@ -23,6 +24,13 @@ import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-svc-"));
 }
+
+const sealedExecution = {
+  buildKey: "b".repeat(64),
+  executionDigest: "f".repeat(64),
+  authorityRequests: [] as const,
+  authorityDelegations: [] as const,
+};
 
 function approvalQueueMock(
   decision: Awaited<ReturnType<ApprovalQueue["request"]>> = "session"
@@ -80,9 +88,9 @@ interface BuildDepsOptions {
   onRetire?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["onRetire"];
   releaseEntity?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["releaseEntity"];
   preparePanel?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["preparePanel"];
-  resolveAppEffectiveVersion?: NonNullable<
+  resolveAppExecution?: NonNullable<
     Parameters<typeof createRuntimeService>[0]["hooks"]
-  >["resolveAppEffectiveVersion"];
+  >["resolveAppExecution"];
   setEntityTitle?: Parameters<typeof createRuntimeService>[0]["setEntityTitle"];
   semanticContexts?: Partial<Parameters<typeof createRuntimeService>[0]["semanticContexts"]>;
   cloneDurableStorage?: NonNullable<
@@ -120,18 +128,23 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     vi.fn(async (args: { className: string; key: string }) => ({
       targetId: `target:${args.className}:${args.key}`,
       effectiveVersion: "ev-do",
+      ...sealedExecution,
     }));
   const prepareWorker =
     opts.prepareWorker ??
     vi.fn(async (args: { source: string; key: string }) => ({
       targetId: `target:worker:${args.source}:${args.key}`,
       effectiveVersion: "ev-worker",
+      ...sealedExecution,
     }));
   const contextFolders = contextFoldersFake();
   const onRetire = opts.onRetire ?? vi.fn(async () => {});
   const releaseEntity = opts.releaseEntity ?? vi.fn(async () => ({ status: "ready" as const }));
-  const preparePanel = opts.preparePanel ?? vi.fn(async () => ({ effectiveVersion: "ev-panel" }));
-  const resolveAppEffectiveVersion = opts.resolveAppEffectiveVersion ?? vi.fn(async () => "ev-app");
+  const preparePanel =
+    opts.preparePanel ?? vi.fn(async () => ({ effectiveVersion: "ev-panel", ...sealedExecution }));
+  const resolveAppExecution =
+    opts.resolveAppExecution ??
+    vi.fn(async () => ({ effectiveVersion: "ev-app", ...sealedExecution }));
   const cloneDurableStorage = opts.cloneDurableStorage ?? vi.fn(async () => {});
   const destroyDurableStorage = opts.destroyDurableStorage ?? vi.fn(async () => {});
   const semanticContexts = {
@@ -153,7 +166,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
       prepareDurableObject,
       prepareWorker,
       preparePanel,
-      resolveAppEffectiveVersion,
+      resolveAppExecution,
       onRetire,
       releaseEntity,
       cloneDurableStorage,
@@ -185,7 +198,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     onRetire,
     releaseEntity,
     preparePanel,
-    resolveAppEffectiveVersion,
+    resolveAppExecution,
     cloneDurableStorage,
     destroyDurableStorage,
   };
@@ -262,6 +275,68 @@ describe("runtimeService.createEntity (do kind)", () => {
     expect(handle.targetId).toBe("target:MyDO:k1");
     expect(entityCache.resolveActive(handle.id)).not.toBeNull();
     expect(prepareDurableObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("seals prepared authority into the durable incarnation and returns that record", async () => {
+    const authorityRequests = [
+      {
+        capability: "service:panel.getInfo",
+        resource: { kind: "exact" as const, key: "panel:getInfo" },
+      },
+    ];
+    const prepareDurableObject = vi.fn(async () => ({
+      targetId: "target:MyDO:k1",
+      effectiveVersion: "ev-do",
+      executionDigest: "a".repeat(64),
+      authorityRequests,
+      authorityDelegations: [],
+    }));
+    const { service, instance, entityCache } = await buildDeps({ prepareDurableObject });
+
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({ contextId: "ctx-x" }),
+    ])) as {
+      id: string;
+      authorityRequests: unknown;
+      authorityDelegations: unknown;
+    };
+
+    expect(handle.authorityRequests).toEqual(authorityRequests);
+    expect(handle.authorityDelegations).toEqual([]);
+    expect(instance.entityResolve(handle.id)?.activeAuthority).toEqual({
+      requests: authorityRequests,
+      delegations: [],
+    });
+    expect(entityCache.resolveActive(handle.id)?.activeAuthority).toEqual({
+      requests: authorityRequests,
+      delegations: [],
+    });
+  });
+
+  it("rejects a partial prepared authority envelope before durable activation", async () => {
+    const prepareDurableObject = vi.fn(async () => ({
+      targetId: "target:MyDO:k1",
+      effectiveVersion: "ev-do",
+      executionDigest: "a".repeat(64),
+      authorityRequests: [],
+    }));
+    const { service, instance } = await buildDeps({ prepareDurableObject });
+
+    await expect(
+      service.handler({ caller: serverCaller }, "createEntity", [
+        doCreateSpec({ contextId: "ctx-x" }),
+      ])
+    ).rejects.toThrow(/authority.*delegations/);
+    expect(
+      instance.entityResolve(
+        canonicalEntityId({
+          kind: "do",
+          source: "workers/example",
+          className: "MyDO",
+          key: "k1",
+        })
+      )
+    ).toBeNull();
   });
 
   it("passes stateArgs into DO preparation so the object runtime can see STATE_ARGS", async () => {
@@ -384,8 +459,16 @@ describe("runtimeService.createEntity (do kind)", () => {
   it("reactivates a retired row without changing its effective version", async () => {
     const prepareDurableObject = vi
       .fn()
-      .mockResolvedValueOnce({ targetId: "target:MyDO:k1", effectiveVersion: "ev-do-v1" })
-      .mockResolvedValueOnce({ targetId: "target:MyDO:k1", effectiveVersion: "ev-do-v2" });
+      .mockResolvedValueOnce({
+        targetId: "target:MyDO:k1",
+        effectiveVersion: "ev-do-v1",
+        ...sealedExecution,
+      })
+      .mockResolvedValueOnce({
+        targetId: "target:MyDO:k1",
+        effectiveVersion: "ev-do-v2",
+        ...sealedExecution,
+      });
     const { service, instance } = await buildDeps({ prepareDurableObject });
 
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
@@ -405,8 +488,8 @@ describe("runtimeService.createEntity (do kind)", () => {
   it("reactivates a retired panel row without changing its effective version", async () => {
     const preparePanel = vi
       .fn()
-      .mockResolvedValueOnce({ effectiveVersion: "ev-panel-v1" })
-      .mockResolvedValueOnce({ effectiveVersion: "ev-panel-v2" });
+      .mockResolvedValueOnce({ effectiveVersion: "ev-panel-v1", ...sealedExecution })
+      .mockResolvedValueOnce({ effectiveVersion: "ev-panel-v2", ...sealedExecution });
     const { service, instance } = await buildDeps({ preparePanel });
     const spec: RuntimeEntityCreateSpec = {
       kind: "panel",
@@ -425,11 +508,40 @@ describe("runtimeService.createEntity (do kind)", () => {
     const reactivated = instance.entityResolve(handle.id);
     expect(reactivated?.status).toBe("active");
     expect(reactivated?.source.effectiveVersion).toBe("ev-panel-v1");
+    expect(preparePanel).toHaveBeenLastCalledWith({
+      source: "panels/example",
+      ref: undefined,
+      buildKey: "b".repeat(64),
+    });
+  });
+
+  it("rejects panel activation when preparation does not select an immutable build", async () => {
+    const { service } = await buildDeps({
+      preparePanel: vi.fn(async () => ({
+        effectiveVersion: "ev-panel",
+        ...sealedExecution,
+        buildKey: undefined,
+      })),
+    });
+
+    await expect(
+      service.handler({ caller: serverCaller }, "createEntity", [
+        {
+          kind: "panel",
+          source: "panels/example",
+          key: "nav-without-build",
+          contextId: "ctx-x",
+        },
+      ])
+    ).rejects.toThrow(/did not select an immutable BuildV2 artifact/);
   });
 
   it("creates app entities as first-class runtime records", async () => {
-    const resolveAppEffectiveVersion = vi.fn(async () => "ev-app-shell");
-    const { service, entityCache } = await buildDeps({ resolveAppEffectiveVersion });
+    const resolveAppExecution = vi.fn(async () => ({
+      effectiveVersion: "ev-app-shell",
+      ...sealedExecution,
+    }));
+    const { service, entityCache } = await buildDeps({ resolveAppExecution });
     const spec: RuntimeEntityCreateSpec = {
       kind: "app",
       source: "apps/shell",
@@ -460,7 +572,7 @@ describe("runtimeService.createEntity (do kind)", () => {
       key: "desktop",
       stateArgs: { window: "main" },
     });
-    expect(resolveAppEffectiveVersion).toHaveBeenCalledWith({
+    expect(resolveAppExecution).toHaveBeenCalledWith({
       source: "apps/shell",
       ref: undefined,
     });
@@ -481,11 +593,11 @@ describe("runtimeService.createEntity (do kind)", () => {
   });
 
   it("reactivates a retired app row without changing its effective version", async () => {
-    const resolveAppEffectiveVersion = vi
+    const resolveAppExecution = vi
       .fn()
-      .mockResolvedValueOnce("ev-app-v1")
-      .mockResolvedValueOnce("ev-app-v2");
-    const { service, instance } = await buildDeps({ resolveAppEffectiveVersion });
+      .mockResolvedValueOnce({ effectiveVersion: "ev-app-v1", ...sealedExecution })
+      .mockResolvedValueOnce({ effectiveVersion: "ev-app-v2", ...sealedExecution });
+    const { service, instance } = await buildDeps({ resolveAppExecution });
     const spec: RuntimeEntityCreateSpec = {
       kind: "app",
       source: "apps/shell",
@@ -776,14 +888,13 @@ describe("runtimeService.setTitle", () => {
     });
   });
 
-  // Fix 2: setTitle's caller-kind access is declared ONCE in the per-method policy
-  // (runtimeMethods.setTitle: panel/app/worker/do) and enforced by the dispatcher's
-  // single gate — the handler no longer re-rejects. These tests prove declared ==
-  // enforced through the real dispatch path (not the handler-direct shortcut above).
-  it("the dispatcher (single gate) rejects shell/server setTitle via the declared per-method policy", async () => {
+  // setTitle is code-authority-only: view/worker code may title its own runtime,
+  // while host callers carry no code principal. Exercise that declaration through
+  // the real compositional dispatcher rather than bypassing it in the handler.
+  it("the dispatcher rejects shell/server setTitle without code authority", async () => {
     const setEntityTitle = vi.fn();
     const { service } = await buildDeps({ setEntityTitle });
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(service);
     dispatcher.markInitialized();
 
@@ -795,15 +906,15 @@ describe("runtimeService.setTitle", () => {
           "setTitle",
           ["T"]
         )
-      ).rejects.toThrow(/not accessible to/i);
+      ).rejects.toThrow(/code principal is required/i);
     }
     expect(setEntityTitle).not.toHaveBeenCalled();
   });
 
-  it("the dispatcher admits worker/do setTitle (per-method policy, single gate)", async () => {
+  it("the dispatcher admits worker/do setTitle with code authority", async () => {
     const setEntityTitle = vi.fn();
     const { service } = await buildDeps({ setEntityTitle });
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(service);
     dispatcher.markInitialized();
 
@@ -942,7 +1053,7 @@ describe("runtimeService.retireEntity", () => {
         operation: expect.objectContaining({ kind: "runtime", verb: "Retire entity" }),
         details: expect.arrayContaining([
           { label: "Runtime entity", value: handle.id },
-          { label: "File context", value: "ctx-foreign-retire" },
+          { label: "Workspace branch", value: "ctx-foreign-retire" },
         ]),
       })
     );
@@ -1351,6 +1462,90 @@ describe("runtimeService session entities", () => {
         contextId: child.contextId,
         kind: "lifecycle",
         ownerEntityId: parent.id,
+      },
+    ]);
+  });
+
+  it("records delegated extension contexts under the verified upstream context", async () => {
+    const { service, instance } = await buildDeps();
+    const upstream = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "do",
+        source: "workers/orchestrator",
+        className: "Orchestrator",
+        key: "delegating-owner",
+        contextId: "ctx-upstream",
+      },
+    ])) as { id: string };
+    const extension = createVerifiedCaller("extension:git-bridge", "extension", {
+      callerId: "extension:git-bridge",
+      callerKind: "extension",
+      repoPath: "extensions/git-bridge",
+      effectiveVersion: "v1",
+    });
+
+    const child = (await service.handler(
+      {
+        caller: extension,
+        chainCaller: {
+          callerId: upstream.id,
+          callerKind: "do",
+          repoPath: "workers/orchestrator",
+          effectiveVersion: "v1",
+        },
+      },
+      "createContext",
+      [{ contextId: "ctx-extension-infra" }]
+    )) as { contextId: string };
+
+    expect(child.contextId).toBe("ctx-extension-infra");
+    expect(instance.contextEdgeListByOwner({ ownerContextId: "ctx-upstream" })).toContainEqual({
+      contextId: child.contextId,
+      kind: "lifecycle",
+      ownerEntityId: extension.runtime.id,
+    });
+  });
+
+  it("reuses a delegated extension's deterministic lifecycle context without a foreign-context prompt", async () => {
+    const { service, instance, approvalQueue } = await buildDeps({ approvalDecision: "deny" });
+    const upstream = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "do",
+        source: "workers/orchestrator",
+        className: "Orchestrator",
+        key: "repeat-owner",
+        contextId: "ctx-repeat-upstream",
+      },
+    ])) as { id: string };
+    const extension = createVerifiedCaller("extension:git-bridge", "extension", {
+      callerId: "extension:git-bridge",
+      callerKind: "extension",
+      repoPath: "extensions/git-bridge",
+      effectiveVersion: "v1",
+    });
+    const delegatedContext = {
+      caller: extension,
+      chainCaller: {
+        callerId: upstream.id,
+        callerKind: "do" as const,
+        repoPath: "workers/orchestrator",
+        effectiveVersion: "v1",
+      },
+    };
+
+    await service.handler(delegatedContext, "createContext", [
+      { contextId: "ctx-extension-repeat" },
+    ]);
+    await expect(
+      service.handler(delegatedContext, "createContext", [{ contextId: "ctx-extension-repeat" }])
+    ).resolves.toEqual({ contextId: "ctx-extension-repeat" });
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(instance.contextEdgeListByOwner({ ownerContextId: "ctx-repeat-upstream" })).toEqual([
+      {
+        contextId: "ctx-extension-repeat",
+        kind: "lifecycle",
+        ownerEntityId: extension.runtime.id,
       },
     ]);
   });

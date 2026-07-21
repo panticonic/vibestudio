@@ -52,6 +52,7 @@ import { typecheckUnit } from "./typecheckFold.js";
 import { diagnosticsFromError, hasErrors, type BuildDiagnostic } from "./diagnostics.js";
 import { recordDiagnostics, diagnosticsForUnit } from "./diagnosticsStore.js";
 import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
+import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import {
   StateTransitionTrigger,
   unitsForChangedPaths,
@@ -114,6 +115,9 @@ export interface RuntimeImageBinding {
   stateHash: string;
   effectiveVersion: string;
   buildKey: string;
+  executionDigest: string;
+  authorityRequests: UnitAuthorityManifest["requests"];
+  authorityDelegations: UnitAuthorityManifest["delegations"];
 }
 
 // ---------------------------------------------------------------------------
@@ -502,13 +506,24 @@ export async function initBuildSystemV2(
     if (!ev) throw new Error(`No effective version for ${node.name} at ${stateHash}`);
 
     const buildKey = computeBuildUnitKey(node, ev);
-    await buildUnit(node, ev, graphAtState, workspaceRoot, stateHash);
+    const build = await buildUnit(node, ev, graphAtState, workspaceRoot, stateHash);
+    const executionDigest = build.metadata.execution?.executionDigest;
+    if (!executionDigest) {
+      throw new Error(`Runtime build ${build.buildKey} is missing its sealed execution identity`);
+    }
+    const authority = build.metadata.authority;
+    if (!authority) {
+      throw new Error(`Runtime build ${build.buildKey} is missing its sealed authority envelope`);
+    }
     return {
       source: node.relativePath,
       unitName: node.name,
       stateHash,
       effectiveVersion: ev,
       buildKey,
+      executionDigest,
+      authorityRequests: authority.requests,
+      authorityDelegations: authority.delegations,
     };
   };
 

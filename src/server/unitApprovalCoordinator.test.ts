@@ -93,7 +93,7 @@ describe("ServerUnitApprovalCoordinator", () => {
       }),
     ]);
 
-    coordinator.publishPending("startup");
+    void coordinator.publishPending("startup");
     await new Promise((resolve) => setTimeout(resolve, 0));
     // Extensions are kicked off first, but a slow extension must NOT block
     // app applies — the app request runs concurrently.
@@ -180,12 +180,114 @@ describe("ServerUnitApprovalCoordinator", () => {
     });
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
-    coordinator.publishPending("startup");
+    void coordinator.publishPending("startup");
     expect(approvalQueue.request).toHaveBeenCalledOnce();
     expect(applyApp).not.toHaveBeenCalled();
 
     resolveDecision("once");
     await pending;
     expect(applyApp).toHaveBeenCalledOnce();
+  });
+
+  it("exposes auto-approved activation settlement to startup readiness", async () => {
+    const approvalQueue = {
+      request: vi.fn(async () => "deny" as const),
+    };
+    const coordinator = new ServerUnitApprovalCoordinator({
+      approvalQueue,
+      delayMs: 10_000,
+      autoApproveStartupUnits: true,
+    });
+    let releaseApply!: () => void;
+    const applyReleased = new Promise<void>((resolve) => {
+      releaseApply = resolve;
+    });
+    const applied = vi.fn(async () => {
+      await applyReleased;
+    });
+
+    const enqueued = coordinator.enqueue({
+      trigger: "startup",
+      entries: [unit("extension", "react-native")],
+      applyApproved: applied,
+      applyDenied: vi.fn(),
+    });
+    let settled = false;
+    const publication = coordinator.publishPending("startup").then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(applied).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    releaseApply();
+    await Promise.all([publication, enqueued]);
+    expect(settled).toBe(true);
+  });
+
+  it("settles only the unit applications selected by a launch gate", async () => {
+    const approvalQueue = {
+      request: vi.fn(async () => "once" as const),
+    };
+    const coordinator = new ServerUnitApprovalCoordinator({
+      approvalQueue,
+      delayMs: 10_000,
+      autoApproveStartupUnits: true,
+    });
+    let releaseUnrelatedApp!: () => void;
+    const unrelatedAppReleased = new Promise<void>((resolve) => {
+      releaseUnrelatedApp = resolve;
+    });
+    const extensionApplied = vi.fn(async () => undefined);
+    const appApplied = vi.fn(async () => {
+      await unrelatedAppReleased;
+    });
+
+    const extension = coordinator.enqueue({
+      trigger: "startup",
+      entries: [unit("extension", "react-native")],
+      applyApproved: extensionApplied,
+      applyDenied: vi.fn(),
+    });
+    const app = coordinator.enqueue({
+      trigger: "startup",
+      entries: [unit("app", "unrelated-electron-app")],
+      applyApproved: appApplied,
+      applyDenied: vi.fn(),
+    });
+
+    await coordinator.publishPending(
+      "startup",
+      (entry) => entry.unitKind === "extension" && entry.unitName === "react-native"
+    );
+    expect(extensionApplied).toHaveBeenCalledOnce();
+    expect(appApplied).toHaveBeenCalledOnce();
+    await extension;
+
+    releaseUnrelatedApp();
+    await app;
+  });
+
+  it("propagates application failures through both publication and enqueue settlement", async () => {
+    const failure = new Error("provider activation failed");
+    const coordinator = new ServerUnitApprovalCoordinator({
+      approvalQueue: { request: vi.fn(async () => "once" as const) },
+      delayMs: 10_000,
+      autoApproveStartupUnits: true,
+    });
+    const enqueued = coordinator.enqueue({
+      trigger: "startup",
+      entries: [unit("extension", "react-native")],
+      applyApproved: vi.fn(async () => {
+        throw failure;
+      }),
+      applyDenied: vi.fn(),
+    });
+    const publication = coordinator.publishPending("startup");
+
+    const [publishedResult, enqueuedResult] = await Promise.allSettled([publication, enqueued]);
+    expect(publishedResult).toEqual({ status: "rejected", reason: failure });
+    expect(enqueuedResult).toEqual({ status: "rejected", reason: failure });
   });
 });

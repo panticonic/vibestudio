@@ -1,9 +1,9 @@
 import * as path from "node:path";
 
 /**
- * Disposable context projections have their own destructive filesystem epoch.
- * A marker/projection protocol change advances this namespace; prior roots are
- * unreachable cache state and are never parsed or migrated.
+ * Disposable context projections use an independent cache namespace. A
+ * marker/projection protocol change advances this namespace; prior roots are
+ * unreachable derived state, not authoritative data requiring migration.
  */
 export const CONTEXT_PROJECTION_EPOCH = 6 as const;
 export const CONTEXT_PROJECTION_NAMESPACE = `v${CONTEXT_PROJECTION_EPOCH}` as const;

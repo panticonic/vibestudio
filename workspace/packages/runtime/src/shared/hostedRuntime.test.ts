@@ -56,6 +56,9 @@ function recordingHost() {
       if (method === "blobstore.putBase64") {
         return { digest: "a".repeat(64), size: 1 };
       }
+      if (method === "blobstore.getBase64") {
+        return args[0] === "b".repeat(64) ? null : "AP+AECpj";
+      }
       if (method === "vcs.status") {
         return {
           contextId: "context:test",
@@ -176,6 +179,23 @@ describe("createHostedRuntime", () => {
       target: "main",
       method: "blobstore.putBase64",
       args: ["AQID"],
+    });
+  });
+
+  it("getBytes decodes the full base64 blob and preserves missing blobs", async () => {
+    const { host, calls } = recordingHost();
+    const core = createHostedRuntime(host);
+
+    const digest = "a".repeat(64);
+    await expect(core.blobstore.getBytes(digest)).resolves.toEqual(
+      new Uint8Array([0, 255, 128, 16, 42, 99])
+    );
+    await expect(core.blobstore.getBytes("b".repeat(64))).resolves.toBeNull();
+
+    expect(calls).toContainEqual({
+      target: "main",
+      method: "blobstore.getBase64",
+      args: [digest],
     });
   });
 

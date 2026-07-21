@@ -314,7 +314,11 @@ export type UnitApprovalDecision = "once" | "session" | "version" | "deny";
 export interface UnitReconcileOptions {
   trigger?: UnitReconcileTrigger;
   removeUndeclared?: boolean;
-  /** Return after declarations/approvals are staged instead of waiting for builds. */
+  /**
+   * `staged` returns once declarations and approval requests are classified.
+   * `applied` also waits for already-trusted units to build and activate;
+   * approval-gated units settle through their approval coordinator.
+   */
   waitFor?: "staged" | "applied";
 }
 

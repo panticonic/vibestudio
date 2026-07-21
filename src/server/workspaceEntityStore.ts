@@ -25,8 +25,11 @@
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import type { EntityKind, EntityRecord, EntitySource } from "@vibestudio/shared/runtime/entitySpec";
-import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
+import type {
+  EntityActivationInput,
+  EntityKind,
+  EntityRecord,
+} from "@vibestudio/shared/runtime/entitySpec";
 import type {
   ContextEdge,
   ContextEdgeByChild,
@@ -36,24 +39,7 @@ import type {
 const WORKSPACE_DO_CLASS = "WorkspaceDO";
 
 /** Input accepted by `WorkspaceDO.entityActivate` (built by the write-owners). */
-export interface EntityActivateInput {
-  kind: EntityKind;
-  source: EntitySource;
-  contextId: string;
-  className?: string;
-  key: string;
-  stateArgs?: unknown;
-  agentBinding?: RuntimeAgentBinding;
-  /** Launch parent (verified caller id) — see EntityRecord.parentId. */
-  parentId?: string;
-  /**
-   * Owning-user id — the creating caller's `subject.userId` (WP0 §6). Passed
-   * straight through to `WorkspaceDO.entityActivate`, which stamps it write-once
-   * onto `entities.owner_user_id`. Absent for bootstrap-created entities that
-   * have no subject (WP0 §5.4).
-   */
-  ownerUserId?: string;
-}
+export type EntityActivateInput = EntityActivationInput;
 
 export interface WorkspaceEntityStoreDeps {
   doDispatch: DoDispatcher;

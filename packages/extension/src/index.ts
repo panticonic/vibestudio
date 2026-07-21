@@ -405,6 +405,10 @@ export interface ExtensionContext {
   readonly extensions: ExtensionsClient;
   readonly invocation: {
     current(): ExtensionInvocation | null;
+    /** Cancellation for the currently executing host invocation. Long-lived
+     * extension work should stop waiting/release caller-owned resources when
+     * this signal aborts. */
+    signal(): AbortSignal | null;
   };
   readonly subscriptions: Disposable[];
   readonly log: {

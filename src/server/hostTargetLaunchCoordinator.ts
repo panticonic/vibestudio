@@ -1,7 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { workspaceAppPackageName } from "@vibestudio/workspace/configParser";
 import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
-import type { PendingApproval, PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import type {
+  PendingApproval,
+  PendingUnitBatchApproval,
+  UnitBatchEntry,
+} from "@vibestudio/shared/approvals";
 import { approvalViewModels, targetLabel } from "@vibestudio/shared/bootstrapLaunchGate";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { HostTargetChangedPayload } from "@vibestudio/shared/events";
@@ -14,8 +18,6 @@ import type {
 } from "@vibestudio/shared/hostTargets";
 import type { AppHost, ReactNativeHostReadiness } from "./appHost.js";
 
-const BEGIN_LAUNCH_REFRESH_GRACE_MS = 250;
-
 type UnitReconcileTrigger = "startup" | "meta-change";
 
 interface ApprovalQueueLike {
@@ -24,7 +26,10 @@ interface ApprovalQueueLike {
 }
 
 interface StartupApprovalPublisher {
-  publishPending(trigger?: UnitReconcileTrigger): void;
+  publishPending(
+    trigger?: UnitReconcileTrigger,
+    matches?: (entry: UnitBatchEntry) => boolean
+  ): Promise<void>;
 }
 
 interface WorkspaceUnitStatusLike {
@@ -65,6 +70,8 @@ export interface HostTargetLaunchCoordinatorDeps {
 export class HostTargetLaunchCoordinator {
   private revision = 0;
   private sessions = new Map<string, HostTargetLaunchSessionSnapshot>();
+  private scheduledSessionRefreshes = new Set<string>();
+  private activeSessionRefreshes = new Set<string>();
 
   constructor(private readonly deps: HostTargetLaunchCoordinatorDeps) {}
 
@@ -79,7 +86,21 @@ export class HostTargetLaunchCoordinator {
   async publishPendingStartupApprovals(target: HostTarget): Promise<PendingUnitBatchApproval[]> {
     await this.deps.awaitStartupUnitReconcile?.();
     await this.deps.prepareHostTarget?.(target);
-    this.deps.startupApprovals.publishPending("startup");
+    const requiredExtensions = new Set(this.deps.getRequiredExtensionSources?.(target) ?? []);
+    const settlement = this.deps.startupApprovals.publishPending(
+      "startup",
+      (unit) =>
+        (unit.unitKind === "app" && unit.target === target) ||
+        (unit.unitKind === "extension" && requiredExtensions.has(unit.source.repo))
+    );
+    const pending = this.pendingLaunchApprovals(target);
+    if (pending.length > 0) return pending;
+
+    // A manual approval is registered synchronously by publishPending and is
+    // returned above without blocking on the user's decision. With no pending
+    // approval, publication is either empty or auto-approved; readiness must
+    // wait for that activation to settle before inspecting providers/apps.
+    await settlement;
     return this.pendingLaunchApprovals(target);
   }
 
@@ -104,9 +125,8 @@ export class HostTargetLaunchCoordinator {
       (session) => session.target === target && !session.settled
     );
     if (existing) {
-      const refreshed = await this.refreshSessionForBegin(existing.sessionId);
-      if (refreshed.settled) this.reportLaunchActivity(target, "settled");
-      return refreshed;
+      this.scheduleSessionRefresh(existing.sessionId);
+      return existing;
     }
 
     const now = Date.now();
@@ -125,15 +145,14 @@ export class HostTargetLaunchCoordinator {
       settled: false,
     };
     this.sessions.set(session.sessionId, session);
-    const refreshed = await this.refreshSessionForBegin(session.sessionId);
-    if (refreshed.settled) this.reportLaunchActivity(target, "settled");
-    return refreshed;
+    this.scheduleSessionRefresh(session.sessionId);
+    return session;
   }
 
   async getLaunchSession(sessionId: string): Promise<HostTargetLaunchSessionSnapshot | null> {
     const current = this.sessions.get(sessionId) ?? null;
-    if (!current || current.settled) return current;
-    return await this.refreshSession(sessionId, { emit: false }).catch(() => current);
+    if (current && !current.settled) this.scheduleSessionRefresh(sessionId);
+    return current;
   }
 
   async resolveLaunchSessionApproval(
@@ -182,13 +201,14 @@ export class HostTargetLaunchCoordinator {
     };
     this.sessions.set(sessionId, approved);
     this.emitSession(approved);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    return await this.refreshSession(sessionId, { emit: true });
+    this.scheduleSessionRefresh(sessionId);
+    return approved;
   }
 
   cancelLaunchSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     this.sessions.delete(sessionId);
+    this.scheduledSessionRefreshes.delete(sessionId);
     if (session) this.reportLaunchActivity(session.target, "settled");
   }
 
@@ -308,29 +328,37 @@ export class HostTargetLaunchCoordinator {
     const sessions = [...this.sessions.values()].filter(
       (session) => session.target === target && !session.settled
     );
-    for (const session of sessions) {
-      const refreshed = await this.refreshSession(session.sessionId, { emit: true }).catch(
-        () => null
-      );
-      if (refreshed?.settled) this.reportLaunchActivity(target, "settled");
-    }
+    for (const session of sessions) this.scheduleSessionRefresh(session.sessionId);
   }
 
   private reportLaunchActivity(target: HostTarget, phase: "requested" | "settled"): void {
     this.deps.onLaunchActivity?.(target, phase);
   }
 
-  private async refreshSessionForBegin(
-    sessionId: string
-  ): Promise<HostTargetLaunchSessionSnapshot> {
-    const refresh = this.refreshSession(sessionId, { emit: true }).catch((error: unknown) =>
-      this.failSession(sessionId, error)
-    );
-    const delayed = new Promise<null>((resolve) =>
-      setTimeout(resolve, BEGIN_LAUNCH_REFRESH_GRACE_MS)
-    );
-    const refreshed = await Promise.race([refresh, delayed]);
-    return refreshed ?? this.requireSession(sessionId);
+  private scheduleSessionRefresh(sessionId: string): void {
+    if (
+      this.scheduledSessionRefreshes.has(sessionId) ||
+      this.activeSessionRefreshes.has(sessionId)
+    ) {
+      return;
+    }
+    this.scheduledSessionRefreshes.add(sessionId);
+    setImmediate(() => {
+      this.scheduledSessionRefreshes.delete(sessionId);
+      const current = this.sessions.get(sessionId);
+      if (!current || current.settled || this.activeSessionRefreshes.has(sessionId)) return;
+
+      this.activeSessionRefreshes.add(sessionId);
+      void this.refreshSession(sessionId, { emit: true })
+        .catch((error: unknown) => {
+          if (this.sessions.has(sessionId)) this.failSession(sessionId, error);
+        })
+        .finally(() => {
+          this.activeSessionRefreshes.delete(sessionId);
+          const refreshed = this.sessions.get(sessionId);
+          if (refreshed?.settled) this.reportLaunchActivity(refreshed.target, "settled");
+        });
+    });
   }
 
   private failSession(sessionId: string, error: unknown): HostTargetLaunchSessionSnapshot {

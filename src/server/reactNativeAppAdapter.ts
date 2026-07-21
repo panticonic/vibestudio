@@ -6,36 +6,14 @@ import type { HostTargetCandidate } from "@vibestudio/shared/hostTargets";
 import { appArtifactRoute, appArtifactUrl } from "@vibestudio/shared/appArtifacts";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import type { AppRegistryEntry, WorkspaceAppDeclaration } from "./appHost.js";
+import type { ActiveExecutionIdentity } from "./runtimeExecutionIdentity.js";
+import type { AppBuildResultLike, AppRegistryEntry, WorkspaceAppDeclaration } from "./appHost.js";
 
 export interface AppBuildProviderDetails {
   name: string;
   activeEv: string | null;
   activeBuildKey: string | null;
   contractVersion: string;
-}
-
-interface ReactNativeBuildArtifact {
-  path: string;
-  role: string;
-  contentType: string;
-  encoding: string;
-  platform?: string;
-  integrity?: string;
-}
-
-interface ReactNativeBuild {
-  metadata: {
-    details?:
-      | {
-          kind: "app";
-          rnHostAbi?: string | null;
-          integrity?: string | null;
-          provider?: AppBuildProviderDetails | null;
-        }
-      | { kind: string };
-  };
-  artifacts?: ReactNativeBuildArtifact[];
 }
 
 interface ReactNativeRegistry {
@@ -88,8 +66,12 @@ export interface ReactNativeAppAdapterDeps {
   workspaceId: string;
   registry: ReactNativeRegistry;
   buildSystem: {
-    getBuildByKey?(key: string): ReactNativeBuild | null;
     getBuildProviderDetails?(target: "react-native"): AppBuildProviderDetails | null;
+  };
+  resolveActiveBuild(entry: AppRegistryEntry): {
+    buildKey: string;
+    build: AppBuildResultLike;
+    identity: ActiveExecutionIdentity;
   };
   approvalCoordinator?: UnitApprovalCoordinator<UnitBatchEntry>;
   entityCache?: ReactNativeEntityCache;
@@ -133,7 +115,8 @@ export class ReactNativeAppAdapter {
           candidate.activeBundleKey
       );
     if (!entry?.activeBundleKey) return null;
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const activeBuild = this.deps.resolveActiveBuild(entry);
+    const build = activeBuild.build;
     const details =
       build?.metadata.details &&
       build.metadata.details.kind === "app" &&
@@ -196,7 +179,9 @@ export class ReactNativeAppAdapter {
     else await this.deps.whenReconciled();
 
     const first = this.readinessSnapshot(source);
-    if (first.ready) return first;
+    const provider = this.deps.buildSystem.getBuildProviderDetails?.("react-native") ?? null;
+    if (first.ready && provider && sameBuildProvider(first.bootstrap.provider, provider))
+      return first;
 
     const resolvedSource = first.source ?? source ?? this.deps.selectedSource();
     if (!resolvedSource) return first;
@@ -220,20 +205,25 @@ export class ReactNativeAppAdapter {
       };
     }
 
-    const provider = this.deps.buildSystem.getBuildProviderDetails?.("react-native") ?? null;
     if (!provider) {
       this.stageLaunchPreflightApproval(candidate, declared);
       const missingProvider = this.readinessSnapshot(candidate.source);
-      if (missingProvider.ready) return missingProvider;
       const requiredExtensions = this.deps.requiredExtensions();
       const orderingDetail =
         requiredExtensions.length > 0
           ? `The declared extensions must start ${requiredExtensions.join(", ")} before ${candidate.source} can build.`
           : `A React Native build-provider extension must be declared (meta/vibestudio.yml hostTargets.react-native.requiresExtensions) and running before ${candidate.source} can build.`;
       return {
-        ...missingProvider,
+        ready: false,
+        source: candidate.source,
+        appId: candidate.name,
         reason: "React Native build provider is not active",
-        details: [...missingProvider.details, orderingDetail],
+        details: [
+          ...(missingProvider.ready
+            ? [`The active ${candidate.source} bundle has no matching active build provider.`]
+            : missingProvider.details),
+          orderingDetail,
+        ],
       };
     }
 
@@ -263,7 +253,8 @@ export class ReactNativeAppAdapter {
           normalizeRepoPath(candidate.source.repo) === normalizedSource
       );
     if (!entry || !this.deps.entityCache) return null;
-    return this.activatePrincipal(entry, deviceId);
+    const activeBuild = this.deps.resolveActiveBuild(entry);
+    return this.activatePrincipal(entry, deviceId, activeBuild);
   }
 
   retirePrincipal(deviceId: string): number {
@@ -417,7 +408,11 @@ export class ReactNativeAppAdapter {
     this.approvedLaunchPreflights.delete(sourceKey);
   }
 
-  private activatePrincipal(entry: AppRegistryEntry, deviceId: string): string {
+  private activatePrincipal(
+    entry: AppRegistryEntry,
+    deviceId: string,
+    activeBuild: { buildKey: string; identity: ActiveExecutionIdentity }
+  ): string {
     const entityCache = this.deps.entityCache;
     if (!entityCache || !entry.activeEv) {
       throw new Error("Cannot activate device-scoped app principal without an active app entity");
@@ -432,6 +427,8 @@ export class ReactNativeAppAdapter {
       id: principalId,
       kind: "app",
       source: { repoPath: sourceRepo, effectiveVersion: entry.activeEv },
+      activeBuildKey: activeBuild.buildKey,
+      ...activeBuild.identity,
       contextId,
       key: principalId,
       createdAt: existing?.createdAt ?? Date.now(),
@@ -465,6 +462,18 @@ export function isBuildProviderDetailsLike(value: unknown): value is AppBuildPro
     (typeof candidate.activeBuildKey === "string" || candidate.activeBuildKey === null) &&
     typeof candidate.contractVersion === "string" &&
     candidate.contractVersion.length > 0
+  );
+}
+
+function sameBuildProvider(
+  left: AppBuildProviderDetails | null | undefined,
+  right: AppBuildProviderDetails
+): boolean {
+  return (
+    left?.name === right.name &&
+    left.activeEv === right.activeEv &&
+    left.activeBuildKey === right.activeBuildKey &&
+    left.contractVersion === right.contractVersion
   );
 }
 

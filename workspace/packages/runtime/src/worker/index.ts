@@ -119,6 +119,8 @@ export { DurableObjectBase } from "./durable-base.js";
 export { rpc } from "@vibestudio/rpc";
 export type {
   DurableObjectContext,
+  DurableObjectSchemaBaseline,
+  DurableObjectSchemaMigration,
   SqlStorage,
   SqlResult,
   DORef,

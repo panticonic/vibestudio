@@ -390,7 +390,7 @@ describe("pushService", () => {
     const before = fs.readFileSync(databasePath);
 
     expect(() => createPushService({ databasePath, metrics: createPushMetrics() })).toThrow(
-      /schema version is 0, expected 1/
+      /schema version 0 predates production baseline 1/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
     const unchanged = new DatabaseSync(databasePath);

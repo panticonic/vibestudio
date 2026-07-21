@@ -4,6 +4,8 @@ import {
   ServiceDispatcher,
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 import {
   SingletonRegistry,
   type WorkspaceDeclarations,
@@ -28,21 +30,21 @@ function createDeps() {
         source: "workers/example-store",
         name: "channel",
         protocols: ["example.store.v1"],
-        policy: { allowed: ["panel", "worker", "shell"] },
+        authority: { principals: ["code", "user"] },
         durableObject: { className: "ExampleStoreDO" },
       },
       {
         source: "workers/example-store",
         name: "panel-channel",
         protocols: ["example.panel-store.v1"],
-        policy: { allowed: ["panel"] },
+        authority: { principals: ["code"] },
         durableObject: { className: "ExampleStoreDO" },
       },
       {
         source: "workers/stateless-api",
         name: "stateless-api",
         protocols: ["example.stateless.v1"],
-        policy: { allowed: ["shell"] },
+        authority: { principals: ["user"] },
         worker: { routePath: "/api" },
       },
     ],
@@ -80,10 +82,56 @@ function createDeps() {
   };
 }
 
+function ungrantedExtensionCaller() {
+  return createVerifiedCaller("extension:test", "extension", {
+    callerId: "extension:test",
+    callerKind: "extension",
+    repoPath: "extensions/test",
+    effectiveVersion: "ev-test",
+    executionDigest: "0".repeat(64),
+    requested: [],
+    delegations: [],
+  });
+}
+
+function createProductionAuthorityDispatcher(deps: ReturnType<typeof createDeps>) {
+  const dispatcher = new ServiceDispatcher();
+  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+    authorizeVerifiedCaller(caller, {
+      workspaceId: "workspace-test",
+      workspaceMember: true,
+      sessionId: "session-test",
+      audience: "service:workers",
+      capability,
+      resourceKey,
+    })
+  );
+  dispatcher.registerService(createWorkerService(deps as never));
+  dispatcher.markInitialized();
+  return dispatcher;
+}
+
+function browserDataExtensionCaller() {
+  return createVerifiedCaller("extension:browser-data", "extension", {
+    callerId: "extension:browser-data",
+    callerKind: "extension",
+    repoPath: "extensions/browser-data",
+    effectiveVersion: "browser-data-test",
+    executionDigest: "b".repeat(64),
+    requested: [
+      {
+        capability: "service:workers.resolveDurableObject",
+        resource: { kind: "prefix", prefix: "" },
+      },
+    ],
+    delegations: [],
+  });
+}
+
 describe("workerService workspace service resolution", () => {
   it("lists every launchable worker with its real manifest entry point", async () => {
     const deps = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
@@ -104,12 +152,24 @@ describe("workerService workspace service resolution", () => {
 
   it("lists and resolves manifest-declared services", async () => {
     const deps = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
     await expect(dispatcher.dispatch(panelCtx, "workers", "listServices", [])).resolves.toEqual([
+      {
+        origin: "product",
+        name: "gad.workspace",
+        title: "GAD workspace graph",
+        description: "Product-sealed semantic workspace authority",
+        protocols: ["vibestudio.gad.workspace.v1"],
+        source: "vibestudio/internal",
+        kind: "durable-object",
+        className: "GadWorkspaceDO",
+        defaultObjectKey: "workspace-semantic-control-plane",
+      },
       expect.objectContaining({
+        origin: "workspace",
         name: "channel",
         kind: "durable-object",
         protocols: ["example.store.v1"],
@@ -165,7 +225,7 @@ describe("workerService workspace service resolution", () => {
 
   it("uses workspace declarations added after the service is constructed", async () => {
     const deps = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
@@ -183,7 +243,7 @@ describe("workerService workspace service resolution", () => {
         source: "workers/poem-store",
         name: "poem-store",
         protocols: ["poem.store.v1"],
-        policy: { allowed: ["panel", "worker", "shell"] },
+        authority: { principals: ["code", "user"] },
         durableObject: { className: "PoemStoreDO" },
       },
     ];
@@ -211,14 +271,14 @@ describe("workerService workspace service resolution", () => {
           source: "workers/poem-collection-store",
           name: "poem-collection",
           protocols: ["poems.collection.v1"],
-          policy: { allowed: ["panel", "worker"] },
+          authority: { principals: ["code"] },
           durableObject: { className: "PoemStore" },
         },
       ],
       routes: [],
     };
     const activateDurableObject = vi.fn(async () => {});
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({
         ...(deps as object),
@@ -260,13 +320,13 @@ describe("workerService workspace service resolution", () => {
           source: "workers/example-store",
           name: "panel-channel",
           protocols: ["example.panel-store.v1"],
-          policy: { allowed: ["extension"] },
+          authority: { principals: ["code"] },
           durableObject: { className: "ExampleStoreDO" },
         },
       ],
       routes: [],
     };
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({
         ...(deps as object),
@@ -277,18 +337,16 @@ describe("workerService workspace service resolution", () => {
     dispatcher.markInitialized();
 
     await expect(
-      dispatcher.dispatch(
-        { caller: createVerifiedCaller("extension:test", "extension") },
-        "workers",
-        "resolveService",
-        ["example.panel-store.v1", "chat-1"]
-      )
+      dispatcher.dispatch({ caller: ungrantedExtensionCaller() }, "workers", "resolveService", [
+        "example.panel-store.v1",
+        "chat-1",
+      ])
     ).rejects.toMatchObject({ code: "EACCES" });
   });
 
   it("resolves concrete durable object targets", async () => {
     const deps = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
@@ -315,6 +373,75 @@ describe("workerService workspace service resolution", () => {
     ).rejects.toThrow("No Durable Object class registered");
   });
 
+  it("resolves the exact reviewed GAD singleton for an authenticated user", async () => {
+    const dispatcher = createProductionAuthorityDispatcher(createDeps());
+    const caller = createVerifiedCaller("panel:gad", "panel", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+
+    await expect(
+      dispatcher.dispatch({ caller }, "workers", "resolveDurableObject", [
+        "vibestudio/internal",
+        "GadWorkspaceDO",
+        "workspace-semantic-control-plane",
+      ])
+    ).resolves.toEqual({
+      kind: "durable-object",
+      source: "vibestudio/internal",
+      className: "GadWorkspaceDO",
+      objectKey: "workspace-semantic-control-plane",
+      targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+    });
+  });
+
+  it("resolves BrowserDataDO only for its reviewed broker code and exact key", async () => {
+    const dispatcher = createProductionAuthorityDispatcher(createDeps());
+    const caller = browserDataExtensionCaller();
+
+    await expect(
+      dispatcher.dispatch({ caller }, "workers", "resolveDurableObject", [
+        "vibestudio/internal",
+        "BrowserDataDO",
+        "global",
+      ])
+    ).resolves.toMatchObject({
+      targetId: "do:vibestudio/internal:BrowserDataDO:global",
+    });
+
+    await expect(
+      dispatcher.dispatch({ caller }, "workers", "resolveDurableObject", [
+        "vibestudio/internal",
+        "BrowserDataDO",
+        "guessed",
+      ])
+    ).rejects.toThrow("No Durable Object class registered");
+  });
+
+  it("does not expose arbitrary internal classes or let users bypass broker authority", async () => {
+    const dispatcher = createProductionAuthorityDispatcher(createDeps());
+    const user = createVerifiedCaller("panel:internal", "panel", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+
+    await expect(
+      dispatcher.dispatch({ caller: user }, "workers", "resolveDurableObject", [
+        "vibestudio/internal",
+        "WorkspaceDO",
+        "workspace-test",
+      ])
+    ).rejects.toThrow("No Durable Object class registered");
+
+    await expect(
+      dispatcher.dispatch({ caller: user }, "workers", "resolveDurableObject", [
+        "vibestudio/internal",
+        "BrowserDataDO",
+        "global",
+      ])
+    ).rejects.toMatchObject({ code: "EACCES" });
+  });
+
   it("resolves concrete durable object targets declared only in the caller context", async () => {
     const deps = createDeps();
     const contextDecls: WorkspaceDeclarations = {
@@ -326,14 +453,14 @@ describe("workerService workspace service resolution", () => {
           source: "workers/poem-collection-store",
           name: "poem-collection",
           protocols: ["poems.collection.v1"],
-          policy: { allowed: ["panel", "worker"] },
+          authority: { principals: ["code"] },
           durableObject: { className: "PoemStore" },
         },
       ],
       routes: [],
     };
     const activateDurableObject = vi.fn(async () => {});
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({
         ...(deps as object),
@@ -378,13 +505,13 @@ describe("workerService workspace service resolution", () => {
           source: "workers/example-store",
           name: "panel-channel",
           protocols: ["example.panel-store.v1"],
-          policy: { allowed: ["extension"] },
+          authority: { principals: ["code"] },
           durableObject: { className: "ExampleStoreDO" },
         },
       ],
       routes: [],
     };
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({
         ...(deps as object),
@@ -396,7 +523,7 @@ describe("workerService workspace service resolution", () => {
 
     await expect(
       dispatcher.dispatch(
-        { caller: createVerifiedCaller("extension:test", "extension") },
+        { caller: ungrantedExtensionCaller() },
         "workers",
         "resolveDurableObject",
         ["workers/example-store", "ExampleStoreDO", "chat-1"]
@@ -407,7 +534,7 @@ describe("workerService workspace service resolution", () => {
   it("activates resolved durable object services and lets DO callers use worker-allowed services", async () => {
     const deps = createDeps();
     const activateDurableObject = vi.fn(async () => {});
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({ ...(deps as object), activateDurableObject } as never)
     );
@@ -433,10 +560,50 @@ describe("workerService workspace service resolution", () => {
     });
   });
 
-  it("stamps an on-demand durable object with the resolving caller's owner", async () => {
+  it("lets an entity-bound agent resolve a service that explicitly admits entities", async () => {
+    const deps = createDeps();
+    deps.workspaceDecls.services = deps.workspaceDecls.services.map((service) =>
+      service.name === "channel"
+        ? { ...service, authority: { principals: ["code", "user", "entity"] } }
+        : service
+    );
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+      authorizeVerifiedCaller(caller, {
+        workspaceId: "workspace-test",
+        workspaceMember: true,
+        sessionId: "session-test",
+        audience: "service:workers",
+        capability,
+        resourceKey,
+      })
+    );
+    dispatcher.registerService(createWorkerService(deps as never));
+    dispatcher.markInitialized();
+    const caller = createVerifiedCaller(
+      "do:workers/agent-worker:AiChatWorker:agent-1",
+      "do",
+      null,
+      {
+        entityId: "agent-1",
+        contextId: "ctx-1",
+        channelId: "channel-1",
+        agentId: "agent-1",
+      }
+    );
+
+    await expect(
+      dispatcher.dispatch({ caller }, "workers", "resolveService", ["example.store.v1", "chat-1"])
+    ).resolves.toMatchObject({
+      name: "channel",
+      targetId: "do:workers/example-store:ExampleStoreDO:chat-1",
+    });
+  });
+
+  it("does not treat resolving users as owners of a shared durable object", async () => {
     const deps = createDeps();
     const activateDurableObject = vi.fn(async () => {});
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({ ...(deps as object), activateDurableObject } as never)
     );
@@ -444,21 +611,76 @@ describe("workerService workspace service resolution", () => {
 
     await dispatcher.dispatch(ownedPanelCtx, "workers", "resolveService", [
       "example.store.v1",
-      "owned-channel",
+      "shared-channel",
     ]);
+    await dispatcher.dispatch(
+      {
+        caller: createVerifiedCaller("panel-owned-bob", "panel", null, null, {
+          userId: "usr_bob",
+          handle: "bob",
+        }),
+      },
+      "workers",
+      "resolveDurableObject",
+      ["workers/example-store", "ExampleStoreDO", "shared-channel"]
+    );
 
-    expect(activateDurableObject).toHaveBeenCalledWith({
+    const expectedActivation = {
       source: "workers/example-store",
       className: "ExampleStoreDO",
-      objectKey: "owned-channel",
+      objectKey: "shared-channel",
       buildRef: "main",
-      ownerUserId: "usr_alice",
+    };
+    expect(activateDurableObject).toHaveBeenNthCalledWith(1, expectedActivation);
+    expect(activateDurableObject).toHaveBeenNthCalledWith(2, expectedActivation);
+  });
+
+  it("resolves the system-owned model-settings singleton without reattributing ownership", async () => {
+    const deps = createDeps();
+    deps.workspaceDecls.singletons.replaceAll([
+      ...deps.workspaceDecls.singletons.all(),
+      {
+        source: "workers/model-settings",
+        className: "ModelSettingsDO",
+        key: "workspace-model-settings",
+      },
+    ]);
+    deps.workspaceDecls.services = [
+      ...deps.workspaceDecls.services,
+      {
+        source: "workers/model-settings",
+        name: "models",
+        protocols: ["vibestudio.models.v1"],
+        authority: { principals: ["host", "user", "code"] },
+        durableObject: { className: "ModelSettingsDO" },
+      },
+    ];
+    const activateDurableObject = vi.fn(async () => {});
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({ ...(deps as object), activateDurableObject } as never)
+    );
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(ownedPanelCtx, "workers", "resolveService", [
+        "vibestudio.models.v1",
+        null,
+      ])
+    ).resolves.toMatchObject({
+      targetId: "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
+    });
+    expect(activateDurableObject).toHaveBeenCalledWith({
+      source: "workers/model-settings",
+      className: "ModelSettingsDO",
+      objectKey: "workspace-model-settings",
+      buildRef: "main",
     });
   });
 
   it("lets DO callers use panel-allowed durable services", async () => {
     const deps = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 

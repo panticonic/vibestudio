@@ -2,11 +2,62 @@ import fs from "node:fs";
 import path from "node:path";
 import { stateLayout } from "../stateLayout.js";
 import type { CredentialUseGrant } from "@vibestudio/credential-client/types";
-import { writeJsonFileAtomic } from "../hostCore/atomicFile.js";
+import {
+  loadVersionedJsonFile,
+  saveVersionedJsonFile,
+  type VersionedJsonCodec,
+} from "../hostCore/versionedJsonStore.js";
 
 export interface StoredCredentialUseGrant extends CredentialUseGrant {
   credentialId: string;
 }
+
+const CREDENTIAL_USE_GRANT_SCHEMA_VERSION = 1 as const;
+
+interface CredentialUseGrantFile {
+  grants: StoredCredentialUseGrant[];
+}
+
+const CREDENTIAL_USE_GRANT_CODEC: VersionedJsonCodec<CredentialUseGrantFile> = {
+  schemaName: "Credential use grant store",
+  currentVersion: CREDENTIAL_USE_GRANT_SCHEMA_VERSION,
+  decodeCurrent(value) {
+    const record = value as Record<string, unknown>;
+    if (
+      Object.keys(record).some((key) => key !== "schemaVersion" && key !== "grants") ||
+      !Array.isArray(record["grants"]) ||
+      !record["grants"].every(isStoredCredentialUseGrant)
+    ) {
+      throw new Error("versioned grant store contains invalid data");
+    }
+    return { grants: record["grants"] };
+  },
+  unversionedMigration: {
+    version: 1,
+    name: "recognize-pre-versioning-credential-grants",
+    migrate(value) {
+      if (Array.isArray(value)) {
+        if (!value.every(isStoredCredentialUseGrant)) {
+          throw new Error("legacy grant array contains an invalid grant");
+        }
+        return { grants: value };
+      }
+      if (!value || typeof value !== "object") {
+        throw new Error("expected a credential grant object");
+      }
+      const record = value as Record<string, unknown>;
+      if (
+        Object.keys(record).length !== 1 ||
+        !Array.isArray(record["grants"]) ||
+        !record["grants"].every(isStoredCredentialUseGrant)
+      ) {
+        throw new Error("unversioned grant store does not match the recognized { grants } schema");
+      }
+      return { grants: record["grants"] };
+    },
+  },
+  encode: (value) => ({ grants: value.grants }),
+};
 
 export interface CredentialUseGrantStoreLike {
   list(credentialId: string): CredentialUseGrant[];
@@ -57,46 +108,24 @@ export class CredentialUseGrantStore implements CredentialUseGrantStoreLike {
 
   private load(): void {
     if (this.loaded) return;
-    this.loaded = true;
     try {
-      const raw = fs.readFileSync(this.filePath, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (!isStoredCredentialUseGrantFile(parsed)) {
-        throw new Error("expected the current exact { grants } schema");
-      }
-      this.grants = parsed.grants;
+      const decoded = loadVersionedJsonFile(this.filePath, CREDENTIAL_USE_GRANT_CODEC);
+      this.grants = decoded?.grants ?? [];
+      this.loaded = true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.grants = [];
-        return;
-      }
-      console.warn(
-        `[CredentialUseGrantStore] Resetting invalid grant store ${this.filePath}: ${
+      throw new Error(
+        `Credential use grant store ${this.filePath} cannot be loaded without risking data loss: ${
           error instanceof Error ? error.message : String(error)
-        }`
+        }`,
+        { cause: error }
       );
-      this.grants = [];
-      this.save();
     }
   }
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
-    writeJsonFileAtomic(this.filePath, { grants: this.grants });
+    saveVersionedJsonFile(this.filePath, { grants: this.grants }, CREDENTIAL_USE_GRANT_CODEC);
   }
-}
-
-function isStoredCredentialUseGrantFile(
-  value: unknown
-): value is { grants: StoredCredentialUseGrant[] } {
-  return (
-    !!value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 1 &&
-    Array.isArray((value as { grants?: unknown }).grants) &&
-    (value as { grants: unknown[] }).grants.every(isStoredCredentialUseGrant)
-  );
 }
 
 function isStoredCredentialUseGrant(value: unknown): value is StoredCredentialUseGrant {

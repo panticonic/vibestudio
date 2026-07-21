@@ -1,6 +1,8 @@
 // Shared types used across main, renderer, server, and preload
 
 import type { CreateChildOptions } from "@vibestudio/types";
+import type { CapabilityScope } from "@vibestudio/rpc";
+import type { EvalAuthorityDelegation, UnitAuthorityManifest } from "./authorityManifest.js";
 import type { StateArgsSchema, StateArgsValue } from "./stateArgs.js";
 
 // Re-export types for consumers of this module
@@ -22,6 +24,8 @@ export type { StateArgsSchema, StateArgsValue };
  * optional in the type.
  */
 export interface PackageManifest {
+  /** Authority requests sealed into this executable unit's build. */
+  authority?: UnitAuthorityManifest;
   /** Human-readable display name shared by all workspace unit kinds. */
   displayName?: string;
   /** Display title (required at runtime for panels; workers don't need it). */
@@ -155,6 +159,10 @@ export interface PanelInfo {
   contextId: string;
   runtimeEntityId?: string | null;
   effectiveVersion?: string | null;
+  buildKey?: string | null;
+  executionDigest?: string | null;
+  authorityRequests?: readonly CapabilityScope[];
+  authorityDelegations?: readonly EvalAuthorityDelegation[];
   ref?: string;
   build?: {
     effectiveVersion?: string | null;
@@ -339,6 +347,11 @@ export interface Panel {
   title: string;
   runtimeEntityId?: string | null;
   effectiveVersion?: string | null;
+  /** Content-addressed BuildV2 artifact executed by this panel incarnation. */
+  buildKey?: string | null;
+  executionDigest?: string | null;
+  authorityRequests?: readonly CapabilityScope[];
+  authorityDelegations?: readonly EvalAuthorityDelegation[];
   /**
    * Owning-user id (WP3): the user whose tree this panel's root belongs to.
    * Attribution/provenance only — NOT an inter-user security token (plan §0.0).

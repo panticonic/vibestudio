@@ -15,6 +15,12 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
       "that losslessly base64-encodes exactly one byte buffer and calls blobstore.putBase64. " +
       "The content-addressed store keeps bytes only; return MIME metadata alongside the digest.",
   },
+  "blobstore.getBytes": {
+    description:
+      "getBytes(digest) → Uint8Array | null. Runtime-only convenience that decodes the " +
+      "canonical blobstore.getBase64 wire result, so binary content can be compared or consumed " +
+      "without importing a base64 library.",
+  },
   "fs.open": {
     description:
       "open(path, flags?, mode?) → FileHandle { fd, read(buf, off, len, pos), " +

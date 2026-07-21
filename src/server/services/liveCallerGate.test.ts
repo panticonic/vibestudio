@@ -3,12 +3,29 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createLiveCallerGate } from "./liveCallerGate.js";
 
 describe("createLiveCallerGate", () => {
+  const executionDigest = "a".repeat(64);
+  const authority = { requests: [], delegations: [] } as const;
+  const codeIdentity = (
+    callerId: string,
+    callerKind: "panel" | "app" | "worker" | "do",
+    repoPath: string
+  ) => ({
+    callerId,
+    callerKind,
+    repoPath,
+    effectiveVersion: "ev-1",
+    executionDigest,
+    requested: authority.requests,
+    delegations: authority.delegations,
+  });
+
   function fixture() {
     let userRevoked = false;
     let member = true;
     let deviceLive = true;
     let agentLive = true;
     let extensionLive = true;
+    let currentExecutionDigest = executionDigest;
     const gate = createLiveCallerGate({
       workspaceId: "ws_alpha",
       userStore: {
@@ -56,7 +73,23 @@ describe("createLiveCallerGate", () => {
                 status: "active",
                 cleanupComplete: true,
               } as never)
-            : ({ kind: "app", ownerUserId: "usr_alice" } as never),
+            : entityId.startsWith("do:")
+              ? ({
+                  id: entityId,
+                  kind: "do",
+                  source: { repoPath: "vibestudio/internal", effectiveVersion: "ev-1" },
+                  activeExecutionDigest: currentExecutionDigest,
+                  activeAuthority: authority,
+                  ownerUserId: "system",
+                } as never)
+              : ({
+                  id: entityId,
+                  kind: "app",
+                  source: { repoPath: "apps/shared", effectiveVersion: "ev-1" },
+                  activeExecutionDigest: currentExecutionDigest,
+                  activeAuthority: authority,
+                  ownerUserId: "usr_alice",
+                } as never),
       },
       isLiveExtension: (callerId) => extensionLive && callerId === "@workspace-extensions/host",
       isLiveSystemRuntime: (callerId, callerKind) =>
@@ -80,6 +113,9 @@ describe("createLiveCallerGate", () => {
       },
       retireExtension: () => {
         extensionLive = false;
+      },
+      advanceIncarnation: () => {
+        currentExecutionDigest = "b".repeat(64);
       },
     };
   }
@@ -125,13 +161,34 @@ describe("createLiveCallerGate", () => {
 
   it("binds a shared app connection to its live grant issuer without assigning a global owner", () => {
     const state = fixture();
-    const app = createVerifiedCaller("app:shared", "app", null, null, {
-      userId: "usr_alice",
-      handle: "alice",
-    });
+    const app = createVerifiedCaller(
+      "app:shared",
+      "app",
+      codeIdentity("app:shared", "app", "apps/shared"),
+      null,
+      {
+        userId: "usr_alice",
+        handle: "alice",
+      }
+    );
     expect(state.gate(app)).toBe(false);
     expect(state.gate(app, "shell:dev_1")).toBe(true);
     state.revokeDevice();
+    expect(state.gate(app, "shell:dev_1")).toBe(false);
+  });
+
+  it("rejects an admitted code caller after its active incarnation changes", () => {
+    const state = fixture();
+    const app = createVerifiedCaller(
+      "app:shared",
+      "app",
+      codeIdentity("app:shared", "app", "apps/shared"),
+      null,
+      { userId: "usr_alice", handle: "alice" }
+    );
+
+    expect(state.gate(app, "shell:dev_1")).toBe(true);
+    state.advanceIncarnation();
     expect(state.gate(app, "shell:dev_1")).toBe(false);
   });
 
@@ -166,10 +223,13 @@ describe("createLiveCallerGate", () => {
 
   it("keeps a live server-spawned shared app authorized without inventing a user owner", () => {
     const state = fixture();
-    const app = createVerifiedCaller("@workspace-apps/remote-cli", "app", null, null, {
-      userId: "system",
-      handle: "system",
-    });
+    const app = createVerifiedCaller(
+      "@workspace-apps/remote-cli",
+      "app",
+      codeIdentity("@workspace-apps/remote-cli", "app", "apps/shared"),
+      null,
+      { userId: "system", handle: "system" }
+    );
 
     expect(state.gate(app, "server")).toBe(true);
     expect(state.gate(app)).toBe(false);
@@ -184,7 +244,11 @@ describe("createLiveCallerGate", () => {
         createVerifiedCaller(
           "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
           "do",
-          null,
+          codeIdentity(
+            "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+            "do",
+            "vibestudio/internal"
+          ),
           null,
           systemSubject
         )
@@ -195,7 +259,7 @@ describe("createLiveCallerGate", () => {
         createVerifiedCaller(
           "do:vibestudio/internal:GadWorkspaceDO:other",
           "do",
-          null,
+          codeIdentity("do:vibestudio/internal:GadWorkspaceDO:other", "do", "vibestudio/internal"),
           null,
           systemSubject
         )

@@ -16,14 +16,11 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
-// Access descriptors shared across the read / write / destructive method
-// groups. The caller-kind gate stays on the service-level `policy` (see
-// fsServiceDef.ts); these descriptors add the doc/safety metadata that drives
-// the fuzzer and the capability catalog. `callers` is intentionally omitted so
-// `policy.allowed` remains the single enforced gate.
+// Access descriptors classify read / write / destructive operations. The
+// service definition owns their compositional principal requirements.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };

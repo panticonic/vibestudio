@@ -426,9 +426,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
   return {
     name: "workspace",
     description: "Current-workspace configuration, units, and lifecycle",
-    policy: {
-      allowed: ["shell", "app", "panel", "worker", "do", "extension", "server"],
-    },
+    authority: { principals: ["user", "code", "host"] },
     methods: workspaceMethods,
     handler: defineServiceHandler("workspace", workspaceMethods, {
       // -----------------------------------------------------------------

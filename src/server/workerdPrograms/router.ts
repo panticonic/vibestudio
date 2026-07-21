@@ -1,3 +1,5 @@
+import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc";
+
 type RouterBinding = string | Fetcher | DurableObjectNamespace | Readonly<Record<string, string>>;
 
 interface RouterEnv extends Record<string, RouterBinding> {
@@ -30,10 +32,11 @@ const router: ExportedHandler<RouterEnv> = {
 
     const strippedHeaders = new Headers(request.headers);
     strippedHeaders.delete("Authorization");
+    strippedHeaders.delete("X-Vibestudio-Dispatch-Secret");
+    strippedHeaders.delete(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER);
     for (const name of Array.from(strippedHeaders.keys())) {
       if (name.toLowerCase().startsWith("x-internal-")) strippedHeaders.delete(name);
     }
-    const strippedRequest = new Request(request, { headers: strippedHeaders });
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
     const prefix = parts[0] ?? "";
@@ -47,6 +50,10 @@ const router: ExportedHandler<RouterEnv> = {
     ) {
       return new Response("Forbidden", { status: 403 });
     }
+    if (prefix === "_w" || prefix === "_u") {
+      strippedHeaders.set(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER, String(Date.now()));
+    }
+    const strippedRequest = new Request(request, { headers: strippedHeaders });
 
     // /_w/{...source}/{className}/{objectKey}/{...method} — source-scoped
     // static DO routes. When no static namespaces exist, preserve the regular

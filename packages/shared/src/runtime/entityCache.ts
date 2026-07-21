@@ -109,6 +109,9 @@ export class EntityCache {
   registerControlPlane(record: {
     id: string;
     source: EntitySource;
+    activeBuildKey: string;
+    activeExecutionDigest: string;
+    activeAuthority: import("../authorityManifest.js").UnitAuthorityManifest;
     contextId: string;
     className: string;
     key: string;

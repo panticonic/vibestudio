@@ -38,6 +38,7 @@ import { runtimeMethods } from "./runtime.js";
 import { evalMethods } from "./eval.js";
 import { settingsMethods } from "./settings.js";
 import { shellApprovalMethods } from "./shellApproval.js";
+import { shellPresenceMethods } from "./shellPresence.js";
 import { vcsMethods } from "./vcs.js";
 import { viewMethods } from "./view.js";
 import { webhookIngressMethods } from "./webhookIngress.js";
@@ -91,6 +92,7 @@ const serviceTables: ServiceTable[] = [
   { service: "eval", file: "eval.ts", methods: evalMethods },
   { service: "settings", file: "settings.ts", methods: settingsMethods },
   { service: "shellApproval", file: "shellApproval.ts", methods: shellApprovalMethods },
+  { service: "shellPresence", file: "shellPresence.ts", methods: shellPresenceMethods },
   { service: "vcs", file: "vcs.ts", methods: vcsMethods },
   { service: "view", file: "view.ts", methods: viewMethods },
   { service: "webhookIngress", file: "webhookIngress.ts", methods: webhookIngressMethods },

@@ -3,13 +3,12 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { AppInfoSchema } from "@vibestudio/shared/panelContracts";
 
-// Access descriptors shared across the app service's read/write method groups.
-// `callers` is left unset here (the service-level policy `["shell", "app"]`
-// remains the gate); these carry doc/safety metadata for the capability catalog.
+// Access descriptors carry sensitivity metadata beside the compositional
+// principal requirements declared by the service definition.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };

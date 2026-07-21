@@ -51,8 +51,7 @@ export function installPanelErrorDiagnosticLauncher(options: {
   contextId?: string | null;
 }): void {
   const g = globalThis as typeof globalThis & PanelErrorDiagnosticLauncherGlobal;
-  g.__vibestudioPanelErrorDiagnostics = (request) =>
-    openPanelErrorDiagnosticChat(request, options);
+  g.__vibestudioPanelErrorDiagnostics = (request) => openPanelErrorDiagnosticChat(request, options);
 }
 
 export async function openPanelErrorDiagnosticChat(
@@ -72,9 +71,7 @@ export async function openPanelErrorDiagnosticChat(
         return getStateArgs<Record<string, unknown>>();
       }
     }),
-    capture("panel console history", () =>
-      self.cdp.consoleHistory({ limit: 80, errorLimit: 80 })
-    ),
+    capture("panel console history", () => self.cdp.consoleHistory({ limit: 80, errorLimit: 80 })),
   ]);
 
   const prompt = buildPanelRenderErrorPrompt({
@@ -84,18 +81,12 @@ export async function openPanelErrorDiagnosticChat(
     consoleHistory,
   });
   const panelContextId = info.ok ? info.value.contextId : options.contextId;
-  const stateArgsForChat: Record<string, unknown> = {
-    initialPrompt: prompt,
-  };
-  if (panelContextId) {
-    stateArgsForChat["contextId"] = panelContextId;
-  }
-
   const debugChat = await openPanel("panels/chat", {
     parentId: options.slotId,
     focus: true,
     name: `panel-error-debug-${Date.now().toString(36)}`,
-    stateArgs: stateArgsForChat,
+    ...(panelContextId ? { contextId: panelContextId } : {}),
+    stateArgs: { initialPrompt: prompt },
   });
 
   return {
@@ -145,10 +136,7 @@ export function buildPanelRenderErrorPrompt(input: {
   return truncate(prompt, MAX_PROMPT_CHARS);
 }
 
-async function capture<T>(
-  label: string,
-  fn: () => Promise<T>
-): Promise<CaptureResult<T>> {
+async function capture<T>(label: string, fn: () => Promise<T>): Promise<CaptureResult<T>> {
   try {
     return { ok: true, value: await fn() };
   } catch (error) {

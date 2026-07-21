@@ -47,7 +47,7 @@ function serviceSourceKey(def: CatalogServiceDefinition): string {
         sourceId(method),
         sourceId(method.args),
         method.returns ? sourceId(method.returns) : "",
-        method.policy?.allowed.join(",") ?? "",
+        JSON.stringify(method.authority ?? null),
         method.access?.sensitivity ?? "",
         method.description ?? "",
       ].join(":")
@@ -57,7 +57,7 @@ function serviceSourceKey(def: CatalogServiceDefinition): string {
   return [
     def.name,
     sourceId(def),
-    def.policy.allowed.join(","),
+    def.authority.principals.join(","),
     def.description ?? "",
     methods,
   ].join(":");

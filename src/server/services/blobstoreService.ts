@@ -1000,7 +1000,14 @@ export async function sweepUnreachableBlobs(
         if (reachable.has(digest)) continue;
         const filePath = path.join(secondPath, leaf.name);
         const stat = await fsp.stat(filePath);
-        if (minAgeMs > 0 && now - stat.mtimeMs < minAgeMs) continue;
+        // Workspace CAS entries can be new hardlink references to immutable
+        // bytes that have lived in the central backing CAS for much longer.
+        // Hardlink creation refreshes ctime, not mtime. Considering only mtime
+        // lets a GC snapshot race a newly composed/published tree and delete
+        // that workspace reference immediately. The newest inode timestamp is
+        // the correct lower bound on how long this namespace entry has been
+        // quiescent.
+        if (minAgeMs > 0 && now - Math.max(stat.mtimeMs, stat.ctimeMs) < minAgeMs) continue;
         await fsp.unlink(filePath);
         result.swept += 1;
         result.bytes += stat.size;
@@ -1763,7 +1770,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
   const definition: ServiceDefinition = {
     name: "blobstore",
     description: "Per-workspace content-addressable blob storage",
-    policy: READ_POLICY,
+    authority: READ_POLICY,
     methods: blobstoreMethods,
     handler: defineServiceHandler("blobstore", blobstoreMethods, {
       has: (_ctx, [hash]) => pathExists(blobPath(deps.blobsDir, hash)),
