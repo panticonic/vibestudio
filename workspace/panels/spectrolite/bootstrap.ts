@@ -8,26 +8,27 @@
 
 import { rpc } from "@workspace/runtime";
 import { parseDoTargetId } from "@workspace/runtime/workerd-client";
-import { launchAgentIntoChannel, unsubscribeAgentFromChannel } from "@workspace/agentic-core";
+import {
+  launchAgentIntoChannel,
+  retireAgentEntity,
+  unsubscribeAgentFromChannel,
+} from "@workspace/agentic-core";
 
 const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 
 export interface InstalledAgentRecord {
   agentId: string;
+  entityId?: string;
   handle: string;
   key: string;
   source: string;
   className: string;
 }
 
-export function resolveContextId(
-  fromStateArgs: string | undefined,
-  fromRuntime: string | undefined
-): string | undefined {
-  const id = fromStateArgs ?? fromRuntime;
-  if (typeof id !== "string") return undefined;
-  const trimmed = id.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+export function requireSpectroliteContextId(fromRuntime: string | undefined): string {
+  const id = fromRuntime?.trim();
+  if (!id) throw new Error("Spectrolite panel runtime has no workspace context");
+  return id;
 }
 
 export function appendInstalledAgent(
@@ -57,11 +58,11 @@ export interface CreateAndSubscribeArgs {
 
 export async function createAndSubscribeAgent(
   args: CreateAndSubscribeArgs
-): Promise<{ ok: boolean; participantId?: string }> {
+): Promise<{ ok: boolean; participantId?: string; entityId?: string }> {
   if (!args.channelContextId) {
     throw new Error("Cannot subscribe an agent DO without a context ID");
   }
-  const { subscription } = await launchAgentIntoChannel(rpc, {
+  const { handle, subscription } = await launchAgentIntoChannel(rpc, {
     source: args.source,
     className: args.className,
     key: args.key,
@@ -70,7 +71,7 @@ export async function createAndSubscribeAgent(
     config: args.config,
     replay: args.replay,
   });
-  return subscription;
+  return { ...subscription, ...(handle.id ? { entityId: handle.id } : {}) };
 }
 
 interface ChannelParticipant {
@@ -111,7 +112,8 @@ export async function unsubscribeDOFromChannel(
   source: string,
   className: string,
   objectKey: string,
-  channelId: string
+  channelId: string,
+  entityId?: string
 ): Promise<void> {
   await unsubscribeAgentFromChannel(rpc, {
     source,
@@ -119,6 +121,7 @@ export async function unsubscribeDOFromChannel(
     key: objectKey,
     channelId,
   });
+  if (entityId) await retireAgentEntity(rpc, entityId);
 }
 
 export interface WorkerSourceEntry {

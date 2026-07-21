@@ -8,6 +8,7 @@ import {
 } from "@workspace/vcs-engine";
 import { createSemanticVcsSchema } from "./semanticVcsSchema.js";
 import {
+  SemanticVcsError,
   SemanticVcsStore,
   applicationIdentity,
   workUnitIdentity,
@@ -15,6 +16,19 @@ import {
 } from "./semanticVcsStore.js";
 
 const timestamp = "2026-07-15T00:00:00.000Z";
+
+describe("SemanticVcsError", () => {
+  it("exposes its typed detail through the RPC error-data contract", () => {
+    const error = new SemanticVcsError("DependencyBlocked", "blocked", {
+      blockingChangeIds: ["change:later"],
+    });
+
+    expect(error.errorData).toEqual({
+      code: "DependencyBlocked",
+      blockingChangeIds: ["change:later"],
+    });
+  });
+});
 
 function noEffectApplication(input: {
   contextId: string;

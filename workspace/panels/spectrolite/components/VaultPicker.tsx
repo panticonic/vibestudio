@@ -8,7 +8,7 @@ import { discoverVaults, type VaultEntry } from "../state/vaultDiscovery";
 
 export interface VaultPickerProps {
   agentHandle?: string;
-  onSelect: (contextPath: string) => void;
+  onSelect: (repoRoot: string) => void;
 }
 
 export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
@@ -96,10 +96,10 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
               <Flex direction="column" gap="1">
                 {vaults.map((vault) => (
                   <button
-                    key={vault.relPath}
+                    key={vault.repoRoot}
                     type="button"
                     className="spectrolite-vault-row"
-                    onClick={() => onSelect(vault.contextPath)}
+                    onClick={() => onSelect(vault.repoRoot)}
                     data-testid={`spectrolite-vault-${vault.name}`}
                   >
                     <span className="spectrolite-vault-icon">
@@ -110,7 +110,7 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
                         {vault.name}
                       </Text>
                       <Text size="1" color="gray" as="div" truncate>
-                        {vault.relPath}
+                        {vault.repoRoot}
                       </Text>
                     </Box>
                   </button>

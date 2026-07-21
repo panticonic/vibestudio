@@ -206,6 +206,37 @@ async function inspectAuthoredChanges(
 }
 
 describe("SemanticWorkspace snapshot import", () => {
+  it("does not initialize a forked context again when a runtime attaches to it", async () => {
+    const { semantic, store, initial } = await authorityFixture();
+    const forked = semantic.forkContext(
+      {
+        sourceContextId: "context:test",
+        targetContextId: "context:subagent",
+        commandId: "command:fork-subagent",
+      },
+      { causalParent: null }
+    );
+    expect(forked).toMatchObject({ kind: "effects-pending" });
+    acknowledgeMaterialization(semantic, forked);
+
+    const attached = semantic.ensureContext(
+      {
+        contextId: "context:subagent",
+        commandId: "command:attach-subagent-runtime",
+      },
+      { causalParent: null }
+    );
+
+    expect(attached).toEqual({
+      kind: "complete",
+      result: {
+        ...store.context("context:subagent"),
+      },
+    });
+    expect(store.pendingEffects("command:attach-subagent-runtime")).toEqual([]);
+    expect(store.context("context:subagent")?.working.ref).toEqual(initial.working.ref);
+  });
+
   it("stops honestly at the exact import boundary without a parallel external graph", async () => {
     const { semantic, restart, store, initial } = await authorityFixture();
     const sourceFile = textFile("src/index.ts", "hello");
@@ -366,8 +397,8 @@ describe("SemanticWorkspace snapshot import", () => {
           {
             start: 0,
             end: 5,
-            changeId: fileCreate.node.value.changeId,
-            workUnitId: imported.workUnitId,
+            change: { kind: "change", changeId: fileCreate.node.value.changeId },
+            workUnit: { kind: "work-unit", workUnitId: imported.workUnitId },
             stop: "import-boundary",
             path: [],
           },
@@ -574,8 +605,8 @@ describe("SemanticWorkspace snapshot import", () => {
       result: {
         spans: [
           {
-            changeId: v1UnchangedCreateId,
-            commandId: "command:import-v1",
+            change: { kind: "change", changeId: v1UnchangedCreateId },
+            command: { kind: "command", commandId: "command:import-v1" },
             stop: "import-boundary",
             path: [],
           },
@@ -597,8 +628,8 @@ describe("SemanticWorkspace snapshot import", () => {
       result: {
         spans: [
           {
-            changeId: v2ReplacementId,
-            commandId: "command:import-v2",
+            change: { kind: "change", changeId: v2ReplacementId },
+            command: { kind: "command", commandId: "command:import-v2" },
             stop: "import-boundary",
             path: [],
           },
@@ -684,8 +715,8 @@ describe("SemanticWorkspace snapshot import", () => {
       result: {
         spans: [
           {
-            changeId: v2ReplacementId,
-            commandId: "command:import-v2",
+            change: { kind: "change", changeId: v2ReplacementId },
+            command: { kind: "command", commandId: "command:import-v2" },
             stop: "import-boundary",
             path: [],
           },
@@ -804,8 +835,8 @@ describe("SemanticWorkspace snapshot import", () => {
       result: {
         spans: [
           {
-            changeId: v1CreateId,
-            commandId: "command:mode-v1",
+            change: { kind: "change", changeId: v1CreateId },
+            command: { kind: "command", commandId: "command:mode-v1" },
             stop: "import-boundary",
             path: [
               {

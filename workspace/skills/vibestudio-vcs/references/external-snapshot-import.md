@@ -126,8 +126,8 @@ imported file states. Confirm each placed file reports intrinsic `contentKind`,
 
 For a vague question such as “who changed this line, and what do we actually
 know?”, first run bounded blame. Walk native mappings normally. When a span
-stops at an import boundary, inspect its terminal `changeId`, then the owning
-`workUnitId`, then its command and causal ingress. Report the work unit's four
+stops at an import boundary, pass its terminal typed `change` root unchanged to
+`inspect`, then do the same with its `workUnit` and `command` roots. Report the work unit's four
 snapshot fields and its exact recorded intent summary, plus any later native
 intent the graph actually proves. Join the change to its work unit through the
 change's exact ownership field; never depend on membership in a bounded

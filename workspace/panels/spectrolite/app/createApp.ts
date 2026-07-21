@@ -1,9 +1,9 @@
 /**
  * Composition root — builds the store + the GAD-native pieces and wires them.
  *
- * Created once per panel mount. The vault runs under its own durable semantic
- * context with an exact committed event and working state, so:
- *   - `viewState` (per-viewer component state) is panel-local, per vault,
+ * Created once per panel mount. The panel retains one durable semantic
+ * workspace context while the selected vault chooses one repository inside it:
+ *   - `viewState` (per-viewer component state) is panel-local and path-scoped,
  *   - `publish` commits local applications, integrates main, and publishes,
  *   - `vault` owns selection + the `vcs.listFiles` path index,
  *   - `session` owns the channel + resident scribe (NO edit-driven dispatch),
@@ -26,13 +26,12 @@ import { createViewStateStore, type ViewStateStore } from "../coedit/viewState";
 import { parseFrontmatter, diffDependencies } from "../mdx/frontmatter";
 import { prefetchDependencies } from "../mdx/depPrefetch";
 import type { Collision } from "../coedit/blockReconcile";
-import { resolveContextId, type InstalledAgentRecord } from "../bootstrap";
+import { requireSpectroliteContextId, type InstalledAgentRecord } from "../bootstrap";
 import { spectroliteE2EHooksEnabled } from "./e2eHooks";
 import { VaultSemanticVcs } from "./semanticVcs";
 
 interface PersistedStateArgs {
   channelName?: string;
-  contextId?: string;
   installedAgents?: InstalledAgentRecord[];
   openPath?: string;
   repoRoot?: string;
@@ -43,7 +42,7 @@ export interface SpectroliteApp {
   session: SessionController;
   vault: VaultController;
   publish: PublishController;
-  semanticVcs: VaultSemanticVcs | null;
+  readonly semanticVcs: VaultSemanticVcs | null;
   viewState: ViewStateStore;
   /** Open a document (vault-relative path) in the editor. */
   openFile(path: string): void;
@@ -112,7 +111,7 @@ type SpectroliteE2EGlobal = typeof globalThis & {
 
 export function createSpectroliteApp(): SpectroliteApp {
   const args = panel.stateArgs.get<PersistedStateArgs>();
-  const contextId = resolveContextId(args.contextId, runtimeContextId) ?? null;
+  const contextId = requireSpectroliteContextId(runtimeContextId);
   const repoRoot = typeof args.repoRoot === "string" ? normalizeVaultPath(args.repoRoot) : null;
   const store = createStore(
     initialState({
@@ -124,7 +123,7 @@ export function createSpectroliteApp(): SpectroliteApp {
     })
   );
 
-  const semanticVcs = contextId && repoRoot ? new VaultSemanticVcs(contextId, repoRoot) : null;
+  let semanticVcs = contextId && repoRoot ? new VaultSemanticVcs(contextId, repoRoot) : null;
 
   const viewState = createViewStateStore();
   // The active document reloads after semantic integration remaps the context
@@ -141,6 +140,12 @@ export function createSpectroliteApp(): SpectroliteApp {
     () => (reloadActiveDocFn ? reloadActiveDocFn() : Promise.resolve()),
     (message) => (commitActiveDocFn ? commitActiveDocFn(message) : Promise.resolve(null))
   );
+
+  const bindVault = (nextRepoRoot: string | null): VaultSemanticVcs | null => {
+    semanticVcs = contextId && nextRepoRoot ? new VaultSemanticVcs(contextId, nextRepoRoot) : null;
+    publish.bindSession(semanticVcs);
+    return semanticVcs;
+  };
 
   // A panel sandbox used solely to prefetch frontmatter-declared dependencies
   // into the panel's module map so inline JSX (LiveJsxEditor) + Preview-mode
@@ -176,6 +181,11 @@ export function createSpectroliteApp(): SpectroliteApp {
   const vault = new VaultController(
     store,
     {
+      beforeVaultSwitch: async () => {
+        if (!store.getState().activePath || !commitActiveDocFn) return;
+        await commitActiveDocFn("Save active note before switching vault");
+      },
+      bindVault,
       onVaultSelected: (repoRoot) => {
         session.onVaultSelected(repoRoot);
         void publish.refresh();
@@ -205,7 +215,7 @@ export function createSpectroliteApp(): SpectroliteApp {
 
   let started = false;
   let startupRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-  const semanticEvents = semanticVcs ? new EventsClient(rpc) : null;
+  const semanticEvents = contextId ? new EventsClient(rpc) : null;
   const unsubscribePublication = semanticEvents?.on("vcs:publication", () => {
     refreshVaultSidebars();
   });
@@ -218,7 +228,9 @@ export function createSpectroliteApp(): SpectroliteApp {
     session,
     vault,
     publish,
-    semanticVcs,
+    get semanticVcs() {
+      return semanticVcs;
+    },
     viewState,
     openFile(path) {
       openFileInternal(path);
@@ -290,7 +302,7 @@ export function createSpectroliteApp(): SpectroliteApp {
           refreshVaultSidebars();
         }
       }
-      if (semanticVcs) {
+      if (semanticEvents) {
         void semanticEvents?.subscribe("vcs:publication").catch((error) => {
           console.warn("[Spectrolite] failed to subscribe to VCS publications:", error);
         });

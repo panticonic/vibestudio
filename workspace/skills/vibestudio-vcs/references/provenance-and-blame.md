@@ -111,11 +111,12 @@ the first unreturned coordinate; reuse it only with the same state, file, and
 range.
 
 Each blame span's `path` contains only the exact content-mapping route between
-applied-change nodes. Its terminal `appliedChangeId` is itself a valid
-`inspect`/`neighbors` root; follow `realizes-change`, then the terminal
-`changeId`, `workUnitId`, or `commandId` to reach semantic intent and the causal
-trajectory invocation. The service does not duplicate those causal edges into
-every blame span.
+applied-change nodes. Its terminal `appliedChange`, `change`, `workUnit`, and
+`command` fields are canonical typed provenance roots: pass any of them
+unchanged to `inspect` or `neighbors`. Follow `realizes-change` from
+`appliedChange` when the mapped-content route matters, or inspect the other
+roots directly to reach semantic intent and the causal trajectory invocation.
+The service does not duplicate those causal edges into every blame span.
 Use the terminal change's `authoredByWorkUnitId` for the exact ownership join.
 Do not require that change to appear in a work unit's bounded authored-change
 preview; page `authored-change` neighbors only when full membership is needed.

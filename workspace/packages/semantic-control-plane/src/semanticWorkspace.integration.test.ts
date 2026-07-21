@@ -510,12 +510,21 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
     });
     if (compareAfterFirst.kind !== "complete") throw new Error("compare did not complete");
     const comparisonAfterFirst = compareAfterFirst.result as {
+      resolution: { complete: boolean; remainingChangeCount: number };
       counts: { blocked: number; conflicting: number };
-      changes: unknown[];
+      changes: Array<{ changeId: string; disposition: { status: string; applicability?: string } }>;
     };
+    expect(comparisonAfterFirst.resolution).toEqual({
+      complete: false,
+      remainingChangeCount: 2,
+    });
     expect(comparisonAfterFirst.counts).toMatchObject({ blocked: 0, conflicting: 0 });
     expect(comparisonAfterFirst.changes).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          changeId: first.changeIds[0],
+          disposition: { status: "shared" },
+        }),
         expect.objectContaining({
           changeId: second.changeIds[0],
           disposition: { status: "actionable", applicability: "applicable" },
@@ -665,6 +674,20 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
     expect(store.facts.member(targetRoot, repositoryId)).toMatchObject({
       presence: "present",
       repoPath: "packages/fixture-renamed",
+    });
+    const resolvedCompare = await semantic.dispatch("compare", {
+      ingress,
+      input: {
+        target: adoptRepositoryMove.workingHead,
+        sourceEventId: sourceCommit.event.eventId,
+        view: "changes",
+        limit: 100,
+      },
+    });
+    if (resolvedCompare.kind !== "complete") throw new Error("compare did not complete");
+    expect(resolvedCompare.result).toMatchObject({
+      resolution: { complete: true, remainingChangeCount: 0 },
+      counts: { shared: 3, actionable: 0, alreadySatisfied: 0, accounted: 0 },
     });
     const integrationCommitDispatch = await semantic.dispatch("commit", {
       ingress,

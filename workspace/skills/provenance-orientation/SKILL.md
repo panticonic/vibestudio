@@ -29,7 +29,8 @@ identity; continue from a returned change node into the causal graph.
 It accepts these semantic shorthands:
 `event:`, `application:`, `work-unit:`, `change:`, `decision:`, and `command:`.
 Pass `inspect.root`, `neighbors.root`, or either endpoint of a returned edge as
-`root` unchanged. The inspected `node` is a value view, not a reusable root.
+the `target` unchanged: `provenance({ target: exactCoordinate })`. The inspected
+`node` is a value view, not a reusable root.
 Invocation, turn, and message roots require their complete typed
 `{ kind, logId, head, ...Id }` coordinate returned by an edge; their local IDs
 alone are not global graph coordinates.
@@ -71,7 +72,7 @@ origin into one “author” value. Walk the relevant edges for the question.
   stable file identity at an exact state. It is not a second general graph walk.
 - `vcs.blame` traces one exact file range through content-coordinate mappings.
 
-Continue `neighbors` with the same root and returned cursor. If a question
+Continue `neighbors` with the same target and returned cursor. If a question
 changes, begin a new read. Never parse an ID, manufacture a node kind, query
 private semantic tables, or add a client-side graph cache.
 
@@ -97,8 +98,9 @@ and source changes it accounted for. Channel delivery remains canonical in the
 trajectory log and is projected through the typed message node; do not create a
 parallel VCS copy or cross-system provenance façade.
 
-When blame reports an import boundary, inspect its terminal ordinary change,
-then the owning import work unit. Report that work unit's `externalSnapshot`—
+When blame reports an import boundary, pass its terminal typed `change`,
+`workUnit`, and `command` roots unchanged to provenance inspection. Report that
+work unit's `externalSnapshot`—
 its `sourceKind`, `sourceUri`, `snapshotRevision`, and `snapshotDigest`—as
 snapshot-level facts. Its `targetRepositoryIds` vector is the exact complete
 target set, including an identical import with no authored change;

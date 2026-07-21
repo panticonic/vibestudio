@@ -1,4 +1,4 @@
-/** Compact status and explicit sync/publish controls for one vault context. */
+/** Compact status and explicit sync/publish controls for one vault repository. */
 
 import { useSyncExternalStore, type ReactNode } from "react";
 import { Button, Flex, Text } from "@radix-ui/themes";

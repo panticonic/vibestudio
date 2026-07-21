@@ -40,8 +40,8 @@ From a real agent tool invocation, import the exact source URI, snapshot
 revision, and complete repository/file source facts naming CAS bytes. Do not
 assert content kind or lengths; the host observes those intrinsic facts and the
 semantic workspace derives the normalized snapshot digest. Call
-blame, inspect its terminal ordinary change, then inspect the owning import work
-unit and its command. Report the work unit's external snapshot tuple and the
+blame, then pass its terminal typed change, work-unit, and command roots
+unchanged to provenance inspection. Report the work unit's external snapshot tuple and the
 actual causal intent, while stating that pre-import coordinate authorship is
 unknown. Do not invent a full Git history or per-path author evidence.
 

@@ -1,42 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  vaultContextId,
-  vaultPathMapping,
-  normalizeVaultPath,
-  shouldRebindToVaultContext,
-} from "./vaultContext.js";
-
-// Mirrors contextFolderManager's validateContextId grammar (must stay in sync).
-const CONTEXT_ID_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-
-describe("vaultContextId", () => {
-  it("produces a valid, stable context id under 63 chars", () => {
-    const id = vaultContextId("projects/default");
-    expect(id).toMatch(/^vault-[a-z0-9]+$/);
-    expect(id.length).toBeLessThanOrEqual(63);
-    expect(CONTEXT_ID_RE.test(id)).toBe(true);
-    // Stable across calls + normalization-equivalent inputs.
-    expect(vaultContextId("projects/default")).toBe(id);
-    expect(vaultContextId("/projects/default/")).toBe(id);
-    expect(vaultContextId("projects\\default")).toBe(id);
-  });
-
-  it("distinguishes different vaults", () => {
-    expect(vaultContextId("projects/a")).not.toBe(vaultContextId("projects/b"));
-    expect(vaultContextId("projects/notes")).not.toBe(vaultContextId("projects/notes2"));
-  });
-});
-
-describe("shouldRebindToVaultContext", () => {
-  it("rebinds an ordinary initial mount but respects an explicit shared context", () => {
-    expect(shouldRebindToVaultContext("projects/default", "agent-context", undefined)).toBe(true);
-    expect(shouldRebindToVaultContext("projects/default", "agent-context", "agent-context")).toBe(
-      false
-    );
-    const stable = vaultContextId("projects/default");
-    expect(shouldRebindToVaultContext("projects/default", stable, undefined)).toBe(false);
-  });
-});
+import { vaultPathMapping, normalizeVaultPath } from "./vaultContext.js";
 
 describe("vaultPathMapping", () => {
   it("maps vault-relative ↔ workspace-relative vcs paths", () => {

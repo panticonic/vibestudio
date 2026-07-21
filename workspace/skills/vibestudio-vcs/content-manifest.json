@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "a38d70a82f7fb699684e0fff1e8b23ab0717521ae337a14470e692042082edc4"
+      "sha256": "2044c524d62bb17ee49237d51f9840978d60e79343a8126e353342650e7cb27e"
     },
     {
       "path": "agents/openai.yaml",
@@ -28,7 +28,7 @@
     },
     {
       "path": "references/compare-and-integrate.md",
-      "sha256": "ecab414f100fe9119cd0da60f6a619ca29c025560e7d978dfa926f8a37b9d539"
+      "sha256": "fa70752fc3ae0b16164053be29d5acd481a45f6b412a794240ad5c2efdf201e2"
     },
     {
       "path": "references/contexts-and-state.md",
@@ -36,7 +36,7 @@
     },
     {
       "path": "references/external-snapshot-import.md",
-      "sha256": "c48a58ab370895f816327ce28e7a3c287aa2e543802ecb85192cf43601a7ccc8"
+      "sha256": "af3ce10b872f925a4381d63e6ec0ca2da7e249504e4f076d47e6a148cd8da9e1"
     },
     {
       "path": "references/file-move-copy.md",
@@ -44,11 +44,11 @@
     },
     {
       "path": "references/provenance-and-blame.md",
-      "sha256": "cdf3ec54ff7469f3d293d1bd9c7a9f37f0ec191f4a665bc717eda4d4fd71257d"
+      "sha256": "3ceb36c9d2542df6ad841c2e48d7a526b4f8c5e546521dba9c6780a7ec5a1944"
     },
     {
       "path": "references/public-contract.json",
-      "sha256": "3693a032ddb0a5189d6f4bc027c75dc889140ac46ac3d15047f87303a94c466b"
+      "sha256": "75b88d33f78b454ad2f0091179361aa94bb09686ec7f33de6c727d4b9db0c900"
     },
     {
       "path": "references/public-contract.md",
@@ -60,7 +60,7 @@
     },
     {
       "path": "references/scenarios.md",
-      "sha256": "3f1a8dea6de7f85dfc4a3425d4aaaf5de8dd626d48791d91c9d5ecd443ded2bc"
+      "sha256": "6f335ddb79de66abdd8de359e59c87938645b8287d3cc7bd90ad45be39048883"
     },
     {
       "path": "references/semantic-commit.md",
@@ -71,5 +71,5 @@
       "sha256": "d6488e08f359f811916e2ca1f11f7cacd16e341b95a7e3cc3ffd8b46b964be57"
     }
   ],
-  "packageDigest": "7288b69cf49f7922182378bb53f57df62e09b988c8f9b43f68f92e8fd701a9aa"
+  "packageDigest": "0c0e8332685da58723b5c9871f71671d59f3a757fe5a30e4c4465faeddf70c40"
 }

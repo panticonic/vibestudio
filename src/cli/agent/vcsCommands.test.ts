@@ -215,6 +215,7 @@ describe("canonical VCS CLI", () => {
         return {
           target: input["target"],
           sourceEventId: input["sourceEventId"],
+          resolution: { complete: true, remainingChangeCount: 0 },
           counts: {
             shared: 0,
             alreadySatisfied: 0,

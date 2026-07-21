@@ -44,13 +44,16 @@ export function AgentRoster() {
   const agents = useVisibleRoster();
   const availableAgents = useAppState((s) => s.availableAgents);
   const [busy, setBusy] = useState(false);
+  const [operationError, setOperationError] = useState<string | null>(null);
 
   const add = async (agentId: string) => {
     setBusy(true);
+    setOperationError(null);
     try {
       await app.session.addAgent(agentId);
     } catch (err) {
       console.warn("[Spectrolite] add agent failed:", err);
+      setOperationError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -58,10 +61,12 @@ export function AgentRoster() {
 
   const remove = async (handle: string) => {
     setBusy(true);
+    setOperationError(null);
     try {
       await app.session.removeAgent(handle);
     } catch (err) {
       console.warn("[Spectrolite] remove agent failed:", err);
+      setOperationError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -143,6 +148,11 @@ export function AgentRoster() {
           )}
         </DropdownMenu.Content>
       </DropdownMenu.Root>
+      {operationError ? (
+        <Text size="1" color="red" role="alert" data-testid="spectrolite-agent-error">
+          {operationError}
+        </Text>
+      ) : null}
     </Flex>
   );
 }
