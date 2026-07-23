@@ -89,12 +89,15 @@ interface ImageServiceApi {
 }
 const IMAGE_SERVICE_EXTENSION = "@workspace-extensions/image-service";
 const FILE_TOOLS_EXTENSION = "@workspace-extensions/file-tools";
-const DEFAULT_FILE_TOOLS_READ_TIMEOUT_MS = 3000;
 
 export interface ReadToolDeps {
   /** RPC caller — needed for image resize. */
   rpc?: RpcCaller;
-  fileToolsReadTimeoutMs?: number;
+  /**
+   * Optional deadline for the Node-side bounded reader. Omitted/null means the
+   * invocation settles through the ordinary RPC/extension lifecycle.
+   */
+  fileToolsReadTimeoutMs?: number | null;
 }
 export function createReadTool(
   cwd: string,
@@ -102,7 +105,7 @@ export function createReadTool(
   deps?: ReadToolDeps
 ): AgentTool<typeof readSchema, ReadToolDetails> {
   const fileToolsRpc = deps?.rpc ?? null;
-  const fileToolsReadTimeoutMs = deps?.fileToolsReadTimeoutMs ?? DEFAULT_FILE_TOOLS_READ_TIMEOUT_MS;
+  const fileToolsReadTimeoutMs = deps?.fileToolsReadTimeoutMs ?? null;
   const imageService = deps?.rpc
     ? createExtensionProxy<ImageServiceApi>(deps.rpc, IMAGE_SERVICE_EXTENSION, () => false)
     : null;
@@ -362,7 +365,7 @@ async function callFileToolsRead(
     offset?: number;
     limit?: number;
   },
-  timeoutMs: number,
+  timeoutMs: number | null,
   signal?: AbortSignal
 ): Promise<ReadResult> {
   const controller = new AbortController();
@@ -384,13 +387,16 @@ async function callFileToolsRead(
       })
     : null;
 
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      const err = new FileToolsReadTimeoutError(timeoutMs);
-      controller.abort(err);
-      reject(err);
-    }, timeoutMs);
-  });
+  const timeoutPromise =
+    timeoutMs !== null && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            const err = new FileToolsReadTimeoutError(timeoutMs);
+            controller.abort(err);
+            reject(err);
+          }, timeoutMs);
+        })
+      : null;
 
   const invokePromise = rpc.call<ReadResult>(
     "main",
@@ -401,9 +407,10 @@ async function callFileToolsRead(
   invokePromise.catch(() => {});
 
   try {
-    return await Promise.race(
-      abortPromise ? [invokePromise, timeoutPromise, abortPromise] : [invokePromise, timeoutPromise]
-    );
+    const contenders: Promise<ReadResult>[] = [invokePromise];
+    if (timeoutPromise) contenders.push(timeoutPromise);
+    if (abortPromise) contenders.push(abortPromise);
+    return await Promise.race(contenders);
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
     if (signal && abortListener) signal.removeEventListener("abort", abortListener);
@@ -453,8 +460,10 @@ function isFileToolsReadAbort(err: unknown): boolean {
   return err.name === "AbortError" && !isFileToolsReadTimeout(err);
 }
 
-function describeFileToolsFallback(err: unknown, timeoutMs: number): string {
-  if (isFileToolsReadTimeout(err)) return `file-tools read timed out after ${timeoutMs}ms`;
+function describeFileToolsFallback(err: unknown, timeoutMs: number | null): string {
+  if (isFileToolsReadTimeout(err)) {
+    return `file-tools read timed out after ${timeoutMs ?? "configured"}ms`;
+  }
   const code =
     typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
   if (code === "ENOTREADY") return "file-tools extension or context not ready";
