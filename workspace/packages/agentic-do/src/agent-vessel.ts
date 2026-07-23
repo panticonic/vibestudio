@@ -493,7 +493,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       id: "agent-loop-driver",
       nextWakeAt: () => this._driver?.nextWakeAt() ?? this.driverNextWakeAtFromSql(),
       fire: async () => {
-        await this.driver.alarm();
+        const { completion } = await this.driver.beginAlarmDispatch();
+        // Durable Objects remain active while I/O is pending; ctx.waitUntil is
+        // explicitly a no-op for DO lifetime. The alarm RPC returns after the
+        // rows are durably leased, while this activation-owned continuation
+        // either settles them or leaves them for lease-expiry recovery.
+        void completion
+          .finally(() => this.persistAlarmSchedule(this.nextAgentAlarmSchedule()))
+          .catch((error) => {
+            console.error("[AgentVessel] alarm effect dispatch failed:", error);
+          });
       },
     });
     this.registerAgentAlarmSource({
@@ -987,6 +996,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             { signal }
           ),
       },
+      promptArtifacts: {
+        prepare: (channelId, signal) => this.preparePromptArtifacts(channelId, signal),
+      },
       credentials: {
         getApiKey: async ({ providerId, modelBaseUrl, requestId, idempotencyKey }) => {
           // Prefer URL-bound credentials when the model exposes a concrete
@@ -1455,155 +1467,114 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
   }
 
-  /** Compose + blob-spill the prompt/tool artifacts whose hashes ride every
-   *  model request descriptor. Content-addressed: cheap to re-run. */
-  protected async ensurePromptArtifacts(channelId: string): Promise<void> {
+  /** Compose + blob-spill the exact prompt/tool/model snapshot that will be
+   * journaled before a model call. This is the impure executor for the
+   * loop-owned `prompt_artifacts` effect; channel delivery only journals the
+   * prerequisite and never awaits this method. */
+  private async preparePromptArtifacts(
+    channelId: string,
+    signal?: AbortSignal
+  ): Promise<Partial<AgentLoopConfig>> {
+    const throwIfAborted = () => {
+      if (!signal?.aborted) return;
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new Error("prompt artifact preparation aborted");
+    };
+    throwIfAborted();
     await this.refreshLocalModelEntry(channelId);
-    try {
-      const systemPrompt = await this.composePrompt(channelId);
-      const registry = await this.toolRegistry(channelId);
-      const schemas: Array<{ name: string; description?: string; parameters?: unknown }> = [
-        ...registry.values(),
-      ].map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-      }));
-      const executionModes = Object.fromEntries(
-        [...registry.values()].map((tool) => [
-          tool.name,
-          tool.executionMode === "parallel" ? "parallel" : "sequential",
-        ])
-      ) satisfies Record<string, "sequential" | "parallel">;
-      // Channel tools: roster participants' advertised methods become model
-      // tools dispatched as channel_call effects (the panel's UI surface —
-      // inline_ui/feedback/action_bar). eval is a LOCAL tool now, not a channel method.
-      const seenTools = new Set(registry.keys());
-      for (const participant of this.rosterSnapshot(channelId)) {
-        if (participant.methods.length > 0) {
-          await this.recordDerivedSessionIngestion(
-            participant.participantId,
-            "participant-tool-advertisement"
-          );
-        }
-        for (const method of participant.methods) {
-          if (seenTools.has(method.name)) continue;
-          seenTools.add(method.name);
-          schemas.push({
-            name: method.name,
-            description:
-              method.description ??
-              `Channel method on @${participant.handle ?? participant.participantId}`,
-            parameters: method.parameters ?? {
-              type: "object",
-              properties: {},
-              additionalProperties: true,
-            },
-          });
-        }
+    throwIfAborted();
+    const systemPrompt = await this.composePrompt(channelId);
+    throwIfAborted();
+    const registry = await this.toolRegistry(channelId);
+    const schemas: Array<{ name: string; description?: string; parameters?: unknown }> = [
+      ...registry.values(),
+    ].map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    }));
+    const executionModes = Object.fromEntries(
+      [...registry.values()].map((tool) => [
+        tool.name,
+        tool.executionMode === "parallel" ? "parallel" : "sequential",
+      ])
+    ) satisfies Record<string, "sequential" | "parallel">;
+    // Channel tools: roster participants' advertised methods become model
+    // tools dispatched as channel_call effects (the panel's UI surface —
+    // inline_ui/feedback/action_bar). eval is a LOCAL tool now, not a channel method.
+    const seenTools = new Set(registry.keys());
+    for (const participant of this.rosterSnapshot(channelId)) {
+      if (participant.methods.length > 0) {
+        await this.recordDerivedSessionIngestion(
+          participant.participantId,
+          "participant-tool-advertisement"
+        );
+        throwIfAborted();
       }
-      const schemasJson = JSON.stringify(schemas);
-      const names = JSON.stringify([...registry.keys()]);
-      const executionModesJson = JSON.stringify(executionModes);
-      const signature = stableSha256Hex({ systemPrompt, schemas, executionModes });
-      const promptHashKey = `agent:promptHash:${channelId}`;
-      const toolsHashKey = `agent:toolsHash:${channelId}`;
-      const toolNamesKey = `agent:toolNames:${channelId}`;
-      const toolExecutionModesKey = `agent:toolExecutionModes:${channelId}`;
-      const artifactSigKey = `agent:artifactSig:${channelId}`;
-      const existingPromptHash = this.getStateValue(promptHashKey) ?? "";
-      const existingToolsHash = this.getStateValue(toolsHashKey) ?? "";
-      if (
-        existingPromptHash &&
-        existingToolsHash &&
-        this.getStateValue(artifactSigKey) === signature &&
-        this.getStateValue(toolNamesKey) === names &&
-        this.getStateValue(toolExecutionModesKey) === executionModesJson
-      ) {
-        return;
+      for (const method of participant.methods) {
+        if (seenTools.has(method.name)) continue;
+        seenTools.add(method.name);
+        schemas.push({
+          name: method.name,
+          description:
+            method.description ??
+            `Channel method on @${participant.handle ?? participant.participantId}`,
+          parameters: method.parameters ?? {
+            type: "object",
+            properties: {},
+            additionalProperties: true,
+          },
+        });
       }
+    }
+    const schemasJson = JSON.stringify(schemas);
+    const names = JSON.stringify([...registry.keys()]);
+    const executionModesJson = JSON.stringify(executionModes);
+    const signature = stableSha256Hex({ systemPrompt, schemas, executionModes });
+    const promptHashKey = `agent:promptHash:${channelId}`;
+    const toolsHashKey = `agent:toolsHash:${channelId}`;
+    const toolNamesKey = `agent:toolNames:${channelId}`;
+    const toolExecutionModesKey = `agent:toolExecutionModes:${channelId}`;
+    const artifactSigKey = `agent:artifactSig:${channelId}`;
+    const existingPromptHash = this.getStateValue(promptHashKey) ?? "";
+    const existingToolsHash = this.getStateValue(toolsHashKey) ?? "";
+    if (
+      !existingPromptHash ||
+      !existingToolsHash ||
+      this.getStateValue(artifactSigKey) !== signature ||
+      this.getStateValue(toolNamesKey) !== names ||
+      this.getStateValue(toolExecutionModesKey) !== executionModesJson
+    ) {
       const prompt = await this.rpc.call<{ digest?: string }>("main", "blobstore.putText", [
         systemPrompt,
       ]);
+      throwIfAborted();
       const tools = await this.rpc.call<{ digest?: string }>("main", "blobstore.putText", [
         schemasJson,
       ]);
+      throwIfAborted();
       const promptHash = typeof prompt?.digest === "string" ? prompt.digest : "";
       const toolsHash = typeof tools?.digest === "string" ? tools.digest : "";
-      const changed =
-        existingPromptHash !== promptHash ||
-        existingToolsHash !== toolsHash ||
-        this.getStateValue(toolNamesKey) !== names ||
-        this.getStateValue(toolExecutionModesKey) !== executionModesJson;
       this.setStateValue(promptHashKey, promptHash);
       this.setStateValue(toolsHashKey, toolsHash);
       this.setStateValue(toolNamesKey, names);
       this.setStateValue(toolExecutionModesKey, executionModesJson);
       this.setStateValue(artifactSigKey, signature);
-      this.deleteStateValue(`agent:promptArtifactError:${channelId}`);
-      if (changed) {
-        this.driver.dropLoop(channelId);
-        const { logId, head } = channelTrajectoryFor(channelId);
-        this.driver.foldCache.delete(logId, head);
-      }
-    } catch (err) {
-      await this.publishPromptArtifactDiagnostic(channelId, err);
-      throw err;
     }
+    throwIfAborted();
+    const { roster: _foldOwnedRoster, ...patch } = this.loopConfig(channelId);
+    return patch;
   }
 
-  private async publishPromptArtifactDiagnostic(channelId: string, err: unknown): Promise<void> {
-    const message = err instanceof Error ? err.message : String(err);
-    const signature = stableSha256Hex({ channelId, message }).slice(0, 16);
-    const errorKey = `agent:promptArtifactError:${channelId}`;
-    if (this.getStateValue(errorKey) === signature) return;
-    this.setStateValue(errorKey, signature);
-
-    const participantId = this.subscriptions.getParticipantId(channelId) ?? this.participantId();
-    const messageId = `agent-prompt-artifact-error:${signature}`;
-    const event: AgenticEvent<"message.completed"> = {
-      kind: "message.completed",
-      actor: {
-        kind: "agent",
-        id: participantId,
-        displayName: this.getEffectiveParticipantInfo(
-          channelId,
-          this.subscriptions.getConfig(channelId)
-        ).name,
-      },
-      causality: { messageId: messageId as never },
-      payload: {
-        protocol: AGENTIC_PROTOCOL_VERSION,
-        role: "assistant",
-        blocks: [
-          {
-            blockId: `${messageId}:diagnostic` as never,
-            type: "diagnostic",
-            content:
-              "Agent prompt setup failed. The agent will not start a model turn until workspace prompt resources load successfully.",
-            metadata: {
-              code: "prompt_artifact_load_failed",
-              severity: "error",
-              reason: message,
-              recoverable: true,
-            },
-          },
-        ],
-        outcome: "completed",
-      },
-      createdAt: new Date().toISOString(),
-    };
-    await this.createChannelClient(channelId)
-      .publishAgenticEvent(participantId, event, {
-        idempotencyKey: messageId,
-        senderMetadata: { type: "agent", name: participantId },
-      })
-      .catch((publishErr) => {
-        console.error(
-          `[AgentVessel] prompt artifact diagnostic emit failed for ${channelId}:`,
-          publishErr
-        );
-      });
+  /** Explicit refresh API: materialize, then journal the same config patch the
+   * durable prompt prerequisite would have produced. */
+  protected async ensurePromptArtifacts(channelId: string): Promise<void> {
+    const patch = await this.preparePromptArtifacts(channelId);
+    await this.driver.handleIncoming(channelId, {
+      type: "command",
+      command: { kind: "setConfig", patch },
+    });
   }
 
   /** Last roster snapshot for a channel (set by maybeRefreshRoster). */
@@ -1967,20 +1938,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       agentHops: event.annotations?.["agentHops"] as number | undefined,
       ...(metadata ? { metadata } : {}),
     };
-    try {
-      await this.ensurePromptArtifacts(channelId);
-    } catch (error) {
-      await this.driver.handleIncoming(channelId, {
-        type: "command",
-        command: {
-          kind: "prompt-failed",
-          ...command,
-          reason: error instanceof Error ? error.message : String(error),
-          code: "prompt_artifact_load_failed",
-        },
-      });
-      return;
-    }
     await this.driver.handleIncoming(channelId, {
       type: "command",
       command: {
@@ -3427,7 +3384,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     input: { content: string },
     opts?: AgentInitiatedTurnOptions
   ): Promise<void> {
-    await this.ensurePromptArtifacts(channelId);
     const metadata: AgentTurnMetadata = {
       origin: opts?.origin ?? "agent-initiated",
       ...(opts?.contextPolicy ? { contextPolicy: opts.contextPolicy } : {}),
@@ -4849,7 +4805,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         taskChannelId: run.taskChannelId,
       },
     };
-    await this.ensurePromptArtifacts(run.parentChannelId);
     await this.driver.handleIncoming(run.parentChannelId, {
       type: "command",
       command: {
@@ -5247,7 +5202,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       foldedMessageCount: parts.length,
     });
     if (run) this.subagentRuns.touch(run.runId, Date.now());
-    await this.ensurePromptArtifacts(channelId);
     await this.driver.handleIncoming(channelId, {
       type: "command",
       command: {

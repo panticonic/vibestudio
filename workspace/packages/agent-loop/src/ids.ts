@@ -122,6 +122,14 @@ export const ids = {
     return `sys:config:${patchHash}:${n}`;
   },
 
+  promptArtifactsRequested(triggerEnvelopeId: string): string {
+    return `sys:prompt-artifacts:${encodeURIComponent(triggerEnvelopeId)}:requested`;
+  },
+
+  promptArtifactsTerminal(triggerEnvelopeId: string): string {
+    return `sys:prompt-artifacts:${encodeURIComponent(triggerEnvelopeId)}:terminal`;
+  },
+
   // effect ids ----------------------------------------------------------------
 
   modelEffect(messageId: string): string {
@@ -138,6 +146,10 @@ export const ids = {
 
   credentialWaitEffect(credKey: string): string {
     return `credwait:${credKey}`;
+  },
+
+  promptArtifactsEffect(triggerEnvelopeId: string): string {
+    return `prompt-artifacts:${encodeURIComponent(triggerEnvelopeId)}`;
   },
 };
 

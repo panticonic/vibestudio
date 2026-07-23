@@ -169,6 +169,7 @@ function recvItem(
         ? command.content
         : [{ type: "text", content: String(command.content ?? "") }],
       outcome: "completed",
+      turnTriggerEnvelopeId: command.source.envelopeId,
       ...(command.metadata ? { metadata: command.metadata } : {}),
       // Sender's canonical id, carried IN ADDITION to the private recv envelope
       // id so the fold can correlate read acks / edits / retracts.
@@ -184,6 +185,26 @@ function recvItem(
     },
     // The user's message already lives in the channel log; the trajectory
     // copy is private context (no republish).
+    publish: false,
+  };
+}
+
+function promptArtifactsRequestedItem(command: Extract<Command, { kind: "prompt" | "steer" }>) {
+  const triggerEnvelopeId = ids.recvUserMessage(command.channelId, command.source.envelopeId);
+  return {
+    envelopeId: ids.promptArtifactsRequested(triggerEnvelopeId),
+    payloadKind: "system.event" as const,
+    payload: {
+      protocol: AGENTIC_PROTOCOL_VERSION,
+      kind: "prompt.artifacts_requested",
+      triggerEnvelopeId,
+      turnTriggerEnvelopeId: command.source.envelopeId,
+      details: {
+        kind: "prompt.artifacts_requested",
+        triggerEnvelopeId,
+        turnTriggerEnvelopeId: command.source.envelopeId,
+      },
+    },
     publish: false,
   };
 }
@@ -332,8 +353,9 @@ function promotedRecvItem(head: DeferredPrompt, promotionSeq: number): AppendIte
       ? (head.content as Record<string, unknown>)
       : {};
   const metadata = head.metadata ? { ...head.metadata, deliverAfterTurn: undefined } : undefined;
+  const envelopeId = ids.recvPromoted(head.sourceMessageId, promotionSeq);
   return {
-    envelopeId: ids.recvPromoted(head.sourceMessageId, promotionSeq),
+    envelopeId,
     payloadKind: "message.completed",
     payload: {
       ...content,
@@ -342,6 +364,8 @@ function promotedRecvItem(head: DeferredPrompt, promotionSeq: number): AppendIte
       outcome: "completed",
       sourceMessageId: head.sourceMessageId,
       senderRef: head.senderRef,
+      promptArtifactsReady: true,
+      turnTriggerEnvelopeId: envelopeId,
       ...(metadata ? { metadata } : {}),
     },
     causality: {
@@ -365,7 +389,10 @@ function promotePendingPrompt(
   precedingAppend: AppendItem[]
 ): StepOutput {
   const prompt = state.pendingPrompt!;
-  const turnId = ids.turnId(state.channelId, prompt.envelopeId, ctx.selfRef.id);
+  if (!prompt.artifactsReady || Object.keys(state.pendingPromptPreparations).length > 0) {
+    return EMPTY;
+  }
+  const turnId = ids.turnId(state.channelId, prompt.turnTriggerEnvelopeId, ctx.selfRef.id);
   const opened = turnOpenedItem(turnId, prompt.metadata, prompt.envelopeId);
   const afterOpened: AgentState = {
     ...state,
@@ -398,8 +425,14 @@ function promotePendingPrompt(
  * `entries`; the model call folds + read-acks them via contextThroughSeq.
  */
 function promoteSteersAsTurn(state: AgentState, ctx: StepContext): StepOutput {
+  if (
+    Object.keys(state.pendingPromptPreparations).length > 0 ||
+    state.steeringQueue.some((entry) => !entry.artifactsReady)
+  ) {
+    return EMPTY;
+  }
   const head = state.steeringQueue[0]!;
-  const turnId = ids.turnId(state.channelId, head.envelopeId, ctx.selfRef.id);
+  const turnId = ids.turnId(state.channelId, head.turnTriggerEnvelopeId, ctx.selfRef.id);
   const opened = turnOpenedItem(turnId, head.metadata, head.envelopeId);
   const afterOpened: AgentState = {
     ...state,
@@ -422,6 +455,16 @@ function promoteSteersAsTurn(state: AgentState, ctx: StepContext): StepOutput {
     ctx,
   });
   return { append: [opened, item], effects: [effect, ...readAcks] };
+}
+
+function promoteDeferredHead(state: AgentState, ctx: StepContext): StepOutput {
+  const head = state.deferredPostTurnQueue[0];
+  if (!head?.artifactsReady || Object.keys(state.pendingPromptPreparations).length > 0) {
+    return EMPTY;
+  }
+  const recv = promotedRecvItem(head, state.lastSeq);
+  const afterRecv = projectAppend(state, [recv], ctx.now);
+  return promotePendingPrompt(afterRecv, ctx, [recv]);
 }
 
 function turnClosedItem(
@@ -658,6 +701,7 @@ export function projectAppend(state: AgentState, append: AppendItem[], now: stri
 /** The C-wake duplicate-dispatch guard (plan WS1.4): never start a new model
  *  call while any invocation from a FAILED attempt is non-terminal. */
 function wakeGuardSatisfied(state: AgentState): boolean {
+  if (Object.keys(state.pendingPromptPreparations).length > 0) return false;
   if (state.inFlightModelCall) return false;
   const currentAttempts = new Set<string>();
   // every pending invocation belongs to some attempt; with no in-flight call
@@ -755,6 +799,7 @@ function nextModelCall(
   ctx: StepContext,
   freshSourceMessageIds: string[] = []
 ): StepOutput {
+  if (Object.keys(state.pendingPromptPreparations).length > 0) return EMPTY;
   const turn = state.openTurn!;
   if (modelRetryLimitExceeded(turn)) {
     return {
@@ -1042,60 +1087,31 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
       // it in deferredPostTurnQueue) but do NOT fire a model call — degrading to
       // steer would otherwise reach nextModelCall and fire a redundant call.
       if (command.metadata?.deliverAfterTurn && state.openTurn) {
-        return { append: [recvItem(command)], effects: [] };
+        return {
+          append: [recvItem(command), promptArtifactsRequestedItem(command)],
+          effects: [],
+        };
       }
       if (state.openTurn) {
-        // degrade to steer (today's TurnDispatcher fallback)
-        return commandStep(state, { ...command, kind: "steer" }, ctx);
+        return {
+          append: [recvItem(command), promptArtifactsRequestedItem(command)],
+          effects: [],
+        };
       }
       const recv = recvItem(command);
-      const turnId = ids.turnId(command.channelId, command.source.envelopeId, ctx.selfRef.id);
-      const opened = turnOpenedItem(turnId, turnMetadata(command), recv.envelopeId);
-      const afterOpened = {
-        ...state,
-        openTurn: {
-          turnId,
-          openedAtSeq: state.lastSeq + 2,
-          modelCallCount: 0,
-          consecutiveModelFailureCount: 0,
-          interrupted: false,
-          waitingCount: 0,
-          ...(turnMetadata(command) ? { metadata: turnMetadata(command) } : {}),
-        },
+      return {
+        append: [recv, promptArtifactsRequestedItem(command)],
+        effects: [],
       };
-      const { item, effect } = modelStartItems(afterOpened, turnId, 0, 2);
-      const readAcks = readAckEffects({
-        state: afterOpened,
-        contextThroughSeq: effect.request.contextThroughSeq,
-        freshSourceMessageIds: command.sourceMessageId ? [command.sourceMessageId] : [],
-        turnId,
-        ctx,
-      });
-      return { append: [recv, opened, item], effects: [effect, ...readAcks] };
     }
 
     case "steer": {
       const recv = recvItem(command);
       if (alreadyIngested(state, recv.envelopeId)) return EMPTY;
-      // Send-after-turn: stash via the fold; never degrade-to-continue.
-      if (command.metadata?.deliverAfterTurn && state.openTurn) {
-        return { append: [recv], effects: [] };
-      }
-      const canContinue =
-        state.openTurn &&
-        !state.openTurn.interrupted &&
-        !state.inFlightModelCall &&
-        Object.keys(state.pendingInvocations).length === 0;
-      if (canContinue) {
-        const next = nextModelCall(
-          { ...state, openTurn: state.openTurn },
-          1, // the recv item precedes the message.started
-          ctx,
-          command.sourceMessageId ? [command.sourceMessageId] : []
-        );
-        return { append: [recv, ...next.append], effects: next.effects };
-      }
-      return { append: [recv], effects: [] };
+      return {
+        append: [recv, promptArtifactsRequestedItem(command)],
+        effects: [],
+      };
     }
 
     case "edit": {
@@ -1381,10 +1397,7 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
     // and bootstrap a fresh turn of their own.
     if (state.steeringQueue.length > 0) return promoteSteersAsTurn(state, ctx);
     if (state.deferredPostTurnQueue.length === 0) return EMPTY;
-    const head = state.deferredPostTurnQueue[0]!;
-    const recv = promotedRecvItem(head, state.lastSeq);
-    const afterRecv = projectAppend(state, [recv], ctx.now);
-    return promotePendingPrompt(afterRecv, ctx, [recv]);
+    return promoteDeferredHead(state, ctx);
   }
 
   // recoverable model failure → fresh attempt (multi-attempt rule)
@@ -1495,6 +1508,69 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
   // interrupt marker with no in-flight call → immediate cleanup
   if (kind === "system.event") {
     const details = (payload["details"] ?? {}) as Record<string, unknown>;
+    if (details["kind"] === "prompt.artifacts_ready") {
+      if (!state.openTurn) {
+        if (state.pendingPrompt?.artifactsReady) return promotePendingPrompt(state, ctx, []);
+        if (state.steeringQueue.length > 0) return promoteSteersAsTurn(state, ctx);
+        return promoteDeferredHead(state, ctx);
+      }
+      if (
+        !state.openTurn.interrupted &&
+        state.steeringQueue.length > 0 &&
+        wakeGuardSatisfied(state) &&
+        Object.keys(state.pendingInvocations).length === 0
+      ) {
+        return nextModelCall(state, 0, ctx);
+      }
+      return EMPTY;
+    }
+    if (details["kind"] === "prompt.artifacts_failed") {
+      const triggerEnvelopeId = String(
+        payload["triggerEnvelopeId"] ?? details["triggerEnvelopeId"] ?? "unknown"
+      );
+      const turnTriggerEnvelopeId = String(
+        payload["turnTriggerEnvelopeId"] ??
+          details["turnTriggerEnvelopeId"] ??
+          triggerEnvelopeId
+      );
+      const reason = String(payload["reason"] ?? details["reason"] ?? "prompt setup failed");
+      const turnId =
+        state.openTurn?.turnId ??
+        ids.turnId(state.channelId, turnTriggerEnvelopeId, ctx.selfRef.id);
+      const messageId = `diag:${turnId}:prompt-artifacts`;
+      const diagnostic: AppendItem = {
+        envelopeId: ids.messageTerminal(messageId),
+        payloadKind: "message.completed",
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          role: "assistant",
+          blocks: [
+            {
+              type: "diagnostic",
+              content:
+                "Agent prompt setup failed. The input was not sent to a model.",
+              metadata: {
+                code: "prompt_artifact_load_failed",
+                severity: "error",
+                reason,
+              },
+            },
+          ],
+          outcome: "completed",
+        },
+        causality: { messageId: messageId as never, turnId },
+        publish: true,
+      };
+      if (state.openTurn) return { append: [diagnostic], effects: [] };
+      return {
+        append: [
+          turnOpenedItem(turnId, undefined, triggerEnvelopeId),
+          diagnostic,
+          turnClosedItem(turnId, { reason: "work_failed" }),
+        ],
+        effects: [],
+      };
+    }
     if (details["kind"] === "interrupt" && state.openTurn && !state.inFlightModelCall) {
       return {
         append: interruptCleanupItems(state, String(details["reason"] ?? "user_interrupted")),
@@ -1526,6 +1602,36 @@ function effectFailedStep(
   _ctx: StepContext
 ): StepOutput {
   const turn = state.openTurn;
+  if (incoming.kind === "prompt_artifacts") {
+    const preparation = Object.values(state.pendingPromptPreparations).find(
+      (candidate) => ids.promptArtifactsEffect(candidate.triggerEnvelopeId) === incoming.effectId
+    );
+    if (!preparation) return EMPTY;
+    return {
+      append: [
+        {
+          envelopeId: ids.promptArtifactsTerminal(preparation.triggerEnvelopeId),
+          payloadKind: "system.event",
+          payload: {
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            kind: "prompt.artifacts_failed",
+            triggerEnvelopeId: preparation.triggerEnvelopeId,
+            turnTriggerEnvelopeId: preparation.turnTriggerEnvelopeId,
+            reason: incoming.error.message,
+            details: {
+              kind: "prompt.artifacts_failed",
+              triggerEnvelopeId: preparation.triggerEnvelopeId,
+              turnTriggerEnvelopeId: preparation.turnTriggerEnvelopeId,
+              reason: incoming.error.message,
+            },
+          },
+          publish: false,
+        },
+      ],
+      effects: [],
+    };
+  }
+
   if (incoming.kind === "model_call") {
     const failure = classifyModelFailure({
       provider: state.inFlightModelCall?.request.provider,

@@ -277,22 +277,28 @@ export interface PendingCredentialWait {
 
 export interface SteeringEntry {
   envelopeId: string;
+  turnTriggerEnvelopeId: string;
   seq: number;
   /** Sender's canonical message id; the read-ack/edit/retract correlation key. */
   sourceMessageId?: string;
   senderRef: ParticipantRef;
   content: unknown;
   metadata?: AgentTurnMetadata;
+  artifactsReady?: boolean;
 }
 
 export interface PendingPrompt {
   envelopeId: string;
+  turnTriggerEnvelopeId: string;
   seq: number;
   sourceMessageId?: string;
   senderRef: ParticipantRef;
   content: unknown;
   agentHops?: number;
   metadata?: AgentTurnMetadata;
+  /** The exact prompt/tool/model snapshot needed to consume this input has
+   * completed and was journaled after the input. */
+  artifactsReady?: boolean;
 }
 
 /** A "send after turn" message held until the current turn closes, then
@@ -300,11 +306,25 @@ export interface PendingPrompt {
 export interface DeferredPrompt {
   sourceMessageId: string;
   envelopeId: string;
+  turnTriggerEnvelopeId: string;
   seq: number;
   senderRef: ParticipantRef;
   content: unknown;
   metadata?: AgentTurnMetadata;
   agentHops?: number;
+  artifactsReady?: boolean;
+}
+
+/** Durable prerequisite for consuming an inbound prompt/steer. The request is
+ * journaled before any host/build/blob I/O starts; the outbox derives exactly
+ * one preparation effect at a time from these rows. */
+export interface PendingPromptPreparation {
+  triggerEnvelopeId: string;
+  /** Original channel envelope that determines the semantic turn identity.
+   * `triggerEnvelopeId` is the private trajectory copy used for effect
+   * idempotency and must never replace this value in turn ids. */
+  turnTriggerEnvelopeId: string;
+  requestedAtSeq: number;
 }
 
 /** Linear session entry — the materialized model-context path. */
@@ -366,6 +386,7 @@ export interface AgentState {
   pendingCredentialWaits: Record<string, PendingCredentialWait>;
   steeringQueue: SteeringEntry[];
   pendingPrompt: PendingPrompt | null;
+  pendingPromptPreparations: Record<string, PendingPromptPreparation>;
   /** "Send after turn" messages, drained one per turn after each turn closes. */
   deferredPostTurnQueue: DeferredPrompt[];
 }
@@ -403,6 +424,7 @@ export function initialAgentState(input: InitialStateInput): AgentState {
     pendingCredentialWaits: {},
     steeringQueue: [],
     pendingPrompt: null,
+    pendingPromptPreparations: {},
     deferredPostTurnQueue: [],
   };
 }
@@ -411,6 +433,12 @@ export function initialAgentState(input: InitialStateInput): AgentState {
 export function derivedTurnStatus(
   state: AgentState
 ): "idle" | "starting" | "running_model" | "waiting_external" | "continuing" {
+  if (
+    state.pendingPrompt ||
+    Object.keys(state.pendingPromptPreparations).length > 0
+  ) {
+    return "starting";
+  }
   if (!state.openTurn) return "idle";
   if (state.inFlightModelCall) return "running_model";
   if (state.openTurn.modelCallCount === 0) return "starting";

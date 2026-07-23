@@ -75,7 +75,7 @@ describe("ChannelClient.send attachments", () => {
 });
 
 describe("ChannelClient subscription lifetime", () => {
-  it("waits for acknowledged activation release without requesting a semantic unsubscribe", async () => {
+  it("uses the channel acknowledgement as activation release without waiting for the mirrored stream terminal", async () => {
     let streamController!: ReadableStreamDefaultController<Uint8Array>;
     const calls: string[] = [];
     const rpc = {
@@ -85,7 +85,6 @@ describe("ChannelClient subscription lifetime", () => {
           return { kind: "durable-object", targetId: "chan-do" };
         }
         if (method === "releaseSubscription") {
-          streamController.close();
           return undefined;
         }
         return undefined;

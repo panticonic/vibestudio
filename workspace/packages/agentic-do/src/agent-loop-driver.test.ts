@@ -124,6 +124,9 @@ async function makeHarness(opts: {
           return { digest, size: value.length };
         },
       },
+      promptArtifacts: {
+        prepare: async () => opts.config ?? config,
+      },
       channel: {
         callMethod: async (input: Parameters<ChannelCallPort["callMethod"]>[0]) => {
           channelCalls.push(input);
@@ -202,7 +205,10 @@ function promptIncoming(envelopeId = "env-1", content = "hello", metadata?: Agen
 async function logKinds(gad: { call: <T>(m: string, ...a: unknown[]) => Promise<T> }) {
   const rows = await gad.call<{ rows: Array<{ payload_kind: string }> }>(
     "query",
-    `SELECT payload_kind FROM log_events WHERE log_id = '${LOG_ID}' ORDER BY seq`,
+    `SELECT payload_kind FROM log_events
+     WHERE log_id = '${LOG_ID}'
+       AND envelope_id NOT LIKE 'sys:prompt-artifacts:%'
+     ORDER BY seq`,
     []
   );
   return rows.rows.map((row) => row.payload_kind);
@@ -333,16 +339,21 @@ describe("AgentLoopDriver", () => {
   it("publishes a read-ack EAGERLY at step time, not behind the (pending) model call", async () => {
     // Regression for the steer-read-ack delay: a fire-and-forget publish_envelope
     // (read-ack) co-emitted with a long model_call used to wait in the effect
-    // pump until the model finished. Hang the model call and DON'T drain the
-    // alarm — the read-ack must already be on the channel (eager step-time
-    // publish), proving it no longer queues behind the model dispatch.
+    // pump until the model finished. Prompt preparation is now a journaled
+    // prerequisite, so start the alarm pump and hang the model call: the
+    // read-ack must publish before the model outcome.
+    const started = deferred<void>();
+    const hung = deferred<EffectOutcome>();
     const harness = await makeHarness({
       script: { model: [], tool: [] },
       executorOverride: (descriptor) =>
         descriptor.kind === "model_call"
           ? ({
               kind: "model_call",
-              execute: () => new Promise<EffectOutcome>(() => {}), // never resolves
+              execute: () => {
+                started.resolve();
+                return hung.promise;
+              },
             } as EffectExecutor)
           : null,
     });
@@ -357,6 +368,8 @@ describe("AgentLoopDriver", () => {
         senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
       },
     });
+    const alarm = harness.driver.alarm();
+    await started.promise;
     const reads = harness.channelPublishes.filter(
       (p) => (p.payload as { kind?: string } | undefined)?.kind === "message.read"
     );
@@ -367,6 +380,8 @@ describe("AgentLoopDriver", () => {
             ?.messageId === "u1"
       )
     ).toBe(true);
+    hung.resolve(textReply("done"));
+    await alarm;
   });
 
   it("a long model_call on one channel does NOT pin the shared pump (other channels still dispatch)", async () => {
@@ -441,8 +456,14 @@ describe("AgentLoopDriver", () => {
           : null,
     });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-abort"));
-    const alarm = harness.driver.alarm();
+    const { completion } = await harness.driver.beginAlarmDispatch();
     await started.promise;
+    let completionSettled = false;
+    void completion.then(() => {
+      completionSettled = true;
+    });
+    await Promise.resolve();
+    expect(completionSettled).toBe(false);
 
     let settled = false;
     const abort = harness.driver.interruptChannel(CHANNEL).then(() => {
@@ -454,12 +475,28 @@ describe("AgentLoopDriver", () => {
     releaseCleanup.resolve();
     await abort;
     expect(settled).toBe(true);
-    await alarm;
+    await completion;
   });
 
   it("persists channel retirement after a user interrupt without reusing its envelope id", async () => {
-    const harness = await makeHarness({ script: { model: [], tool: [] } });
+    const started = deferred<void>();
+    const hung = deferred<EffectOutcome>();
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              execute: () => {
+                started.resolve();
+                return hung.promise;
+              },
+            } as EffectExecutor)
+          : null,
+    });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-retire-after-interrupt"));
+    const alarm = harness.driver.alarm();
+    await started.promise;
 
     await harness.driver.handleIncoming(CHANNEL, {
       type: "command",
@@ -469,12 +506,16 @@ describe("AgentLoopDriver", () => {
       type: "command",
       command: { kind: "abort", reason: "channel_unsubscribe" },
     });
+    hung.resolve({ kind: "model", blocks: [], stopReason: "aborted" });
+    await alarm;
 
     const turnId = ids.turnId(CHANNEL, "env-retire-after-interrupt", "agent:self");
     const rows = await harness.gad.call<{ rows: Array<{ envelope_id: string }> }>(
       "query",
       `SELECT envelope_id FROM log_events
-       WHERE log_id = '${LOG_ID}' AND payload_kind = 'system.event'
+       WHERE log_id = '${LOG_ID}'
+         AND payload_kind = 'system.event'
+         AND envelope_id LIKE '%:interrupt:%'
        ORDER BY seq`,
       []
     );
@@ -525,8 +566,63 @@ describe("AgentLoopDriver", () => {
     expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b", expect.any(AbortSignal));
   });
 
+  it("does not let a non-cooperative executor hold lifecycle release or journal a late result", async () => {
+    const started = deferred<void>();
+    const finish = deferred<EffectOutcome>();
+    let observedSignal: AbortSignal | null = null;
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              execute: ({ signal }) => {
+                observedSignal = signal;
+                started.resolve();
+                return finish.promise;
+              },
+            } as EffectExecutor)
+          : null,
+    });
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-noncooperative-release"));
+    const { completion } = await harness.driver.beginAlarmDispatch();
+    await started.promise;
+    let completionSettled = false;
+    void completion.then(() => {
+      completionSettled = true;
+    });
+    await Promise.resolve();
+    expect(completionSettled).toBe(false);
+
+    let released = false;
+    const release = harness.driver.releaseActivation().then((count) => {
+      released = true;
+      return count;
+    });
+    await Promise.resolve();
+    expect(released).toBe(true);
+    await expect(release).resolves.toBe(1);
+    expect((observedSignal as AbortSignal | null)?.aborted).toBe(true);
+
+    finish.resolve({
+      kind: "model",
+      blocks: [{ type: "text", text: "too late" }],
+      stopReason: "completed",
+    });
+    await completion;
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+    ]);
+    expect(harness.driver.outbox.all()).toEqual([
+      expect.objectContaining({ kind: "model_call", attempts: 0 }),
+    ]);
+  });
+
   it("closes effect admission while the interrupt marker is being journaled", async () => {
     let modelCalls = 0;
+    const modelStarted = deferred<void>();
     const interruptEntered = deferred<void>();
     const releaseInterrupt = deferred<void>();
     const harness = await makeHarness({
@@ -535,14 +631,28 @@ describe("AgentLoopDriver", () => {
         descriptor.kind === "model_call"
           ? ({
               kind: "model_call",
-              async execute() {
+              execute({ signal }) {
                 modelCalls += 1;
-                return textReply("must not run");
+                modelStarted.resolve();
+                return new Promise<EffectOutcome>((resolve) => {
+                  signal.addEventListener(
+                    "abort",
+                    () =>
+                      resolve({
+                        kind: "model",
+                        blocks: [],
+                        stopReason: "aborted",
+                      }),
+                    { once: true }
+                  );
+                });
               },
             } as EffectExecutor)
           : null,
     });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-admission"));
+    const alarm = harness.driver.alarm();
+    await modelStarted.promise;
     const handleIncoming = harness.driver.handleIncoming.bind(harness.driver);
     vi.spyOn(harness.driver, "handleIncoming").mockImplementation(async (channelId, incoming) => {
       if (incoming.type === "command" && incoming.command.kind === "interrupt") {
@@ -555,10 +665,11 @@ describe("AgentLoopDriver", () => {
     const interrupt = harness.driver.interruptChannel(CHANNEL);
     await interruptEntered.promise;
     await harness.driver.alarm();
-    expect(modelCalls).toBe(0);
+    expect(modelCalls).toBe(1);
 
     releaseInterrupt.resolve();
     await interrupt;
+    await alarm;
     expect(harness.driver.outbox.all()).toEqual([]);
   });
 
@@ -600,6 +711,7 @@ describe("AgentLoopDriver", () => {
     });
 
     await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await settle(harness.driver);
 
     const rows = await harness.gad.call<{ rows: Array<{ actor_json: string }> }>(
       "query",
@@ -1220,6 +1332,12 @@ describe("AgentLoopDriver", () => {
     });
 
     await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    const preparation = harness.driver.outbox.all()[0];
+    expect(preparation).toEqual(expect.objectContaining({ kind: "prompt_artifacts" }));
+    await harness.driver.applyOutcome(preparation!, {
+      kind: "prompt-artifacts",
+      patch: {},
+    });
     await harness.driver.wake(CHANNEL);
 
     expect(await logKinds(harness.gad)).toEqual([
@@ -1286,14 +1404,13 @@ describe("AgentLoopDriver", () => {
   it("closes a completed assistant turn when replay missed the terminal cascade", async () => {
     const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     const host = await createTestDO(GadWorkspaceDO, { __objectKey: "driver-host" });
-    let armed = true;
+    let outcomeAppends = 0;
     const crashed = await makeHarness({
       script: { model: [textReply("done")], tool: [] },
       gad,
       driverSql: host,
       killPoint: (point) => {
-        if (armed && point === "after-outcome-append") {
-          armed = false;
+        if (point === "after-outcome-append" && ++outcomeAppends === 2) {
           throw new Error("crash after terminal append");
         }
       },
@@ -1447,7 +1564,7 @@ describe("AgentLoopDriver", () => {
   it("parks a reset-aware model failure when replay missed the terminal cascade", async () => {
     const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     const host = await createTestDO(GadWorkspaceDO, { __objectKey: "driver-host" });
-    let armed = true;
+    let outcomeAppends = 0;
     const crashed = await makeHarness({
       script: {
         model: [
@@ -1463,8 +1580,7 @@ describe("AgentLoopDriver", () => {
       gad,
       driverSql: host,
       killPoint: (point) => {
-        if (armed && point === "after-outcome-append") {
-          armed = false;
+        if (point === "after-outcome-append" && ++outcomeAppends === 2) {
           throw new Error("crash after terminal append");
         }
       },

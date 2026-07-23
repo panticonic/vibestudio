@@ -201,6 +201,13 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
       const metadata = metadataFromPayload(payload);
       const sourceMessageId = sourceMessageIdFromPayload(payload);
       const senderRef = senderRefFromPayload(payload, envelope.actor);
+      const artifactsReady = payload["promptArtifactsReady"] === true;
+      const turnTriggerEnvelopeId = String(payload["turnTriggerEnvelopeId"] ?? "");
+      if (!turnTriggerEnvelopeId) {
+        throw new Error(
+          `user trajectory event ${String(envelope.envelopeId)} lacks turnTriggerEnvelopeId`
+        );
+      }
       const agentHops =
         typeof causality["agentHops"] === "number" ? (causality["agentHops"] as number) : undefined;
 
@@ -212,11 +219,13 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
         const deferred: DeferredPrompt = {
           sourceMessageId: sourceMessageId ?? String(envelope.envelopeId),
           envelopeId: String(envelope.envelopeId),
+          turnTriggerEnvelopeId,
           seq: envelope.seq,
           senderRef,
           content: payload,
           ...(metadata ? { metadata } : {}),
           ...(agentHops !== undefined ? { agentHops } : {}),
+          ...(artifactsReady ? { artifactsReady: true } : {}),
         };
         return { ...state, deferredPostTurnQueue: [...state.deferredPostTurnQueue, deferred] };
       }
@@ -235,14 +244,17 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
         senderRef,
         content: payload,
         ...(metadata ? { metadata } : {}),
+        ...(artifactsReady ? { artifactsReady: true } : {}),
       };
       const steering = {
         envelopeId: String(envelope.envelopeId),
+        turnTriggerEnvelopeId,
         seq: envelope.seq,
         ...(sourceMessageId ? { sourceMessageId } : {}),
         senderRef,
         content: payload,
         ...(metadata ? { metadata } : {}),
+        ...(artifactsReady ? { artifactsReady: true } : {}),
       };
       if (state.openTurn) {
         return {
@@ -258,12 +270,14 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
         entries: [...state.entries, entry],
         pendingPrompt: {
           envelopeId: String(envelope.envelopeId),
+          turnTriggerEnvelopeId,
           seq: envelope.seq,
           ...(sourceMessageId ? { sourceMessageId } : {}),
           senderRef,
           content: payload,
           ...(metadata ? { metadata } : {}),
           agentHops,
+          ...(artifactsReady ? { artifactsReady: true } : {}),
         },
       };
     }
@@ -481,6 +495,81 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
     case kind === "system.event": {
       const details = (payload["details"] ?? {}) as Record<string, unknown>;
       const detailKind = String(details["kind"] ?? payload["kind"] ?? "");
+      if (detailKind === "prompt.artifacts_requested") {
+        const triggerEnvelopeId = String(
+          payload["triggerEnvelopeId"] ?? details["triggerEnvelopeId"] ?? ""
+        );
+        if (!triggerEnvelopeId) return state;
+        const turnTriggerEnvelopeId = String(
+          payload["turnTriggerEnvelopeId"] ?? details["turnTriggerEnvelopeId"] ?? ""
+        );
+        if (!turnTriggerEnvelopeId) {
+          throw new Error(
+            `prompt artifact request ${String(envelope.envelopeId)} lacks turnTriggerEnvelopeId`
+          );
+        }
+        return {
+          ...state,
+          pendingPromptPreparations: {
+            ...state.pendingPromptPreparations,
+            [triggerEnvelopeId]: {
+              triggerEnvelopeId,
+              turnTriggerEnvelopeId,
+              requestedAtSeq: envelope.seq,
+            },
+          },
+        };
+      }
+      if (
+        detailKind === "prompt.artifacts_ready" ||
+        detailKind === "prompt.artifacts_failed"
+      ) {
+        const triggerEnvelopeId = String(
+          payload["triggerEnvelopeId"] ?? details["triggerEnvelopeId"] ?? ""
+        );
+        if (!triggerEnvelopeId) return state;
+        const { [triggerEnvelopeId]: _removedPreparation, ...pendingPromptPreparations } =
+          state.pendingPromptPreparations;
+        if (detailKind === "prompt.artifacts_failed") {
+          return {
+            ...state,
+            pendingPromptPreparations,
+            pendingPrompt:
+              state.pendingPrompt?.envelopeId === triggerEnvelopeId
+                ? null
+                : state.pendingPrompt,
+            steeringQueue: state.steeringQueue.filter(
+              (entry) => entry.envelopeId !== triggerEnvelopeId
+            ),
+            deferredPostTurnQueue: state.deferredPostTurnQueue.filter(
+              (entry) => entry.envelopeId !== triggerEnvelopeId
+            ),
+            entries: state.entries.filter(
+              (entry) => entry.kind !== "user" || entry.envelopeId !== triggerEnvelopeId
+            ),
+          };
+        }
+        const patch = (payload["patch"] ?? details["patch"] ?? {}) as Record<string, unknown>;
+        return {
+          ...state,
+          config: { ...state.config, ...patch },
+          pendingPromptPreparations,
+          pendingPrompt:
+            state.pendingPrompt?.envelopeId === triggerEnvelopeId
+              ? { ...state.pendingPrompt, artifactsReady: true }
+              : state.pendingPrompt,
+          steeringQueue: state.steeringQueue.map((entry) =>
+            entry.envelopeId === triggerEnvelopeId
+              ? { ...entry, artifactsReady: true }
+              : entry
+          ),
+          deferredPostTurnQueue: state.deferredPostTurnQueue.map((entry) =>
+            entry.envelopeId === triggerEnvelopeId
+              ? { ...entry, artifactsReady: true }
+              : entry
+          ),
+        };
+      }
       if (detailKind === "credential.wait_started") {
         // Payload-first: emitters mirror fold-critical fields at the payload
         // top level so an (oversized-details) blob spill can't blind the fold.

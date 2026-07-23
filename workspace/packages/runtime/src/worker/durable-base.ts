@@ -679,18 +679,25 @@ export abstract class DurableObjectBase {
 
   /** Schedule the alarm at an absolute epoch-ms time. */
   protected setAlarmAt(timeMs: number): void {
-    const schedule: DoAlarmSchedule = { wakeAt: timeMs };
-    this.trackAlarmRpc(
-      this.workspaceStateService.alarmSet({
-        ...this.lifecycleKey(),
-        wakeAt: schedule.wakeAt,
-      })
-    );
+    this.trackAlarmRpc(this.persistAlarmSchedule({ wakeAt: timeMs }));
   }
 
   /** Cancel any pending alarm for this DO. */
   protected deleteAlarm(): void {
-    this.trackAlarmRpc(this.workspaceStateService.alarmClear(this.lifecycleKey()));
+    this.trackAlarmRpc(this.persistAlarmSchedule(null));
+  }
+
+  /** Persist an exact alarm projection from activation-owned work which has
+   * no later fetch-finally drain boundary. */
+  protected async persistAlarmSchedule(schedule: DoAlarmSchedule | null): Promise<void> {
+    if (schedule) {
+      await this.workspaceStateService.alarmSet({
+        ...this.lifecycleKey(),
+        wakeAt: schedule.wakeAt,
+      });
+      return;
+    }
+    await this.workspaceStateService.alarmClear(this.lifecycleKey());
   }
 
   private readonly pendingAlarmRpcs = new Set<Promise<void>>();

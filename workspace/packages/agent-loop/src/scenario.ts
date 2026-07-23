@@ -156,5 +156,10 @@ export function pendingEffectIds(scenario: Scenario): string[] {
 }
 
 export function kinds(scenario: Scenario): string[] {
-  return scenario.log.map((row) => row.payloadKind);
+  // Prompt preparation is operational journal state. Most loop tests assert
+  // the semantic turn trajectory; dedicated prerequisite tests inspect these
+  // rows directly.
+  return scenario.log
+    .filter((row) => !row.envelopeId.startsWith("sys:prompt-artifacts:"))
+    .map((row) => row.payloadKind);
 }

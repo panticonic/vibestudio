@@ -262,7 +262,7 @@ describe("AiChatWorker", () => {
     await expect(worker.materializedPrompt("ch-1")).resolves.toContain("UPDATED WORKSPACE AGENTS");
   });
 
-  it("publishes a diagnostic and fails closed when workspace prompt resources are malformed", async () => {
+  it("fails prompt preparation closed without publishing outside the durable loop", async () => {
     const worker = await makeWorker();
     worker.seedSubscriptionConfig("ch-1", {});
     worker.workspaceSkills = { not: "a skill list" };
@@ -271,28 +271,16 @@ describe("AiChatWorker", () => {
       "workspace.listSkills returned invalid resource shape"
     );
 
-    expect(worker.published).toHaveLength(1);
-    expect(worker.published[0]?.event).toMatchObject({
-      kind: "message.completed",
-      payload: {
-        blocks: [
-          expect.objectContaining({
-            type: "diagnostic",
-            metadata: expect.objectContaining({
-              code: "prompt_artifact_load_failed",
-              severity: "error",
-              recoverable: true,
-            }),
-          }),
-        ],
-        outcome: "completed",
-      },
-    });
+    // Preparation is an executor boundary. Its caller journals the failure and
+    // the loop publishes the one deterministic diagnostic; the vessel must not
+    // create a second, non-journaled side channel.
+    expect(worker.published).toHaveLength(0);
+    expect(worker.driverHandleIncoming).not.toHaveBeenCalled();
 
     await expect(worker.materializedPrompt("ch-1")).rejects.toThrow(
       "workspace.listSkills returned invalid resource shape"
     );
-    expect(worker.published).toHaveLength(1);
+    expect(worker.published).toHaveLength(0);
   });
 
   it("persists live setting changes through the standard agent methods", async () => {

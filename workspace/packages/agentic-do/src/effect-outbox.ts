@@ -83,6 +83,11 @@ export function ensureOutboxSchema(sql: SqlStorage): void {
 
 export function maxAttempts(kind: EffectKind, mutating = false): number {
   switch (kind) {
+    case "prompt_artifacts":
+      // Prompt/tool materialization is a prerequisite, not the user-visible
+      // work itself. A terminal infrastructure failure settles the input with
+      // a diagnostic instead of holding a turn in an invisible retry loop.
+      return 1;
     case "model_call":
       // A retry-classified provider failure is explicitly non-terminal. Keep
       // the journaled request pending until it succeeds or the owning turn is
@@ -103,6 +108,8 @@ export function maxAttempts(kind: EffectKind, mutating = false): number {
 
 export function leaseMs(kind: EffectKind): number {
   switch (kind) {
+    case "prompt_artifacts":
+      return 60 * 1000;
     case "model_call":
       return 10 * 60 * 1000;
     case "local_tool":

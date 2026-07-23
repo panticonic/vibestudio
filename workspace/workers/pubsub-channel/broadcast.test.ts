@@ -83,4 +83,36 @@ describe("structured participant delivery lifecycle", () => {
     cleanupDeliveryChain(deps.objectKey, participantId);
     await replacement;
   });
+
+  it("does not let a non-cooperative delivery hold activation release", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const call = vi.fn(() => pending);
+    const deps = {
+      objectKey: "channel-noncooperative-release",
+      rpc: { call },
+    } as unknown as BroadcastDeps;
+    const participantId = "do:workers/agent:AgentDO:noncooperative";
+    const envelope = {
+      kind: "control" as const,
+      type: "ready" as const,
+      ready: { totalCount: 0, envelopeCount: 0 },
+    };
+
+    const accepted = queueDoEnvelope(deps, participantId, envelope);
+    await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(1));
+    await expect(releaseDeliveryChain(deps.objectKey, participantId)).resolves.toBeUndefined();
+
+    await queueDoEnvelope(deps, participantId, envelope);
+    expect(call).toHaveBeenCalledTimes(1);
+
+    finish();
+    await accepted;
+    reopenDeliveryChain(deps.objectKey, participantId);
+    await queueDoEnvelope(deps, participantId, envelope);
+    expect(call).toHaveBeenCalledTimes(2);
+    cleanupDeliveryChain(deps.objectKey, participantId);
+  });
 });

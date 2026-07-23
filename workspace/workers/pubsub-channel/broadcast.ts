@@ -80,9 +80,21 @@ export async function releaseDeliveryChain(
     new Error(`Participant activation released: ${participantId}`)
   );
   const pending = deliveryChains.get(key);
-  if (pending) await pending;
-  if (deliveryChains.get(key) === pending) deliveryChains.delete(key);
-  activeDeliveryControllers.delete(key);
+  if (!pending) {
+    deliveryChains.delete(key);
+    activeDeliveryControllers.delete(key);
+    return;
+  }
+  // Cancellation is advisory. A transport may not observe AbortSignal until
+  // its old workerd generation disappears, so lifecycle release must not wait
+  // for the callback it is trying to terminate. Keep the ordered lane promise
+  // installed: if a replacement reopens before the old request rejects, its
+  // first delivery stays ordered behind that terminal instead of racing it.
+  void pending
+    .finally(() => {
+      if (deliveryChains.get(key) === pending) deliveryChains.delete(key);
+    })
+    .catch(() => {});
 }
 
 /** Re-open a transport lane when a replacement activation subscribes. */

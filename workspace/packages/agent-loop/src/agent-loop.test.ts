@@ -123,12 +123,118 @@ function prompt(
       ...(metadata ? { metadata } : {}),
     },
   });
+  drainPromptArtifactPreparations(s);
+}
+
+function drainPromptArtifactPreparations(s: Scenario): void {
+  for (;;) {
+    const effect = [...s.effects.values()].find(
+      (candidate) => candidate.kind === "prompt_artifacts"
+    );
+    if (!effect) return;
+    resolveEffect(s, effect.effectId, {
+      kind: "prompt-artifacts",
+      patch: s.state.config,
+    });
+  }
 }
 
 const turn1 = ids.turnId("chan-1", "env-1", "agent:self");
 const msg0 = ids.messageId(turn1, 0);
 
 describe("agent-loop core lifecycle", () => {
+  it("journals prompt preparation before opening a turn or admitting a model call", () => {
+    const s = scenario();
+    const triggerEnvelopeId = ids.recvUserMessage("chan-1", "env-1");
+
+    dispatch(s, {
+      type: "command",
+      command: {
+        kind: "prompt",
+        channelId: "chan-1",
+        source: { envelopeId: "env-1" },
+        content: "hello",
+        senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
+      },
+    });
+
+    expect(kinds(s)).toEqual(["message.completed"]);
+    expect(s.state.openTurn).toBeNull();
+    expect(pendingEffectIds(s)).toEqual([ids.promptArtifactsEffect(triggerEnvelopeId)]);
+
+    resolveEffect(s, ids.promptArtifactsEffect(triggerEnvelopeId), {
+      kind: "prompt-artifacts",
+      patch: { systemPromptHash: "blob:prepared" },
+    });
+
+    expect(kinds(s)).toEqual(["message.completed", "turn.opened", "message.started"]);
+    expect(s.state.config.systemPromptHash).toBe("blob:prepared");
+    expect(s.state.openTurn?.turnId).toBe(turn1);
+    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(msg0)]);
+    expect(
+      (
+        s.log.find((row) => row.payloadKind === "message.started")!.payload as {
+          modelRequest: { systemPromptHash: string };
+        }
+      ).modelRequest.systemPromptHash
+    ).toBe("blob:prepared");
+  });
+
+  it("settles prompt preparation failure as a closed diagnostic turn without model work", () => {
+    const s = scenario();
+    const triggerEnvelopeId = ids.recvUserMessage("chan-1", "env-1");
+
+    dispatch(s, {
+      type: "command",
+      command: {
+        kind: "prompt",
+        channelId: "chan-1",
+        source: { envelopeId: "env-1" },
+        content: "hello",
+        senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
+      },
+    });
+    dispatch(s, {
+      type: "effect-failed",
+      effectId: ids.promptArtifactsEffect(triggerEnvelopeId),
+      kind: "prompt_artifacts",
+      error: { message: "workspace prompt resource unavailable" },
+      attempts: 1,
+    });
+
+    expect(kinds(s)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.completed",
+      "turn.closed",
+    ]);
+    expect(s.state.openTurn).toBeNull();
+    expect(s.state.pendingPrompt).toBeNull();
+    expect(s.state.entries.map((entry) => entry.kind)).toEqual(["assistant"]);
+    expect(pendingEffectIds(s)).toEqual([]);
+    expect(
+      s.log.find(
+        (row) =>
+          row.payloadKind === "message.completed" &&
+          row.envelopeId.includes(":prompt-artifacts:")
+      )
+    ).toMatchObject({
+      payloadKind: "message.completed",
+      publish: true,
+      payload: {
+        blocks: [
+          expect.objectContaining({
+            type: "diagnostic",
+            metadata: expect.objectContaining({
+              code: "prompt_artifact_load_failed",
+              reason: "workspace prompt resource unavailable",
+            }),
+          }),
+        ],
+      },
+    });
+  });
+
   it("journals a pre-model infrastructure failure as a terminal failed turn", () => {
     const s = scenario();
 
@@ -170,21 +276,23 @@ describe("agent-loop core lifecycle", () => {
 
     // journal-before-dispatch: recv + turn.opened + message.started all durable
     expect(kinds(s)).toEqual(["message.completed", "turn.opened", "message.started"]);
-    expect(s.log[1]!.causality).toMatchObject({
+    const opened = s.log.find((row) => row.payloadKind === "turn.opened")!;
+    const started = s.log.find((row) => row.payloadKind === "message.started")!;
+    expect(opened.causality).toMatchObject({
       turnId: turn1,
       messageId: ids.recvUserMessage("chan-1", "env-1"),
     });
-    expect(s.log[2]!.envelopeId).toBe(ids.messageStarted(msg0));
+    expect(started.envelopeId).toBe(ids.messageStarted(msg0));
     expect(pendingEffectIds(s)).toEqual([ids.modelEffect(msg0)]);
 
     // the started payload fully describes the request (re-derivable, P2)
-    const request = (s.log[2]!.payload as { modelRequest: Record<string, unknown> }).modelRequest;
+    const request = (started.payload as { modelRequest: Record<string, unknown> }).modelRequest;
     expect(request).toMatchObject({
       provider: "anthropic",
       model: "claude-sonnet-4-6",
       systemPromptHash: "blob:system-prompt",
       attemptId: ids.attemptId(msg0),
-      contextThroughSeq: 2,
+      contextThroughSeq: 4,
     });
 
     resolveEffect(s, ids.modelEffect(msg0), {
@@ -519,6 +627,11 @@ describe("agent-loop core lifecycle", () => {
     });
     // model call in flight: steer only journals the user message
     expect(s.state.steeringQueue).toHaveLength(1);
+    expect(pendingEffectIds(s)).toEqual([
+      ids.modelEffect(msg0),
+      ids.promptArtifactsEffect(ids.recvUserMessage("chan-1", "env-2")),
+    ]);
+    drainPromptArtifactPreparations(s);
     expect(pendingEffectIds(s)).toEqual([ids.modelEffect(msg0)]);
 
     resolveEffect(s, ids.modelEffect(msg0), {
@@ -1533,6 +1646,8 @@ describe("wake / recovery (C-wake)", () => {
           role: "user",
           blocks: [{ type: "text", content: "hi" }],
           outcome: "completed",
+          turnTriggerEnvelopeId: "env-9",
+          promptArtifactsReady: true,
         },
         causality: { messageId: "recv:chan-1:env-9" as never },
       },
@@ -1832,6 +1947,7 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
         ...(opts.metadata ? { metadata: opts.metadata } : {}),
       },
     });
+    drainPromptArtifactPreparations(s);
   }
 
   function readAcks(s: Scenario): Array<{ messageId: string; turnId?: string }> {
@@ -1870,6 +1986,7 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
       },
     });
     expect(readAcks(s).map((ack) => ack.messageId)).not.toContain("s1");
+    drainPromptArtifactPreparations(s);
     // model completes text-only with a steer queued → continuation consumes it
     resolveEffect(s, ids.modelEffect(msg0), {
       kind: "model",
@@ -2073,6 +2190,7 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
         senderRef: userRef,
       },
     });
+    drainPromptArtifactPreparations(s);
 
     dispatch(s, { type: "command", command: { kind: "interrupt", flushDeferred: true } });
     const firstFlushId = s.log.find(
@@ -2096,6 +2214,7 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
         senderRef: userRef,
       },
     });
+    drainPromptArtifactPreparations(s);
 
     dispatch(s, { type: "command", command: { kind: "interrupt", flushDeferred: true } });
     const flushIds = s.log
@@ -2136,6 +2255,7 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
         senderRef: userRef,
       },
     });
+    drainPromptArtifactPreparations(s);
     expect(s.state.steeringQueue.map((e) => e.sourceMessageId)).toEqual(["s1"]);
     // Flush ("Send now"): abandon the pending form + deliver the steer.
     dispatch(s, { type: "command", command: { kind: "interrupt", flushDeferred: true } });

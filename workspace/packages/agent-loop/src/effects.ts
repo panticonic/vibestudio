@@ -17,15 +17,18 @@ import {
 import { ids } from "./ids.js";
 import { classifyModelFailure, type ModelFailureInfo } from "./model-errors.js";
 import type {
+  AgentLoopConfig,
   AgentState,
   InFlightModelCall,
   ModelRequestDescriptor,
   PendingApproval,
   PendingCredentialWait,
   PendingInvocation,
+  PendingPromptPreparation,
 } from "./state.js";
 
 export type EffectKind =
+  | "prompt_artifacts"
   | "model_call"
   | "local_tool"
   | "channel_call"
@@ -47,6 +50,12 @@ export interface ModelCallEffect extends EffectDescriptorBase {
   messageId: string;
   turnId: string;
   request: ModelRequestDescriptor;
+}
+
+export interface PromptArtifactsEffect extends EffectDescriptorBase {
+  kind: "prompt_artifacts";
+  triggerEnvelopeId: string;
+  requestedAtSeq: number;
 }
 
 export interface LocalToolEffect extends EffectDescriptorBase {
@@ -108,6 +117,7 @@ export interface PublishEnvelopeEffect extends EffectDescriptorBase {
 }
 
 export type EffectDescriptor =
+  | PromptArtifactsEffect
   | ModelCallEffect
   | LocalToolEffect
   | ChannelCallEffect
@@ -262,9 +272,29 @@ export function credentialWaitEffect(
   };
 }
 
+export function promptArtifactsEffect(
+  state: AgentState,
+  preparation: PendingPromptPreparation
+): PromptArtifactsEffect {
+  return {
+    effectId: ids.promptArtifactsEffect(preparation.triggerEnvelopeId),
+    kind: "prompt_artifacts",
+    channelId: state.channelId,
+    idempotencyKey: ids.promptArtifactsEffect(preparation.triggerEnvelopeId),
+    triggerEnvelopeId: preparation.triggerEnvelopeId,
+    requestedAtSeq: preparation.requestedAtSeq,
+  };
+}
+
 /** Pending effect ⟺ logged intention without logged outcome (P2). */
 export function derivePendingEffects(state: AgentState): EffectDescriptor[] {
   const out: EffectDescriptor[] = [];
+  const nextPromptPreparation = Object.values(state.pendingPromptPreparations).sort(
+    (a, b) =>
+      a.requestedAtSeq - b.requestedAtSeq ||
+      a.triggerEnvelopeId.localeCompare(b.triggerEnvelopeId)
+  )[0];
+  if (nextPromptPreparation) out.push(promptArtifactsEffect(state, nextPromptPreparation));
   if (state.inFlightModelCall) out.push(modelCallEffect(state, state.inFlightModelCall));
   for (const invocation of Object.values(state.pendingInvocations)) {
     if (invocation.requiresApproval && invocation.approvalState !== "granted") continue; // gated
@@ -294,6 +324,10 @@ export interface AppendItem {
 }
 
 export type EffectOutcome =
+  | {
+      kind: "prompt-artifacts";
+      patch: Partial<AgentLoopConfig>;
+    }
   | {
       kind: "model";
       blocks: unknown[];
@@ -387,6 +421,30 @@ export function outcomeEvents(
   outcome: EffectOutcome,
   ctx: { now: string }
 ): AppendItem[] {
+  if (descriptor.kind === "prompt_artifacts") {
+    if (outcome.kind !== "prompt-artifacts") {
+      throw new Error("prompt_artifacts expects a prompt-artifacts outcome");
+    }
+    return [
+      {
+        envelopeId: ids.promptArtifactsTerminal(descriptor.triggerEnvelopeId),
+        payloadKind: "system.event",
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          kind: "prompt.artifacts_ready",
+          triggerEnvelopeId: descriptor.triggerEnvelopeId,
+          patch: outcome.patch,
+          details: {
+            kind: "prompt.artifacts_ready",
+            triggerEnvelopeId: descriptor.triggerEnvelopeId,
+            patch: outcome.patch,
+          },
+        },
+        publish: false,
+      },
+    ];
+  }
+
   if (descriptor.kind === "model_call") {
     if (outcome.kind === "model-suspended") return []; // §1.4.5 events come from step
     if (outcome.kind === "retry") return []; // driver reschedules the same effect row

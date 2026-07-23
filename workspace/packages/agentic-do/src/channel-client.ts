@@ -245,13 +245,20 @@ export class ChannelClient {
     }
     let explicitlyClosed = false;
     const closed = (async () => {
-      for await (const record of records) {
-        if (record.kind === "subscribed") {
-          throw new Error("Channel subscription sent more than one ACK");
+      try {
+        for await (const record of records) {
+          if (record.kind === "subscribed") {
+            throw new Error("Channel subscription sent more than one ACK");
+          }
+          // Agent vessels receive live data through onChannelEnvelope. Draining
+          // this response owns their exact session lifetime; it is not a second
+          // semantic delivery path.
         }
-        // Agent vessels receive live data through onChannelEnvelope. Draining
-        // this response owns their exact session lifetime; it is not a second
-        // semantic delivery path.
+      } catch (error) {
+        // An acknowledged release/leave aborts the local response body after
+        // the channel has closed its authoritative endpoint. That local abort
+        // is the expected mirror terminal, not an unexpected disconnect.
+        if (!explicitlyClosed) throw error;
       }
       if (!explicitlyClosed) throw new Error("Channel subscription closed unexpectedly");
     })();
@@ -267,8 +274,11 @@ export class ChannelClient {
           releasePromise = (async () => {
             try {
               await this.call<void>("releaseSubscription", participantId);
-              await closed;
             } finally {
+              // The channel's method acknowledgement is the proof that it
+              // closed this exact response resource and fenced structured
+              // delivery. Do not wait for the same terminal to traverse the
+              // response stream back to the activation being released.
               controller.abort();
             }
           })();

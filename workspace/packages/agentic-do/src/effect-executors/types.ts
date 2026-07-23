@@ -6,6 +6,7 @@
  */
 
 import type {
+  AgentLoopConfig,
   AgentState,
   EffectDescriptor,
   EffectKind,
@@ -155,6 +156,9 @@ export interface ExecutorDeps {
    *  requests then fail with a clear model error, never a suspend. */
   localModels?: LocalModelsPort;
   localTools: LocalToolPort;
+  promptArtifacts?: {
+    prepare(channelId: string, signal: AbortSignal): Promise<Partial<AgentLoopConfig>>;
+  };
   http: HttpCallPort;
   callbackAddress: { source: string; className: string; objectKey: string };
   env?: Record<string, unknown>;

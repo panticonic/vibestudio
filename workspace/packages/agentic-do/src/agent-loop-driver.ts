@@ -928,7 +928,20 @@ export class AgentLoopDriver {
   /** Isolated so a failing compaction append can never fail the delivery
    *  whose journal work already succeeded (AL-8 inverse wedge). */
   private async maybeCompact(loop: LoopInstance): Promise<void> {
-    if (loop.state.openTurn) return;
+    // Prompt preparation is active semantic work even before turn.opened is
+    // journaled. Compaction here would move the context boundary between
+    // accepting the user's input and capturing the exact prompt snapshot that
+    // will execute it. Queued steering/deferred input has the same invariant:
+    // compact only once there is no accepted, unconsumed input.
+    if (
+      loop.state.openTurn ||
+      loop.state.pendingPrompt ||
+      Object.keys(loop.state.pendingPromptPreparations).length > 0 ||
+      loop.state.steeringQueue.length > 0 ||
+      loop.state.deferredPostTurnQueue.length > 0
+    ) {
+      return;
+    }
     const minEntries = this.deps.compaction?.minEntries ?? COMPACTION_MIN_ENTRIES;
     const triggerBytes = this.deps.compaction?.triggerBytes ?? COMPACTION_TRIGGER_BYTES;
     if (loop.state.entries.length < minEntries) return;
@@ -1146,7 +1159,7 @@ export class AgentLoopDriver {
     return this.outbox.forBranch(logIdForChannel(channelId)).length > 0;
   }
 
-  async dispatchDue(): Promise<void> {
+  private startDueDispatches(): Array<Promise<void>> {
     const now = this.deps.now();
     const work: Array<Promise<void>> = [];
     const unresolved = this.outbox.all();
@@ -1173,6 +1186,11 @@ export class AgentLoopDriver {
       this.outbox.lease(row.branchId, row.effectId, now);
       work.push(this.dispatchRow(row));
     }
+    return work;
+  }
+
+  async dispatchDue(): Promise<void> {
+    const work = this.startDueDispatches();
     await Promise.all(work);
   }
 
@@ -1365,6 +1383,10 @@ export class AgentLoopDriver {
       }
       return;
     }
+    // Lifecycle suspension is an activation fence, not merely an abort
+    // request. A non-cooperative executor may resolve after its AbortSignal;
+    // that late value belongs to the dying isolate and must not be journaled.
+    if (this.activationReleased && controller.signal.aborted) return;
     // Superseded run (see catch above): the live redispatch owns the row —
     // discard this outcome instead of racing its appends.
     if (this.currentDispatchByRow.get(this.rowKey(row))?.controller !== controller) return;
@@ -1852,22 +1874,59 @@ export class AgentLoopDriver {
   }
 
   /**
-   * Stop every activation-owned executor without manufacturing a semantic
-   * terminal. Durable outbox rows remain leased and are recovered by the next
-   * activation through the ordinary alarm/replay path.
+   * Fence every activation-owned executor without manufacturing a semantic
+   * terminal. Cancellation is advisory: a provider or transport is allowed to
+   * ignore AbortSignal, so lifecycle release must never wait for executor
+   * cooperation. The activationReleased fence below prevents any late result
+   * from touching durable state; replacement then terminates the old isolate
+   * and recovers the still-leased outbox rows through the ordinary alarm/replay
+   * path.
    */
   async releaseActivation(): Promise<number> {
     this.activationReleased = true;
     const active = [...this.activeDispatches];
     const reason = new Error("durable-object activation released");
     for (const entry of active) entry.controller.abort(reason);
-    await Promise.all(active.map((entry) => entry.settled));
     return active.length;
   }
 
   async alarm(): Promise<void> {
+    const { completion } = await this.beginAlarmDispatch();
+    await completion;
+  }
+
+  /**
+   * Perform the bounded, durability-critical half of an alarm and return the
+   * activation-owned I/O as a separately awaitable task.
+   *
+   * The alarm request must not own provider/model latency: workerd cannot
+   * deliver lifecycle prepare to the same Durable Object while that alarm
+   * event remains active. Rows are reconciled and leased before this method
+   * returns, so detaching `completion` introduces no unleased crash window.
+   * Durable Objects remain active while its I/O is pending; the completion's
+   * final schedule preserves ordinary lease-expiry recovery if the activation
+   * disappears or an executor ignores cancellation.
+   */
+  async beginAlarmDispatch(): Promise<{ completion: Promise<void> }> {
     await this.processScheduledModelResumes();
-    await this.pump();
+    for (const loop of this.loops.values()) {
+      await this.reconcile(loop);
+    }
+    const initialWork = this.startDueDispatches();
+    this.scheduleEarliest();
+    const completion = (async () => {
+      let work = initialWork;
+      while (work.length > 0) {
+        await Promise.all(work);
+        if (this.activationReleased) return;
+        // Outcomes can journal the next deterministic effect in the same
+        // durable chain (prompt artifacts → model, model → tool, tool →
+        // continuation). Drain those newly due rows without waiting for an
+        // arbitrary second alarm tick; leased/deferred rows are excluded.
+        work = this.startDueDispatches();
+      }
+    })().finally(() => this.scheduleEarliest());
+    return { completion };
   }
 
   async scheduleResumeAtReset(
@@ -1908,20 +1967,6 @@ export class AgentLoopDriver {
    * work into an isolate-local continuation. */
   private requestPump(): void {
     this.deps.scheduleAlarm(this.deps.now() + 1);
-  }
-
-  /** Reconcile and dispatch one alarm-owned snapshot. Rows are claimed in
-   * durable storage before external I/O, so a later alarm can recover expired
-   * work after hibernation/restart without relying on in-memory state. */
-  private async pump(): Promise<void> {
-    try {
-      for (const loop of this.loops.values()) {
-        await this.reconcile(loop);
-      }
-      await this.dispatchDue();
-    } finally {
-      this.scheduleEarliest();
-    }
   }
 
   private earliestScheduledModelResumeAt(): number | null {

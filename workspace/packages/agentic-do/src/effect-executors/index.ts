@@ -15,6 +15,7 @@ import type {
   EffectOutcome,
   HttpCallEffect,
   LocalToolEffect,
+  PromptArtifactsEffect,
   PublishEnvelopeEffect,
 } from "@workspace/agent-loop";
 import { modelCallExecutor } from "./model-call.js";
@@ -82,6 +83,17 @@ export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
         ...(terminalReasonCode ? { terminalReasonCode } : {}),
       } satisfies EffectOutcome;
     }
+  },
+};
+
+export const promptArtifactsExecutor: EffectExecutor<PromptArtifactsEffect> = {
+  kind: "prompt_artifacts",
+  async execute({ descriptor, signal, deps }) {
+    if (!deps.promptArtifacts) {
+      throw new Error("prompt artifact preparation is unavailable");
+    }
+    const patch = await deps.promptArtifacts.prepare(descriptor.channelId, signal);
+    return { kind: "prompt-artifacts", patch } satisfies EffectOutcome;
   },
 };
 
@@ -188,6 +200,8 @@ export const publishExecutor: EffectExecutor<PublishEnvelopeEffect> = {
 
 export function executorFor(descriptor: EffectDescriptor): EffectExecutor {
   switch (descriptor.kind) {
+    case "prompt_artifacts":
+      return promptArtifactsExecutor as EffectExecutor;
     case "model_call":
       return modelCallExecutor as EffectExecutor;
     case "local_tool":
