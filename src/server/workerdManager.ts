@@ -1298,12 +1298,30 @@ export class WorkerdManager {
    * event so runtime leases are resumed from durable state.
    */
   async recoverUnresponsiveSandbox(reason: string): Promise<void> {
+    return this.recoverSandbox(reason, false);
+  }
+
+  /**
+   * Recover a runtime generation that has already exited. The exit observer
+   * cannot await this work, so failures are logged at that boundary; callers
+   * reaching the new generation still receive ordinary transport terminals
+   * from the destroyed connection pool.
+   */
+  private recoverExitedSandbox(reason: string): Promise<void> {
+    return this.recoverSandbox(reason, true);
+  }
+
+  private async recoverSandbox(reason: string, alreadyExited: boolean): Promise<void> {
     if (this.unresponsiveRecovery) return this.unresponsiveRecovery;
     const recovery = (async () => {
       const correlationId = crypto.randomUUID();
       const previousGeneration = this.bootGeneration === 0 ? null : this.bootGeneration;
       log.error(`recovering unresponsive workerd sandbox: ${reason}`);
-      await this.stopWorkerd(`unresponsive-sandbox:${reason}`);
+      if (alreadyExited) {
+        await destroyWorkerdConnections(`workerd process generation crashed: ${reason}`);
+      } else {
+        await this.stopWorkerd(`unresponsive-sandbox:${reason}`);
+      }
       await this.restartWorkerd();
       await this.emitRestartReady({
         correlationId,
@@ -2230,7 +2248,15 @@ export class WorkerdManager {
           spawnedProcess.removeListener("error", onError);
           spawnedProcess.on("exit", (code, signal) => {
             this.logWorkerdExit(code, signal, spawnedPid);
-            if (this.process === spawnedProcess) this.process = null;
+            const wasCurrent = this.process === spawnedProcess;
+            if (wasCurrent) this.process = null;
+            if (wasCurrent && !this.shuttingDown) {
+              void this.recoverExitedSandbox(
+                `unexpected exit (code=${code}, signal=${signal})`
+              ).catch((err) => {
+                log.error("failed to recover unexpectedly exited workerd:", err);
+              });
+            }
           });
           spawnedProcess.on("error", (err) => {
             log.error("workerd process error:", err);
