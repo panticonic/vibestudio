@@ -20,7 +20,8 @@ function makeDoRecord(
   id: string,
   repoPath: string,
   effectiveVersion: string,
-  requestedMethods: string[] = ["credentials.listStoredCredentials"]
+  requestedMethods: string[] = ["credentials.listStoredCredentials"],
+  agentBinding?: EntityRecord["agentBinding"]
 ): EntityRecord {
   return {
     id,
@@ -31,18 +32,27 @@ function makeDoRecord(
     createdAt: Date.now(),
     status: "active",
     cleanupComplete: true,
+    activeBuildKey: `build:${effectiveVersion}`,
     activeExecutionDigest: "a".repeat(64),
     activeAuthority: {
       requests: requestedMethods.map((method) => ({
-        capability: `service:${method}`,
-        resource: {
-          kind: "exact" as const,
-          key:
-            method === "credentials.listStoredCredentials" ? "workspace:test" : `service:${method}`,
-        },
+        capability: method === "credentials.proxyFetch" ? "credential.use" : `service:${method}`,
+        resource:
+          method === "credentials.proxyFetch"
+            ? { kind: "prefix" as const, prefix: "" }
+            : {
+                kind: "exact" as const,
+                key:
+                  method === "credentials.listStoredCredentials"
+                    ? "workspace:test"
+                    : `service:${method}`,
+              },
+        tier: "gated" as const,
+        evidence: "exact" as const,
       })),
-      delegations: [],
+      evalCeilings: [],
     },
+    ...(agentBinding ? { agentBinding } : {}),
   };
 }
 
@@ -73,7 +83,9 @@ function createTestSetup(opts?: {
     args: unknown[];
   }> = [];
 
-  const dispatcher = createTestServiceDispatcher();
+  const dispatcher = createTestServiceDispatcher({
+    openMethods: ["automation.spawn", "build.recompute", "build.status"],
+  });
   const handler: ServiceDefinition["handler"] = async (ctx, method, args) => {
     const service = serviceForMethod(method);
     dispatched.push({ ctx, service, method, args });
@@ -138,7 +150,7 @@ function createTestSetup(opts?: {
 function registerRpcTestService(
   dispatcher: ServiceDispatcher,
   name: string,
-  principals: Array<"user" | "code" | "host" | "entity">,
+  principals: Array<"user" | "code" | "host">,
   methods: Record<string, "read" | "write">,
   handler: ServiceDefinition["handler"] = async () => ({ ok: true })
 ): void {
@@ -462,6 +474,50 @@ describe("RpcServer HTTP POST /rpc", () => {
       expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
     });
 
+    it("verifies exact trajectory causality without replacing the caller's code origin", async () => {
+      await gateway.stop();
+      await setup.server.stop();
+
+      setup = createTestSetup({ verifyExactCausalInvocation: vi.fn(async () => true) });
+      setup.server.initHandlers();
+      gateway = new Gateway({
+        tokenManager: setup.tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => setup.server,
+      });
+      port = await gateway.start(0);
+      const binding = {
+        entityId: "entity:agent",
+        contextId: "context:agent",
+        channelId: "channel:agent",
+        agentId: "agent:stable",
+        userId: "user:one",
+      };
+      const token = setup.tokenManager.ensureToken("agent:one", "agent", {
+        agentBinding: binding,
+      });
+      const causalParent = {
+        kind: "trajectory-invocation" as const,
+        ...channelTrajectoryFor(binding.channelId),
+        invocationId: "invocation:present",
+      };
+
+      const result = await postRpc(port, token, {
+        targetId: "main",
+        method: "build.status",
+        args: [],
+        causalParent,
+      });
+
+      expect(result.body["error"]).toBeUndefined();
+      expect(setup.dispatched.at(-1)?.ctx).toMatchObject({
+        caller: { runtime: { id: "agent:one", kind: "agent" } },
+        authorization: { authorizingOrigin: { kind: "host" } },
+        causalParent,
+      });
+      expect(setup.dispatched.at(-1)?.ctx.caller.sessionOrigin).toBeUndefined();
+    });
+
     it("uses a verified concrete DO caller for service dispatch", async () => {
       await gateway.stop();
       await setup.server.stop();
@@ -514,7 +570,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       });
     });
 
-    it("attaches verified service code identity to a concrete DO caller", async () => {
+    it("keeps ambient entity binding as a relationship instead of replacing sealed DO code authority", async () => {
       await gateway.stop();
       await setup.server.stop();
 
@@ -523,7 +579,13 @@ describe("RpcServer HTTP POST /rpc", () => {
         makeDoRecord(
           "do:workers/agent-worker:AiChatWorker:agent-1",
           "workers/agent-worker",
-          "hash-1"
+          "hash-1",
+          undefined,
+          {
+            entityId: "session:agent-1",
+            contextId: "ctx-agent-1",
+            channelId: "channel-agent-1",
+          }
         )
       );
       setup = createTestSetup({ entityCache });
@@ -569,11 +631,20 @@ describe("RpcServer HTTP POST /rpc", () => {
             {
               capability: "service:credentials.listStoredCredentials",
               resource: { kind: "exact", key: "workspace:test" },
+              tier: "gated",
+              evidence: "exact",
             },
           ],
-          delegations: [],
+          evalCeilings: [],
+        },
+        codeApproved: true,
+        agentBinding: {
+          entityId: "session:agent-1",
+          contextId: "ctx-agent-1",
+          channelId: "channel-agent-1",
         },
       });
+      expect(setup.dispatched[0]!.ctx.authorization?.authorizingOrigin.kind).toBe("code");
     });
 
     it("rejects runtime identities outside the authenticated service scope", async () => {
@@ -769,7 +840,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [{}],
       });
 
-      expect(body["error"]).toContain("authenticated code principal is required");
+      expect(body["error"]).toContain("no authority branch admits the user origin");
       expect(setup.dispatched).toHaveLength(0);
     });
 
@@ -1189,6 +1260,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       const dispatcher = createTestServiceDispatcher();
       registerRpcTestService(dispatcher, "credentials", ["code"], { proxyFetch: "write" });
       dispatcher.markInitialized();
+      const assertAuthority = vi.spyOn(dispatcher, "assertAuthority");
       const server = new RpcServer({
         tokenManager,
         dispatcher,
@@ -1235,19 +1307,25 @@ describe("RpcServer HTTP POST /rpc", () => {
                 executionDigest: "a".repeat(64),
                 requested: [
                   {
-                    capability: "service:credentials.proxyFetch",
-                    resource: {
-                      kind: "exact",
-                      key: "service:credentials.proxyFetch",
-                    },
+                    capability: "credential.use",
+                    resource: { kind: "prefix", prefix: "" },
+                    tier: "gated",
+                    evidence: "exact",
                   },
                 ],
-                delegations: [],
+                evalCeilings: [],
               },
+              codeApproved: true,
             },
           }),
           expect.any(Function),
           expect.any(AbortSignal)
+        );
+        expect(assertAuthority).toHaveBeenCalledWith(
+          expect.objectContaining({ authorityAcquisition: "wait" }),
+          "credentials",
+          "proxyFetch",
+          [{ url: "https://example.com/", method: "GET" }]
         );
       } finally {
         await gw.stop();

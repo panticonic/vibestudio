@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 import { createPanelRuntimeService } from "./panelRuntimeService.js";
 
@@ -155,7 +156,7 @@ describe("panelRuntimeService", () => {
       ownsClientSession: vi.fn(() => true),
       getLease: vi.fn(() => null),
     };
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createPanelRuntimeService({ coordinator: coordinator as never }));
     dispatcher.markInitialized();
 
@@ -184,6 +185,6 @@ describe("panelRuntimeService", () => {
           },
         ]
       )
-    ).rejects.toThrow(/not accessible to panel callers/);
+    ).rejects.toThrow(/no authority branch admits the code origin/);
   });
 });

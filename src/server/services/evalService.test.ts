@@ -172,7 +172,7 @@ describe("createEvalService", () => {
           stateArgs: {
             ownerPrincipalId: "session:default",
             subKey: "default",
-            authorityDelegationPurpose: "tool-eval",
+            authorityCeilingPurpose: "tool-eval",
           },
         },
       ],
@@ -210,7 +210,7 @@ describe("createEvalService", () => {
           stateArgs: {
             ownerPrincipalId: ownerId,
             subKey: "chan_1",
-            authorityDelegationPurpose: "agentic-code-execution",
+            authorityCeilingPurpose: "agentic-code-execution",
           },
         }),
       ],
@@ -393,15 +393,10 @@ describe("createEvalService", () => {
       (calls.find((c) => c.method === "startRun")?.args[0] as { timeoutMs?: number }).timeoutMs
     ).toBeUndefined();
 
-    // The held run + completion push run on a background task — let them settle.
-    await new Promise((r) => setTimeout(r, 10));
-    // executeRun was dispatched HELD (the mock records dispatchHeld as a dispatch).
-    expect(calls.find((c) => c.method === "executeRun")).toMatchObject({ args: [runId] });
-    // Completion pushed to the owning agent DO, content-routed by channelId.
-    expect(calls.find((c) => c.method === "onEvalComplete")).toMatchObject({
-      ref: { source: "workers/agent-worker", className: "AiChatWorker", objectKey: "abc" },
-      args: [expect.objectContaining({ runId, agentInvocationId, channelId: "chan_1" })],
-    });
+    // Untimed asynchronous eval has no host-held execution or completion transport. The EvalDO
+    // owns both after acknowledging startRun.
+    expect(calls.some((c) => c.method === "executeRun")).toBe(false);
+    expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
   });
 
   it("startRun without a caller runId mints a server uuid (and uses it for the run)", async () => {
@@ -509,11 +504,8 @@ describe("createEvalService", () => {
   });
 });
 
-/**
- * F2: when the held `executeRun` dispatch dies (server restart dropped the connection), the service
- * reconciles the run's terminal state via `getRun` and pushes `onEvalComplete` itself, so the agent's
- * parked invocation settles even if its own poll backstop never re-fires.
- */
+/** Explicit deadlines retain a host-side CPU-starvation watchdog. It observes but does not execute
+ * or deliver the EvalDO-owned asynchronous run. */
 function createHeldFailHarness(opts: {
   contextId: string;
   getRunResponse: { status: string; result?: unknown };
@@ -601,8 +593,8 @@ function createHeldFailHarness(opts: {
   return { service, calls, ownerId, recoverUnresponsiveSandbox };
 }
 
-describe("createEvalService — F2 held-run failure reconciliation", () => {
-  it("accepts a cooperative synchronous timeout without invoking process recovery", async () => {
+describe("createEvalService — explicit timeout process watchdog", () => {
+  it("accepts a cooperative timeout without invoking process recovery", async () => {
     const { service, calls, ownerId, recoverUnresponsiveSandbox } = createHeldFailHarness({
       contextId: "ctx_agent",
       getRunResponse: { status: "running" },
@@ -617,10 +609,7 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
     await new Promise((resolve) => setTimeout(resolve, 15));
 
     expect(recoverUnresponsiveSandbox).not.toHaveBeenCalled();
-    expect(calls.find((call) => call.method === "onEvalComplete")?.args[0]).toMatchObject({
-      runId: "inv-cooperative",
-      result: { success: false, error: "eval timed out after 5ms" },
-    });
+    expect(calls.some((call) => call.method === "onEvalComplete")).toBe(false);
   });
 
   it("recycles an unresponsive synchronous sandbox at its host deadline and delivers the reconciled terminal", async () => {
@@ -648,54 +637,8 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
     expect(recoverUnresponsiveSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "inv-watchdog", timeoutMs: 5 })
     );
-    expect(calls.find((call) => call.method === "getRun")).toMatchObject({
-      args: ["inv-watchdog"],
-    });
-    expect(calls.find((call) => call.method === "onEvalComplete")?.args[0]).toMatchObject({
-      runId: "inv-watchdog",
-      result: interrupted,
-    });
-  });
-
-  it("pushes onEvalComplete with the reconciled getRun result when the held run died but completed (done)", async () => {
-    const result = { success: true, console: "ok", returnValue: 7 };
-    const { service, calls, ownerId } = createHeldFailHarness({
-      contextId: "ctx_agent",
-      getRunResponse: { status: "done", result },
-    });
-
-    await service.handler(
-      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
-      "startRun",
-      [{ subKey: "chan_1", code: "return 7;", runId: "inv-h1" }]
-    );
-    await new Promise((r) => setTimeout(r, 10));
-
-    // After the held dispatch threw, the service reconciled via getRun and pushed the REAL result.
-    expect(calls.find((c) => c.method === "getRun")).toMatchObject({ args: ["inv-h1"] });
-    expect(calls.find((c) => c.method === "onEvalComplete")).toMatchObject({
-      ref: { source: "workers/agent-worker", className: "AiChatWorker", objectKey: "abc" },
-      args: [expect.objectContaining({ runId: "inv-h1", channelId: "chan_1", result })],
-    });
-  });
-
-  it("pushes a synthetic terminal failure when the held run is gone (cancelled/unknown)", async () => {
-    const { service, calls, ownerId } = createHeldFailHarness({
-      contextId: "ctx_agent",
-      getRunResponse: { status: "cancelled" },
-    });
-
-    await service.handler(
-      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
-      "startRun",
-      [{ subKey: "chan_1", code: "return 1;", runId: "inv-h2" }]
-    );
-    await new Promise((r) => setTimeout(r, 10));
-
-    const push = calls.find((c) => c.method === "onEvalComplete");
-    expect(push).toBeTruthy();
-    expect((push!.args[0] as { result: { success: boolean } }).result.success).toBe(false);
-    expect((push!.args[0] as { runId: string }).runId).toBe("inv-h2");
+    expect(calls.some((call) => call.method === "getRun")).toBe(false);
+    expect(calls.some((call) => call.method === "onEvalComplete")).toBe(false);
   });
 
   it("does not arm host recovery when the caller omits a deadline", async () => {

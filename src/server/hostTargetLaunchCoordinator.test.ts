@@ -7,7 +7,7 @@ import type { AppHost } from "./appHost.js";
 const SEALED_EXECUTION_AUTHORITY = {
   executionDigest: "a".repeat(64),
   authorityRequests: [],
-  authorityDelegations: [],
+  authorityEvalCeilings: [],
 } as const;
 
 const mobileApproval: PendingUnitBatchApproval = {

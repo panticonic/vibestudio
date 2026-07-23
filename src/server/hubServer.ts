@@ -80,6 +80,7 @@ import {
 } from "./hostCore/routedRoomStore.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { ServiceDispatcher, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { EventService } from "@vibestudio/shared/eventsService";
 import { authorizeVerifiedCaller } from "./services/authorityRuntime.js";
 import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
@@ -172,6 +173,7 @@ interface HubControlTransport {
   ingress: import("./webrtcIngress.js").WebRtcIngress;
   pairing: Omit<ConnectPairing, "code" | "room">;
   rpcServer: import("./rpcServer.js").RpcServer;
+  grantStore: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   inviteExpiryTimers: Map<string, NodeJS.Timeout>;
 }
 
@@ -1678,8 +1680,39 @@ async function startHubControlTransport(
   const reachRoot = path.join(configDir, "server-auth", "webrtc");
 
   const dispatcher = new ServiceDispatcher();
+  const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
+  const grantStore = new CapabilityGrantStore({
+    statePath: path.join(configDir, "hub-control-state"),
+  });
+  const { createApprovalQueue } = await import("./services/approvalQueue.js");
+  const approvalQueue = createApprovalQueue({
+    eventService: new EventService(),
+    autoApprove:
+      process.env["NODE_ENV"] === "development" &&
+      (process.env["VIBESTUDIO_HUB_AUTO_APPROVE"] === "1" ||
+        process.env["VIBESTUDIO_AUTO_APPROVE"] === "1"),
+  });
+  const { AcquisitionCoordinator } = await import("./services/acquisitionCoordinator.js");
+  const acquisitions = new AcquisitionCoordinator({ approvalQueue, grantStore });
+  dispatcher.setAuthorityAcquirer({
+    request: (input) => acquisitions.request(input),
+    acquire: (input, signal) => acquisitions.requestAndWait(input, signal),
+    consume: (grantId) => acquisitions.consume(grantId),
+    invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
+      acquisitions.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+  });
   dispatcher.registerService(createDirectHubControlService(state));
-  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+  const { createAuthorityService } = await import("./services/authorityService.js");
+  dispatcher.registerService(createAuthorityService({ dispatcher, acquisitions }));
+  const { createShellApprovalService } = await import("./services/shellApprovalService.js");
+  dispatcher.registerService(
+    createShellApprovalService({
+      approvalQueue,
+      capabilityGrantStore: grantStore,
+      deviceLabelFor: (deviceId) => state.identityDb.getDevice(deviceId)?.label,
+    })
+  );
+  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey, tier }) =>
     authorizeVerifiedCaller(caller, {
       workspaceId: "hub",
       workspaceMember: true,
@@ -1687,6 +1720,8 @@ async function startHubControlTransport(
       audience: "hub-control",
       capability,
       resourceKey,
+      tier,
+      grantStore,
     })
   );
   dispatcher.markInitialized();
@@ -1760,6 +1795,7 @@ async function startHubControlTransport(
       ice: clientIce,
     },
     rpcServer,
+    grantStore,
     inviteExpiryTimers: new Map(),
   };
   state.controlTransport = transport;
@@ -2055,7 +2091,14 @@ export function buildWorkspaceChildEnv(input: {
   } else {
     delete env["VIBESTUDIO_WORKSPACE_EPHEMERAL"];
   }
-  if (input.autoApproveStartupUnits) {
+  // An explicit unattended-run policy belongs to the supervising process and
+  // must survive the hub/workspace process boundary. The per-workspace bit is
+  // additive: it grants the same policy to a freshly bootstrapped workspace,
+  // but must not erase a policy the caller deliberately supplied.
+  if (
+    input.autoApproveStartupUnits ||
+    input.baseEnv["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1"
+  ) {
     env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] = "1";
   } else {
     delete env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
@@ -2770,17 +2813,13 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   await startHubControlTransport(activeState, centralPaths.configDir);
 
   let startupInvite: HubPairingInvite | null = null;
-  // A persisted device room is a live reach contract. Restart every registered
-  // child that owns at least one route so returning clients can reconnect
-  // without first reaching an in-memory hub session to re-route themselves.
-  const restartableWorkspaces = centralData.listWorkspaces().filter((entry) => {
-    const routeFile = routedRoomStatePath(entry.name);
-    return (
-      isWorkspaceEphemeral(activeState, entry.name) ||
-      (fs.existsSync(routeFile) && new RoutedRoomStore(routeFile).list().length > 0)
-    );
-  });
-  await restoreRoutedWorkspaceRuntimes(restartableWorkspaces, (name) =>
+  // Prewarm every registered workspace runtime WITHOUT blocking hub readiness.
+  // A persisted device room is a live reach contract, so routed children must
+  // restart for returning clients — but pairing and hub control must not wait
+  // out a ~20s child cold boot. Routing coalesces onto the pending start, so a
+  // client that arrives mid-boot awaits the same runtime promise instead of
+  // spawning a duplicate.
+  void restoreRoutedWorkspaceRuntimes(centralData.listWorkspaces(), (name) =>
     ensureWorkspaceRuntime(activeState, name)
   );
   let revocationCleanupDrain: Promise<void> | null = null;
@@ -2853,6 +2892,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
       state.controlTransport.inviteExpiryTimers.clear();
       await state.controlTransport.ingress.close();
       await state.controlTransport.rpcServer.stop();
+      state.controlTransport.grantStore.close();
     }
     const childProcesses = workspaceChildren();
     await Promise.all(childProcesses.map((child) => terminateWorkspaceChild(child)));

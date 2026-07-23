@@ -53,6 +53,10 @@ const surface = (target: "panel" | "workerRuntime", name: string): RuntimeSurfac
 const svc = createDocsService({
   dispatcher,
   runtimeSurfaces: { panel: emptySurface("panel"), workerRuntime: emptySurface("workerRuntime") },
+  tierLookup: (method) =>
+    method.startsWith("blobstore.")
+      ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
+      : null,
 });
 
 const ctx = (kind: CallerKind): ServiceContext =>
@@ -101,7 +105,7 @@ describe("docs service (caller-aware)", () => {
       "service:blobstore.admin.wipe",
     ])) as CatalogEntry;
     expect(entry.qualifiedName).toBe("blobstore.admin.wipe");
-    expect((entry.access as { callers?: string[] }).callers).toEqual(["server"]);
+    expect((entry.access as { principals?: string[] }).principals).toEqual(["host"]);
   });
 
   it("getSchema returns args/returns JSON Schema for visible methods", async () => {
@@ -133,6 +137,10 @@ describe("docs service (caller-aware)", () => {
         panel: surface("panel", "panelOnly"),
         workerRuntime: surface("workerRuntime", "workerOnly"),
       },
+      tierLookup: (method) =>
+        method.startsWith("blobstore.")
+          ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
+          : null,
     });
 
     const panelHits = (await runtimeSvc.handler(ctx("panel"), "search", [
@@ -152,5 +160,154 @@ describe("docs service (caller-aware)", () => {
       { surface: "runtime" },
     ])) as CatalogHit[];
     expect(extensionHits).toEqual([]);
+  });
+
+  it("does not couple stable service/runtime docs to live workspace builds", async () => {
+    let workspaceLoads = 0;
+    const partitioned = createDocsService({
+      dispatcher,
+      runtimeSurfaces: {
+        panel: surface("panel", "panelOnly"),
+        workerRuntime: surface("workerRuntime", "workerOnly"),
+      },
+      workspaceServicesForCaller: () => {
+        workspaceLoads += 1;
+        throw new Error("workspace provider build must not run for stable docs");
+      },
+      tierLookup: (method) =>
+        method.startsWith("blobstore.")
+          ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
+          : null,
+    });
+
+    expect(
+      await partitioned.handler(ctx("worker"), "describe", ["runtime:workerRuntime.workerOnly"])
+    ).toMatchObject({ id: "runtime:workerRuntime.workerOnly" });
+    expect(
+      await partitioned.handler(ctx("worker"), "describe", ["service:blobstore.putText"])
+    ).toMatchObject({ id: "service:blobstore.putText" });
+    expect(
+      await partitioned.handler(ctx("worker"), "search", ["worker runtime", { surface: "runtime" }])
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "runtime:workerRuntime.workerOnly" })])
+    );
+    expect(workspaceLoads).toBe(0);
+  });
+
+  it("discovers workspace service capabilities from the caller's live semantic context", async () => {
+    const servicesByCaller = new Map<
+      string,
+      import("./docsService.js").LiveWorkspaceServiceDoc[]
+    >();
+    const dynamic = createDocsService({
+      dispatcher,
+      runtimeSurfaces: {
+        panel: emptySurface("panel"),
+        workerRuntime: emptySurface("workerRuntime"),
+      },
+      workspaceServicesForCaller: (callerCtx) =>
+        servicesByCaller.get(callerCtx.caller.runtime.id) ?? [],
+      tierLookup: (method) =>
+        method.startsWith("blobstore.")
+          ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
+          : null,
+    });
+    const author = ctx("worker");
+    author.caller.runtime.id = "worker:author";
+    const other = ctx("worker");
+    other.caller.runtime.id = "worker:other";
+    expect(await dynamic.handler(author, "describe", ["workspace:notes"])).toBeNull();
+    servicesByCaller.set("worker:author", [
+      {
+        providerEffectiveVersion: "a".repeat(64),
+        methods: [
+          {
+            name: "getNote",
+            signature: "getNote(id: string): Promise<string>",
+            access: { tier: "open", sensitivity: "read", principals: ["code"] },
+          },
+        ],
+        declaration: {
+          source: "workers/notes",
+          name: "notes",
+          protocols: ["notes.v1"],
+          authority: { principals: ["code"] },
+          durableObject: { className: "NotesDO" },
+        },
+      },
+    ]);
+    expect(await dynamic.handler(author, "describe", ["workspace:notes"])).toMatchObject({
+      surface: "workspace",
+      access: { capability: "workspace-service:notes", source: "workers/notes" },
+      members: ["getNote"],
+    });
+    expect(await dynamic.handler(author, "describe", ["workspace:notes.getNote"])).toMatchObject({
+      signature: "getNote(id: string): Promise<string>",
+      access: { providerEffectiveVersion: "a".repeat(64), receiver: { tier: "open" } },
+    });
+    expect(await dynamic.handler(other, "describe", ["workspace:notes"])).toBeNull();
+  });
+
+  it("keeps stable repair docs available while a workspace provider build is invalid", async () => {
+    const reported: unknown[] = [];
+    const repairing = createDocsService({
+      dispatcher,
+      runtimeSurfaces: {
+        panel: emptySurface("panel"),
+        workerRuntime: emptySurface("workerRuntime"),
+      },
+      workspaceServicesForCaller: () => {
+        throw new Error("notes provider has an invalid RPC declaration");
+      },
+      reportWorkspaceDocsError: (error) => reported.push(error),
+      tierLookup: (method) =>
+        method.startsWith("blobstore.")
+          ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
+          : null,
+    });
+
+    const hits = (await repairing.handler(ctx("worker"), "search", [
+      "store utf-8",
+      undefined,
+    ])) as CatalogHit[];
+    expect(hits.some((hit) => hit.id === "service:blobstore.putText")).toBe(true);
+    await repairing.handler(ctx("worker"), "search", ["store utf-8", undefined]);
+    expect(reported).toHaveLength(1);
+  });
+
+  it("keeps an invalid provider declaration discoverable without inventing method docs", async () => {
+    const dynamic = createDocsService({
+      dispatcher,
+      runtimeSurfaces: {
+        panel: emptySurface("panel"),
+        workerRuntime: emptySurface("workerRuntime"),
+      },
+      workspaceServicesForCaller: () => [
+        {
+          declaration: {
+            source: "workers/notes",
+            name: "notes",
+            protocols: ["notes.v1"],
+            authority: { principals: ["code"] },
+            durableObject: { className: "NotesDO" },
+          },
+          providerBuildError: "reportValue must declare a literal RPC effect",
+          methods: [],
+        },
+      ],
+      tierLookup: (method) =>
+        method.startsWith("blobstore.")
+          ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
+          : null,
+    });
+
+    const entry = await dynamic.handler(ctx("worker"), "describe", ["workspace:notes"]);
+    expect(entry).toMatchObject({
+      access: {
+        availability: "build-error",
+        providerBuildError: "reportValue must declare a literal RPC effect",
+      },
+    });
+    expect(entry).not.toHaveProperty("members");
   });
 });

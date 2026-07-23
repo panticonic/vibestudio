@@ -4,7 +4,7 @@ import { createLiveCallerGate } from "./liveCallerGate.js";
 
 describe("createLiveCallerGate", () => {
   const executionDigest = "a".repeat(64);
-  const authority = { requests: [], delegations: [] } as const;
+  const authority = { requests: [], evalCeilings: [] } as const;
   const codeIdentity = (
     callerId: string,
     callerKind: "panel" | "app" | "worker" | "do",
@@ -16,7 +16,7 @@ describe("createLiveCallerGate", () => {
     effectiveVersion: "ev-1",
     executionDigest,
     requested: authority.requests,
-    delegations: authority.delegations,
+    evalCeilings: authority.evalCeilings,
   });
 
   function fixture() {

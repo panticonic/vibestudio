@@ -4,15 +4,18 @@ import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import { createHostCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
+import { PRODUCT_WORKSPACE_SERVICES } from "@vibestudio/shared/productWorkspaceServices.mjs";
+import type { DirectAuthorityAttestation } from "@vibestudio/rpc";
 import { randomBytes } from "node:crypto";
 import { assertPresent } from "../../lintHelpers";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { EgressProxy } from "../services/egressProxy.js";
 import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
 import type { RouteRegistry } from "../routeRegistry.js";
-import { attestDirectRpc } from "../services/authorityRuntime.js";
+import { attestDirectRpc, attestWorkspaceDoRpc } from "../services/authorityRuntime.js";
 import { SEMANTIC_CONTROL_PLANE } from "../internalDOs/controlPlane.js";
 import type { WorkerdManager, WorkerdWorkspaceProvider } from "../workerdManager.js";
+import type { DORef } from "../workerdRpcRelay.js";
 
 export interface WorkerdGatewayBootstrapConfig {
   getPort(): number | null;
@@ -67,6 +70,73 @@ export function resolveWorkerdServerAliasUrls(config: WorkerdGatewayBootstrapCon
 }
 
 /**
+ * One authority mediator for every host-originated direct DO call. Workspace
+ * services are discovered from live declarations and their method effect is
+ * resolved from the exact build bound to the object. Product-sealed services
+ * use the same projection, with their reviewed topology as the sole static
+ * input. Unknown workspace methods fail before crossing the receiver boundary.
+ */
+export function createHostDoAuthorityAttester(input: {
+  manager: Pick<WorkerdManager, "resolveDoRpcMethodAuthority">;
+  workspaceId: string;
+  services: WorkspaceDeclarations["services"];
+  callerId?: string;
+}): (ref: DORef, method: string) => DirectAuthorityAttestation {
+  return (ref, method) => {
+    const caller = createHostCaller(input.callerId ?? "main", "server", {
+      userId: "system",
+      handle: "system",
+    });
+    const facts = {
+      caller,
+      source: ref.source,
+      className: ref.className,
+      objectKey: ref.objectKey,
+      method,
+      workspaceId: input.workspaceId,
+      workspaceMember: true,
+      sessionId: `host:${method}`,
+    } as const;
+    if (method.startsWith("__")) return attestDirectRpc(facts);
+
+    const matches = [...input.services, ...PRODUCT_WORKSPACE_SERVICES].filter((service) => {
+      const durableObject = service.durableObject;
+      return (
+        service.source === ref.source &&
+        durableObject?.className === ref.className &&
+        (!("objectKey" in durableObject) || durableObject.objectKey === ref.objectKey)
+      );
+    });
+    if (matches.length > 1) {
+      throw new Error(
+        `Direct DO target ${ref.source}:${ref.className}:${ref.objectKey} has ambiguous workspace service authority`
+      );
+    }
+    const service = matches[0];
+    if (!service) return attestDirectRpc(facts);
+    const methodAuthority = input.manager.resolveDoRpcMethodAuthority(
+      ref.source,
+      ref.className,
+      ref.objectKey,
+      method
+    );
+    if (!methodAuthority) {
+      throw new Error(
+        `Live workspace service ${ref.source}:${ref.className}.${method} has no exact build-catalog declaration`
+      );
+    }
+    return attestWorkspaceDoRpc({
+      ...facts,
+      service: { name: service.name, principals: service.authority.principals },
+      methodAuthority: {
+        effect: methodAuthority.effect,
+        tier: methodAuthority.access?.tier ?? "open",
+      },
+    });
+  };
+}
+
+/**
  * Register the workerd process manager and its sole transport dependency.
  *
  * Downstream services depend on `doDispatch` or `workerdManager` through the
@@ -78,7 +148,10 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
 
   deps.container.registerManaged({
     name: "workerdManager",
-    dependencies: ["fsService"],
+    // Workerd calls back into host RPC while activation work and lifecycle
+    // release settle. Starting after RpcServer and stopping before it keeps
+    // that return path available for the whole sandbox generation.
+    dependencies: ["fsService", "rpcServer"],
     async start(resolve) {
       const { WorkerdManager } = await import("../workerdManager.js");
       const { getWorkerdProgramSources } = await import("../workerdProgramLoader.js");
@@ -157,19 +230,11 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         return `http://127.0.0.1:${port}`;
       });
       dispatch.setGetDispatchSecret(() => manager.getDispatchSecret());
-      dispatch.setAuthorityAttester((ref, method) =>
-        attestDirectRpc({
-          caller: createHostCaller("main", "server", {
-            userId: "system",
-            handle: "system",
-          }),
-          source: ref.source,
-          className: ref.className,
-          objectKey: ref.objectKey,
-          method,
+      dispatch.setAuthorityAttester(
+        createHostDoAuthorityAttester({
+          manager,
           workspaceId: deps.workspaceId,
-          workspaceMember: true,
-          sessionId: `host:${method}`,
+          services: deps.workspaceDeclarations.services,
         })
       );
       return dispatch;

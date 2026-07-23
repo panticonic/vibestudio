@@ -1,15 +1,14 @@
 import {
   parseUnitAuthorityManifest,
-  type EvalAuthorityDelegation,
+  type EvalAuthorityCeiling,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
-import type { CapabilityScope } from "@vibestudio/rpc";
 import type { EntityActivationInput, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
 export interface PreparedExecutionIdentity {
   executionDigest?: string;
-  authorityRequests?: readonly CapabilityScope[];
-  authorityDelegations?: readonly EvalAuthorityDelegation[];
+  authorityRequests?: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
+  authorityEvalCeilings?: readonly EvalAuthorityCeiling[];
 }
 
 export interface ActiveExecutionIdentity {
@@ -53,10 +52,21 @@ export function requireActiveExecutionIdentity(
   if (!prepared.executionDigest || !/^[0-9a-f]{64}$/.test(prepared.executionDigest)) {
     throw new Error(`${label} is missing a canonical execution digest`);
   }
+  // Source manifests may omit an orthogonal empty section, but the builder
+  // normalizes both arrays into the immutable execution recipe. Crossing the
+  // activation boundary with either field absent would make it impossible to
+  // distinguish a deliberately empty envelope from a partially propagated
+  // one, so the sealed runtime form is intentionally total.
+  if (!Array.isArray(prepared.authorityRequests)) {
+    throw new Error(`${label} authority is missing normalized requests`);
+  }
+  if (!Array.isArray(prepared.authorityEvalCeilings)) {
+    throw new Error(`${label} authority is missing normalized evalCeilings`);
+  }
   const activeAuthority = parseUnitAuthorityManifest(
     {
       requests: prepared.authorityRequests,
-      delegations: prepared.authorityDelegations,
+      evalCeilings: prepared.authorityEvalCeilings,
     },
     `${label} authority`
   );

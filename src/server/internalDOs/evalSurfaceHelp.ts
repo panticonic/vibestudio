@@ -54,9 +54,9 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
   },
   "runtime.retireEntity": {
     description:
-      "Prefer workers.destroy(handleOrId) for regular workers. The raw equivalent is " +
+      "Prefer workers.destroy(entityOrId) for regular workers and disposable resolved Durable Objects. The raw equivalent is " +
       'rpc.call("main", `runtime.retireEntity`, [{ id }]), passing the entity id returned by ' +
-      "runtime.createEntity. Verify it disappeared with workers.list() or runtime.listEntities.",
+      "runtime.createEntity or the targetId returned by workers.resolveDurableObject. Resolving a shared service does not transfer ownership; retire only entities whose lifecycle you own. Verify retirement with runtime.listEntities.",
   },
 };
 

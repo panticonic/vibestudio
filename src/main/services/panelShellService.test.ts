@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { createPanelShellService } from "./panelShellService.js";
 
 const appCtx: ServiceContext = { caller: createVerifiedCaller("@workspace-apps/shell", "app") };
@@ -12,8 +13,8 @@ function createServiceHarness(appCapabilities: string[] = []) {
   const setCurrentThemeConfig = vi.fn();
   const broadcastThemeConfig = vi.fn();
   const themeConfig = {
-    accentColor: "amber",
-    grayColor: "slate",
+    accentColor: "violet",
+    grayColor: "mauve",
     radius: "medium" as const,
     scaling: "100%" as const,
     panelBackground: "translucent" as const,
@@ -180,7 +181,7 @@ describe("PanelShellService", () => {
 
   it("exposes only the theme config getter to panel callers through dispatch policy", async () => {
     const harness = createServiceHarness();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(harness.service);
     dispatcher.markInitialized();
 

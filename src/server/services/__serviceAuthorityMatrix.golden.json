@@ -6,7 +6,7 @@
     "methods": {
       "getProfile": {
         "authority": {
-          "principals": ["host", "user", "code", "entity"]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -14,7 +14,7 @@
       },
       "isMember": {
         "authority": {
-          "principals": ["host", "user", "code", "entity"]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -22,7 +22,7 @@
       },
       "listWorkspaceMembers": {
         "authority": {
-          "principals": ["host", "user", "code", "entity"]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -30,7 +30,7 @@
       },
       "resolveProfiles": {
         "authority": {
-          "principals": ["host", "user", "code", "entity"]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -40,7 +40,7 @@
   },
   "audit": {
     "service": {
-      "principals": ["user", "host", "code", "entity"]
+      "principals": ["user", "host", "code"]
     },
     "methods": {
       "query": {
@@ -60,7 +60,7 @@
     "methods": {
       "getConnectionInfo": {
         "authority": {
-          "principals": ["host", "user", "code", "entity"]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -88,6 +88,29 @@
         },
         "access": {
           "sensitivity": "admin"
+        }
+      }
+    }
+  },
+  "authority": {
+    "service": {
+      "principals": ["host", "user", "code", "session", "mission"]
+    },
+    "methods": {
+      "awaitDecision": {
+        "authority": {
+          "principals": ["host", "user", "code", "session", "mission"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "preflight": {
+        "authority": {
+          "principals": ["host", "user", "code", "session", "mission"]
+        },
+        "access": {
+          "sensitivity": "read"
         }
       }
     }
@@ -354,6 +377,166 @@
       }
     }
   },
+  "contentTrust": {
+    "service": {
+      "principals": ["user", "host"]
+    },
+    "methods": {
+      "addPolicy": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "list": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "revoke": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "status": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "vouch": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      }
+    }
+  },
+  "contextIntegrity": {
+    "service": {
+      "principals": ["code"]
+    },
+    "methods": {
+      "fact": {
+        "authority": {
+          "requirement": {
+            "kind": "all",
+            "requirements": [
+              {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "service:contextIntegrity.fact"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "session",
+                        "capability": "service:contextIntegrity.fact"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "relationship",
+                "name": "agent-binding"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:contextIntegrity.fact"
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "ingest": {
+        "authority": {
+          "requirement": {
+            "kind": "all",
+            "requirements": [
+              {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "service:contextIntegrity.ingest"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "session",
+                        "capability": "service:contextIntegrity.ingest"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "relationship",
+                "name": "agent-binding"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:contextIntegrity.ingest"
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
   "corsApproval": {
     "service": {
       "principals": ["code"]
@@ -361,13 +544,62 @@
     "methods": {
       "authorize": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "network.response.read"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "network.response.read"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "network.response.read"
+          },
+          "prepared": {
+            "resolver": "corsApproval.authorize.target",
+            "leaves": [
+              {
+                "capability": "network.response.read",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write",
           "approval": [
             {
-              "capability": "cors-response-read",
+              "capability": "network.response.read",
               "operation": {
                 "kind": "network",
                 "verb": "Read cross-origin response"
@@ -448,7 +680,63 @@
       },
       "deleteClientConfig": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "account-providers.delete"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "account-providers.delete"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "account-providers.delete"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "account-providers.delete"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "argument",
+            "index": 0,
+            "path": ["configId"]
+          }
         },
         "access": {
           "sensitivity": "destructive",
@@ -552,7 +840,63 @@
       },
       "revokeCredential": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "accounts.disconnect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "accounts.disconnect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "accounts.disconnect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "accounts.disconnect"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "argument",
+            "index": 0,
+            "path": ["credentialId"]
+          }
         },
         "access": {
           "sensitivity": "destructive"
@@ -581,7 +925,7 @@
   },
   "docs": {
     "service": {
-      "principals": ["code", "host", "user", "entity"]
+      "principals": ["code", "host", "user"]
     },
     "methods": {
       "describe": {
@@ -636,7 +980,7 @@
   },
   "eval": {
     "service": {
-      "principals": ["code", "user", "host", "entity"]
+      "principals": ["code", "user", "host"]
     },
     "methods": {
       "cancel": {
@@ -822,14 +1166,82 @@
     "methods": {
       "openExternal": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "external.open"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "external.open"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "external.open"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "external.open"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "external.open"
+          },
+          "prepared": {
+            "resolver": "externalOpen.openExternal.target",
+            "leaves": [
+              {
+                "capability": "external.open",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write",
           "approval": [
             {
               "when": "caller is panel/app/worker/do",
-              "capability": "external-browser-open",
+              "capability": "external.open",
               "operation": {
                 "kind": "browser",
                 "verb": "Open external browser"
@@ -844,7 +1256,7 @@
   },
   "fs": {
     "service": {
-      "principals": ["code", "host", "user", "entity"]
+      "principals": ["code", "host", "user"]
     },
     "methods": {
       "access": {
@@ -1279,12 +1691,12 @@
   },
   "mirror": {
     "service": {
-      "principals": ["user", "entity", "code", "host"]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "objects": {
         "authority": {
-          "principals": ["user", "entity", "code", "host"]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -1292,10 +1704,97 @@
       },
       "targets": {
         "authority": {
-          "principals": ["user", "entity", "code", "host"]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
+        }
+      }
+    }
+  },
+  "mission": {
+    "service": {
+      "principals": ["user", "host"]
+    },
+    "methods": {
+      "approve": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "admin"
+        }
+      },
+      "createDraft": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "edit": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "finishSession": {
+        "authority": {
+          "principals": ["host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "get": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "list": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "pause": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "resume": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "retire": {
+        "authority": {
+          "principals": ["user", "host"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "startSession": {
+        "authority": {
+          "principals": ["host"]
+        },
+        "access": {
+          "sensitivity": "write"
         }
       }
     }
@@ -1341,12 +1840,130 @@
   },
   "panelCdp": {
     "service": {
-      "principals": ["user", "host", "code", "entity"]
+      "principals": ["user", "host", "code"]
     },
     "methods": {
       "consoleHistory": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelCdp.consoleHistory"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelCdp.consoleHistory"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelCdp.consoleHistory"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelCdp.consoleHistory"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelCdp.consoleHistory"
+          },
+          "prepared": {
+            "resolver": "panelCdp.consoleHistory.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -1354,7 +1971,125 @@
       },
       "getCdpEndpoint": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "panel.inspect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "panel.inspect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "panel.inspect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "panel.inspect"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "panel.inspect"
+          },
+          "prepared": {
+            "resolver": "panelCdp.getCdpEndpoint.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "admin"
@@ -1362,7 +2097,125 @@
       },
       "goBack": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelCdp.goBack"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelCdp.goBack"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelCdp.goBack"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelCdp.goBack"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelCdp.goBack"
+          },
+          "prepared": {
+            "resolver": "panelCdp.goBack.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1370,7 +2223,125 @@
       },
       "goForward": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelCdp.goForward"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelCdp.goForward"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelCdp.goForward"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelCdp.goForward"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelCdp.goForward"
+          },
+          "prepared": {
+            "resolver": "panelCdp.goForward.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1402,7 +2373,125 @@
       },
       "navigate": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelCdp.navigate"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelCdp.navigate"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelCdp.navigate"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelCdp.navigate"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelCdp.navigate"
+          },
+          "prepared": {
+            "resolver": "panelCdp.navigate.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1410,7 +2499,125 @@
       },
       "reload": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelCdp.reload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelCdp.reload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelCdp.reload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelCdp.reload"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelCdp.reload"
+          },
+          "prepared": {
+            "resolver": "panelCdp.reload.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1418,7 +2625,125 @@
       },
       "screenshot": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelCdp.screenshot"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelCdp.screenshot"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelCdp.screenshot"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelCdp.screenshot"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelCdp.screenshot"
+          },
+          "prepared": {
+            "resolver": "panelCdp.screenshot.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -1426,7 +2751,125 @@
       },
       "stop": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelCdp.stop"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelCdp.stop"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelCdp.stop"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelCdp.stop"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelCdp.stop"
+          },
+          "prepared": {
+            "resolver": "panelCdp.stop.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1465,7 +2908,7 @@
       },
       "getSnapshot": {
         "authority": {
-          "principals": ["user", "code", "entity", "host"]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -1512,7 +2955,125 @@
     "methods": {
       "archive": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.archive"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.archive"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.archive"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.archive"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.archive"
+          },
+          "prepared": {
+            "resolver": "panelTree.archive.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "destructive"
@@ -1528,7 +3089,125 @@
       },
       "callAgent": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.callAgent"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.callAgent"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.callAgent"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.callAgent"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.callAgent"
+          },
+          "prepared": {
+            "resolver": "panelTree.callAgent.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1536,7 +3215,125 @@
       },
       "close": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.close"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.close"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.close"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.close"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.close"
+          },
+          "prepared": {
+            "resolver": "panelTree.close.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "destructive"
@@ -1544,7 +3341,125 @@
       },
       "create": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.create"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.create"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.create"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.create"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.create"
+          },
+          "prepared": {
+            "resolver": "panelTree.create.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1560,7 +3475,125 @@
       },
       "expandIds": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.expandIds"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.expandIds"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.expandIds"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.expandIds"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.expandIds"
+          },
+          "prepared": {
+            "resolver": "panelTree.expandIds.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1608,7 +3641,7 @@
       },
       "getTreeSnapshot": {
         "authority": {
-          "principals": ["code", "user", "host", "entity"]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -1624,7 +3657,7 @@
       },
       "metadata": {
         "authority": {
-          "principals": ["code", "user", "host", "entity"]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -1632,7 +3665,125 @@
       },
       "movePanel": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.movePanel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.movePanel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.movePanel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.movePanel"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.movePanel"
+          },
+          "prepared": {
+            "resolver": "panelTree.movePanel.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1649,6 +3800,20 @@
                   {
                     "kind": "capability",
                     "principal": "code",
+                    "capability": "service:panelTree.navigate"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
                     "capability": "service:panelTree.navigate"
                   },
                   {
@@ -1707,6 +3872,20 @@
                     "requirements": [
                       {
                         "kind": "capability",
+                        "principal": "session",
+                        "capability": "service:workspace-state.slot.commitPreparedNavigation"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
                         "principal": "user",
                         "capability": "service:workspace-state.slot.commitPreparedNavigation"
                       },
@@ -1726,12 +3905,72 @@
               "resource": {
                 "kind": "literal",
                 "key": "service:workspace-state.slot.commitPreparedNavigation"
-              },
-              "evalAcquisition": {
-                "kind": "baseline"
               }
             }
-          ]
+          ],
+          "prepared": {
+            "resolver": "panelTree.navigate.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1748,6 +3987,20 @@
                   {
                     "kind": "capability",
                     "principal": "code",
+                    "capability": "service:panelTree.navigateHistory"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
                     "capability": "service:panelTree.navigateHistory"
                   },
                   {
@@ -1806,6 +4059,20 @@
                     "requirements": [
                       {
                         "kind": "capability",
+                        "principal": "session",
+                        "capability": "service:workspace-state.slot.commitPreparedNavigation"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
                         "principal": "user",
                         "capability": "service:workspace-state.slot.commitPreparedNavigation"
                       },
@@ -1825,12 +4092,72 @@
               "resource": {
                 "kind": "literal",
                 "key": "service:workspace-state.slot.commitPreparedNavigation"
-              },
-              "evalAcquisition": {
-                "kind": "baseline"
               }
             }
-          ]
+          ],
+          "prepared": {
+            "resolver": "panelTree.navigateHistory.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1838,7 +4165,125 @@
       },
       "openDevTools": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.openDevTools"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.openDevTools"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.openDevTools"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.openDevTools"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.openDevTools"
+          },
+          "prepared": {
+            "resolver": "panelTree.openDevTools.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1846,7 +4291,125 @@
       },
       "rebuildAndReload": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.rebuildAndReload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.rebuildAndReload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.rebuildAndReload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.rebuildAndReload"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.rebuildAndReload"
+          },
+          "prepared": {
+            "resolver": "panelTree.rebuildAndReload.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1854,7 +4417,125 @@
       },
       "rebuildPanel": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.rebuildPanel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.rebuildPanel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.rebuildPanel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.rebuildPanel"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.rebuildPanel"
+          },
+          "prepared": {
+            "resolver": "panelTree.rebuildPanel.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1862,7 +4543,125 @@
       },
       "reload": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.reload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.reload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.reload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.reload"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.reload"
+          },
+          "prepared": {
+            "resolver": "panelTree.reload.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1878,7 +4677,125 @@
       },
       "setCollapsed": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.setCollapsed"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.setCollapsed"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.setCollapsed"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.setCollapsed"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.setCollapsed"
+          },
+          "prepared": {
+            "resolver": "panelTree.setCollapsed.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1886,7 +4803,125 @@
       },
       "setStateArgs": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.setStateArgs"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.setStateArgs"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.setStateArgs"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.setStateArgs"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.setStateArgs"
+          },
+          "prepared": {
+            "resolver": "panelTree.setStateArgs.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1902,7 +4937,125 @@
       },
       "takeOver": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.takeOver"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.takeOver"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.takeOver"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.takeOver"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.takeOver"
+          },
+          "prepared": {
+            "resolver": "panelTree.takeOver.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1910,7 +5063,125 @@
       },
       "unload": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.unload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.unload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.unload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.unload"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.unload"
+          },
+          "prepared": {
+            "resolver": "panelTree.unload.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1918,7 +5189,125 @@
       },
       "updatePanelState": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelTree.updatePanelState"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelTree.updatePanelState"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelTree.updatePanelState"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelTree.updatePanelState"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelTree.updatePanelState"
+          },
+          "prepared": {
+            "resolver": "panelTree.updatePanelState.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": ["gated", "critical"]
+                }
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -1951,7 +5340,7 @@
   },
   "phoneProvisioning": {
     "service": {
-      "principals": ["entity", "code", "user"]
+      "principals": ["code", "user"]
     },
     "methods": {
       "devices": {
@@ -1995,7 +5384,7 @@
     "methods": {
       "getPanelActiveOwner": {
         "authority": {
-          "principals": ["host", "user", "code", "entity"]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -2015,14 +5404,177 @@
       }
     }
   },
+  "push": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "listRegistrations": {
+        "authority": {
+          "principals": ["host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "register": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "send": {
+        "authority": {
+          "principals": ["host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "unregister": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      }
+    }
+  },
   "runtime": {
     "service": {
       "principals": ["code", "user", "host"]
     },
     "methods": {
+      "activatePanelEntity": {
+        "authority": {
+          "principals": ["host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
       "cloneContext": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "context.clone"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "context.clone"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "context.clone"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "context.clone"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "context.clone"
+          },
+          "prepared": {
+            "resolver": "runtime.cloneContext.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write",
@@ -2041,7 +5593,123 @@
       },
       "createContext": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "context.boundary"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "context.boundary"
+          },
+          "prepared": {
+            "resolver": "runtime.createContext.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -2049,7 +5717,123 @@
       },
       "createEntity": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "context.boundary"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "context.boundary"
+          },
+          "prepared": {
+            "resolver": "runtime.createEntity.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write",
@@ -2080,7 +5864,123 @@
       },
       "createSubagentContext": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "subagents.create"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "subagents.create"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "subagents.create"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "subagents.create"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "subagents.create"
+          },
+          "prepared": {
+            "resolver": "runtime.createSubagentContext.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -2088,7 +5988,123 @@
       },
       "destroyContext": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "context.boundary"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "context.boundary"
+          },
+          "prepared": {
+            "resolver": "runtime.destroyContext.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "critical"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "destructive",
@@ -2107,7 +6123,7 @@
       },
       "listEntities": {
         "authority": {
-          "principals": ["code", "host", "user", "entity"]
+          "principals": ["code", "host", "user"]
         },
         "access": {
           "sensitivity": "read"
@@ -2115,7 +6131,7 @@
       },
       "listOwnedContexts": {
         "authority": {
-          "principals": ["code", "host", "user", "entity"]
+          "principals": ["code", "host", "user"]
         },
         "access": {
           "sensitivity": "read"
@@ -2129,9 +6145,17 @@
           "sensitivity": "write"
         }
       },
+      "reservePanelEntity": {
+        "authority": {
+          "principals": ["host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
       "resolveContext": {
         "authority": {
-          "principals": ["code", "host", "user", "entity"]
+          "principals": ["code", "host", "user"]
         },
         "access": {
           "sensitivity": "read"
@@ -2139,7 +6163,123 @@
       },
       "retireEntity": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "context.boundary"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "context.boundary"
+          },
+          "prepared": {
+            "resolver": "runtime.retireEntity.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "critical"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "destructive"
@@ -2157,7 +6297,7 @@
   },
   "serverLog": {
     "service": {
-      "principals": ["user", "code", "host", "entity"]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "query": {
@@ -2376,7 +6516,7 @@
   },
   "vcs": {
     "service": {
-      "principals": ["user", "code", "host", "entity"]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "blame": {
@@ -2571,7 +6711,75 @@
     "methods": {
       "getEndpoint": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "runtime.inspect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "runtime.inspect"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "runtime.inspect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "runtime.inspect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "runtime.inspect"
+          },
+          "prepared": {
+            "resolver": "workerdInspector.getEndpoint.target",
+            "leaves": [
+              {
+                "capability": "runtime.inspect",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "admin"
@@ -2666,12 +6874,8 @@
                 "requirements": [
                   {
                     "kind": "capability",
-                    "principal": "entity",
+                    "principal": "session",
                     "capability": "service:workers.resolveDurableObject"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "agent-binding"
                   },
                   {
                     "kind": "relationship",
@@ -2690,12 +6894,10 @@
             "leaves": [
               {
                 "capability": "workspace-service:*",
+                "tier": "gated",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["host", "user", "code", "entity"]
-                },
-                "evalAcquisition": {
-                  "kind": "baseline"
+                  "principals": ["host", "user", "code"]
                 }
               },
               {
@@ -2703,9 +6905,6 @@
                 "requirement": {
                   "kind": "selected",
                   "principals": ["code"]
-                },
-                "evalAcquisition": {
-                  "kind": "baseline"
                 }
               }
             ]
@@ -2758,12 +6957,8 @@
                 "requirements": [
                   {
                     "kind": "capability",
-                    "principal": "entity",
+                    "principal": "session",
                     "capability": "service:workers.resolveService"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "agent-binding"
                   },
                   {
                     "kind": "relationship",
@@ -2782,12 +6977,10 @@
             "leaves": [
               {
                 "capability": "workspace-service:*",
+                "tier": "gated",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["host", "user", "code", "entity"]
-                },
-                "evalAcquisition": {
-                  "kind": "baseline"
+                  "principals": ["host", "user", "code"]
                 }
               }
             ]
@@ -2974,7 +7167,7 @@
       },
       "listSkills": {
         "authority": {
-          "principals": ["host", "user", "code", "entity"]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -2982,7 +7175,7 @@
       },
       "readSkill": {
         "authority": {
-          "principals": ["host", "user", "code", "entity"]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -3083,6 +7276,14 @@
         "access": {
           "sensitivity": "read"
         }
+      },
+      "validateConfig": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
       }
     }
   },
@@ -3105,6 +7306,14 @@
         },
         "access": {
           "sensitivity": "write"
+        }
+      },
+      "entity.resolve": {
+        "authority": {
+          "principals": ["user", "code", "host"]
+        },
+        "access": {
+          "sensitivity": "read"
         }
       },
       "entity.resolveActive": {

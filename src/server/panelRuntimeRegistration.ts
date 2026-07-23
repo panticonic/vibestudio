@@ -37,6 +37,7 @@ import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
 import type { SlotRow } from "@vibestudio/shell-core/workspaceStateClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ContextIngestionRecorder } from "./services/contextIntegrityStore.js";
 
 const log = createDevLogger("PanelRuntimeRegistration");
 
@@ -108,6 +109,7 @@ export interface CommonDeps {
   /** Live config reads and GAD-authoritative protected-main writes. */
   getWorkspaceConfig?: () => WorkspaceConfig;
   persistWorkspaceConfigField?: (ctx: ServiceContext, key: string, value: unknown) => Promise<void>;
+  recordContextIngestion?: ContextIngestionRecorder;
   treeScanner?: import("./vcsHost/workspaceTreeScanner.js").WorkspaceTreeScanner;
   adminToken: string;
   hostConfig: HostConfig;
@@ -287,11 +289,15 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       if (!rec) return null;
       const k = rec.kind;
       if (k !== "panel" && k !== "app" && k !== "worker" && k !== "do") return null;
+      if (!rec.activeExecutionDigest || !rec.activeAuthority) return null;
       return createVerifiedCaller(rec.id, k, {
         callerId: rec.id,
         callerKind: k,
         repoPath: rec.source.repoPath,
         effectiveVersion: rec.source.effectiveVersion,
+        executionDigest: rec.activeExecutionDigest,
+        requested: rec.activeAuthority.requests,
+        evalCeilings: rec.activeAuthority.evalCeilings,
       });
     },
   };
@@ -311,6 +317,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           }
           await deps.persistWorkspaceConfigField(ctx, key, value);
         },
+        recordContextIngestion: deps.recordContextIngestion,
         listUnits: deps.listWorkspaceUnits,
         restartUnit: deps.restartWorkspaceUnit,
         listUnitLogs: deps.listWorkspaceUnitLogs,
@@ -443,11 +450,10 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         const hostProviderChannel = new CdpHostProviderRpcChannel(bridge);
         panelCdpDefinition = createPanelCdpService({
           ...panelGateDeps,
-          approvalQueue: assertPresent(deps.approvalQueue),
-          grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
           hasAppCapability: deps.hasAppCapability,
           hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
+          recordContextIngestion: deps.recordContextIngestion,
           getTarget: (panelId) => requestPanelMetadataForServices(panelId),
           getEndpoint: async (panelId, requesterEntityId) => {
             await ensureCdpTargetReady(panelId);
@@ -600,8 +606,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         );
         panelTreeDefinition = createPanelTreeService({
           ...panelGateDeps,
-          approvalQueue: assertPresent(deps.approvalQueue),
-          grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
           hasAppCapability: deps.hasAppCapability,
           hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),

@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
+import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type {
   ApprovalDecision,
@@ -48,8 +49,10 @@ import type {
   ResolvedVia,
 } from "@vibestudio/shared/governance/types";
 
-/** Terminal decision surfaced back to queue waiters (dismiss collapses to deny). */
+/** A grant-or-deny verdict that can be represented by an authority row. */
 export type GrantedDecision = "once" | "session" | "version" | "deny";
+/** Terminal queue result. Dismiss is deliberately distinct from an explicit deny. */
+export type ApprovalQueueDecision = GrantedDecision | "dismiss";
 
 /**
  * The resolver's verified identity + surface (WP5 §4/§5), threaded from the
@@ -122,6 +125,9 @@ export interface CapabilityApprovalQueueRequest extends ApprovalQueueRequestBase
   resourceScope?: PendingCapabilityApproval["resourceScope"];
   grantResourceKey?: string;
   details?: PendingCapabilityApproval["details"];
+  snapshot?: PendingCapabilityApproval["snapshot"];
+  cardType?: PendingCapabilityApproval["cardType"];
+  allowedDecisions?: PendingCapabilityApproval["allowedDecisions"];
 }
 
 export interface UnitBatchApprovalQueueRequest extends ApprovalQueueRequestBase {
@@ -239,7 +245,7 @@ export type FieldInputApprovalResult = ClientConfigApprovalResult;
 export type UserlandApprovalResult = UserlandApprovalChoice;
 
 interface QueueWaiter {
-  resolve: (decision: GrantedDecision) => void;
+  resolve: (decision: ApprovalQueueDecision) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
@@ -282,7 +288,7 @@ interface QueueEntry {
 }
 
 export interface ApprovalQueue {
-  request(req: DecisionApprovalQueueRequest): Promise<GrantedDecision>;
+  request(req: DecisionApprovalQueueRequest): Promise<ApprovalQueueDecision>;
   requestClientConfig(req: ClientConfigApprovalQueueRequest): Promise<ClientConfigApprovalResult>;
   requestCredentialInput(
     req: CredentialInputApprovalQueueRequest
@@ -795,10 +801,13 @@ export function createApprovalQueue(deps: {
         resource: req.resource,
         resourceScope: req.resourceScope,
         details: req.details,
+        snapshot: req.snapshot,
+        cardType: req.cardType,
+        allowedDecisions: req.allowedDecisions,
       } satisfies PendingCapabilityApproval;
     }
     if (req.kind === "unit-batch") {
-      return {
+      const approval = {
         ...base,
         kind: "unit-batch",
         trigger: req.trigger,
@@ -807,6 +816,8 @@ export function createApprovalQueue(deps: {
         units: req.units,
         configWrite: req.configWrite ?? null,
       } satisfies PendingUnitBatchApproval;
+      const copy = getApprovalCopy(approval);
+      return { ...approval, title: copy.title, description: copy.summary };
     }
     if (req.kind === "client-config") {
       return {
@@ -1001,7 +1012,7 @@ export function createApprovalQueue(deps: {
     );
   }
 
-  function settleDecisionEntry(entry: QueueEntry, decision: GrantedDecision): void {
+  function settleDecisionEntry(entry: QueueEntry, decision: ApprovalQueueDecision): void {
     removeEntry(entry);
     for (const waiter of entry.waiters.values()) {
       if (waiter.signal && waiter.onAbort) {
@@ -1095,10 +1106,32 @@ export function createApprovalQueue(deps: {
     return selected.value;
   }
 
+  function autoApproveCapabilityDecision(
+    req: Extract<ApprovalQueueRequest, { kind: "capability" }>
+  ): GrantedDecision {
+    if (!autoApproveDecision) {
+      throw new Error("Capability auto-approval is not enabled");
+    }
+    const allowed = req.allowedDecisions;
+    if (!allowed || allowed.includes(autoApproveDecision)) return autoApproveDecision;
+
+    // Auto-approval is an explicit development/test trust mode. Respect the
+    // request's semantic decision domain instead of returning a syntactically
+    // valid but forbidden choice. Prefer the narrowest reusable grant that the
+    // request offers; never silently turn auto-allow into a deny or dismiss.
+    const compatible = (["once", "session", "version"] as const).find((decision) =>
+      allowed.includes(decision)
+    );
+    if (compatible) return compatible;
+    throw new Error("Capability approval offers no auto-allow decision");
+  }
+
   return {
     request(req) {
       if (autoApproveDecision) {
-        return Promise.resolve(autoApproveDecision);
+        return Promise.resolve(
+          req.kind === "capability" ? autoApproveCapabilityDecision(req) : autoApproveDecision
+        );
       }
 
       const dedupKey = dedupKeyFor(req);
@@ -1123,7 +1156,7 @@ export function createApprovalQueue(deps: {
       }
 
       const bound = entry;
-      return new Promise<GrantedDecision>((resolve) => {
+      return new Promise<ApprovalQueueDecision>((resolve) => {
         const waiterId = bound.nextWaiterId++;
         const waiter: QueueWaiter = { resolve, signal: req.signal };
 
@@ -1465,14 +1498,31 @@ export function createApprovalQueue(deps: {
     async resolve(approvalId, decision, resolver) {
       const entry = entriesById.get(approvalId);
       if (!entry) return;
+      if (
+        entry.approval.kind === "capability" &&
+        decision !== "dismiss" &&
+        entry.approval.allowedDecisions &&
+        !entry.approval.allowedDecisions.includes(decision)
+      ) {
+        throw new Error(`Capability approval does not accept decision '${decision}'`);
+      }
+      if (
+        entry.approval.kind === "capability" &&
+        entry.approval.cardType === "confirm.critical" &&
+        decision !== "once" &&
+        decision !== "deny" &&
+        decision !== "dismiss"
+      ) {
+        throw new Error("Critical confirmations only accept confirm-once, deny, or dismiss");
+      }
 
-      const granted: GrantedDecision = decision === "dismiss" ? "deny" : decision;
+      const granted = decision;
       await settle(
         entry,
         {
           decision,
-          granted: granted !== "deny",
-          grantScopeStored: grantScopeFor(granted),
+          granted: granted !== "deny" && granted !== "dismiss",
+          grantScopeStored: granted === "dismiss" ? null : grantScopeFor(granted),
           resolver,
         },
         (e) => settleDecisionEntry(e, granted)

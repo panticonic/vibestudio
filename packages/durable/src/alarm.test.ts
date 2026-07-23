@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DurableObjectBase, rpc, type AlarmSchedule } from "./index.js";
-import { createTestDO } from "./test-utils.js";
+import { createTestDO, createTestDirectAuthority } from "./test-utils.js";
 
 class AlarmProbeDO extends DurableObjectBase {
   nextAlarm: AlarmSchedule | null = null;
@@ -15,7 +15,12 @@ class AlarmProbeDO extends DurableObjectBase {
     return this.nextAlarm;
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   schedule(wakeAt: number): string {
     this.setAlarmAt(wakeAt);
     return "scheduled";
@@ -59,6 +64,64 @@ describe("DurableObjectBase alarm dispatch", () => {
 
     await expect(call("__alarm")).resolves.toEqual({ nextAlarm: null });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a body-supplied server kind without a host attestation", async () => {
+    const { instance } = await createTestDO(AlarmProbeDO);
+    const response = await (
+      instance as unknown as { fetch(request: Request): Promise<Response> }
+    ).fetch(
+      new Request("http://test/test-key/__alarm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          args: [],
+          __instanceToken: "token",
+          __instanceId: "do:test:TestDO:test-key",
+          __caller: { callerId: "main", callerKind: "server" },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      errorCode: "EACCES",
+      error: expect.stringMatching(/host attestation required/),
+    });
+  });
+
+  it("persists host-control nonce consumption across object reconstruction", async () => {
+    const first = await createTestDO(AlarmProbeDO);
+    const caller = {
+      callerId: "main",
+      callerKind: "server" as const,
+      authorization: createTestDirectAuthority({
+        callerKind: "server",
+        method: "__alarm",
+      }),
+    };
+    const dispatch = (instance: AlarmProbeDO) =>
+      (instance as unknown as { fetch(request: Request): Promise<Response> }).fetch(
+        new Request("http://test/test-key/__alarm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            args: [],
+            __instanceToken: "token",
+            __instanceId: "do:test:TestDO:test-key",
+            __caller: caller,
+          }),
+        })
+      );
+
+    await expect(dispatch(first.instance)).resolves.toMatchObject({ status: 200 });
+    const reconstructed = await createTestDO(AlarmProbeDO, undefined, { db: first.db });
+    const replay = await dispatch(reconstructed.instance);
+    expect(replay.status).toBe(403);
+    await expect(replay.json()).resolves.toMatchObject({
+      errorCode: "EACCES",
+      error: expect.stringMatching(/replayed/),
+    });
   });
 
   it("fails the request when its durable scheduling write fails", async () => {

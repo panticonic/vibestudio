@@ -49,11 +49,11 @@ function createWorkspaceMemory() {
     kind: "panel" | "app" | "worker" | "do" | "session";
     source: string;
     contextId: string;
-    status: "active" | "retired";
+    status: "preparing" | "active" | "retired";
     key: string;
     activeBuildKey: string;
     activeExecutionDigest: string;
-    activeAuthority: { requests: []; delegations: [] };
+    activeAuthority: { requests: []; evalCeilings: [] };
     displayTitle?: string | null;
   }
 
@@ -122,6 +122,23 @@ function createWorkspaceMemory() {
         createdAt: Date.now(),
         status: e.status,
         cleanupComplete: true,
+      };
+    },
+    async resolveEntity(id) {
+      const e = entities.get(id);
+      if (!e) return null;
+      return {
+        id: e.id,
+        kind: e.kind,
+        source: { repoPath: e.source, effectiveVersion: e.status === "preparing" ? "" : "test" },
+        contextId: e.contextId,
+        key: e.key,
+        ...(e.activeBuildKey ? { activeBuildKey: e.activeBuildKey } : {}),
+        ...(e.activeExecutionDigest ? { activeExecutionDigest: e.activeExecutionDigest } : {}),
+        ...(e.status === "active" ? { activeAuthority: e.activeAuthority } : {}),
+        createdAt: Date.now(),
+        status: e.status,
+        cleanupComplete: e.status === "retired",
       };
     },
     async resolveSlotByEntity(entityId) {
@@ -256,7 +273,7 @@ function createWorkspaceMemory() {
           key,
           activeBuildKey: "b".repeat(64),
           activeExecutionDigest: "a".repeat(64),
-          activeAuthority: { requests: [], delegations: [] },
+          activeAuthority: { requests: [], evalCeilings: [] },
         });
       }
       created.push(id);
@@ -269,7 +286,52 @@ function createWorkspaceMemory() {
         buildKey: "b".repeat(64),
         executionDigest: "a".repeat(64),
         authorityRequests: [],
-        authorityDelegations: [],
+        authorityEvalCeilings: [],
+      };
+    },
+    async reservePanelEntity(spec) {
+      const key = spec.key ?? "auto-key";
+      const id = canonicalEntityId({ kind: "panel", key });
+      entities.set(id, {
+        id,
+        kind: "panel",
+        source: spec.source,
+        contextId: spec.contextId ?? "ctx-default",
+        status: "preparing",
+        key,
+        activeBuildKey: "",
+        activeExecutionDigest: "",
+        activeAuthority: { requests: [], evalCeilings: [] },
+      });
+      created.push(id);
+      return {
+        id,
+        kind: "panel",
+        source: { repoPath: spec.source, effectiveVersion: "" },
+        contextId: spec.contextId ?? "ctx-default",
+        targetId: id,
+      };
+    },
+    async activatePanelEntity(spec) {
+      if (!spec.key) throw new Error("activatePanelEntity requires a reserved key");
+      const id = canonicalEntityId({ kind: "panel", key: spec.key });
+      const entity = entities.get(id);
+      if (!entity || entity.status !== "preparing") {
+        throw new Error(`Unknown preparing panel ${id}`);
+      }
+      entity.status = "active";
+      entity.activeBuildKey = "b".repeat(64);
+      entity.activeExecutionDigest = "a".repeat(64);
+      return {
+        id,
+        kind: "panel",
+        source: { repoPath: spec.source, effectiveVersion: "test" },
+        contextId: entity.contextId,
+        targetId: id,
+        buildKey: entity.activeBuildKey,
+        executionDigest: entity.activeExecutionDigest,
+        authorityRequests: [],
+        authorityEvalCeilings: [],
       };
     },
     async retireEntity(id) {
@@ -535,7 +597,8 @@ describe("PanelManager", () => {
 
     const registry = new PanelRegistry({});
     const { deps } = makeManagerDeps(workspacePath);
-    const createEntity = vi.spyOn(deps.runtime, "createEntity");
+    const reservePanelEntity = vi.spyOn(deps.runtime, "reservePanelEntity");
+    const activatePanelEntity = vi.spyOn(deps.runtime, "activatePanelEntity");
     const manager = new PanelManager({ registry, ...deps });
 
     const created = await manager.create("panels/example", {
@@ -544,7 +607,15 @@ describe("PanelManager", () => {
       ref: "ctx:panel-dev",
     });
 
-    expect(createEntity).toHaveBeenCalledWith(
+    await created.preparation;
+    expect(reservePanelEntity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "panel",
+        source: "panels/example",
+        ref: "ctx:panel-dev",
+      })
+    );
+    expect(activatePanelEntity).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "panel",
         source: "panels/example",

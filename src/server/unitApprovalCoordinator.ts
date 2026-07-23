@@ -46,6 +46,8 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
     private readonly deps: {
       approvalQueue: UnitApprovalQueueLike;
       delayMs?: number;
+      /** Startup has an explicit staging barrier so every unit shares one prompt. */
+      autoPublishStartup?: boolean;
       autoApproveStartupUnits?: boolean;
     }
   ) {}
@@ -63,13 +65,15 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
     if (!batch) {
       batch = { trigger: request.trigger, requests: [], timer: null };
       this.pending.set(request.trigger, batch);
-      batch.timer = setTimeout(() => {
-        void this.publishPending(request.trigger).catch(() => {
-          // Every enqueued request receives the same error through its own
-          // promise. Avoid a second unhandled rejection from the timer-owned
-          // publication promise.
-        });
-      }, this.deps.delayMs ?? 0);
+      if (request.trigger !== "startup" || this.deps.autoPublishStartup !== false) {
+        batch.timer = setTimeout(() => {
+          void this.publishPending(request.trigger).catch(() => {
+            // Every enqueued request receives the same error through its own
+            // promise. Avoid a second unhandled rejection from the timer-owned
+            // publication promise.
+          });
+        }, this.deps.delayMs ?? 0);
+      }
     }
     return new Promise<void>((resolve, reject) => {
       batch.requests.push({ ...request, resolve, reject });
@@ -134,7 +138,8 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
         entries: request.entries,
         settlement: Promise.resolve(decision)
           .then(async (resolvedDecision) => {
-            if (resolvedDecision === "deny") request.applyDenied();
+            if (resolvedDecision === "deny" || resolvedDecision === "dismiss")
+              request.applyDenied();
             else await request.applyApproved();
             request.resolve();
           })
@@ -170,7 +175,10 @@ function requestApplyRank(request: PendingRequest): number {
 function unitBatchTitle(units: UnitBatchEntry[], trigger: "startup" | "meta-change"): string {
   const hasApps = units.some((unit) => unit.unitKind === "app");
   const hasExtensions = units.some((unit) => unit.unitKind === "extension");
-  if (hasApps && hasExtensions) {
+  const hasOtherUnits = units.some(
+    (unit) => unit.unitKind !== "app" && unit.unitKind !== "extension"
+  );
+  if ((hasApps && hasExtensions) || hasOtherUnits) {
     return trigger === "meta-change" ? "Workspace units changed" : "Approve workspace units";
   }
   if (hasApps)
@@ -183,6 +191,8 @@ function unitBatchTitle(units: UnitBatchEntry[], trigger: "startup" | "meta-chan
 function unitBatchDescription(units: UnitBatchEntry[]): string {
   const appCount = units.filter((unit) => unit.unitKind === "app").length;
   const extensionCount = units.filter((unit) => unit.unitKind === "extension").length;
+  const panelCount = units.filter((unit) => unit.unitKind === "panel").length;
+  const workerCount = units.filter((unit) => unit.unitKind === "worker").length;
   const parts: string[] = [];
   if (extensionCount > 0) {
     parts.push(
@@ -191,6 +201,12 @@ function unitBatchDescription(units: UnitBatchEntry[]): string {
   }
   if (appCount > 0) {
     parts.push(`${appCount} privileged app${appCount === 1 ? "" : "s"} that run in the app host`);
+  }
+  if (panelCount > 0) {
+    parts.push(`${panelCount} workspace panel${panelCount === 1 ? "" : "s"}`);
+  }
+  if (workerCount > 0) {
+    parts.push(`${workerCount} workspace worker${workerCount === 1 ? "" : "s"}`);
   }
   return parts.length > 0
     ? `This workspace declares ${parts.join(" and ")}.`

@@ -26,6 +26,7 @@ import {
   createTypedServiceClient,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
+import { createPrivateGuestGlobal } from "@vibestudio/shared/evalConfinement";
 
 /**
  * EvalDO — the blessed, per-owner unsafe-eval kernel.
@@ -37,9 +38,8 @@ import {
  *    env bindings — NOTHING workspace-owned is statically bundled here: keeps the
  *    internal bundle lean, lets the volatile engine update without a kernel rebuild,
  *    and keeps host code free of hardcoded workspace unit names),
- *  - compiles via the workerd `UNSAFE_EVAL` binding (`new Function` is blocked in workerd;
- *    we install `__vibestudioCompileFunction__` so the engine's two codegen sites route
- *    through `env.UNSAFE_EVAL.newFunction`),
+ *  - compiles via the workerd `UNSAFE_EVAL` binding (`new Function` is blocked in workerd),
+ *    passed explicitly into the engine and never published on the isolate global,
  *  - persists REPL scope rows in its own SQLite via `SqlScopePersistence` and spills large values
  *    to the workspace blobstore,
  *  - exposes a synchronous in-DO `db` (its SQLite) to eval'd code, with reserved-table guards.
@@ -63,6 +63,35 @@ const RESULT_RETURN_PREVIEW_CHARS = 60_000;
 const RESULT_ERROR_MAX_CHARS = 20_000;
 const RESULT_STORAGE_MAX_CHARS = 250_000;
 
+type BoundaryHarden = <T>(value: T) => T;
+
+/**
+ * Source-test fallback for the production SES hardener installed by
+ * workerdEntry. Keep it shallow: recursively freezing Vitest spies or Node
+ * native compatibility objects would mutate the test runner rather than model
+ * the already-locked-down workerd realm.
+ */
+const fallbackHarden: BoundaryHarden = <T>(value: T): T => {
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.freeze(value);
+  }
+  return value;
+};
+
+function hardenBoundary<T>(value: T): T {
+  const sesHarden = (globalThis as { harden?: BoundaryHarden }).harden;
+  return (sesHarden ?? fallbackHarden)(value);
+}
+
+function publishModuleNamespace<T>(value: T): T {
+  // Native ESM namespace exotic objects are already immutable and their
+  // [[SetIntegrityLevel]] operation rejects Object.freeze. Lockdown protects
+  // the values they expose; authored facades and package exports are hardened.
+  return Object.prototype.toString.call(value) === "[object Module]"
+    ? value
+    : hardenBoundary(value);
+}
+
 interface UnsafeEvalBinding {
   eval(code: string, name?: string): unknown;
   newFunction(code: string, name?: string, ...argNames: string[]): (...args: unknown[]) => unknown;
@@ -74,12 +103,15 @@ interface SandboxResult {
   returnValue?: unknown;
   exports?: Record<string, unknown>;
   error?: string;
+  failureKind?: "user-code" | "infrastructure" | "cancelled";
+  failureCode?: string;
 }
 
 interface ScopeManagerLike {
   readonly current: Record<string, unknown>;
   readonly api: unknown;
   hydrate(): Promise<unknown>;
+  persist(): Promise<void>;
   enterEval(): void;
   exitEval(): Promise<void>;
 }
@@ -160,7 +192,6 @@ const RUNTIME_HOSTED_FACTORIES = [
 ] as const;
 const RUNTIME_PANEL_FACTORIES = ["createPanelRuntime", "createRuntimeSelfHandle"] as const;
 
-type GlobalBag = Record<string, unknown>;
 type FsClient = TypedServiceClient<typeof fsMethods>;
 type BlobstoreClient = TypedServiceClient<typeof blobstoreMethods>;
 type DocsClient = TypedServiceClient<typeof docsMethods>;
@@ -232,6 +263,8 @@ interface RunResult {
   console: string;
   returnValue?: unknown;
   error?: string;
+  failureKind?: "user-code" | "infrastructure" | "cancelled";
+  failureCode?: string;
   scopeKeys?: string[];
 }
 
@@ -248,6 +281,13 @@ export class EvalDO extends DurableObjectBase {
   private readonly inFlightRuns = new Map<string, Promise<RunResult>>();
   /** Abort controllers per in-flight run — used by `reset` and the `timeoutMs` deadline. */
   private readonly runAborts = new Map<string, AbortController>();
+  /**
+   * Per-run phase cell captured by that run's RPC wrappers. Ordinary calls
+   * always inherit the run AbortSignal. Only after the hosted execution has
+   * settled may registered cancellation cleanup issue new calls without the
+   * already-aborted signal; the cancelled program itself is no longer running.
+   */
+  private readonly runCleanupPhases = new Map<string, { active: boolean }>();
   /** Run-scoped cleanup registered by evaluated orchestration code. Cancel
    *  executes these BEFORE aborting outbound RPC so child runtimes can retire
    *  through the normal authority path instead of becoming orphans. */
@@ -268,6 +308,9 @@ export class EvalDO extends DurableObjectBase {
   private hostedRuntimeIdentity: { contextId: string; gatewayToken: string } | null = null;
   private cdpLoaded = false;
   private warnedNoCdpProvider = false;
+  /** Stateless provider/runtime modules shared by EvalDO instances in this isolate.
+   * The map and compiler remain host-closure state and are never guest globals. */
+  private readonly isolateModuleMap: Record<string, unknown> = {};
 
   /**
    * Per-OBJECT module registry passed to the engine on every run. Many owners' EvalDOs share
@@ -309,10 +352,10 @@ export class EvalDO extends DurableObjectBase {
     // is created lazily by SqlScopePersistence on first run; user `db` tables are created
     // on demand by eval'd code.
     //
-    // The `runs` table is the durable job queue: `startRun` inserts, `executeRun` runs the
-    // sandbox synchronously in a HELD handler (the eval service holds the connection open —
-    // workerd does not cap held requests), `getRun` is the poll backstop. `agent_ref`/
-    // `channel_id` are stored so the alarm-free executeRun reconstructs the `chat` binding.
+    // The `runs` table is the durable job queue. `startRun` inserts and starts agent-owned work
+    // under this object's `waitUntil` lifetime; no host HTTP request is held for an asynchronous
+    // run. `getRun` is the durable recovery/read path. `agent_ref`/`channel_id` are stored so a
+    // restarted owner can still observe the exact run and its terminal result.
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS runs (
         run_id TEXT PRIMARY KEY,
@@ -339,16 +382,22 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /**
-   * Crash recovery: a held `executeRun` connection drops on server restart → workerd cancels
-   * the EvalDO handler → the run dies mid-flight, leaving a `running` row no in-memory executor
-   * owns. Called once at construction (before any run is live), so every `running` row is stale.
+   * Crash recovery: a process restart cancels the object's background execution and leaves a
+   * `running` row no in-memory executor owns. Called once at construction (before any run is live),
+   * so every `running` row is stale.
    * Mark them an interrupt error; the waiting caller's `getRun` poll surfaces it and the model
    * re-issues (a fresh runId). We never auto-re-run — evals have side effects (spawned agents).
    */
   private reconcileOrphanedRuns(): void {
     this.sql.exec(
       `UPDATE runs SET status = 'done', result = ? WHERE status = 'running'`,
-      JSON.stringify({ success: false, console: "", error: "eval interrupted by restart" })
+      JSON.stringify({
+        success: false,
+        console: "",
+        error: "eval interrupted by restart",
+        failureKind: "infrastructure",
+        failureCode: "eval_runtime_restarted",
+      })
     );
   }
 
@@ -358,7 +407,8 @@ export class EvalDO extends DurableObjectBase {
       causalParent?: RpcCausalParent | null;
       readOnly?: boolean;
     },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    cleanupPhase?: { active: boolean }
   ): EvalExecutionContext {
     const causalParent = input.causalParent ? Object.freeze({ ...input.causalParent }) : null;
     const readOnly = input.readOnly === true;
@@ -366,7 +416,7 @@ export class EvalDO extends DurableObjectBase {
     const mergeOptions = <T extends RpcCallOptions | RpcStreamOptions>(value?: T): T => {
       const options = {
         ...(value ?? {}),
-        ...(signal ? { signal } : {}),
+        ...(signal && cleanupPhase?.active !== true ? { signal } : {}),
         ...(readOnly ? { readOnly: true } : {}),
       };
       if (causalParent) options.causalParent = causalParent;
@@ -470,10 +520,10 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /**
-   * Keep the inbound `respond()` watchdog disabled explicitly: `executeRun` is a HELD handler that
-   * legitimately runs for the eval's whole duration (the eval service holds the connection with
-   * held-call diagnostics). An opt-in `timeoutMs` bounds a run, and a dropped connection
-   * (server restart) ends it (reconciled on boot). Quick methods (startRun/getRun) resolve at once.
+   * Keep the inbound `respond()` watchdog disabled explicitly: the synchronous panel/CLI `run`
+   * method legitimately runs for the eval's whole duration. Agent `startRun` returns immediately
+   * and executes under `waitUntil`. An opt-in `timeoutMs` bounds either form; restart interruption
+   * is reconciled on boot.
    */
   protected override get respondTimeoutMs(): number {
     return 0;
@@ -486,20 +536,38 @@ export class EvalDO extends DurableObjectBase {
    * insert + execute in this held handler, return the result in one response. The CALLER holds its
    * own leg; the server holds the EvalDO leg. workerd does not cap a held request.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   async run(args: RunArgs): Promise<RunResult> {
     const runId = args.runId ?? crypto.randomUUID();
-    await this.startRun({ ...args, runId });
+    await this.enqueueRun({ ...args, runId }, false);
     return this.executeRun(runId);
   }
 
   /**
-   * Quick, idempotent enqueue — insert a `pending` row, return at once (no execution). The eval
-   * service awaits this before returning `runId` to an async (agent) caller, so the row exists for
-   * `getRun`. Idempotent on `run_id`: a replayed run returns the existing row, never a duplicate.
+   * Quick, idempotent enqueue for an asynchronous agent run. The durable row is written before a
+   * background execution is attached to the DO event with `waitUntil`, so the caller receives a
+   * run id without holding an HTTP connection. Idempotent on `run_id`: a replay observes the same
+   * row and may reattach only a still-pending run; it never creates a duplicate execution.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   async startRun(args: RunArgs & { runId: string }): Promise<{ runId: string; status: string }> {
+    return this.enqueueRun(args, true);
+  }
+
+  private async enqueueRun(
+    args: RunArgs & { runId: string },
+    schedule: boolean
+  ): Promise<{ runId: string; status: string }> {
     const runId = args.runId;
     const existing = this.sql
       .exec(`SELECT status, args FROM runs WHERE run_id = ?`, runId)
@@ -510,6 +578,7 @@ export class EvalDO extends DurableObjectBase {
       if (JSON.stringify(prior) !== JSON.stringify(args)) {
         throw new Error(`eval: runId ${runId} was reused with different input`);
       }
+      if (schedule && status === "pending") this.scheduleRun(runId);
       return { runId, status };
     }
     // Reset and enqueue are one DO turn and ordered before insertion. This is
@@ -527,7 +596,53 @@ export class EvalDO extends DurableObjectBase {
       Date.now(),
       deadlineAt
     );
+    if (schedule) this.scheduleRun(runId);
     return { runId, status: "pending" };
+  }
+
+  /**
+   * Attach an asynchronous run to the object's lifetime. Deferring one task turn is important:
+   * `startRun` must be able to serialize its acknowledgement before guest code can monopolize the
+   * isolate (for example, a synchronous infinite loop with an opt-in external watchdog).
+   */
+  private scheduleRun(runId: string): void {
+    if (!this.ctx.waitUntil) {
+      throw new Error("eval: Durable Object context does not support background execution");
+    }
+    const execution = new Promise<void>((resolve) => setTimeout(resolve, 0))
+      .then(() => this.executeAndDeliver(runId))
+      .catch((error) => {
+        console.error(
+          `[EvalDO] background run ${runId} failed`,
+          error instanceof Error ? (error.stack ?? error.message) : String(error)
+        );
+      });
+    this.ctx.waitUntil(execution);
+  }
+
+  /** Execute once, persist first, then let only this agent's EvalDO settle its owning agent. */
+  private async executeAndDeliver(runId: string): Promise<void> {
+    const row = this.sql.exec(`SELECT args FROM runs WHERE run_id = ?`, runId).toArray()[0];
+    if (!row) return;
+    const args = JSON.parse(String(row["args"])) as RunArgs;
+    const result = await this.executeRun(runId);
+    if (!args.agentRef || !args.channelId) return;
+    try {
+      await this.rpc.call(args.agentRef, "onEvalComplete", [
+        {
+          runId,
+          agentInvocationId: args.agentInvocationId,
+          result,
+          channelId: args.channelId,
+        },
+      ]);
+    } catch (error) {
+      // The terminal row is canonical. A hibernated/restarted agent re-observes it through getRun.
+      console.warn(
+        `[EvalDO] completion delivery for ${runId} failed (durable getRun recovery remains available):`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   }
 
   /**
@@ -536,7 +651,12 @@ export class EvalDO extends DurableObjectBase {
    * rather than starting a second sandbox run — so a deferRedrive that races the first dispatch can
    * never double-run the eval (which would double-spawn headless agents).
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   async executeRun(runId: string): Promise<RunResult> {
     const inFlight = this.inFlightRuns.get(runId);
     if (inFlight) return inFlight;
@@ -559,20 +679,36 @@ export class EvalDO extends DurableObjectBase {
     const row = this.sql
       .exec(`SELECT status, args, deadline_at, result FROM runs WHERE run_id = ?`, runId)
       .toArray()[0];
-    if (!row) return { success: false, console: "", error: `eval: unknown run ${runId}` };
+    if (!row) {
+      return {
+        success: false,
+        console: "",
+        error: `eval: unknown run ${runId}`,
+        failureKind: "infrastructure",
+        failureCode: "eval_run_missing",
+      };
+    }
     const claimed = String(row["status"]);
     if (claimed !== "running") {
       // Already terminal (idempotent re-dispatch, or cancelled before we claimed it).
       if (claimed === "done" && row["result"] != null) {
         return JSON.parse(String(row["result"])) as RunResult;
       }
-      return { success: false, console: "", error: `eval: run ${runId} is ${claimed}` };
+      return {
+        success: false,
+        console: "",
+        error: `eval: run ${runId} is ${claimed}`,
+        failureKind: claimed === "cancelled" ? "cancelled" : "infrastructure",
+        failureCode: claimed === "cancelled" ? "eval_cancelled" : "eval_invalid_run_state",
+      };
     }
 
     const args = JSON.parse(String(row["args"])) as RunArgs;
     const deadlineAt = row["deadline_at"] != null ? Number(row["deadline_at"]) : null;
     const controller = new AbortController();
+    const cleanupPhase = { active: false };
     this.runAborts.set(runId, controller);
+    this.runCleanupPhases.set(runId, cleanupPhase);
     let timer: ReturnType<typeof setTimeout> | null = null;
     let cancellationCleanupError: unknown;
 
@@ -581,36 +717,42 @@ export class EvalDO extends DurableObjectBase {
       if (deadlineAt != null) {
         const remaining = deadlineAt - Date.now();
         if (remaining <= 0) {
-          try {
-            await this.executeRunCancelHandlers(runId);
-          } finally {
-            controller.abort();
-          }
+          controller.abort();
+          cleanupPhase.active = true;
+          await this.executeRunCancelHandlers(runId);
         } else {
           timer = setTimeout(() => {
-            void this.executeRunCancelHandlers(runId)
-              .catch((error) => {
-                cancellationCleanupError = error;
-                console.error(
-                  `[EvalDO] cancellation cleanup failed for timed-out run ${runId}`,
-                  error
-                );
-              })
-              .finally(() => controller.abort());
+            controller.abort();
           }, remaining);
           timer.unref?.();
         }
       }
       const ran = this.runChain.then(() =>
-        this.runLocked(args, controller.signal, runId, deadlineAt)
+        this.runLocked(args, controller.signal, runId, deadlineAt, cleanupPhase)
       );
       this.runChain = ran.catch(() => undefined);
       result = await ran;
+      if (controller.signal.aborted && deadlineAt !== null) {
+        cleanupPhase.active = true;
+        try {
+          await this.executeRunCancelHandlers(runId);
+          // Cancellation handlers deliberately run outside the sandbox's
+          // ordinary abort signal. They can therefore mutate `scope` after
+          // runLocked's exitEval() has persisted its final snapshot. Persist
+          // once more after cleanup so those terminal writes are durable.
+          await this.scopeManager?.persist();
+        } catch (error) {
+          cancellationCleanupError = error;
+          console.error(`[EvalDO] cancellation cleanup failed for timed-out run ${runId}`, error);
+        }
+      }
       if (controller.signal.aborted && deadlineAt !== null) {
         result = {
           success: false,
           console: result.console,
           error: `eval timed out after ${args.timeoutMs}ms`,
+          failureKind: "cancelled",
+          failureCode: "eval_deadline_exceeded",
         };
       }
       if (cancellationCleanupError !== undefined) {
@@ -625,14 +767,21 @@ export class EvalDO extends DurableObjectBase {
         };
       }
     } catch (err) {
+      console.error(
+        `[EvalDO] run ${runId} failed`,
+        err instanceof Error ? (err.stack ?? err.message) : String(err)
+      );
       result = {
         success: false,
         console: "",
         error: err instanceof Error ? err.message : String(err),
+        failureKind: "infrastructure",
+        failureCode: "eval_host_failed",
       };
     } finally {
       if (timer) clearTimeout(timer);
       this.runAborts.delete(runId);
+      this.runCleanupPhases.delete(runId);
       if (!controller.signal.aborted) this.runCancelHandlers.delete(runId);
     }
 
@@ -651,13 +800,20 @@ export class EvalDO extends DurableObjectBase {
         success: false,
         console: result.console,
         error: "eval: run cancelled",
+        failureKind: "cancelled",
+        failureCode: "eval_cancelled",
       });
     }
     return terminalResult;
   }
 
   /** Poll backstop: a run's status + result (`status` is 'pending'|'running'|'done'|'cancelled'|'unknown'). */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   getRun(runId: string): { status: string; result?: RunResult; progress?: unknown } {
     const row = this.sql
       .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
@@ -677,11 +833,49 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /**
+   * Settle an execution that never crossed the method boundary.  The host uses
+   * this only after the held executeRun transport failed while the durable row
+   * is still pending.  A running or terminal row is untouched, so loss of a
+   * response cannot overwrite work that actually began.
+   */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
+  failPendingRun(runId: string, error: string): RunResult | null {
+    const result = this.compactRunResult({
+      success: false,
+      console: "",
+      error,
+      failureKind: "infrastructure",
+      failureCode: "eval_dispatch_failed",
+    });
+    this.sql.exec(
+      `UPDATE runs SET status = 'done', result = ? WHERE run_id = ? AND status = 'pending'`,
+      JSON.stringify(result),
+      runId
+    );
+    const row = this.sql
+      .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
+      .toArray()[0];
+    return row?.["status"] === "done" && row["result"] != null
+      ? (JSON.parse(String(row["result"])) as RunResult)
+      : null;
+  }
+
+  /**
    * Lossless, bounded retrieval for a large string cached in the durable REPL
    * scope. Reads join `runChain`, so they observe every prior eval's persisted
    * mutations and cannot race a later eval that overwrites the same key.
    */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   async readScopeTextPage(
     key: string,
     offset: number,
@@ -715,7 +909,12 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /** Persistently remove one temporary large-result cache key. */
-  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "destructive",
+  })
   async deleteScopeValue(key: string): Promise<{ ok: boolean; existed: boolean }> {
     const remove = this.runChain.then(async () => {
       const execution = this.infrastructureExecution();
@@ -765,16 +964,37 @@ export class EvalDO extends DurableObjectBase {
 
   /** Reset the eval context: cancel in-flight runs, then wipe user tables + scope
    *  while preserving the durable queue and its progress rows. */
-  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "destructive",
+  })
   async reset(): Promise<{ ok: boolean }> {
     // Cancel queued + in-flight runs FIRST so a run finishing normally can't CAS itself `done`
     // (executeRun's write requires status='running'); then abort any live run.
     this.sql.exec(`UPDATE runs SET status = 'cancelled' WHERE status IN ('pending', 'running')`);
     const runIds = new Set([...this.inFlightRuns.keys(), ...this.runCancelHandlers.keys()]);
-    const cleanupResults = await Promise.allSettled(
-      [...runIds].map((id) => this.executeRunCancelHandlers(id))
-    );
+    for (const id of runIds) {
+      const phase = this.runCleanupPhases.get(id);
+      if (phase) phase.active = true;
+    }
+    // A cancellation handler can be the owner that tells a nested resource to
+    // stop (for example, a system-test runner interrupting its agent turn), so
+    // waiting for the eval body before starting handlers creates a dependency
+    // cycle. Start cleanup with cancellation-safe RPC authority, abort ordinary
+    // execution, and then observe both terminals.
+    const cleanupPromises = [...runIds].map((id) => this.executeRunCancelHandlers(id));
     for (const id of runIds) this.runAborts.get(id)?.abort();
+    const [runResults, cleanupResults] = await Promise.all([
+      Promise.allSettled(
+        [...runIds]
+          .map((id) => this.inFlightRuns.get(id))
+          .filter((run): run is Promise<RunResult> => run !== undefined)
+      ),
+      Promise.allSettled(cleanupPromises),
+    ]);
+    void runResults;
     const result = this.runChain.then(() => this.resetLocked());
     this.runChain = result.catch(() => undefined);
     let value: { ok: boolean };
@@ -798,20 +1018,37 @@ export class EvalDO extends DurableObjectBase {
    * Cancel ONE run without touching scope or other runs. CAS the row to `cancelled` FIRST (only if
    * still pending/running) so a late finish loses — `runEval`'s persist requires `status='running'`
    * and its post-write status read returns the cancelled failure instead of resurrecting `done`.
-   * Then abort the run's controller so a run wedged on an outbound rpc.call unwinds (the signal is
-   * threaded into every outbound call in `runLocked`). A no-op for an already-terminal run.
+   * Cleanup handlers and ordinary execution settle as one cancellation phase:
+   * handlers may initiate nested teardown while the run's abort signal unwinds
+   * its ordinary calls. A no-op for an already-terminal run.
    */
-  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "destructive",
+  })
   async cancel(runId: string): Promise<{ ok: boolean }> {
     this.sql.exec(
       `UPDATE runs SET status = 'cancelled' WHERE run_id = ? AND status IN ('pending', 'running')`,
       runId
     );
-    try {
-      await this.executeRunCancelHandlers(runId);
-    } finally {
-      this.runAborts.get(runId)?.abort();
-    }
+    const inFlight = this.inFlightRuns.get(runId);
+    const cleanupPhase = this.runCleanupPhases.get(runId);
+    if (cleanupPhase) cleanupPhase.active = true;
+    const cleanup = this.executeRunCancelHandlers(runId);
+    this.runAborts.get(runId)?.abort();
+    const [runResult, cleanupResult] = await Promise.allSettled([
+      inFlight ?? Promise.resolve(undefined),
+      cleanup,
+    ]);
+    void runResult;
+    if (cleanupResult.status === "rejected") throw cleanupResult.reason;
+    // runLocked and cleanup race intentionally so a cleanup owner can release
+    // the resource on which the sandbox is blocked. Once both are terminal,
+    // persist the shared scope again: cleanup may have recorded terminal state
+    // after runLocked's exitEval() snapshot.
+    await this.scopeManager?.persist();
     return { ok: true };
   }
 
@@ -831,7 +1068,13 @@ export class EvalDO extends DurableObjectBase {
   ): void {
     const failures = this.cancellationCleanupFailures(results);
     if (failures.length > 0) {
-      throw new AggregateError(failures, `eval: cancellation cleanup failed during ${operation}`);
+      const details = failures
+        .map((failure) => (failure instanceof Error ? failure.message : String(failure)))
+        .join("; ");
+      throw new AggregateError(
+        failures,
+        `eval: cancellation cleanup failed during ${operation}: ${details}`
+      );
     }
   }
 
@@ -846,8 +1089,8 @@ export class EvalDO extends DurableObjectBase {
    * `runChain`, so `reset` (which `.then()`s off that chain) would hang behind it. Instead we:
    *  1. CAS every non-terminal run to `cancelled` (so any orphaned run's eventual finish loses its
    *     CAS persist — see `runEval` — and is neutralized; it can never resurrect itself `done`),
-   *  2. await every registered cancellation handler, then abort EVERY in-flight controller (a run
-   *     wedged on an outbound rpc.call unwinds via its threaded signal),
+   *  2. abort EVERY in-flight controller (so wedged outbound calls unwind), then
+   *     await every registered cancellation handler,
    *  3. REPLACE `this.runChain` with a fresh resolved promise — we ORPHAN the stuck chain rather
    *     than `.then()` off it, so we never wait on the wedged run, and
    *  4. run `resetLocked()` synchronously (NOT queued behind the old chain).
@@ -859,10 +1102,10 @@ export class EvalDO extends DurableObjectBase {
   private async forceReset(): Promise<{ ok: boolean }> {
     this.sql.exec(`UPDATE runs SET status = 'cancelled' WHERE status IN ('pending', 'running')`);
     const runIds = new Set([...this.runAborts.keys(), ...this.runCancelHandlers.keys()]);
+    for (const controller of this.runAborts.values()) controller.abort();
     const cleanupResults = await Promise.allSettled(
       [...runIds].map((id) => this.executeRunCancelHandlers(id))
     );
-    for (const controller of this.runAborts.values()) controller.abort();
     // Orphan the (possibly wedged) chain — do NOT `.then()` off it, or we'd hang behind the stuck
     // run. A subsequently-enqueued run chains off this fresh resolved promise and proceeds at once.
     this.runChain = Promise.resolve();
@@ -886,7 +1129,11 @@ export class EvalDO extends DurableObjectBase {
   private resetLocked(): { ok: boolean } {
     const tables = this.sql
       .exec(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('state', 'repl_scopes', 'runs', 'run_progress')`
+        `SELECT name FROM sqlite_master
+         WHERE type='table'
+           AND name NOT LIKE 'sqlite_%'
+           AND name NOT GLOB '_vibestudio_*'
+           AND name NOT IN ('state', 'repl_scopes', 'runs', 'run_progress')`
       )
       .toArray() as Array<{ name: string }>;
     for (const { name } of tables) {
@@ -905,9 +1152,10 @@ export class EvalDO extends DurableObjectBase {
     args: RunArgs,
     signal?: AbortSignal,
     runId?: string,
-    deadlineAt?: number | null
+    deadlineAt?: number | null,
+    cleanupPhase?: { active: boolean }
   ): Promise<RunResult> {
-    const execution = this.createExecutionContext(args, signal);
+    const execution = this.createExecutionContext(args, signal, cleanupPhase);
     const engine = await this.ensureEngine(execution);
     const support = await this.ensureRuntimeSupport(execution);
     const scopeManager = await this.ensureScopeManager(engine);
@@ -915,11 +1163,8 @@ export class EvalDO extends DurableObjectBase {
     // Every runtime/client below closes over this immutable run context. A force
     // reset may orphan this execution and start another one, but neither run can
     // replace or clear the other's causal edge, containment, or abort signal.
-    const rt = this.createRunHostedRuntime(
-      support,
-      execution,
-      args.gatewayToken,
-      args.parent ?? null
+    const rt = hardenBoundary(
+      this.createRunHostedRuntime(support, execution, args.gatewayToken, args.parent ?? null)
     );
     // `services` is the complete convenience namespace (createServicesProxy): service names that
     // don't collide with runtime bindings are reachable as `services.<name>.<method>(...)`, while
@@ -931,7 +1176,7 @@ export class EvalDO extends DurableObjectBase {
     //  2. dynamic fallback — any other service becomes `callMain("<name>.<method>", …)`.
     // It adds no access: the fallback routes through `callMain`, so the server dispatcher's
     // per-method `policy.allowed` is still the sole gate (a `do`-denied method still rejects).
-    const services = support.createServicesProxy(rt);
+    const services = hardenBoundary(support.createServicesProxy(rt));
 
     // Layer 2 — the importable surface (gad/workspace/credentials/openPanel/…)
     // injected ambiently too (same refs as importing the declared runtime
@@ -945,7 +1190,7 @@ export class EvalDO extends DurableObjectBase {
     const bindings: Record<string, unknown> = {
       ...rt,
       services,
-      ctx: {
+      ctx: hardenBoundary({
         contextId: args.contextId ?? null,
         objectKey: this.objectKey,
         ...(runId
@@ -961,10 +1206,10 @@ export class EvalDO extends DurableObjectBase {
               },
             }
           : {}),
-      },
+      }),
       scope: scopeManager.current,
-      scopes: scopeManager.api,
-      db: this.dbBinding(),
+      scopes: hardenBoundary(scopeManager.api),
+      db: hardenBoundary(this.dbBinding()),
       // `help()` → discovery for an agent driving eval: the importable runtime
       // surface (what `import {…} from "@workspace/runtime"` gives), the ambient
       // pre-injected globals (do NOT import these), available raw services, and where to look next.
@@ -1070,10 +1315,13 @@ export class EvalDO extends DurableObjectBase {
       bindings,
       // Same signal threading as `rpcBinding`: the `chat`/`agent` ops the owning agent forwards
       // are outbound rpc.calls too, so a cancelled run unwinds them instead of wedging the chain.
-      buildOwnerBindings(args, (target, method, values) =>
-        execution.rpc.call(target, method, values)
+      hardenBoundary(
+        buildOwnerBindings(args, (target, method, values) =>
+          execution.rpc.call(target, method, values)
+        )
       )
     );
+    hardenBoundary(bindings["help"]);
 
     // In path mode, load the entry file. The eval service validates exactly one of
     // `code` or `path`; this fallback remains defensive for direct/internal calls.
@@ -1098,7 +1346,11 @@ export class EvalDO extends DurableObjectBase {
     if (!runtimeFs || typeof runtimeFs !== "object") {
       throw new Error("eval: hosted runtime did not expose its scoped filesystem");
     }
-    const runLocalModules = createEvalNodeCompat(runtimeFs as Record<string, unknown>);
+    const runLocalModules = Object.fromEntries(
+      Object.entries(createEvalNodeCompat(runtimeFs as Record<string, unknown>)).map(
+        ([specifier, namespace]) => [specifier, publishModuleNamespace(namespace)]
+      )
+    );
     const runModuleMap: Record<string, unknown> = {
       ...this.moduleMap,
       ...runLocalModules,
@@ -1110,6 +1362,9 @@ export class EvalDO extends DurableObjectBase {
       for (const name of EVAL_AMBIENT_ONLY) {
         if (name in bindings) namespace[name] = bindings[name];
       }
+      // The namespace shape is immutable. `scope` remains deliberately mutable
+      // behind its proxy and is therefore not recursively hardened here.
+      Object.freeze(namespace);
     }
 
     // Lazily build the cdp-client bundle ONLY when this run references CDP. Most
@@ -1129,11 +1384,14 @@ export class EvalDO extends DurableObjectBase {
     const agentInvocationId = args.agentInvocationId;
     const streamer =
       agentRef && channelId && agentInvocationId
-        ? new ConsoleStreamer((chunk) =>
+        ? new ConsoleStreamer((chunk, progressSignal) =>
             this.rpc
-              .call(agentRef, "onEvalProgress", [
-                { runId, agentInvocationId, channelId, output: chunk },
-              ])
+              .call(
+                agentRef,
+                "onEvalProgress",
+                [{ runId, agentInvocationId, channelId, output: chunk }],
+                { signal: progressSignal }
+              )
               .then(() => undefined)
           )
         : null;
@@ -1158,6 +1416,10 @@ export class EvalDO extends DurableObjectBase {
           if (value !== undefined) return value;
           throw new Error(`Module "${id}" not available in EvalDO; use the imports parameter.`);
         },
+        compileFunction: this.compileInIsolate,
+        confinement: "private-global",
+        harden: hardenBoundary,
+        publishLazyLoaderToGlobal: false,
         // Opt-in deadline (timeoutMs) → AbortSignal. Best-effort: the engine may not honor it
         // inside native code; authored loops/functions also receive cooperative
         // checkpoints so ordinary synchronous code settles inside this EvalDO.
@@ -1170,9 +1432,10 @@ export class EvalDO extends DurableObjectBase {
           streamer?.push(formatted);
         },
       });
-      // Drain the streamed console before returning — guarantees every chunk lands before the
-      // invocation terminal that `onEvalComplete` publishes once `executeRun` returns.
-      if (streamer) await streamer.finalFlush();
+      // Live progress is incidental. The terminal result below is canonical and
+      // includes the complete console, so a stalled progress receiver must not
+      // hold this durable run open.
+      streamer?.close();
       const consoleText = result.consoleOutput || consoleOutput;
       // Recoverable large output: the harness windows console/return for the
       // model, losing the tail. Stash a bounded copy into the persistent scope so
@@ -1184,9 +1447,12 @@ export class EvalDO extends DurableObjectBase {
         console: consoleText,
         returnValue: result.returnValue,
         error: result.error,
+        failureKind: result.failureKind,
+        failureCode: result.failureCode,
         scopeKeys: Object.keys(scopeManager.current),
       };
     } finally {
+      streamer?.close();
       if (!signal?.aborted) {
         const localKeys = new Set([runtimeModuleName, ...Object.keys(runLocalModules)]);
         for (const [specifier, value] of Object.entries(runModuleMap)) {
@@ -1204,6 +1470,8 @@ export class EvalDO extends DurableObjectBase {
       ...(result.error
         ? { error: this.windowText(result.error, RESULT_ERROR_MAX_CHARS, "$lastConsole") }
         : {}),
+      ...(result.failureKind ? { failureKind: result.failureKind } : {}),
+      ...(result.failureCode ? { failureCode: result.failureCode } : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 500) } : {}),
     };
     if (result.returnValue !== undefined) {
@@ -1217,6 +1485,8 @@ export class EvalDO extends DurableObjectBase {
       success: compact.success,
       console: this.windowText(compact.console, 20_000, "$lastConsole"),
       ...(compact.error ? { error: this.windowText(compact.error, 10_000, "$lastConsole") } : {}),
+      ...(compact.failureKind ? { failureKind: compact.failureKind } : {}),
+      ...(compact.failureCode ? { failureCode: compact.failureCode } : {}),
       ...(compact.returnValue !== undefined
         ? {
             returnValue: {
@@ -1236,6 +1506,8 @@ export class EvalDO extends DurableObjectBase {
       console:
         "[eval] Result exceeded the EvalDO storage limit. Large console/return data may be available in scope.$lastConsole and scope.$lastReturn.",
       ...(result.error ? { error: this.windowText(result.error, 10_000, "$lastConsole") } : {}),
+      ...(result.failureKind ? { failureKind: result.failureKind } : {}),
+      ...(result.failureCode ? { failureCode: result.failureCode } : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 100) } : {}),
     };
   }
@@ -1338,25 +1610,20 @@ export class EvalDO extends DurableObjectBase {
     return source;
   }
 
-  /**
-   * Bootstrap the shared isolate globals: the UnsafeEval-backed compile
-   * function (`new Function` is blocked in workerd), the global module map, and
-   * the global require. Mirrors the worker bundle bootstrap. Returns the map.
-   */
-  private ensureIsolateModuleGlobals(): Record<string, unknown> {
-    const g = globalThis as GlobalBag;
+  private compileFunction(argNames: string[], body: string): (...args: unknown[]) => unknown {
     const unsafeEval = this.env["UNSAFE_EVAL"] as UnsafeEvalBinding | undefined;
     if (!unsafeEval) throw new Error("EvalDO: UNSAFE_EVAL binding not configured");
-    g["__vibestudioCompileFunction__"] = (argNames: string[], body: string) =>
-      unsafeEval.newFunction(body, "eval", ...argNames);
-    const moduleMap = (g["__vibestudioModuleMap__"] ??= {}) as Record<string, unknown>;
-    g["__vibestudioRequire__"] = (id: string): unknown => {
-      const mod = moduleMap[id];
-      if (mod) return mod;
-      throw new Error(`Module "${id}" not available in EvalDO. Use the imports parameter for npm.`);
-    };
-    return moduleMap;
+    return unsafeEval.newFunction(body, "eval", ...argNames);
   }
+
+  private requireIsolateModule = (id: string): unknown => {
+    const mod = this.isolateModuleMap[id];
+    if (mod !== undefined) return mod;
+    throw new Error(`Module "${id}" not available in EvalDO. Use the imports parameter for npm.`);
+  };
+
+  private compileInIsolate = (argNames: string[], body: string) =>
+    this.compileFunction(argNames, body);
 
   /**
    * Build `specifier` as a worker library bundle via the build service and
@@ -1369,27 +1636,36 @@ export class EvalDO extends DurableObjectBase {
     execution: EvalExecutionContext,
     opts: { externals?: string[] } = {}
   ): Promise<unknown> {
-    const g = globalThis as GlobalBag;
-    const moduleMap = this.ensureIsolateModuleGlobals();
+    const moduleMap = this.isolateModuleMap;
     if (!moduleMap[specifier]) {
       const built = await execution.build.getBuild(specifier, undefined, {
         library: true,
         externals: opts.externals ?? [],
         libraryTarget: "worker",
       });
-      const bundle = requireBuildBundleResult(
+      const artifact = requireBuildBundleResult(
         built,
         `EvalDO: build.getBuild did not return a library bundle for ${specifier}`
       );
-      const compile = g["__vibestudioCompileFunction__"] as (
-        a: string[],
-        b: string
-      ) => (...args: unknown[]) => unknown;
       const exports: Record<string, unknown> = {};
       const module = { exports };
-      const fn = compile(["require", "exports", "module"], bundle);
-      fn(g["__vibestudioRequire__"], exports, module);
-      moduleMap[specifier] = module.exports;
+      const body =
+        artifact.format === "async-cjs"
+          ? `return (async () => {\n${artifact.bundle}\n})();`
+          : artifact.bundle;
+      const controlledImport = async (dependency: string): Promise<unknown> =>
+        this.requireIsolateModule(dependency);
+      const receiver = [this.requireIsolateModule, exports, module, controlledImport];
+      const runConfined = this.compileInIsolate(
+        ["scope"],
+        `with (scope) {\n` +
+          `  return (function(require, exports, module, __vibestudioImport) {\n` +
+          `    "use strict";\n${body}\n` +
+          `  }).apply(undefined, this.receiver);\n` +
+          `}`
+      );
+      await runConfined.call({ receiver }, createPrivateGuestGlobal());
+      moduleMap[specifier] = hardenBoundary(module.exports);
     }
     return moduleMap[specifier];
   }
@@ -1404,7 +1680,7 @@ export class EvalDO extends DurableObjectBase {
   private async ensureEngine(execution: EvalExecutionContext): Promise<EvalEngine> {
     if (this.engine) return this.engine;
     const engineSource = this.requireDeclaredProviderSource("EVAL_ENGINE_SOURCE", "evalEngine");
-    const moduleMap = this.ensureIsolateModuleGlobals();
+    const moduleMap = this.isolateModuleMap;
     const loaded = await this.loadLibraryModule(engineSource, execution, {
       externals: Object.keys(moduleMap),
     });
@@ -1533,6 +1809,17 @@ export class EvalDO extends DurableObjectBase {
       rpc,
       selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
       defaultOpenParentId: () => parent?.parentId ?? null,
+      loadModule: async (id: string) => {
+        const existing = this.moduleMap[id] ?? this.isolateModuleMap[id];
+        if (existing !== undefined) return existing;
+        const cdpSource = this.declaredProviderSource("EVAL_CDP_CLIENT_SOURCE");
+        if (cdpSource && id === cdpSource) {
+          return this.loadLibraryModule(cdpSource, execution, {
+            externals: Object.keys(this.isolateModuleMap),
+          });
+        }
+        throw new Error(`Module "${id}" is not endowed to this eval runtime`);
+      },
     });
     const host: Record<string, unknown> = {
       id: this.rpcSelfId,
@@ -1599,9 +1886,9 @@ export class EvalDO extends DurableObjectBase {
       }
       return;
     }
-    const globalMap = this.ensureIsolateModuleGlobals();
+    const sharedMap = this.isolateModuleMap;
     const loaded = (await this.loadLibraryModule(cdpSource, execution, {
-      externals: Object.keys(globalMap),
+      externals: Object.keys(sharedMap),
     })) as { CdpConnection?: unknown } | undefined;
     if (typeof loaded?.CdpConnection !== "function") {
       // The default (".") library entry must re-export BOTH `CdpConnection`
@@ -1612,10 +1899,8 @@ export class EvalDO extends DurableObjectBase {
         `EvalDO: ${cdpSource} (providers.cdpClient) did not expose CdpConnection (wrong build entry?)`
       );
     }
-    // Seed BOTH maps: the per-object map backs `import {…} from "<declared cdp client>"`
-    // (engine resolution); the global map (seeded by loadLibraryModule) backs
-    // `handle.cdp`'s `loadLightweightClient`, which resolves via the global
-    // `__vibestudioRequire__`.
+    // Seed the per-owner map as an alias of the closure-held isolate module.
+    // No loader or module namespace is published on globalThis.
     this.moduleMap[cdpSource] = loaded;
     this.cdpLoaded = true;
   }

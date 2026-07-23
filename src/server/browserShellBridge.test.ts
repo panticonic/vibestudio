@@ -128,7 +128,8 @@ describe("installFallbackShellBridge", () => {
       expect.objectContaining({
         target: "main",
         message: expect.objectContaining({ method: "panelTree.metadata" }),
-      })
+      }),
+      undefined
     );
     expect(mocks.send).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -137,7 +138,8 @@ describe("installFallbackShellBridge", () => {
           method: "panelTree.focus",
           args: ["panel:tree/slot-b"],
         }),
-      })
+      }),
+      undefined
     );
   });
 

@@ -1,16 +1,26 @@
 import {
+  DIRECT_AUTHORITY_ACCEPTED_AT_HEADER,
   collectExposableMethods,
   createConnectionlessRpcClient,
   envelopeFromMessage,
   rpcExposedMethodNames,
   rpcErrorDataOf,
   rpcErrorKindOf,
+  rpcMethodAuthority,
   type AuthenticatedCaller,
   type ConnectionlessRpcClient,
   type DeferrableRpcClient,
   type RpcEnvelope,
+  type RpcEvent,
   type RpcRequest,
 } from "@vibestudio/rpc";
+import {
+  DurableDirectRpcNonceLedger,
+  directRpcDenial,
+  eventIntakeAuthority,
+  hostControlDenial,
+  type EventIntakeRule,
+} from "@vibestudio/shared/directRpcEnforcement";
 import {
   migrateDurableObjectSchema,
   type DurableObjectSchemaBaseline,
@@ -50,7 +60,11 @@ export interface DORef {
   objectKey: string;
 }
 
-export type { DurableObjectSchemaBaseline, DurableObjectSchemaMigration } from "./schema.js";
+export type {
+  DurableObjectSchemaBaseline,
+  DurableObjectSchemaMigration,
+  SchemaSqlStorage,
+} from "./schema.js";
 
 export interface LifecyclePrepareInput {
   epoch: string;
@@ -82,9 +96,11 @@ export interface AlarmSchedule {
 
 export abstract class DurableObjectBase {
   static schemaVersion = 1;
+  static eventIntake: readonly EventIntakeRule[] = [];
 
   protected ctx: DurableObjectContext;
   protected sql: SqlStorage;
+  private readonly directRpcNonces: DurableDirectRpcNonceLedger;
   protected env: Record<string, unknown>;
 
   private schemaReady = false;
@@ -100,6 +116,10 @@ export abstract class DurableObjectBase {
   constructor(ctx: DurableObjectContext, env: unknown) {
     this.ctx = ctx;
     this.sql = ctx.storage.sql;
+    this.directRpcNonces = new DurableDirectRpcNonceLedger({
+      exec: (query, ...bindings) => this.sql.exec(query, ...bindings),
+      transactionSync: (callback) => this.ctx.storage.transactionSync(callback),
+    });
     this.env = env as Record<string, unknown>;
   }
 
@@ -186,6 +206,11 @@ export abstract class DurableObjectBase {
                 ? { callerPanelId: record["callerPanelId"] }
                 : {}),
               ...(typeof record["userId"] === "string" ? { userId: record["userId"] } : {}),
+              ...(record["authorization"] && typeof record["authorization"] === "object"
+                ? {
+                    authorization: record["authorization"] as AuthenticatedCaller["authorization"],
+                  }
+                : {}),
             },
           };
         }
@@ -390,13 +415,16 @@ export abstract class DurableObjectBase {
     }
 
     const method = segments.slice(1).join("/") || "getState";
+    const acceptedAtRaw = request.headers.get(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER);
+    const acceptedAtHeader = acceptedAtRaw === null ? Number.NaN : Number(acceptedAtRaw);
+    const authorityAcceptedAt = Number.isFinite(acceptedAtHeader) ? acceptedAtHeader : Date.now();
 
     try {
       // Converged inbound dispatch: an `RpcEnvelope` POSTed to `__rpc` (relay
       // traffic, server→DO event push, deferred replies) flows through the
       // shared core's `handleEnvelope` → `exposeAll`'d method / event listeners.
       if (method === "__rpc") {
-        return await this.handleInboundEnvelope(request);
+        return await this.handleInboundEnvelope(request, authorityAcceptedAt);
       }
 
       let args: unknown[] = [];
@@ -418,8 +446,9 @@ export abstract class DurableObjectBase {
 
       if (method === "__lifecycle/prepare" || method === "__lifecycle/resume") {
         return this.withCaller(verifiedCallerFromBody, async () => {
-          if (this.caller?.callerKind !== "server") {
-            return jsonResponse({ error: "Lifecycle calls require server caller" }, 403);
+          const denial = this.hostControlDenial(method, authorityAcceptedAt);
+          if (denial) {
+            return jsonResponse({ error: denial.reason, errorCode: denial.code }, 403);
           }
           const result =
             method === "__lifecycle/prepare"
@@ -434,8 +463,9 @@ export abstract class DurableObjectBase {
 
       if (method === "__alarm") {
         return this.withCaller(verifiedCallerFromBody, async () => {
-          if (this.caller?.callerKind !== "server") {
-            return jsonResponse({ error: "Alarm calls require server caller" }, 403);
+          const denial = this.hostControlDenial(method, authorityAcceptedAt);
+          if (denial) {
+            return jsonResponse({ error: denial.reason, errorCode: denial.code }, 403);
           }
           return jsonResponse({ nextAlarm: await this.alarm() });
         });
@@ -464,7 +494,7 @@ export abstract class DurableObjectBase {
           args,
         },
       });
-      const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
+      const responseEnvelope = await this.dispatchInboundEnvelope(envelope, authorityAcceptedAt);
       const responseMessage = responseEnvelope?.message;
       if (responseMessage?.type === "response" && "error" in responseMessage) {
         if (responseMessage.error.startsWith('Method "')) {
@@ -508,6 +538,27 @@ export abstract class DurableObjectBase {
     }
   }
 
+  private hostControlDenial(
+    method: string,
+    authorityAcceptedAt: number
+  ): { code: "EACCES"; reason: string } | null {
+    const attestation = this.caller?.authorization ?? null;
+    const denial = hostControlDenial({
+      method,
+      attestation,
+      audience: this.rpcSelfId,
+      now: authorityAcceptedAt,
+    });
+    if (denial) return denial;
+    if (
+      !attestation ||
+      !this.directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
+    ) {
+      return { code: "EACCES", reason: `${method}: host authority attestation was replayed` };
+    }
+    return null;
+  }
+
   /**
    * Gate inbound RPC by caller. Default: allow all (the generic relay is open,
    * `rpcServer.checkRelayAuth`). Sensitive recipients that run privileged code
@@ -532,20 +583,58 @@ export abstract class DurableObjectBase {
   ): void {}
 
   /** Handle an `RpcEnvelope` POSTed to `__rpc`; returns a response envelope (or `{}` for events). */
-  private async handleInboundEnvelope(request: Request): Promise<Response> {
+  private async handleInboundEnvelope(
+    request: Request,
+    authorityAcceptedAt: number
+  ): Promise<Response> {
     const envelope = (await request.json()) as RpcEnvelope;
     const message = envelope.message;
+    if (message?.type === "event") {
+      const caller = envelope.delivery.caller ?? null;
+      const event = message as RpcEvent;
+      const method = `__event:${event.event}`;
+      const audience = this.rpcSelfId;
+      const denial = directRpcDenial({
+        kind: "event",
+        method,
+        eventTopic: event.event,
+        caller,
+        attestation: caller?.authorization ?? null,
+        declaration: eventIntakeAuthority(this, event.event),
+        audience,
+        resourceKey: audience,
+        capability: `event:${event.event}`,
+        now: authorityAcceptedAt,
+      });
+      if (denial) return jsonResponse({ error: denial.reason, errorCode: denial.code }, 403);
+      const attestation = caller?.authorization;
+      if (
+        !attestation ||
+        !this.directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
+      ) {
+        return jsonResponse(
+          { error: `${method}: host authority attestation was replayed`, errorCode: "EACCES" },
+          403
+        );
+      }
+      // Retained until the checked-in parity worksheet proves shared enforcement.
+      this.assertInboundAllowed(caller, "event");
+      this.connectionlessClient().deliver(envelope);
+      return jsonResponse({});
+    }
     if (message?.type !== "request" && message?.type !== "stream-request") {
-      // Event push / frames: deliver with no response (opt-in subscription).
-      this.assertInboundAllowed(envelope.delivery.caller ?? null, "event");
+      // Correlated responses and stream frames are not new effectful event intake.
       this.connectionlessClient().deliver(envelope);
       return jsonResponse({});
     }
     if (message.type === "stream-request") {
-      const responseEnvelope = await this.dispatchInboundEnvelope({
-        ...envelope,
-        message: { ...message, type: "request" } satisfies RpcRequest,
-      });
+      const responseEnvelope = await this.dispatchInboundEnvelope(
+        {
+          ...envelope,
+          message: { ...message, type: "request" } satisfies RpcRequest,
+        },
+        authorityAcceptedAt
+      );
       const responseMessage = responseEnvelope?.message;
       if (responseMessage?.type === "response" && "result" in responseMessage) {
         if (responseMessage.result instanceof Response) return responseMessage.result;
@@ -564,7 +653,7 @@ export abstract class DurableObjectBase {
         500
       );
     }
-    const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
+    const responseEnvelope = await this.dispatchInboundEnvelope(envelope, authorityAcceptedAt);
     return jsonResponse(responseEnvelope ?? {});
   }
 
@@ -573,7 +662,10 @@ export abstract class DurableObjectBase {
    * (`respond` → `handleEnvelope` → `exposeAll`'d method), with the DO's
    * caller-context getters bound to `envelope.delivery.caller` for the duration.
    */
-  private async dispatchInboundEnvelope(envelope: RpcEnvelope): Promise<RpcEnvelope | null> {
+  private async dispatchInboundEnvelope(
+    envelope: RpcEnvelope,
+    authorityAcceptedAt: number
+  ): Promise<RpcEnvelope | null> {
     const connectionless = this.connectionlessClient();
     // An unattributed method-path call carries a synthetic empty caller; surface
     // it as a null caller context (matching the pre-convergence behavior) rather
@@ -581,6 +673,55 @@ export abstract class DurableObjectBase {
     const rawCaller = envelope.delivery.caller;
     const caller = rawCaller && rawCaller.callerId !== "" ? rawCaller : null;
     const message = envelope.message as RpcRequest;
+    const method = message?.method;
+    const audience = this.rpcSelfId;
+    const denial = method
+      ? directRpcDenial({
+          kind: "call",
+          method,
+          caller,
+          attestation: caller?.authorization ?? null,
+          declaration: rpcMethodAuthority(this, method) ?? null,
+          audience,
+          resourceKey: audience,
+          capability: caller?.authorization?.capability ?? "",
+          now: authorityAcceptedAt,
+        })
+      : { code: "EACCES" as const, reason: "direct RPC method is required" };
+    if (denial) {
+      return {
+        from: envelope.target,
+        target: envelope.from,
+        delivery: { caller: caller ?? { callerId: "", callerKind: "unknown" } },
+        provenance: envelope.provenance ?? [],
+        message: {
+          type: "response",
+          requestId: message?.requestId ?? "",
+          error: denial.reason,
+          errorCode: denial.code,
+        },
+      } as RpcEnvelope;
+    }
+    const attestation = caller?.authorization;
+    if (
+      !attestation ||
+      !this.directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
+    ) {
+      return {
+        from: envelope.target,
+        target: envelope.from,
+        delivery: { caller: caller ?? { callerId: "", callerKind: "unknown" } },
+        provenance: envelope.provenance ?? [],
+        message: {
+          type: "response",
+          requestId: message?.requestId ?? "",
+          error: `${method ?? "<unknown>"}: host authority attestation was replayed`,
+          errorCode: "EACCES",
+        },
+      } as RpcEnvelope;
+    }
+    // Legacy receiver guards remain until the generated parity suite proves
+    // shared enforcement is at least as restrictive for every call and event.
     this.assertInboundAllowed(caller, "call");
     const prev = {
       verifiedCaller: this.currentVerifiedCaller,

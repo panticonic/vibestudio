@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { createRuntimeService } from "./runtimeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
@@ -14,8 +15,15 @@ import {
   type EntityRecord,
   type RuntimeEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
+import {
+  createTestServiceDispatcher,
+  testAuthority,
+} from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { DODispatch } from "../doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
@@ -29,7 +37,7 @@ const sealedExecution = {
   buildKey: "b".repeat(64),
   executionDigest: "f".repeat(64),
   authorityRequests: [] as const,
-  authorityDelegations: [] as const,
+  authorityEvalCeilings: [] as const,
 };
 
 function approvalQueueMock(
@@ -87,6 +95,9 @@ interface BuildDepsOptions {
   prepareWorker?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["prepareWorker"];
   onRetire?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["onRetire"];
   releaseEntity?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["releaseEntity"];
+  releaseEntityRelaySeal?: Parameters<
+    typeof createRuntimeService
+  >[0]["hooks"]["releaseEntityRelaySeal"];
   preparePanel?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["preparePanel"];
   resolveAppExecution?: NonNullable<
     Parameters<typeof createRuntimeService>[0]["hooks"]
@@ -169,12 +180,11 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
       resolveAppExecution,
       onRetire,
       releaseEntity,
+      releaseEntityRelaySeal: opts.releaseEntityRelaySeal,
       cloneDurableStorage,
       destroyDurableStorage,
     },
     contextBoundary: {
-      approvalQueue,
-      grantStore,
       contextExists: (id: string) =>
         contextFolders.existing.has(id) || entityCache.listActive().some((e) => e.contextId === id),
       resolveContextOwnerLabel: (id: string) =>
@@ -184,6 +194,31 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     setEntityTitle: opts.setEntityTitle,
     semanticContexts,
   });
+  const dispatcher = new ServiceDispatcher();
+  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) => {
+    const resolved = testAuthority(caller, capability, resourceKey);
+    return capability === "context.boundary"
+      ? {
+          ...resolved,
+          grants: grantStore.grantsForSubjects(
+            [resolved.context.authorizingOrigin.principal],
+            capability
+          ),
+        }
+      : resolved;
+  });
+  const acquisition = new AcquisitionCoordinator({ approvalQueue, grantStore });
+  dispatcher.setAuthorityAcquirer({
+    request: (input) => acquisition.request(input),
+    acquire: (input) => acquisition.requestAndWait(input),
+    consume: (grantId) => acquisition.consume(grantId),
+    invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
+      acquisition.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+  });
+  dispatcher.registerService(service);
+  dispatcher.markInitialized();
+  const invokeRuntime = (caller: VerifiedCaller, method: string, args: unknown[]) =>
+    dispatcher.dispatch({ caller, authorityAcquisition: "wait" }, "runtime", method, args);
 
   return {
     instance,
@@ -201,6 +236,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     resolveAppExecution,
     cloneDurableStorage,
     destroyDurableStorage,
+    dispatch: invokeRuntime,
   };
 }
 
@@ -210,6 +246,15 @@ const panelCaller = (id = "panel:caller", _contextId = "ctx-caller") =>
     callerKind: "panel",
     repoPath: "panels/caller",
     effectiveVersion: "v1",
+    requested: [
+      { capability: "context.clone", resource: { kind: "network", value: "*" } },
+      { capability: "subagents.create", resource: { kind: "network", value: "*" } },
+      {
+        capability: "context.relationships.record",
+        resource: { kind: "network", value: "*" },
+      },
+      { capability: "context.boundary", resource: { kind: "network", value: "*" } },
+    ],
   });
 
 const appCaller = (id = "app:apps/shell:desktop", _contextId = "ctx-caller") =>
@@ -218,6 +263,15 @@ const appCaller = (id = "app:apps/shell:desktop", _contextId = "ctx-caller") =>
     callerKind: "app",
     repoPath: "apps/shell",
     effectiveVersion: "v1",
+    requested: [
+      { capability: "context.clone", resource: { kind: "network", value: "*" } },
+      { capability: "subagents.create", resource: { kind: "network", value: "*" } },
+      {
+        capability: "context.relationships.record",
+        resource: { kind: "network", value: "*" },
+      },
+      { capability: "context.boundary", resource: { kind: "network", value: "*" } },
+    ],
   });
 
 const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval") =>
@@ -227,6 +281,9 @@ const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval") =>
     repoPath: "vibestudio/internal",
     effectiveVersion: "v1",
   });
+
+const sessionCaller = (id = "agent:session") =>
+  createVerifiedCaller(id, "agent", null, null, null, true);
 
 const shellCaller = createVerifiedCaller("shell", "shell");
 const serverCaller = createVerifiedCaller("server", "server");
@@ -240,6 +297,62 @@ const doCreateSpec = (
   className: "MyDO",
   key: "k1",
   ...overrides,
+});
+
+describe("runtimeService deferred panel activation", () => {
+  it("publishes stable coordinates before preparation and activates the same entity later", async () => {
+    const { service, instance, entityCache, preparePanel } = await buildDeps();
+    const spec = {
+      kind: "panel" as const,
+      source: "panels/editor",
+      contextId: "ctx-panel",
+      key: "nav-reserved",
+      stateArgs: { document: "readme" },
+    };
+
+    const reserved = (await service.handler({ caller: serverCaller }, "reservePanelEntity", [
+      spec,
+    ])) as { id: string; buildKey?: string };
+    expect(reserved.id).toBe(canonicalEntityId({ kind: "panel", key: spec.key }));
+    expect(reserved.buildKey).toBeUndefined();
+    expect(instance.entityResolve(reserved.id)).toMatchObject({
+      status: "preparing",
+      contextId: "ctx-panel",
+    });
+    expect(entityCache.resolveActive(reserved.id)).toBeNull();
+    expect(preparePanel).not.toHaveBeenCalled();
+
+    const active = (await service.handler({ caller: serverCaller }, "activatePanelEntity", [
+      spec,
+    ])) as { id: string; buildKey?: string };
+    expect(active).toMatchObject({ id: reserved.id, buildKey: "b".repeat(64) });
+    expect(instance.entityResolveActive(reserved.id)).toMatchObject({
+      status: "active",
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "f".repeat(64),
+    });
+    expect(entityCache.resolveActive(reserved.id)?.id).toBe(reserved.id);
+    expect(preparePanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("retires a cancelled reservation without invoking executable release", async () => {
+    const { service, instance, releaseEntity, preparePanel } = await buildDeps();
+    const spec = {
+      kind: "panel" as const,
+      source: "panels/editor",
+      contextId: "ctx-panel",
+      key: "nav-cancelled",
+    };
+    const reserved = (await service.handler({ caller: serverCaller }, "reservePanelEntity", [
+      spec,
+    ])) as { id: string };
+
+    await service.handler({ caller: serverCaller }, "retireEntity", [{ id: reserved.id }]);
+
+    expect(instance.entityResolve(reserved.id)?.status).toBe("retired");
+    expect(preparePanel).not.toHaveBeenCalled();
+    expect(releaseEntity).not.toHaveBeenCalled();
+  });
 });
 
 describe("runtimeService.createEntity (do kind)", () => {
@@ -282,6 +395,8 @@ describe("runtimeService.createEntity (do kind)", () => {
       {
         capability: "service:panel.getInfo",
         resource: { kind: "exact" as const, key: "panel:getInfo" },
+        tier: "gated" as const,
+        evidence: "exact" as const,
       },
     ];
     const prepareDurableObject = vi.fn(async () => ({
@@ -289,7 +404,7 @@ describe("runtimeService.createEntity (do kind)", () => {
       effectiveVersion: "ev-do",
       executionDigest: "a".repeat(64),
       authorityRequests,
-      authorityDelegations: [],
+      authorityEvalCeilings: [],
     }));
     const { service, instance, entityCache } = await buildDeps({ prepareDurableObject });
 
@@ -298,18 +413,18 @@ describe("runtimeService.createEntity (do kind)", () => {
     ])) as {
       id: string;
       authorityRequests: unknown;
-      authorityDelegations: unknown;
+      authorityEvalCeilings: unknown;
     };
 
     expect(handle.authorityRequests).toEqual(authorityRequests);
-    expect(handle.authorityDelegations).toEqual([]);
+    expect(handle.authorityEvalCeilings).toEqual([]);
     expect(instance.entityResolve(handle.id)?.activeAuthority).toEqual({
       requests: authorityRequests,
-      delegations: [],
+      evalCeilings: [],
     });
     expect(entityCache.resolveActive(handle.id)?.activeAuthority).toEqual({
       requests: authorityRequests,
-      delegations: [],
+      evalCeilings: [],
     });
   });
 
@@ -326,7 +441,7 @@ describe("runtimeService.createEntity (do kind)", () => {
       service.handler({ caller: serverCaller }, "createEntity", [
         doCreateSpec({ contextId: "ctx-x" }),
       ])
-    ).rejects.toThrow(/authority.*delegations/);
+    ).rejects.toThrow(/authority.*evalCeilings/);
     expect(
       instance.entityResolve(
         canonicalEntityId({
@@ -619,12 +734,50 @@ describe("runtimeService.createEntity (do kind)", () => {
 });
 
 describe("runtimeService.createEntity context policy", () => {
-  it("mints a fresh UUID when contextId is omitted", async () => {
+  it("mints a fresh UUID for a root host caller when contextId is omitted", async () => {
     const { service } = await buildDeps();
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
       doCreateSpec(),
     ])) as EntityRecord;
     expect(handle.contextId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("inherits the verified caller's context when contextId is omitted", async () => {
+    const { service, entityCache, approvalQueue } = await buildDeps();
+    const caller = panelCaller("panel:inheriting", "ctx-caller");
+    entityCache._onActivate({
+      id: caller.runtime.id,
+      kind: "panel",
+      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      contextId: "ctx-caller",
+      key: "inheriting",
+      createdAt: 1,
+      status: "active",
+      cleanupComplete: true,
+    });
+
+    const handle = (await service.handler({ caller }, "createEntity", [doCreateSpec()])) as {
+      contextId: string;
+    };
+
+    expect(handle.contextId).toBe("ctx-caller");
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("derives an external agent relay context from the bound entity", async () => {
+    const { service } = await buildDeps();
+    const caller = extensionCaller();
+    const bound = (await service.handler({ caller }, "createEntity", [
+      { kind: "session", source: "agent-cli", key: "bound", contextId: "ctx-bound" },
+    ])) as { id: string };
+
+    const handle = (await service.handler({ caller }, "createEntity", [
+      doCreateSpec({
+        agentBinding: { entityId: bound.id, channelId: "channel-bound" },
+      }),
+    ])) as { contextId: string };
+
+    expect(handle.contextId).toBe("ctx-bound");
   });
 
   it("allows callers in their own context", async () => {
@@ -698,8 +851,8 @@ describe("runtimeService.createEntity context policy", () => {
   });
 
   it("requests approval for panel callers launching into an EXISTING foreign context", async () => {
-    const { service, approvalQueue, entityCache } = await buildDeps({
-      approvalDecision: "session",
+    const { dispatch, approvalQueue, entityCache } = await buildDeps({
+      approvalDecision: "version",
     });
     const caller = panelCaller("panel:p2", "ctx-caller");
     entityCache._onActivate({
@@ -724,7 +877,7 @@ describe("runtimeService.createEntity context policy", () => {
       cleanupComplete: true,
     });
 
-    const handle = (await service.handler({ caller }, "createEntity", [
+    const handle = (await dispatch(caller, "createEntity", [
       doCreateSpec({ contextId: "ctx-target" }),
     ])) as { contextId: string };
     expect(handle.contextId).toBe("ctx-target");
@@ -732,8 +885,8 @@ describe("runtimeService.createEntity context policy", () => {
   });
 
   it("requests approval for app callers in cross-context and grants when allowed", async () => {
-    const { service, approvalQueue, entityCache } = await buildDeps({
-      approvalDecision: "session",
+    const { dispatch, approvalQueue, entityCache } = await buildDeps({
+      approvalDecision: "version",
     });
     const caller = appCaller("app:apps/shell:desktop", "ctx-caller");
     entityCache._onActivate({
@@ -757,7 +910,7 @@ describe("runtimeService.createEntity context policy", () => {
       cleanupComplete: true,
     });
 
-    const handle = (await service.handler({ caller }, "createEntity", [
+    const handle = (await dispatch(caller, "createEntity", [
       doCreateSpec({ contextId: "ctx-target" }),
     ])) as { contextId: string };
     expect(handle.contextId).toBe("ctx-target");
@@ -771,7 +924,7 @@ describe("runtimeService.createEntity context policy", () => {
   });
 
   it("rejects panel callers launching into an existing foreign context when denied", async () => {
-    const { service, entityCache } = await buildDeps({ approvalDecision: "deny" });
+    const { dispatch, entityCache } = await buildDeps({ approvalDecision: "deny" });
     const caller = panelCaller("panel:p3", "ctx-caller");
     entityCache._onActivate({
       id: caller.runtime.id,
@@ -794,7 +947,7 @@ describe("runtimeService.createEntity context policy", () => {
       cleanupComplete: true,
     });
     await expect(
-      service.handler({ caller }, "createEntity", [doCreateSpec({ contextId: "ctx-target" })])
+      dispatch(caller, "createEntity", [doCreateSpec({ contextId: "ctx-target" })])
     ).rejects.toThrow(/denied/i);
   });
 });
@@ -941,6 +1094,9 @@ describe("runtimeService.retireEntity", () => {
       onRetire: vi.fn(async () => {
         order.push("hook");
       }),
+      releaseEntityRelaySeal: vi.fn(() => {
+        order.push("release-seal");
+      }),
     });
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
       doCreateSpec({ contextId: "ctx-x" }),
@@ -956,7 +1112,7 @@ describe("runtimeService.retireEntity", () => {
     };
 
     await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
-    expect(order).toEqual(["release:retire", "do-commit", "hook"]);
+    expect(order).toEqual(["release:retire", "do-commit", "release-seal", "hook"]);
     // cleanup_complete should be 1 on success.
     const rec = instance.entityResolve(handle.id);
     expect(rec?.cleanupComplete).toBe(true);
@@ -1029,7 +1185,9 @@ describe("runtimeService.retireEntity", () => {
   });
 
   it("prompts with retire-specific copy when a caller retires a foreign entity", async () => {
-    const { service, approvalQueue } = await buildDeps({ approvalDecision: "session" });
+    const { service, dispatch, approvalQueue, entityCache } = await buildDeps({
+      approvalDecision: "once",
+    });
     const owner = evalDoCaller("do:vibestudio/internal:EvalDO:owner");
     const handle = (await service.handler({ caller: owner }, "createEntity", [
       doCreateSpec({
@@ -1041,9 +1199,18 @@ describe("runtimeService.retireEntity", () => {
     ])) as { id: string };
     (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
 
-    await service.handler({ caller: panelCaller("panel:other") }, "retireEntity", [
-      { id: handle.id },
-    ]);
+    const caller = sessionCaller("agent:retire");
+    entityCache._onActivate({
+      id: caller.runtime.id,
+      kind: "session",
+      source: { repoPath: "agent-cli", effectiveVersion: "v1" },
+      contextId: "ctx-session-retire",
+      key: "retire",
+      createdAt: 1,
+      status: "active",
+      cleanupComplete: true,
+    });
+    await dispatch(caller, "retireEntity", [{ id: handle.id }]);
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1268,6 +1435,7 @@ describe("runtimeService session entities", () => {
       id: string;
       kind: string;
       source: string;
+      key: string;
       contextId: string;
       title?: string;
       createdAt: number;
@@ -1277,6 +1445,7 @@ describe("runtimeService session entities", () => {
       id: handle.id,
       kind: "session",
       source: "agent-cli",
+      key: "s-list",
       contextId: handle.contextId,
       title: "Listed session",
     });
@@ -1719,8 +1888,8 @@ describe("runtimeService.cloneContext", () => {
   });
 
   it("prompts when cloning a FOREIGN EXISTING context", async () => {
-    const { service, approvalQueue, entityCache } = await buildDeps({
-      approvalDecision: "session",
+    const { service, dispatch, approvalQueue, entityCache } = await buildDeps({
+      approvalDecision: "version",
     });
     const caller = panelCaller("panel:f", "ctx-caller");
     entityCache._onActivate({
@@ -1735,7 +1904,7 @@ describe("runtimeService.cloneContext", () => {
     });
     await seedConversation(service, "ctx-foreign");
 
-    await service.handler({ caller }, "cloneContext", [{ sourceContextId: "ctx-foreign" }]);
+    await dispatch(caller, "cloneContext", [{ sourceContextId: "ctx-foreign" }]);
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({ capability: "context.boundary" })
@@ -1913,15 +2082,74 @@ describe("runtimeService.destroyContext", () => {
     expect(instance.entityResolve(owned.id)?.status).toBe("retired");
   });
 
+  it("preserves creator ownership after the last context entity is retired", async () => {
+    const { service, approvalQueue, instance } = await buildDeps();
+    const caller = workerCaller();
+    const owned = (await service.handler({ caller }, "createEntity", [
+      {
+        kind: "do",
+        source: "workers/agent",
+        className: "AgentDO",
+        key: "retired-owner-proof",
+        contextId: "ctx-retired-owned",
+      },
+    ])) as { id: string };
+
+    await service.handler({ caller }, "retireEntity", [{ id: owned.id }]);
+    expect(instance.entityResolve(owned.id)?.status).toBe("retired");
+    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+
+    await service.handler({ caller }, "destroyContext", [
+      { contextId: "ctx-retired-owned", recursive: true },
+    ]);
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("recognizes a context tree as creator-owned through descendant lineage", async () => {
+    const { service, approvalQueue, instance } = await buildDeps();
+    const caller = workerCaller();
+    const root = (await service.handler({ caller }, "createEntity", [
+      {
+        kind: "do",
+        source: "workers/agent",
+        className: "AgentDO",
+        key: "headless-root",
+        contextId: "ctx-owned-tree",
+      },
+    ])) as { id: string };
+    const childCaller = workerCaller(root.id);
+    const child = (await service.handler({ caller: childCaller }, "createEntity", [
+      {
+        kind: "do",
+        source: "vibestudio/internal",
+        className: "EvalDO",
+        key: "agent-eval",
+        contextId: "ctx-owned-tree",
+      },
+    ])) as { id: string };
+    expect(instance.entityResolve(root.id)?.parentId).toBe(caller.runtime.id);
+    expect(instance.entityResolve(child.id)?.parentId).toBe(root.id);
+    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+
+    await service.handler({ caller }, "destroyContext", [
+      { contextId: "ctx-owned-tree", recursive: true },
+    ]);
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(instance.entityResolve(root.id)?.status).toBe("retired");
+    expect(instance.entityResolve(child.id)?.status).toBe("retired");
+  });
+
   it("prompts (severe) to destroy a foreign context you do NOT own", async () => {
-    const { service, approvalQueue, entityCache } = await buildDeps({
-      approvalDecision: "session",
+    const { service, dispatch, approvalQueue, entityCache } = await buildDeps({
+      approvalDecision: "once",
     });
-    const caller = panelCaller("panel:x", "ctx-caller");
+    const caller = sessionCaller("agent:destroy");
     entityCache._onActivate({
       id: caller.runtime.id,
-      kind: "panel",
-      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      kind: "session",
+      source: { repoPath: "agent-cli", effectiveVersion: "v1" },
       contextId: "ctx-caller",
       key: "x",
       createdAt: 1,
@@ -1931,7 +2159,7 @@ describe("runtimeService.destroyContext", () => {
     // Entities in ctx-victim are parented to the server, not the caller.
     await seedConversation(service, "ctx-victim");
 
-    await service.handler({ caller }, "destroyContext", [{ contextId: "ctx-victim" }]);
+    await dispatch(caller, "destroyContext", [{ contextId: "ctx-victim" }]);
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
     expect(approvalQueue.request).toHaveBeenCalledWith(
@@ -2143,7 +2371,7 @@ describe("runtimeService.createSubagentContext", () => {
 
   it("gates a caller-created owner before forking a foreign existing parent context", async () => {
     const forkContext = vi.fn(async () => {});
-    const { service, entityCache, approvalQueue } = await buildDeps({
+    const { service, dispatch, entityCache, approvalQueue } = await buildDeps({
       approvalDecision: "deny",
       semanticContexts: { forkContext },
     });
@@ -2162,7 +2390,7 @@ describe("runtimeService.createSubagentContext", () => {
     (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
 
     await expect(
-      service.handler({ caller }, "createSubagentContext", [
+      dispatch(caller, "createSubagentContext", [
         { parentContextId: "ctx-foreign-parent", ownerEntityId: owner.id, targetKey: "run:deny" },
       ])
     ).rejects.toThrow(/denied/i);

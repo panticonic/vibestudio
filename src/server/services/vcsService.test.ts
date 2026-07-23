@@ -10,13 +10,20 @@ import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import { createVcsService } from "./vcsService.js";
 
 const EVENT = { kind: "event" as const, eventId: "event:one" };
+const INTERNAL_AUTHORIZATION = {
+  contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
+} as unknown as NonNullable<ServiceContext["authorization"]>;
 
 function workerContext(id = "worker:one"): ServiceContext {
-  return { caller: createVerifiedCaller(id, "worker"), requestId: "request:one" };
+  return {
+    caller: createVerifiedCaller(id, "worker"),
+    requestId: "request:one",
+    authorization: INTERNAL_AUTHORIZATION,
+  };
 }
 
 function shellContext(): ServiceContext {
-  return { caller: createVerifiedCaller("shell", "shell") };
+  return { caller: createVerifiedCaller("shell", "shell"), authorization: INTERNAL_AUTHORIZATION };
 }
 
 function agentContext(channelId = "channel:own"): ServiceContext {
@@ -27,6 +34,7 @@ function agentContext(channelId = "channel:own"): ServiceContext {
       channelId,
       agentId: "agent:stable",
     }),
+    authorization: INTERNAL_AUTHORIZATION,
   };
 }
 
@@ -92,7 +100,10 @@ describe("canonical vcsService", () => {
     await definition.handler(shellContext(), "status", [{ contextId: "context:target" }]);
     expect(semanticCall).toHaveBeenCalledWith("vcsStatus", {
       input: { contextId: "context:target" },
-      ingress: { causalParent: null },
+      ingress: {
+        causalParent: null,
+        contextIntegrity: { class: "internal", externalKeys: [] },
+      },
     });
   });
 
@@ -110,7 +121,10 @@ describe("canonical vcsService", () => {
     await definition.handler(agentContext(channelId), "status", [{ contextId: "context:agent" }]);
     expect(semanticCall).toHaveBeenCalledWith("vcsStatus", {
       input: { contextId: "context:agent" },
-      ingress: { causalParent: null },
+      ingress: {
+        causalParent: null,
+        contextIntegrity: { class: "internal", externalKeys: [] },
+      },
     });
   });
 
@@ -130,6 +144,7 @@ describe("canonical vcsService", () => {
         ...trajectory,
         invocationId: "invocation:eval",
       },
+      authorization: INTERNAL_AUTHORIZATION,
     };
     await definition.handler(ctx, "status", [{ contextId: "context:agent" }]);
     expect(semanticCall).toHaveBeenCalledWith(
@@ -148,7 +163,10 @@ describe("canonical vcsService", () => {
         channelId: "channel:agent",
       },
     });
-    const ctx: ServiceContext = { caller: createVerifiedCaller("do:AgentDO:one", "do") };
+    const ctx: ServiceContext = {
+      caller: createVerifiedCaller("do:AgentDO:one", "do"),
+      authorization: INTERNAL_AUTHORIZATION,
+    };
     await expect(
       definition.handler(ctx, "discard", [
         {
@@ -457,7 +475,8 @@ describe("canonical vcsService", () => {
         expectedMainEventId: "event:main",
       },
       null,
-      ctx.caller
+      ctx.caller,
+      { class: "internal", externalKeys: [] }
     );
   });
 });

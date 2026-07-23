@@ -1,8 +1,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import vm, { Script } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@vibestudio/env-paths";
+import {
+  createPrivateGuestGlobal,
+  getRealmCompiler,
+  tameRealmCodegen,
+} from "@vibestudio/shared/evalConfinement";
 
 import { initBuildSystemV2, type BuildSystemV2 } from "./index.js";
 import type { BuildSourceProvider } from "./buildSource.js";
@@ -125,18 +131,20 @@ describe("BuildSystemV2 library package subpaths", () => {
       []
     );
 
-    await expect(
-      buildSystem.getBuild("@workspace/split-library", undefined, {
-        library: true,
-        libraryTarget: "panel",
-      })
-    ).rejects.toThrow(/Top-level await|node:buffer/);
+    const rootResult = await buildSystem.getBuild("@workspace/split-library", undefined, {
+      library: true,
+      libraryTarget: "panel",
+    });
+    expect(rootResult.format).toBe("async-cjs");
+    expect(rootResult.bundle).toContain("await Promise.resolve");
+    expect(rootResult.bundle).toContain("root");
 
     const result = await buildSystem.getBuild("@workspace/split-library/report", undefined, {
       library: true,
       libraryTarget: "panel",
     });
     expect(result.bundle).toContain("safe-report-entry");
+    expect(result.format).toBe("async-cjs");
     expect(result.bundle).not.toContain("Buffer.from");
   });
 
@@ -232,6 +240,192 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(workerBuild.bundle).not.toContain("PANEL-ENTRY");
   });
 
+  it("builds the real agentic runtime package with async transitive dependencies for eval", async () => {
+    const actualWorkspaceRoot = path.resolve(__dirname, "../../../workspace");
+    buildSystem = await initBuildSystemV2(
+      actualWorkspaceRoot,
+      fakeWorkspaceSource(() => actualWorkspaceRoot),
+      []
+    );
+
+    const result = await buildSystem.getBuild("@workspace/agentic-do", undefined, {
+      library: true,
+      libraryTarget: "worker",
+    });
+
+    expect(result.format).toBe("async-cjs");
+    expect(result.bundle).toContain("AgentWorkerBase");
+    expect(result.bundle).not.toMatch(/require\(["']node:buffer["']\)/u);
+
+    const module = { exports: {} as Record<string, unknown> };
+    const dynamicDependencies: string[] = [];
+    const wrappedBundle = `return (async () => {\n${result.bundle}\n})();`;
+    new Script(`(function (require, exports, module) { ${wrappedBundle} })`, {
+      filename: "agentic-do.eval-bundle.cjs",
+    });
+    const execute = new Function(
+      "require",
+      "exports",
+      "module",
+      "__vibestudioImport",
+      wrappedBundle
+    ) as (
+      require: (specifier: string) => never,
+      exports: Record<string, unknown>,
+      module: { exports: Record<string, unknown> },
+      dynamicImport: (specifier: string) => Promise<unknown>
+    ) => Promise<void>;
+    await execute(
+      (specifier) => {
+        throw new Error(`unexpected external dependency ${specifier}`);
+      },
+      module.exports,
+      module,
+      async (specifier) => {
+        dynamicDependencies.push(specifier);
+        return {};
+      }
+    );
+    expect(Object.keys(module.exports)).toEqual(
+      expect.arrayContaining(["AgentWorkerBase", "ChannelClient", "AgentLoopDriver"])
+    );
+    expect(dynamicDependencies).toEqual(
+      expect.arrayContaining(["node:fs", "node:os", "node:path", "node:module"])
+    );
+  }, 30_000);
+
+  it("uses worker conditions throughout an eval library dependency graph", async () => {
+    const actualWorkspaceRoot = path.resolve(__dirname, "../../../workspace");
+    buildSystem = await initBuildSystemV2(
+      actualWorkspaceRoot,
+      fakeWorkspaceSource(() => actualWorkspaceRoot),
+      []
+    );
+
+    const result = await buildSystem.getBuild("@workspace/mdx-editor-core", undefined, {
+      library: true,
+      libraryTarget: "worker",
+    });
+    expect(result.format).toBe("async-cjs");
+    expect(result.bundle).not.toContain('document.createElement("i")');
+
+    const module = { exports: {} as Record<string, unknown> };
+    const wrappedBundle = `return (async () => {\n${result.bundle}\n})();`;
+    const execute = new Function(
+      "require",
+      "exports",
+      "module",
+      "__vibestudioImport",
+      wrappedBundle
+    ) as (
+      require: (specifier: string) => never,
+      exports: Record<string, unknown>,
+      module: { exports: Record<string, unknown> },
+      dynamicImport: (specifier: string) => Promise<never>
+    ) => Promise<void>;
+    await execute(
+      (specifier) => {
+        throw new Error(`unexpected external dependency ${specifier}`);
+      },
+      module.exports,
+      module,
+      async (specifier) => {
+        throw new Error(`unexpected dynamic dependency ${specifier}`);
+      }
+    );
+    expect(module.exports).toMatchObject({
+      importMarkdownToLexical: expect.any(Function),
+      exportMarkdownFromLexical: expect.any(Function),
+    });
+  }, 30_000);
+
+  it("loads the real hosted runtime without ambient network authority", async () => {
+    const actualWorkspaceRoot = path.resolve(__dirname, "../../../workspace");
+    buildSystem = await initBuildSystemV2(
+      actualWorkspaceRoot,
+      fakeWorkspaceSource(() => actualWorkspaceRoot),
+      []
+    );
+
+    const result = await buildSystem.getBuild("@workspace/runtime/hosted", undefined, {
+      library: true,
+      libraryTarget: "worker",
+    });
+    expect(result.format).toBe("async-cjs");
+
+    const context = vm.createContext({});
+    const realm = vm.runInContext("globalThis", context) as Record<string, unknown>;
+    tameRealmCodegen(realm);
+    const RealmFunction = getRealmCompiler(realm);
+    // Node's vm realm omits web-platform text codecs that workerd provides.
+    // Install guest-realm wrappers whose closures retain the host codecs but
+    // whose functions, objects, and returned byte arrays all belong to the
+    // tamed realm. Passing the host constructors or module endowments through
+    // directly would reopen codegen through their constructor chains.
+    const installTextCodecs = new RealmFunction(
+      "HostTextDecoder",
+      "HostTextEncoder",
+      `
+        globalThis.TextDecoder = class TextDecoder {
+          #inner;
+          constructor(...args) { this.#inner = new HostTextDecoder(...args); }
+          decode(...args) { return this.#inner.decode(...args); }
+          get encoding() { return this.#inner.encoding; }
+          get fatal() { return this.#inner.fatal; }
+          get ignoreBOM() { return this.#inner.ignoreBOM; }
+        };
+        globalThis.TextEncoder = class TextEncoder {
+          #inner = new HostTextEncoder();
+          encode(input) { return new Uint8Array(this.#inner.encode(input)); }
+          encodeInto(input, destination) {
+            const bytes = this.encode(input);
+            const written = Math.min(bytes.byteLength, destination.byteLength);
+            destination.set(bytes.subarray(0, written));
+            return { read: input.length, written };
+          }
+          get encoding() { return this.#inner.encoding; }
+        };
+      `
+    ) as (decoder: typeof TextDecoder, encoder: typeof TextEncoder) => void;
+    installTextCodecs(TextDecoder, TextEncoder);
+    const receiver = vm.runInContext(
+      `(() => {
+        const exports = Object.create(null);
+        return [
+          (specifier) => { throw new Error("unexpected external dependency " + specifier); },
+          exports,
+          { exports },
+          async (specifier) => { throw new Error("unexpected dynamic dependency " + specifier); }
+        ];
+      })()`,
+      context
+    ) as [
+      (specifier: string) => never,
+      Record<string, unknown>,
+      { exports: Record<string, unknown> },
+      (specifier: string) => Promise<never>,
+    ];
+    const module = receiver[2];
+    const run = new RealmFunction(
+      "scope",
+      `with (scope) {
+        return (function(require, exports, module, __vibestudioImport) {
+          "use strict";
+          return (async () => {
+            ${result.bundle}
+          })();
+        }).apply(undefined, __vibestudioReceiver);
+      }`
+    ) as (scope: Record<PropertyKey, unknown>) => Promise<void>;
+
+    const guestScope = createPrivateGuestGlobal(realm);
+    guestScope["__vibestudioReceiver"] = receiver;
+    await run(guestScope);
+    expect(module.exports).toMatchObject({
+      createHostedRuntime: expect.any(Function),
+    });
+  }, 30_000);
+
   it("resolves a build unit that exists only at a context ref", async () => {
     const mainRoot = path.join(root, "main-state");
     const contextRoot = path.join(root, "context-state");
@@ -269,7 +463,14 @@ describe("BuildSystemV2 library package subpaths", () => {
         library: true,
         libraryTarget: "panel",
       })
-    ).rejects.toThrow(/Unknown build unit/);
+    ).rejects.toMatchObject({
+      code: "package_not_found",
+      errorData: {
+        code: "package_not_found",
+        specifier: "@workspace/context-only",
+        ref: "main",
+      },
+    });
 
     const result = await buildSystem.getBuild("@workspace/context-only", "ctx:agent-1", {
       library: true,

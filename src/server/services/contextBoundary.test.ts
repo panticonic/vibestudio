@@ -1,150 +1,89 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { scopeCovers } from "@vibestudio/shared/authorization";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
   CONTEXT_BOUNDARY_CAPABILITY,
   contextBoundaryResourceKey,
-  requireContextBoundaryPermission,
-  type ContextBoundaryDeps,
+  prepareContextBoundarySelection,
 } from "./contextBoundary.js";
 
-function tempStatePath(): string {
-  return join(mkdtempSync(join(tmpdir(), "ctx-boundary-")), "grants.json");
-}
-
-function subjectCaller(id = "panel:p1") {
-  return createVerifiedCaller(id, "panel", {
-    callerId: id,
-    callerKind: "panel",
-    repoPath: "panels/p",
-    effectiveVersion: "v1",
-  });
-}
-
-function makeDeps(
-  opts: {
-    decision?: "session" | "deny" | "once";
-    exists?: (id: string) => boolean;
-    owner?: string;
-  } = {}
-): ContextBoundaryDeps & { request: ReturnType<typeof vi.fn> } {
-  const request = vi.fn(async () => opts.decision ?? "session");
-  return {
-    approvalQueue: { request } as never,
-    grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-    contextExists: opts.exists ?? (() => true),
-    resolveContextOwnerLabel: () => opts.owner,
-    request,
-  };
-}
-
+const caller = createVerifiedCaller("panel:p1", "panel", {
+  callerId: "panel:p1",
+  callerKind: "panel",
+  repoPath: "panels/p",
+  effectiveVersion: "v1",
+});
 const action = { kind: "runtime" as const, verb: "Create panel" };
 
-afterEach(() => vi.restoreAllMocks());
-
-describe("requireContextBoundaryPermission", () => {
-  it("allows same-context actions without prompting", async () => {
-    const deps = makeDeps();
-    const result = await requireContextBoundaryPermission(deps, {
-      subjectCaller: subjectCaller(),
-      originContextId: "ctx-a",
-      targetContextId: "ctx-a",
-      action,
-    });
-    expect(result.allowed).toBe(true);
-    expect(deps.request).not.toHaveBeenCalled();
+describe("prepareContextBoundarySelection", () => {
+  it("omits same-context and fresh-context leaves", () => {
+    const existing = { contextExists: () => true };
+    expect(
+      prepareContextBoundarySelection(existing, {
+        subjectCaller: caller,
+        originContextId: "ctx-a",
+        targetContextId: "ctx-a",
+        action,
+      })
+    ).toBeNull();
+    expect(
+      prepareContextBoundarySelection(
+        { contextExists: () => false },
+        {
+          subjectCaller: caller,
+          originContextId: "ctx-a",
+          targetContextId: "ctx-fresh",
+          action,
+        }
+      )
+    ).toBeNull();
   });
 
-  it("allows launching into a FRESH foreign context without prompting", async () => {
-    const deps = makeDeps({ exists: () => false });
-    const result = await requireContextBoundaryPermission(deps, {
-      subjectCaller: subjectCaller(),
-      originContextId: "ctx-a",
-      targetContextId: "ctx-fresh",
-      action,
-    });
-    expect(result.allowed).toBe(true);
-    expect(deps.request).not.toHaveBeenCalled();
-  });
-
-  it("prompts (once) for an EXISTING foreign context and grants when allowed", async () => {
-    const deps = makeDeps({ exists: () => true, owner: "Agent X" });
-    const result = await requireContextBoundaryPermission(deps, {
-      subjectCaller: subjectCaller(),
-      originContextId: "ctx-a",
-      targetContextId: "ctx-b",
-      action,
-    });
-    expect(result.allowed).toBe(true);
-    expect(deps.request).toHaveBeenCalledTimes(1);
-    expect(deps.request).toHaveBeenCalledWith(
+  it("derives the exact foreign-context leaf and host review copy", () => {
+    expect(
+      prepareContextBoundarySelection(
+        { contextExists: () => true, resolveContextOwnerLabel: () => "Agent X" },
+        {
+          subjectCaller: caller,
+          originContextId: "ctx-a",
+          targetContextId: "ctx-b",
+          action,
+        }
+      )
+    ).toEqual(
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
-        callerId: "panel:p1",
-        grantResourceKey: contextBoundaryResourceKey("ctx-b", "panel:p1"),
-        title: "Open panel in another workspace branch",
-        description:
-          "This lets the requester open a panel in the workspace branch owned by Agent X. It can read or modify the workspace state and running work in that branch.",
-        details: [
-          { label: "Owner", value: "Agent X" },
-          { label: "Workspace branch", value: "ctx-b" },
-        ],
+        resourceKey: contextBoundaryResourceKey("ctx-b", "panel:p1"),
+        authorizingCaller: caller,
+        challenge: expect.objectContaining({
+          title: "Open panel in another workspace branch",
+          description: expect.stringContaining("workspace branch owned by Agent X"),
+          details: [
+            { label: "Owner", value: "Agent X" },
+            { label: "Workspace branch", value: "ctx-b" },
+          ],
+        }),
       })
     );
   });
 
-  it("denies when the user denies the cross-context prompt", async () => {
-    const deps = makeDeps({ decision: "deny" });
-    const result = await requireContextBoundaryPermission(deps, {
-      subjectCaller: subjectCaller(),
-      originContextId: "ctx-a",
-      targetContextId: "ctx-b",
-      action,
-    });
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toBeTruthy();
-  });
-
-  it("treats a null origin as foreign (gates an existing target)", async () => {
-    const deps = makeDeps({ exists: () => true });
-    await requireContextBoundaryPermission(deps, {
-      subjectCaller: subjectCaller(),
-      originContextId: null,
-      targetContextId: "ctx-b",
-      action,
-    });
-    expect(deps.request).toHaveBeenCalledTimes(1);
-  });
-
-  it("attributes the prompt to the subject caller (never the executing server)", async () => {
-    const deps = makeDeps();
-    await requireContextBoundaryPermission(deps, {
-      subjectCaller: subjectCaller("panel:anchor"),
-      originContextId: "ctx-a",
-      targetContextId: "ctx-b",
-      action,
-    });
-    expect(deps.request).toHaveBeenCalledWith(
-      expect.objectContaining({ callerId: "panel:anchor", callerKind: "panel" })
+  it("renders durable-object launches as background processes", () => {
+    const selected = prepareContextBoundarySelection(
+      { contextExists: () => true },
+      {
+        subjectCaller: caller,
+        originContextId: null,
+        targetContextId: "ctx-b",
+        action: { kind: "runtime", verb: "Create do" },
+      }
     );
+    expect(selected?.challenge.title).toBe("Launch background process in another workspace branch");
+    expect(selected?.challenge.description).toContain("start a background process");
   });
 
-  it("renders durable-object launches without the raw do kind label", async () => {
-    const deps = makeDeps();
-    await requireContextBoundaryPermission(deps, {
-      subjectCaller: subjectCaller(),
-      originContextId: "ctx-a",
-      targetContextId: "ctx-b",
-      action: { kind: "runtime", verb: "Create do" },
-    });
-    expect(deps.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "Launch background process in another workspace branch",
-        description: expect.stringContaining("start a background process"),
-      })
-    );
+  it("uses a hierarchical key covered by the manifest context prefix", () => {
+    const key = contextBoundaryResourceKey("ctx/a", "panel:p1");
+    expect(key).toBe("context/ctx%2Fa/requester/panel%3Ap1");
+    expect(scopeCovers({ kind: "prefix", prefix: "context" }, key)).toBe(true);
   });
 });

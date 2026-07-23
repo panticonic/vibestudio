@@ -4,9 +4,10 @@ import {
   panelAccessSeverityForTarget,
 } from "@vibestudio/shared/panelAccessPolicy";
 import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { callerHasAppCapability } from "./chromeTrust.js";
-import { requireContextBoundaryPermission, type ContextBoundaryDeps } from "./contextBoundary.js";
+import { prepareContextBoundarySelection, type ContextBoundaryDeps } from "./contextBoundary.js";
 
 export interface PanelAccessPermissionTarget extends PanelAccessTarget {
   title?: string;
@@ -37,13 +38,6 @@ export interface PanelAccessPermissionDeps extends ContextBoundaryDeps {
   resolveRequesterPanel?(caller: VerifiedCaller): Promise<PanelAccessPermissionTarget | null>;
   /** Retained for wiring compatibility; the context-boundary gate no longer reads it. */
   hasApprovalSession?(): boolean;
-}
-
-export interface PanelAccessPermissionResult {
-  allowed: boolean;
-  capability?: string;
-  prompted?: boolean;
-  reason?: string;
 }
 
 /** Ops that change a panel's context (gate against the DESTINATION, not the current, context). */
@@ -110,68 +104,31 @@ function verbFor(op: PanelAccessOperation): string {
   }
 }
 
-/**
- * The single context-boundary gate for panel control-plane operations. Prompts
- * iff the action targets another, already-existing context. The prompt is
- * attributed to a code-identity SUBJECT — the direct userland caller, or (for a
- * host-mediated `server`/`shell` call) the host-set anchor entity — never the
- * host itself. Same-context, fresh-context, and open (read) ops are free.
- */
-export async function requirePanelAccessPermission(
+/** Side-effect-free panel target selection for dispatcher authority preparation. */
+export async function preparePanelAccessAuthority(
   deps: PanelAccessPermissionDeps,
   ctx: ServiceContext,
   op: PanelAccessOperation,
   target: PanelAccessPermissionTarget
-): Promise<PanelAccessPermissionResult> {
-  if (isOpenPanelOperation(op)) return { allowed: true };
-  if (callerHasAppCapability(ctx.caller, "panel-hosting", deps)) {
-    return { allowed: true };
+): Promise<PreparedAuthoritySelection[]> {
+  if (isOpenPanelOperation(op) || callerHasAppCapability(ctx.caller, "panel-hosting", deps)) {
+    return [];
   }
-
-  // Resolve the subject. A direct userland caller carries `.code`; an `agent`
-  // caller (linked external session) carries a host-verified entity binding and
-  // is its own subject — it must NOT fall into the anchor branch below, which
-  // would substitute the TARGET panel's entity and make every access read as
-  // same-context. A host-mediated call arrives as `server`/`shell` (no code
-  // identity) and runs under the host-set anchor entity instead. No code
-  // identity AND no resolvable anchor ⇒ a genuine system action ⇒ free.
   const isAgentCaller = ctx.caller.runtime.kind === "agent";
-  let subjectCaller: VerifiedCaller = ctx.caller;
+  let subjectCaller = ctx.caller;
   if (!ctx.caller.code && !isAgentCaller) {
     const anchorId = anchorEntityId(target);
     const anchor = anchorId ? deps.resolveSubjectCaller(anchorId) : null;
-    if (!anchor) return { allowed: true };
+    if (!anchor) return [];
     subjectCaller = anchor;
   }
-
   const targetContextId = destinationContextId(deps, op, target);
-  if (targetContextId == null) return { allowed: true }; // fresh / no-change / unknown
-
-  // Agent callers: same-context (per the host-verified credential binding) is
-  // free; cross-context is DENY-not-prompt — the capability-approval pipeline
-  // is code-identity-shaped (grants key on repoPath/version), which an agent
-  // credential does not carry, and the correct agent workflow is to open its
-  // own preview panel in its own context rather than automate another
-  // context's live panel. The structured reason tells the agent exactly that.
-  if (isAgentCaller) {
-    const agentContextId = ctx.caller.agentBinding?.contextId ?? null;
-    if (agentContextId !== null && targetContextId === agentContextId) {
-      return { allowed: true };
-    }
-    if (!deps.contextExists(targetContextId)) return { allowed: true };
-    return {
-      allowed: false,
-      reason:
-        `${verbFor(op)} ${targetContextId} denied: agents may only automate panels in ` +
-        `their own context (${agentContextId ?? "unbound"}). Open a preview instance in ` +
-        `your context instead (eval: openPanel(source, { contextId }) ), or ask a user ` +
-        `in the conversation to act on the foreign panel.`,
-    };
-  }
-
-  const originContextId = await deps.resolveCallerContext(subjectCaller.runtime.id);
-
-  const result = await requireContextBoundaryPermission(deps, {
+  if (targetContextId == null) return [];
+  const originContextId = isAgentCaller
+    ? (ctx.caller.agentBinding?.contextId ?? null)
+    : await deps.resolveCallerContext(subjectCaller.runtime.id);
+  const severity = panelAccessSeverityForTarget(target);
+  const selection = prepareContextBoundarySelection(deps, {
     subjectCaller,
     originContextId,
     targetContextId,
@@ -179,14 +136,10 @@ export async function requirePanelAccessPermission(
       kind: "panel",
       verb: verbFor(op),
       targetLabel: target.title ?? target.id,
-      severity: panelAccessSeverityForTarget(target),
+      severity,
       ...(target.operationGroupKey ? { groupKey: target.operationGroupKey } : {}),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     },
   });
-
-  return {
-    allowed: result.allowed,
-    ...(result.reason ? { reason: result.reason } : {}),
-    ...(result.decision !== undefined ? { prompted: true } : {}),
-  };
+  return selection ? [{ ...selection, tier: severity === "severe" ? "critical" : "gated" }] : [];
 }

@@ -19,9 +19,11 @@ describe("reconcileSingletons", () => {
             {
               capability: "service:credentials.listStoredCredentials",
               resource: { kind: "exact", key: "workspace:test" },
+              tier: "gated",
+              evidence: "exact",
             },
           ],
-          authorityDelegations: [],
+          authorityEvalCeilings: [],
         },
         "system"
       )
@@ -35,9 +37,11 @@ describe("reconcileSingletons", () => {
           {
             capability: "service:credentials.listStoredCredentials",
             resource: { kind: "exact", key: "workspace:test" },
+            tier: "gated",
+            evidence: "exact",
           },
         ],
-        delegations: [],
+        evalCeilings: [],
       },
       contextId: "ctx-settings",
       className: "ModelSettingsDO",

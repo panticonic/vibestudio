@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ExtensionHost } from "@vibestudio/extension-host";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { createPushService } from "./pushService.js";
 
 const servicesDir = fileURLToPath(new URL(".", import.meta.url));
 const goldenPath = join(servicesDir, "__serviceAuthorityMatrix.golden.json");
@@ -58,6 +59,11 @@ async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
     inertDeps() as ExtensionHost
   );
   definitions.set(extensionDefinition.name, extensionDefinition);
+  // Push owns a SQLite store, so the generic callable proxy is not a valid
+  // construction dependency. Include its real definition with an isolated
+  // in-memory store instead of letting the census silently skip it.
+  const pushDefinition = createPushService({ databasePath: ":memory:" }).definition;
+  definitions.set(pushDefinition.name, pushDefinition);
   for (const file of files) {
     const module = (await import(/* @vite-ignore */ join(servicesDir, file))) as Record<
       string,

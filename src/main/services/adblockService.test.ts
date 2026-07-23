@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { readFileSync } from "node:fs";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { createAdblockService } from "./adblockService.js";
 
 function createManager() {
@@ -23,15 +25,39 @@ function createManager() {
   };
 }
 
+function adblockPanelCaller() {
+  const manifest = JSON.parse(
+    readFileSync(new URL("../../../workspace/about/adblock/package.json", import.meta.url), "utf8")
+  ) as {
+    vibestudio: {
+      authority: {
+        requests: Array<{
+          capability: string;
+          resource: { kind: "exact"; key: string } | { kind: "prefix"; prefix: string };
+        }>;
+      };
+    };
+  };
+  return createVerifiedCaller("panel:about-adblock", "panel", {
+    callerId: "panel:about-adblock",
+    callerKind: "panel",
+    repoPath: "about/adblock",
+    effectiveVersion: "test-version",
+    executionDigest: "a".repeat(64),
+    requested: manifest.vibestudio.authority.requests,
+    evalCeilings: [],
+  });
+}
+
 describe("createAdblockService", () => {
   it("allows panel callers to use panel adblock methods", async () => {
     const manager = createManager();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createAdblockService({ adBlockManager: manager as never }));
     dispatcher.markInitialized();
 
     const result = await dispatcher.dispatch(
-      { caller: createVerifiedCaller("panel:test", "panel") },
+      { caller: adblockPanelCaller() },
       "adblock",
       "getPanelUrl",
       [123]
@@ -41,20 +67,18 @@ describe("createAdblockService", () => {
     expect(manager.getPanelUrl).toHaveBeenCalledWith(123);
   });
 
-  it("keeps global adblock configuration methods shell-only", async () => {
+  it("lets the declared ad-block settings panel read and update global configuration", async () => {
     const manager = createManager();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createAdblockService({ adBlockManager: manager as never }));
     dispatcher.markInitialized();
 
     await expect(
-      dispatcher.dispatch(
-        { caller: createVerifiedCaller("panel:test", "panel") },
-        "adblock",
-        "setEnabled",
-        [false]
-      )
-    ).rejects.toThrow("not accessible to panel callers");
-    expect(manager.setEnabled).not.toHaveBeenCalled();
+      dispatcher.dispatch({ caller: adblockPanelCaller() }, "adblock", "getConfig", [])
+    ).resolves.toEqual({});
+    await expect(
+      dispatcher.dispatch({ caller: adblockPanelCaller() }, "adblock", "setEnabled", [false])
+    ).resolves.toBe(true);
+    expect(manager.setEnabled).toHaveBeenCalledWith(false);
   });
 });

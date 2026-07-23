@@ -24,6 +24,8 @@ export interface StartupReconciliationDeps {
   /** Optional safety-sweep grace window (ms). Default: DO's own DEFAULT_GRACE_MS. */
   gcGraceMs?: number;
   recoverLifecycle?: () => Promise<void>;
+  /** Restore exact active runtime images before any lifecycle/alarm admission. */
+  restoreRuntimes?: (records: EntityRecord[]) => Promise<void>;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
@@ -75,6 +77,11 @@ export async function runStartupReconciliation(
     gcDeletedIds = await deps.dispatchWorkspaceDO<string[]>("entityGc", gcOpts);
   } catch (err) {
     log.warn("[Bootstrap] entityGc safety sweep failed:", err);
+  }
+
+  if (deps.restoreRuntimes) {
+    const active = await deps.dispatchWorkspaceDO<EntityRecord[]>("entityListActive");
+    await deps.restoreRuntimes(active);
   }
 
   let lifecycleRecovered = false;

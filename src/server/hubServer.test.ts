@@ -513,6 +513,34 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_WORKSPACE_DIR"]).toBeUndefined();
     expect(env["PATH"]).toBe("/usr/bin");
   });
+
+  it("propagates an explicitly enabled unattended startup policy to the child", () => {
+    const env = buildWorkspaceChildEnv({
+      ...base,
+      baseEnv: {
+        ...base.baseEnv,
+        VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1",
+      },
+      childWorkspaceName: "alpha",
+      autoApproveStartupUnits: false,
+    });
+
+    expect(env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"]).toBe("1");
+  });
+
+  it("does not inherit an unrecognized startup approval value", () => {
+    const env = buildWorkspaceChildEnv({
+      ...base,
+      baseEnv: {
+        ...base.baseEnv,
+        VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "true",
+      },
+      childWorkspaceName: "alpha",
+      autoApproveStartupUnits: false,
+    });
+
+    expect(env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"]).toBeUndefined();
+  });
 });
 
 function fakeRuntime(
@@ -718,6 +746,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
         ice: "all" as const,
       },
       rpcServer: {} as never,
+      grantStore: { close: vi.fn() } as never,
       inviteExpiryTimers: new Map(),
     };
     return { state, shellToken, rootUserId: root.id, rootDeviceId: rootDevice.deviceId };

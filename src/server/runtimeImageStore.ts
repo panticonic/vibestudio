@@ -5,6 +5,11 @@ import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
+import {
+  loadVersionedJsonFile,
+  saveVersionedJsonFile,
+  type VersionedJsonCodec,
+} from "./hostCore/versionedJsonStore.js";
 
 export interface RuntimeImageRecord {
   id: string;
@@ -14,7 +19,7 @@ export interface RuntimeImageRecord {
   buildKey: string;
   executionDigest: string;
   authorityRequests: UnitAuthorityManifest["requests"];
-  authorityDelegations: UnitAuthorityManifest["delegations"];
+  authorityEvalCeilings: UnitAuthorityManifest["evalCeilings"];
   effectiveVersion: string;
   generation: number;
   error?: RuntimeImageRecordError;
@@ -29,9 +34,170 @@ export interface RuntimeImageRecordError {
 }
 
 interface RuntimeImageFile {
-  version: 3;
   records: RuntimeImageRecord[];
 }
+
+const RUNTIME_IMAGE_RECORD_KEYS = [
+  "id",
+  "source",
+  "unitName",
+  "stateHash",
+  "buildKey",
+  "executionDigest",
+  "authorityRequests",
+  "authorityEvalCeilings",
+  "effectiveVersion",
+  "generation",
+  "error",
+  "scopeRef",
+  "updatedAt",
+] as const;
+
+function runtimeImageRecord(
+  value: unknown,
+  index: number,
+  schemaLabel = "runtime-images v4"
+): RuntimeImageRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${schemaLabel} record ${index} is not an object`);
+  }
+  const record = value as Partial<RuntimeImageRecord>;
+  const invalid = (field: string): never => {
+    throw new Error(`${schemaLabel} record ${index} has invalid ${field}`);
+  };
+  const unknownKeys = Object.keys(record).filter(
+    (key) => !(RUNTIME_IMAGE_RECORD_KEYS as readonly string[]).includes(key)
+  );
+  if (unknownKeys.length > 0) invalid(`field(s): ${unknownKeys.join(", ")}`);
+  if (typeof record.id !== "string" || record.id.length === 0) invalid("id");
+  if (typeof record.source !== "string" || record.source.length === 0) invalid("source");
+  if (typeof record.unitName !== "string" || record.unitName.length === 0) invalid("unitName");
+  if (typeof record.stateHash !== "string" || record.stateHash.length === 0) invalid("stateHash");
+  if (typeof record.buildKey !== "string" || record.buildKey.length === 0) invalid("buildKey");
+  if (
+    typeof record.executionDigest !== "string" ||
+    !/^[0-9a-f]{64}$/.test(record.executionDigest)
+  ) {
+    invalid("executionDigest");
+  }
+  if (typeof record.effectiveVersion !== "string" || record.effectiveVersion.length === 0) {
+    invalid("effectiveVersion");
+  }
+  if (!Number.isSafeInteger(record.generation) || Number(record.generation) < 1) {
+    invalid("generation");
+  }
+  if (typeof record.updatedAt !== "number" || !Number.isFinite(record.updatedAt)) {
+    invalid("updatedAt");
+  }
+  if (record.scopeRef !== undefined && typeof record.scopeRef !== "string") invalid("scopeRef");
+  if (record.error !== undefined) {
+    if (
+      !record.error ||
+      record.error.code !== "rebind_failed" ||
+      typeof record.error.message !== "string" ||
+      typeof record.error.failedAt !== "number" ||
+      !Number.isFinite(record.error.failedAt)
+    ) {
+      invalid("error");
+    }
+  }
+  const authority = parseUnitAuthorityManifest(
+    {
+      requests: record.authorityRequests,
+      evalCeilings: record.authorityEvalCeilings,
+    },
+    `runtime image ${record.id} authority`
+  );
+  return {
+    ...(record as RuntimeImageRecord),
+    authorityRequests: authority.requests,
+    authorityEvalCeilings: authority.evalCeilings,
+  };
+}
+
+function decodeRuntimeImageFile(value: unknown): RuntimeImageFile {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("runtime-images v4 is not an object");
+  }
+  const file = value as Record<string, unknown>;
+  const unknownKeys = Object.keys(file).filter((key) => key !== "version" && key !== "records");
+  if (unknownKeys.length > 0) {
+    throw new Error(`runtime-images v4 has unknown field(s): ${unknownKeys.join(", ")}`);
+  }
+  if (file["version"] !== 4) {
+    throw new Error(`runtime-images v4 has invalid version ${String(file["version"])}`);
+  }
+  if (!Array.isArray(file["records"])) {
+    throw new Error("runtime-images v4 records must be an array");
+  }
+  const records = file["records"].map((record, index) => runtimeImageRecord(record, index));
+  const ids = new Set<string>();
+  for (const record of records) {
+    if (ids.has(record.id)) {
+      throw new Error(`runtime-images v4 contains duplicate id ${record.id}`);
+    }
+    ids.add(record.id);
+  }
+  return { records };
+}
+
+function migrateRuntimeImagesV3(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("runtime-images v3 is not an object");
+  }
+  const file = value as Record<string, unknown>;
+  const unknownFileKeys = Object.keys(file).filter((key) => key !== "version" && key !== "records");
+  if (unknownFileKeys.length > 0 || file["version"] !== 3 || !Array.isArray(file["records"])) {
+    throw new Error("runtime-images v3 has an invalid shape");
+  }
+  const records = file["records"].map((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`runtime-images v3 record ${index} is not an object`);
+    }
+    const legacy = value as Record<string, unknown>;
+    const legacyKeys = new Set<string>(
+      RUNTIME_IMAGE_RECORD_KEYS.map((key) =>
+        key === "authorityEvalCeilings" ? "authorityDelegations" : key
+      )
+    );
+    const unknownKeys = Object.keys(legacy).filter((key) => !legacyKeys.has(key));
+    if (unknownKeys.length > 0) {
+      throw new Error(
+        `runtime-images v3 record ${index} has unknown field(s): ${unknownKeys.join(", ")}`
+      );
+    }
+    if (!Object.hasOwn(legacy, "authorityDelegations")) {
+      throw new Error(`runtime-images v3 record ${index} is missing authorityDelegations`);
+    }
+    const { authorityDelegations, ...rest } = legacy;
+    return runtimeImageRecord(
+      {
+        ...rest,
+        authorityEvalCeilings: authorityDelegations,
+      },
+      index,
+      "runtime-images v3 migration"
+    );
+  });
+  return { records };
+}
+
+const RUNTIME_IMAGE_CODEC: VersionedJsonCodec<RuntimeImageFile> = {
+  schemaName: "runtime-images",
+  currentVersion: 4,
+  versionKey: "version",
+  migrations: [
+    {
+      version: 4,
+      name: "rename-eval-delegations-to-ceilings",
+      migrate: migrateRuntimeImagesV3,
+    },
+  ],
+  decodeCurrent: decodeRuntimeImageFile,
+  encode: (value) => ({
+    records: [...value.records].sort((a, b) => a.id.localeCompare(b.id)),
+  }),
+};
 
 export class RuntimeImageStore {
   private readonly filePath: string;
@@ -89,58 +255,15 @@ export class RuntimeImageStore {
   }
 
   private load(): void {
-    if (!fs.existsSync(this.filePath)) return;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf-8")) as RuntimeImageFile;
-      if (parsed.version !== 3 || !Array.isArray(parsed.records)) return;
-      for (const record of parsed.records) {
-        if (
-          typeof record.id === "string" &&
-          typeof record.source === "string" &&
-          typeof record.unitName === "string" &&
-          typeof record.stateHash === "string" &&
-          typeof record.buildKey === "string" &&
-          /^[0-9a-f]{64}$/.test(record.executionDigest) &&
-          typeof record.effectiveVersion === "string" &&
-          typeof record.generation === "number" &&
-          typeof record.updatedAt === "number"
-        ) {
-          const authority = parseUnitAuthorityManifest(
-            {
-              requests: record.authorityRequests,
-              delegations: record.authorityDelegations,
-            },
-            `runtime image ${record.id} authority`
-          );
-          const normalized: RuntimeImageRecord = {
-            ...record,
-            authorityRequests: authority.requests,
-            authorityDelegations: authority.delegations,
-          };
-          if (
-            record.error &&
-            (record.error.code !== "rebind_failed" ||
-              typeof record.error.message !== "string" ||
-              typeof record.error.failedAt !== "number")
-          ) {
-            delete normalized.error;
-          }
-          this.records.set(record.id, normalized);
-        }
-      }
-    } catch {
-      this.records.clear();
+    const parsed = loadVersionedJsonFile(this.filePath, RUNTIME_IMAGE_CODEC);
+    if (!parsed) return;
+    for (const record of parsed.records) {
+      this.records.set(record.id, record);
     }
   }
 
   private persist(): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    const payload: RuntimeImageFile = {
-      version: 3,
-      records: this.list().sort((a, b) => a.id.localeCompare(b.id)),
-    };
-    const tmp = `${this.filePath}.tmp.${process.pid}`;
-    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
-    fs.renameSync(tmp, this.filePath);
+    saveVersionedJsonFile(this.filePath, { records: this.list() }, RUNTIME_IMAGE_CODEC);
   }
 }

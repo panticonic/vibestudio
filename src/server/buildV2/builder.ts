@@ -23,7 +23,14 @@ import { execFile } from "child_process";
 import { createRequire } from "module";
 import { promisify } from "util";
 import { pathToFileURL } from "url";
+import {
+  transformSync as transformBabel,
+  types as babelTypes,
+  type PluginItem,
+  type PluginObj,
+} from "@babel/core";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
+import { BuildRequestError } from "./diagnostics.js";
 import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
 import {
   appUnitManifestDescriptor,
@@ -34,7 +41,6 @@ import {
 import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
-  withExtensionRuntimeAuthority,
 } from "@vibestudio/shared/authorityManifest";
 import * as buildStore from "./buildStore.js";
 import {
@@ -75,6 +81,31 @@ import type {
   BuildProviderArtifact,
   BuildProviderInput,
 } from "@vibestudio/shared/buildProvider";
+import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
+
+const transformModulesCommonJs = createRequire(path.join(process.cwd(), "package.json"))(
+  "@babel/plugin-transform-modules-commonjs"
+) as PluginItem;
+
+/**
+ * Library artifacts execute inside the eval linker, not the host ESM loader.
+ * Route every syntactic dynamic import through the linker's closure-held
+ * callback. This is a per-build transform, so newly authored workspace
+ * packages do not depend on a host-generated source census.
+ */
+const controlledDynamicImportPlugin: PluginObj = {
+  name: "vibestudio-controlled-dynamic-import",
+  visitor: {
+    CallExpression(callPath) {
+      if (callPath.node.callee.type !== "Import") return;
+      callPath.replaceWith(
+        babelTypes.callExpression(babelTypes.identifier("__vibestudioImport"), [
+          ...callPath.node.arguments,
+        ])
+      );
+    },
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Module Initialization
@@ -914,6 +945,9 @@ export default { promises: _fs, readFile, writeFile, readdir, stat, lstat, mkdir
 }
 
 function createPathShimPlugin(resolveDir: string): esbuild.Plugin {
+  const reviewedPatheEntry = createRequire(path.join(process.cwd(), "package.json")).resolve(
+    "pathe"
+  );
   return {
     name: "path-shim",
     setup(build) {
@@ -923,8 +957,8 @@ function createPathShimPlugin(resolveDir: string): esbuild.Plugin {
       }));
 
       build.onLoad({ filter: /.*/, namespace: "workspace-path-shim" }, () => ({
-        contents: `export { basename, dirname, extname, format, isAbsolute, join, normalize, parse, relative, resolve, sep, delimiter, toNamespacedPath } from "pathe";
-import * as pathe from "pathe";
+        contents: `export { basename, dirname, extname, format, isAbsolute, join, normalize, parse, relative, resolve, sep, delimiter, toNamespacedPath } from ${JSON.stringify(reviewedPatheEntry)};
+import * as pathe from ${JSON.stringify(reviewedPatheEntry)};
 export const posix = pathe;
 export default pathe;`,
         loader: "js",
@@ -991,20 +1025,16 @@ export default { getRandomValues, randomBytes, createHash };`,
   };
 }
 
-function createWorkerBufferShimPlugin(resolveDir: string): esbuild.Plugin {
+function createWorkerBufferShimPlugin(_resolveDir: string): esbuild.Plugin {
+  const reviewedBufferEntry = createRequire(path.join(process.cwd(), "package.json")).resolve(
+    "buffer/"
+  );
   return {
     name: "worker-buffer-shim",
     setup(build) {
-      build.onResolve({ filter: /^(buffer|node:buffer)$/ }, async (args) => {
-        const result = await build.resolve("buffer/", {
-          kind: args.kind,
-          resolveDir,
-        });
-        if (!result.errors || result.errors.length === 0) {
-          return result;
-        }
-        return null;
-      });
+      build.onResolve({ filter: /^(buffer|node:buffer)$/ }, () => ({
+        path: reviewedBufferEntry,
+      }));
     },
   };
 }
@@ -1029,6 +1059,13 @@ function relativeAssetHref(artifactPath: string): string {
 
 function panelLoaderScript(bundleSrc: string): string {
   return `<script src="./__loader.js" data-bundle-src="${escapeHtml(bundleSrc)}"></script>`;
+}
+
+function panelPreloadLinks(bundleSrc: string): string {
+  return [
+    '<link rel="preload" href="./__transport.js" as="script" />',
+    `<link rel="modulepreload" href="${escapeHtml(bundleSrc)}" />`,
+  ].join("\n  ");
 }
 
 function isPanelEntryJsOutput(outputPath: string): boolean {
@@ -1112,6 +1149,14 @@ export function injectHtmlTransforms(
       }
     }
   }
+  const preloads = panelPreloadLinks(bundleSrc);
+  if (usePanelLoader && !result.includes(preloads)) {
+    if (/<\/head>/i.test(result)) {
+      result = result.replace(/<\/head>/i, `  ${preloads}\n</head>`);
+    } else {
+      result = `${preloads}\n${result}`;
+    }
+  }
   const bundleScript =
     /<script\b[^>]*\bsrc\s*=\s*["'](?:\.\/)?bundle\.js(?:\?[^"']*)?["'][^>]*><\/script>/i;
   if (usePanelLoader) {
@@ -1182,6 +1227,7 @@ function generatePanelHtml(
   ${PANEL_CSP_META}
   <title>${escapeHtml(title)}</title>
   ${importMapScript}${cdnLinks}${cssLink}
+  ${usePanelLoader ? panelPreloadLinks(bundleSrc) : ""}
   <style>
     html, body { margin: 0; padding: 0; height: 100%; }
     ${additionalCss}
@@ -1459,7 +1505,7 @@ function withRequestedSourceState(build: BuildResult, sourceStateHash: string): 
 
 const EMPTY_UNIT_AUTHORITY: UnitAuthorityManifest = Object.freeze({
   requests: Object.freeze([]),
-  delegations: Object.freeze([]),
+  evalCeilings: Object.freeze([]),
 });
 
 /**
@@ -1475,13 +1521,9 @@ function authorityFromMaterializedSource(
     vibestudio?: { authority?: unknown };
   };
   const authority = packageJson.vibestudio?.authority;
-  const declared =
-    authority === undefined
-      ? EMPTY_UNIT_AUTHORITY
-      : parseUnitAuthorityManifest(authority, `${node.name} vibestudio.authority`);
-  return node.kind === "extension"
-    ? withExtensionRuntimeAuthority(declared, `${node.name} effective extension authority`)
-    : declared;
+  return authority === undefined
+    ? EMPTY_UNIT_AUTHORITY
+    : parseUnitAuthorityManifest(authority, `${node.name} vibestudio.authority`);
 }
 
 async function doBuild(
@@ -1789,8 +1831,21 @@ async function buildPanel(
     target: "es2022",
     format: "esm",
     splitting: true,
+    // Panels are runtime artifacts, not source modules consumed by a dev
+    // server. Shipping React's development branches and readable-but-much-
+    // larger output makes every webview parse megabytes of diagnostics before
+    // it can mount. Linked sourcemaps preserve debuggability without putting
+    // that cost on the startup path.
+    define: {
+      "process.env.NODE_ENV": JSON.stringify("production"),
+    },
+    minify: true,
     outdir,
-    sourcemap: sourcemap ? "inline" : false,
+    // Keep development maps available without putting them on the startup
+    // path. Inline maps made every panel download and parse several megabytes
+    // of debugger-only data before its first render; external maps are fetched
+    // only when developer tooling asks for them.
+    sourcemap: sourcemap ? "linked" : false,
     metafile: true,
     logLevel: "warning",
     conditions: [...PANEL_CONDITIONS],
@@ -2339,6 +2394,7 @@ async function buildWorker(
   // Read the manifest from the materialized source state rather than
   // `node.manifest`, so exact-state builds never observe mutable source directories.
   const workerSourcePath = path.join(sourceRoot, node.relativePath);
+  const workspaceRpcCatalog = collectWorkspaceRpcCatalog(workerSourcePath);
   const extractedPkgPath = path.join(workerSourcePath, "package.json");
   const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8"));
   const extractedManifest = extractedPkg.vibestudio ?? {};
@@ -2447,13 +2503,16 @@ async function buildWorker(
         sourceStateHash,
         sourcemap,
         authority,
+        workspaceRpcCatalog,
         details: { kind: "generic" },
         builtAt: new Date().toISOString(),
       };
       return buildStore.put(buildKey, artifacts, metadata);
     }
 
-    return storeSimpleBuild(buildKey, bundle, node, ev, sourcemap, sourceStateHash, authority);
+    return storeSimpleBuild(buildKey, bundle, node, ev, sourcemap, sourceStateHash, authority, {
+      workspaceRpcCatalog,
+    });
   } finally {
     env.cleanup();
   }
@@ -3133,7 +3192,8 @@ async function buildLibraryBundle(
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot, conditions);
 
   try {
-    const outfile = path.join(env.outdir, "bundle.js");
+    const moduleUrl = `vibestudio-module://build/${buildKey}/${encodeURIComponent(node.name)}`;
+    const outfile = path.join(env.outdir, "bundle.mjs");
     const entryFile =
       entrySubpath === "."
         ? env.entryFile
@@ -3141,11 +3201,23 @@ async function buildLibraryBundle(
     await esbuild.build({
       entryPoints: [entryFile],
       bundle: true,
-      format: "cjs",
+      // Preserve async-module semantics across the complete dependency graph.
+      // A second syntax-only pass lowers imports/exports to require/exports
+      // without touching top-level await; the eval linker executes that output
+      // inside an async module factory.
+      format: "esm",
       platform: "browser",
+      target: "es2022",
       outfile,
       write: true,
       external: externals,
+      // Apply the execution target to third-party dependencies too. The
+      // workspace resolver below already uses these conditions for local
+      // packages, but without esbuild's top-level conditions npm dependencies
+      // silently fall back to the browser condition because this bundle uses
+      // the browser platform for its safe fs/path/buffer shims. A worker/eval
+      // bundle must prefer `worker`/`workerd` exports throughout the graph.
+      conditions: [...conditions],
       plugins: [
         // `conditions` selects each workspace package's export entry by execution
         // target (panel vs worker/eval). Pass `externals` to the resolve plugin
@@ -3156,15 +3228,35 @@ async function buildLibraryBundle(
         createTsExtensionPlugin(sourceRoot),
         createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
         createPathShimPlugin(env.resolveDir),
+        createWorkerBufferShimPlugin(env.resolveDir),
       ],
       nodePaths: env.nodePaths,
       loader: LIBRARY_ASSET_LOADERS,
       logLevel: "warning",
       tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
+      // The async-CJS linker has no ambient ESM loader and must never expose a
+      // host checkout path. Preserve import.meta.url semantics with an exact,
+      // content-addressed synthetic module coordinate embedded in the artifact.
+      define: { "import.meta": JSON.stringify({ url: moduleUrl }) },
     });
 
-    const bundleContent = fs.readFileSync(outfile, "utf-8");
-    return storeSimpleBuild(buildKey, bundleContent, node, ev, false, sourceStateHash, authority);
+    const esmBundle = fs.readFileSync(outfile, "utf-8");
+    const bundleContent = transformBabel(esmBundle, {
+      babelrc: false,
+      configFile: false,
+      sourceType: "module",
+      plugins: [controlledDynamicImportPlugin, [transformModulesCommonJs, { strictMode: true }]],
+      compact: false,
+      comments: true,
+      ast: false,
+      code: true,
+    })?.code;
+    if (!bundleContent) {
+      throw new Error(`library module lowering produced no output for ${node.name}`);
+    }
+    return storeSimpleBuild(buildKey, bundleContent, node, ev, false, sourceStateHash, authority, {
+      details: { kind: "library", format: "async-cjs" },
+    });
   } finally {
     env.cleanup();
   }
@@ -3537,7 +3629,11 @@ function resolvePackageExportEntryPoint(
   const normalized = subpath === "." ? "." : subpath.startsWith("./") ? subpath : `./${subpath}`;
   const pkgJsonPath = path.join(sourcePath, "package.json");
   if (!fs.existsSync(pkgJsonPath)) {
-    throw new Error(`No package.json found for ${node.name} at ${sourcePath}`);
+    throw new BuildRequestError(
+      "package_manifest_missing",
+      `No package.json found for ${node.name}`,
+      { packageName: node.name, subpath: normalized, conditions: [...conditions] }
+    );
   }
 
   const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
@@ -3547,7 +3643,11 @@ function resolvePackageExportEntryPoint(
     ? resolveExportSubpath(pkgJson.exports, normalized, conditions)
     : null;
   if (!target) {
-    throw new Error(`No export ${normalized} found for ${node.name}`);
+    throw new BuildRequestError(
+      "package_export_not_found",
+      `No export ${normalized} found for ${node.name}`,
+      { packageName: node.name, subpath: normalized, conditions: [...conditions] }
+    );
   }
 
   const resolved = path.resolve(sourcePath, target);
@@ -3555,5 +3655,14 @@ function resolvePackageExportEntryPoint(
   const srcFallback = resolveSourceFallback(sourcePath, target);
   if (srcFallback) return srcFallback;
 
-  throw new Error(`Export ${normalized} for ${node.name} resolves to missing file: ${target}`);
+  throw new BuildRequestError(
+    "package_export_target_missing",
+    `Export ${normalized} for ${node.name} resolves to missing file: ${target}`,
+    {
+      packageName: node.name,
+      subpath: normalized,
+      conditions: [...conditions],
+      target,
+    }
+  );
 }

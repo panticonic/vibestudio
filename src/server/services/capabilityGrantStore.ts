@@ -1,392 +1,733 @@
-import { stateLayout } from "../stateLayout.js";
-import { canonicalKey } from "@vibestudio/shared/canonicalKey";
+import fs from "node:fs";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
+import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
+import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
+import type { AuthorityGrant, Principal, ResourceScope } from "@vibestudio/rpc";
+import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
+import { scopeCovers } from "@vibestudio/shared/authorization";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import type { ApprovalResourceScope } from "@vibestudio/shared/approvals";
-import {
-  loadVersionedJsonFile,
-  saveVersionedJsonFile,
-  type VersionedJsonCodec,
-} from "../hostCore/versionedJsonStore.js";
+import type {
+  ApprovalPrincipal,
+  UserlandApprovalGrant,
+  UserlandApprovalGrantScope,
+  UserlandApprovalIssuer,
+  UserlandApprovalSubject,
+} from "@vibestudio/shared/approvals";
+import { stateLayout } from "../stateLayout.js";
+import { AUTHORITY_GRANTS_MIGRATION_PLAN } from "./authorityGrantSchema.js";
 
-export type CapabilityGrantDecision = "session" | "version";
-
-export interface CapabilityGrantIdentity {
-  callerId: string;
-  repoPath: string;
-  effectiveVersion: string;
-}
-
-export interface CapabilityGrant {
-  effect?: "allow" | "deny";
+export interface IssueAuthorityGrantInput {
+  id?: string;
+  effect: "allow" | "deny";
   capability: string;
-  resourceKey: string;
-  resourceScope?: ApprovalResourceScope;
-  scope: CapabilityGrantDecision;
-  callerId?: string;
-  repoPath: string;
-  effectiveVersion?: string;
-  grantedAt: number;
+  resource: ResourceScope;
+  subject: Principal;
+  constraints?: AuthorityGrant["constraints"];
+  issuedBy: string;
+  provenance: "acquisition" | "critical-confirmation" | "preauthorization" | "install" | "seed";
+  createdAt?: number;
+  expiresAt?: number;
 }
 
-interface CapabilityGrantFile {
-  grants: CapabilityGrant[];
+export interface PreauthorizationEnvelopeInput {
+  envelopeId?: string;
+  sessionId: string;
+  taskRef: string;
+  missionSubject?: `mission:${string}`;
+  createdBy: `user:${string}`;
+  createdAt?: number;
+  rules: readonly {
+    capability: string;
+    resource: ResourceScope;
+    worstCaseSeverity: "routine" | "sensitive";
+  }[];
 }
-
-const CAPABILITY_GRANT_SCHEMA_VERSION = 1;
-
-const CAPABILITY_GRANT_CODEC: VersionedJsonCodec<CapabilityGrantFile> = {
-  schemaName: "Capability grant store",
-  currentVersion: CAPABILITY_GRANT_SCHEMA_VERSION,
-  decodeCurrent(value) {
-    const record = value as Record<string, unknown>;
-    if (
-      Object.keys(record).some((key) => key !== "schemaVersion" && key !== "grants") ||
-      !Array.isArray(record["grants"]) ||
-      !record["grants"].every(isPersistentCapabilityGrant)
-    ) {
-      throw new Error("versioned grant store contains invalid data");
-    }
-    return { grants: record["grants"] };
-  },
-  unversionedMigration: {
-    version: 1,
-    name: "recognize-pre-versioning-capability-grants",
-    migrate(value) {
-      if (!isCapabilityGrantFile(value)) {
-        throw new Error("legacy grant store does not match the recognized { grants } schema");
-      }
-      return { grants: value.grants };
-    },
-  },
-  encode: (value) => ({ grants: value.grants }),
-};
 
 export class CapabilityGrantStore {
-  private readonly sessionGrants = new Map<string, CapabilityGrant>();
-  private readonly filePath: string;
-  private persistent: CapabilityGrantFile = { grants: [] };
+  private readonly db: DatabaseSync;
+  readonly databasePath: string;
 
   constructor(opts: { statePath: string }) {
-    this.filePath = stateLayout(opts.statePath).capabilityGrantsFile;
-    this.load();
-  }
-
-  hasGrant(
-    capability: string,
-    resourceKey: string,
-    identity: CapabilityGrantIdentity,
-    resourceScope?: ApprovalResourceScope
-  ): boolean {
-    const requestedScope = resourceScope ?? exactResourceScope(resourceKey);
-    return (
-      Array.from(this.sessionGrants.values()).some(
-        (grant) =>
-          grant.effect !== "deny" &&
-          grantMatches(grant, capability, resourceKey, requestedScope, identity)
-      ) ||
-      this.persistent.grants.some(
-        (grant) =>
-          grant.effect !== "deny" &&
-          grantMatches(grant, capability, resourceKey, requestedScope, identity)
-      )
-    );
-  }
-
-  grant(
-    capability: string,
-    resourceKey: string,
-    identity: CapabilityGrantIdentity,
-    scope: CapabilityGrantDecision,
-    resourceScope?: ApprovalResourceScope,
-    now = Date.now(),
-    effect: "allow" | "deny" = "allow"
-  ): void {
-    const normalizedScope = resourceScope ?? exactResourceScope(resourceKey);
-    if (scope === "session") {
-      const next: CapabilityGrant = {
-        capability,
-        resourceKey,
-        resourceScope: normalizedScope,
-        scope,
-        callerId: identity.callerId,
-        repoPath: identity.repoPath,
-        grantedAt: now,
-        effect,
-      };
-      this.sessionGrants.set(capabilityGrantKey(scope, capability, resourceKey, identity), next);
-      return;
-    }
-    const next: CapabilityGrant = {
-      capability,
-      resourceKey,
-      resourceScope: normalizedScope,
-      scope,
-      callerId:
-        scope === "version" && versionGrantRequiresCaller(identity) ? identity.callerId : undefined,
-      repoPath: identity.repoPath,
-      effectiveVersion: scope === "version" ? identity.effectiveVersion : undefined,
-      grantedAt: now,
-      effect,
-    };
-    this.persistent.grants = [
-      ...this.persistent.grants.filter(
-        (grant) =>
-          !(
-            grant.capability === next.capability &&
-            grant.resourceKey === next.resourceKey &&
-            grant.scope === next.scope &&
-            grant.callerId === next.callerId &&
-            grant.repoPath === next.repoPath &&
-            grant.effectiveVersion === next.effectiveVersion
-          )
-      ),
-      next,
-    ];
-    this.save();
-  }
-
-  hasDenial(
-    capability: string,
-    resourceKey: string,
-    identity: CapabilityGrantIdentity,
-    resourceScope?: ApprovalResourceScope
-  ): boolean {
-    const requestedScope = resourceScope ?? exactResourceScope(resourceKey);
-    return (
-      Array.from(this.sessionGrants.values()).some(
-        (grant) =>
-          grant.effect === "deny" &&
-          grantMatches(grant, capability, resourceKey, requestedScope, identity)
-      ) ||
-      this.persistent.grants.some(
-        (grant) =>
-          grant.effect === "deny" &&
-          grantMatches(grant, capability, resourceKey, requestedScope, identity)
-      )
-    );
-  }
-
-  /** Durable grants only; session decisions intentionally disappear at restart. */
-  listPersistent(): CapabilityGrant[] {
-    return this.persistent.grants.map((grant) => ({ ...grant }));
-  }
-
-  /** Active in-memory decisions, exposed so the trusted Permissions page can revoke them. */
-  listSession(): CapabilityGrant[] {
-    return Array.from(this.sessionGrants.values(), (grant) => ({ ...grant }));
-  }
-
-  revokeSession(id: string): boolean {
-    for (const [key, grant] of this.sessionGrants) {
-      if (capabilityGrantId(grant) !== id) continue;
-      this.sessionGrants.delete(key);
-      return true;
-    }
-    return false;
-  }
-
-  revokePersistent(id: string): boolean {
-    const before = this.persistent.grants.length;
-    this.persistent.grants = this.persistent.grants.filter(
-      (grant) => capabilityGrantId(grant) !== id
-    );
-    if (this.persistent.grants.length === before) return false;
-    this.save();
-    return true;
-  }
-
-  private load(): void {
+    const layout = stateLayout(opts.statePath);
+    this.databasePath = layout.authority.grantsDb;
+    fs.mkdirSync(path.dirname(this.databasePath), { recursive: true, mode: 0o700 });
+    this.db = new DatabaseSync(this.databasePath);
+    this.db.exec("PRAGMA busy_timeout = 5000");
+    this.db.exec("PRAGMA foreign_keys = ON");
     try {
-      this.persistent = loadVersionedJsonFile(this.filePath, CAPABILITY_GRANT_CODEC) ?? {
-        grants: [],
-      };
+      openCanonicalSqliteDatabase(this.db, AUTHORITY_GRANTS_MIGRATION_PLAN, {
+        description: `authority grant store in ${this.databasePath}`,
+      });
+      this.db.exec("PRAGMA journal_mode = WAL");
     } catch (error) {
+      this.db.close();
       throw new Error(
-        `Capability grant store ${this.filePath} cannot be loaded without risking data loss: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Authority grant store ${this.databasePath} cannot be loaded without risking data loss: ${error instanceof Error ? error.message : String(error)}`,
         { cause: error }
       );
     }
   }
 
-  private save(): void {
-    saveVersionedJsonFile(this.filePath, this.persistent, CAPABILITY_GRANT_CODEC);
+  close(): void {
+    this.db.close();
   }
-}
 
-function isCapabilityGrantFile(value: unknown): value is CapabilityGrantFile {
-  return (
-    !!value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 1 &&
-    Array.isArray((value as { grants?: unknown }).grants) &&
-    (value as { grants: unknown[] }).grants.every(isPersistentCapabilityGrant)
-  );
-}
+  issue(input: IssueAuthorityGrantInput): AuthorityGrant {
+    validateGrantInput(input);
+    const id = input.id ?? ulid(input.createdAt);
+    const createdAt = input.createdAt ?? Date.now();
+    const constraints = input.constraints ?? {};
+    this.db
+      .prepare(
+        `INSERT INTO authority_grants (
+          id, effect, capability, resource_key, resource_scope, subject,
+          session_id, invocation_digest, mission_subject, envelope_id,
+          lineage_at_consent, issued_by, provenance, created_at, expires_at,
+          revoked_at, consumed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`
+      )
+      .run(
+        id,
+        input.effect,
+        input.capability,
+        resourceKeyOf(input.resource),
+        input.resource.kind,
+        input.subject,
+        constraints.sessionId ?? null,
+        constraints.invocationDigest ?? null,
+        constraints.missionSubject ?? null,
+        constraints.envelopeId ?? null,
+        canonicalJson([...(constraints.lineageAtConsent ?? [])].sort()),
+        input.issuedBy,
+        input.provenance,
+        createdAt,
+        input.expiresAt ?? null
+      );
+    return {
+      id,
+      effect: input.effect,
+      capability: input.capability,
+      resource: input.resource,
+      subject: input.subject,
+      constraints: { ...constraints },
+      issuedBy: input.issuedBy,
+      provenance: input.provenance,
+      createdAt,
+      ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+    };
+  }
 
-function isPersistentCapabilityGrant(value: unknown): value is CapabilityGrant {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const grant = value as Partial<CapabilityGrant>;
-  const allowedKeys = new Set([
-    "capability",
-    "resourceKey",
-    "resourceScope",
-    "scope",
-    "callerId",
-    "repoPath",
-    "effectiveVersion",
-    "grantedAt",
-    "effect",
-  ]);
-  return (
-    Object.keys(grant).every((key) => allowedKeys.has(key)) &&
-    typeof grant.capability === "string" &&
-    typeof grant.resourceKey === "string" &&
-    isApprovalResourceScope(grant.resourceScope) &&
-    grant.scope === "version" &&
-    (grant.callerId === undefined || typeof grant.callerId === "string") &&
-    typeof grant.repoPath === "string" &&
-    typeof grant.effectiveVersion === "string" &&
-    (grant.effect === undefined || grant.effect === "allow" || grant.effect === "deny") &&
-    Number.isFinite(grant.grantedAt) &&
-    (!versionGrantRequiresCaller({
-      callerId: grant.callerId ?? "",
-      repoPath: grant.repoPath,
-      effectiveVersion: grant.effectiveVersion,
-    }) ||
-      typeof grant.callerId === "string")
-  );
-}
+  grantsForSubjects(
+    subjects: readonly Principal[],
+    capability: string,
+    now = Date.now()
+  ): AuthorityGrant[] {
+    if (subjects.length === 0) return [];
+    const found: AuthorityGrant[] = [];
+    for (const chunk of chunks([...new Set(subjects)], 300)) {
+      const placeholders = chunk.map(() => "?").join(",");
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM authority_grants
+           WHERE subject IN (${placeholders})
+             AND revoked_at IS NULL
+             AND (expires_at IS NULL OR expires_at > ?)`
+        )
+        .all(...chunk, now) as GrantRow[];
+      for (const row of rows) {
+        if (capabilityPatternCovers(String(row["capability"]), capability))
+          found.push(rowToGrant(row));
+      }
+    }
+    return found;
+  }
 
-function isApprovalResourceScope(value: unknown): value is ApprovalResourceScope {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const scope = value as Record<string, unknown>;
-  if (scope["kind"] === "exact") {
+  consume(grantId: string, now = Date.now()): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE authority_grants SET consumed_at = ?
+         WHERE id = ? AND consumed_at IS NULL AND revoked_at IS NULL
+           AND invocation_digest IS NOT NULL`
+      )
+      .run(now, grantId);
+    return Number(result.changes) === 1;
+  }
+
+  revoke(grantId: string, now = Date.now()): boolean {
+    const result = this.db
+      .prepare("UPDATE authority_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+      .run(now, grantId);
+    return Number(result.changes) === 1;
+  }
+
+  pruneSession(sessionId: string, now = Date.now()): number {
+    const result = this.db
+      .prepare(
+        "UPDATE authority_grants SET revoked_at = ? WHERE session_id = ? AND revoked_at IS NULL"
+      )
+      .run(now, sessionId);
+    return Number(result.changes);
+  }
+
+  listAuthorityGrants(): AuthorityGrant[] {
     return (
-      Object.keys(scope).every((key) => key === "kind" || key === "key" || key === "label") &&
-      typeof scope["key"] === "string" &&
-      (scope["label"] === undefined || typeof scope["label"] === "string")
+      this.db
+        .prepare("SELECT * FROM authority_grants ORDER BY created_at DESC, id DESC")
+        .all() as GrantRow[]
+    ).map(rowToGrant);
+  }
+
+  listActiveAuthorityGrants(now = Date.now()): AuthorityGrant[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM authority_grants
+           WHERE revoked_at IS NULL AND consumed_at IS NULL
+             AND (expires_at IS NULL OR expires_at > ?)
+           ORDER BY created_at DESC, id DESC`
+        )
+        .all(now) as GrantRow[]
+    ).map(rowToGrant);
+  }
+
+  createEnvelope(input: PreauthorizationEnvelopeInput): string {
+    if (input.rules.some((rule) => rule.worstCaseSeverity === ("critical" as string))) {
+      throw new Error("Critical worst-case rules cannot enter a preauthorization envelope");
+    }
+    const envelopeId = input.envelopeId ?? ulid(input.createdAt);
+    const createdAt = input.createdAt ?? Date.now();
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO preauth_envelopes
+           (envelope_id, session_id, task_ref, mission_subject, state, created_by, created_at, closed_at)
+           VALUES (?, ?, ?, ?, 'active', ?, ?, NULL)`
+        )
+        .run(
+          envelopeId,
+          input.sessionId,
+          input.taskRef,
+          input.missionSubject ?? null,
+          input.createdBy,
+          createdAt
+        );
+      const insert = this.db.prepare(
+        `INSERT INTO envelope_rules
+         (envelope_id, capability, resource_key, resource_scope, worst_case_severity)
+         VALUES (?, ?, ?, ?, ?)`
+      );
+      for (const rule of input.rules) {
+        insert.run(
+          envelopeId,
+          rule.capability,
+          resourceKeyOf(rule.resource),
+          rule.resource.kind,
+          rule.worstCaseSeverity
+        );
+      }
+    });
+    return envelopeId;
+  }
+
+  envelopeAllows(input: {
+    envelopeId: string;
+    sessionId: string;
+    taskRef: string;
+    missionSubject?: `mission:${string}`;
+    capability: string;
+    resourceKey: string;
+  }): boolean {
+    const rows = this.db
+      .prepare(
+        `SELECT r.* FROM envelope_rules r
+         JOIN preauth_envelopes e ON e.envelope_id = r.envelope_id
+         WHERE e.envelope_id = ? AND e.state = 'active' AND e.session_id = ? AND e.task_ref = ?
+           AND ((e.mission_subject IS NULL AND ? IS NULL) OR e.mission_subject = ?)`
+      )
+      .all(
+        input.envelopeId,
+        input.sessionId,
+        input.taskRef,
+        input.missionSubject ?? null,
+        input.missionSubject ?? null
+      ) as EnvelopeRuleRow[];
+    return rows.some(
+      (row) =>
+        capabilityPatternCovers(String(row["capability"]), input.capability) &&
+        scopeCovers(
+          scopeFromRow(String(row["resource_scope"]), String(row["resource_key"])),
+          input.resourceKey
+        )
     );
   }
-  if (scope["kind"] === "origin") {
-    return Object.keys(scope).length === 2 && typeof scope["origin"] === "string";
+
+  closeEnvelope(envelopeId: string, now = Date.now()): boolean {
+    let changed = false;
+    this.transaction(() => {
+      changed =
+        Number(
+          this.db
+            .prepare(
+              "UPDATE preauth_envelopes SET state = 'closed', closed_at = ? WHERE envelope_id = ? AND state = 'active'"
+            )
+            .run(now, envelopeId).changes
+        ) === 1;
+      if (changed) {
+        this.db
+          .prepare(
+            "UPDATE authority_grants SET revoked_at = ? WHERE envelope_id = ? AND revoked_at IS NULL"
+          )
+          .run(now, envelopeId);
+      }
+    });
+    return changed;
   }
-  if (scope["kind"] === "domain") {
-    return Object.keys(scope).length === 2 && typeof scope["domain"] === "string";
-  }
-  return scope["kind"] === "network" && Object.keys(scope).length === 2 && scope["value"] === "*";
-}
 
-export function capabilityGrantId(grant: CapabilityGrant): string {
-  return canonicalKey([
-    "capability-grant-record",
-    grant.scope,
-    grant.capability,
-    grant.resourceKey,
-    grant.callerId ?? "",
-    grant.repoPath,
-    grant.effectiveVersion ?? "",
-    JSON.stringify(grant.resourceScope ?? null),
-    grant.effect ?? "allow",
-  ]);
-}
-
-export function capabilityGrantKey(
-  scope: CapabilityGrantDecision,
-  capability: string,
-  resourceKey: string,
-  identity: CapabilityGrantIdentity
-): string {
-  return canonicalKey([
-    "capability-grant",
-    scope,
-    capability,
-    resourceKey,
-    scope === "session" || (scope === "version" && versionGrantRequiresCaller(identity))
-      ? identity.callerId
-      : "",
-    identity.repoPath,
-    scope === "version" ? identity.effectiveVersion : "",
-  ]);
-}
-
-export function versionGrantRequiresCaller(identity: CapabilityGrantIdentity): boolean {
-  return identity.effectiveVersion === "internal" || identity.repoPath === "vibestudio/internal";
-}
-
-function grantMatches(
-  grant: CapabilityGrant,
-  capability: string,
-  resourceKey: string,
-  requestedScope: ApprovalResourceScope,
-  identity: CapabilityGrantIdentity
-): boolean {
-  return (
-    grant.capability === capability &&
-    resourceScopeCovers(
-      grant.resourceScope ?? exactResourceScope(grant.resourceKey),
-      requestedScope,
-      resourceKey
-    ) &&
-    principalScopeMatches(grant, identity)
-  );
-}
-
-function principalScopeMatches(grant: CapabilityGrant, identity: CapabilityGrantIdentity): boolean {
-  if (grant.scope === "session") {
-    return grant.callerId === identity.callerId;
-  }
-  if (
-    grant.repoPath !== identity.repoPath ||
-    grant.effectiveVersion !== identity.effectiveVersion
-  ) {
-    return false;
-  }
-  if (versionGrantRequiresCaller(identity)) {
-    return grant.callerId === identity.callerId;
-  }
-  return grant.callerId === undefined || grant.callerId === identity.callerId;
-}
-
-function exactResourceScope(key: string): ApprovalResourceScope {
-  return { kind: "exact", key };
-}
-
-function resourceScopeCovers(
-  granted: ApprovalResourceScope,
-  requested: ApprovalResourceScope,
-  requestedKey: string
-): boolean {
-  if (granted.kind === "network") {
+  lookupUserland(
+    principal: ApprovalPrincipal,
+    subjectId: string,
+    issuer?: UserlandApprovalIssuer
+  ): UserlandApprovalGrant | null {
     return (
-      requested.kind === "network" || requested.kind === "origin" || requested.kind === "domain"
+      this.userlandRows(principal, subjectId, issuer).find(
+        (entry) => entry.grant.scope === "session"
+      )?.grant ??
+      this.userlandRows(principal, subjectId, issuer).find(
+        (entry) => entry.grant.scope === "caller"
+      )?.grant ??
+      this.userlandRows(principal, subjectId, issuer).find(
+        (entry) => entry.grant.scope === "version"
+      )?.grant ??
+      null
     );
   }
-  if (granted.kind === "domain") {
-    if (requested.kind === "domain") {
-      return domainCovers(granted.domain, requested.domain);
-    }
-    if (requested.kind === "origin") {
-      const hostname = originHostname(requested.origin);
-      return hostname ? domainCovers(granted.domain, hostname) : false;
-    }
-    return false;
+
+  async recordUserland(
+    principal: ApprovalPrincipal,
+    subject: UserlandApprovalSubject,
+    choice: string,
+    now = Date.now(),
+    issuer?: UserlandApprovalIssuer,
+    scope: UserlandApprovalGrantScope = "caller"
+  ): Promise<void> {
+    const effectiveIssuer = issuer ?? {
+      kind: principal.callerKind,
+      id: scope === "version" ? principal.repoPath : principal.callerId,
+    };
+    const subjectPrincipal = userlandSubject(principal, scope);
+    this.transaction(() => {
+      this.revokeUserlandRows(principal, subject.id, effectiveIssuer, scope, now);
+      this.issue({
+        effect: choice === "deny" ? "deny" : "allow",
+        capability: userlandCapability(effectiveIssuer, choice),
+        resource: { kind: "exact", key: subject.id },
+        subject: subjectPrincipal,
+        constraints:
+          scope === "session"
+            ? { sessionId: principal.callerId, lineageAtConsent: [] }
+            : { lineageAtConsent: [] },
+        issuedBy: userlandIssuedBy(principal),
+        provenance: "acquisition",
+        createdAt: now,
+      });
+    });
   }
-  if (granted.kind === "origin") {
-    return requested.kind === "origin" && requested.origin === granted.origin;
+
+  async revokeUserland(
+    principal: ApprovalPrincipal,
+    subjectId: string,
+    issuer?: UserlandApprovalIssuer,
+    now = Date.now()
+  ): Promise<boolean> {
+    const rows = this.userlandRows(principal, subjectId, issuer);
+    let changed = false;
+    this.transaction(() => {
+      for (const row of rows) changed = this.revoke(row.id, now) || changed;
+    });
+    return changed;
   }
-  return requested.kind === "exact" ? granted.key === requested.key : granted.key === requestedKey;
+
+  listUserland(
+    principal: ApprovalPrincipal,
+    issuer?: UserlandApprovalIssuer
+  ): UserlandApprovalGrant[] {
+    return this.userlandRows(principal, undefined, issuer).map((entry) => entry.grant);
+  }
+
+  listPersistentUserland(): Array<{ id: string; grant: UserlandApprovalGrant }> {
+    return this.allUserlandRows()
+      .filter((entry) => entry.grant.scope !== "session")
+      .map(({ id, grant }) => ({ id, grant }));
+  }
+
+  revokePersistentUserland(id: string, now = Date.now()): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT id FROM authority_grants
+         WHERE id = ? AND capability LIKE 'userland.choice/%' AND session_id IS NULL`
+      )
+      .get(id);
+    return row ? this.revoke(id, now) : false;
+  }
+
+  private userlandRows(
+    principal: ApprovalPrincipal,
+    subjectId?: string,
+    issuer?: UserlandApprovalIssuer
+  ): Array<{ id: string; grant: UserlandApprovalGrant }> {
+    const candidates = this.allUserlandRows().filter(({ grant }) => {
+      if (subjectId !== undefined && grant.subject.id !== subjectId) return false;
+      if (!userlandGrantApplies(grant, principal)) return false;
+      const effectiveIssuer = userlandEffectiveIssuer(grant);
+      const expectedIssuer =
+        issuer ??
+        (grant.scope === "version"
+          ? { kind: principal.callerKind, id: principal.repoPath }
+          : { kind: principal.callerKind, id: principal.callerId });
+      return (
+        effectiveIssuer.kind === expectedIssuer.kind && effectiveIssuer.id === expectedIssuer.id
+      );
+    });
+    return candidates.sort((left, right) => right.grant.grantedAt - left.grant.grantedAt);
+  }
+
+  private allUserlandRows(): Array<{ id: string; grant: UserlandApprovalGrant }> {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM authority_grants
+         WHERE capability LIKE 'userland.choice/%'
+           AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > ?)
+         ORDER BY created_at DESC, id DESC`
+      )
+      .all(Date.now()) as GrantRow[];
+    return rows.map((row) => ({
+      id: String(row["id"]),
+      grant: userlandGrantFromRow(row),
+    }));
+  }
+
+  private revokeUserlandRows(
+    principal: ApprovalPrincipal,
+    subjectId: string,
+    issuer: UserlandApprovalIssuer,
+    scope: UserlandApprovalGrantScope,
+    now: number
+  ): void {
+    for (const row of this.userlandRows(principal, subjectId, issuer)) {
+      if (row.grant.scope === scope) this.revoke(row.id, now);
+    }
+  }
+
+  private transaction(work: () => void): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      work();
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
-function originHostname(origin: string): string | null {
+type GrantRow = Record<string, SQLOutputValue>;
+type EnvelopeRuleRow = Record<string, SQLOutputValue>;
+
+const USERLAND_CAPABILITY_PREFIX = "userland.choice/";
+
+function encoded(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function decoded(value: string, label: string): string {
   try {
-    return new URL(origin).hostname;
-  } catch {
-    return null;
+    const result = Buffer.from(value, "base64url").toString("utf8");
+    if (encoded(result) !== value) throw new Error("non-canonical encoding");
+    return result;
+  } catch (error) {
+    throw new Error(`Invalid ${label} encoding`, { cause: error });
   }
 }
 
-function domainCovers(grantedDomain: string, requestedDomain: string): boolean {
-  return requestedDomain === grantedDomain || requestedDomain.endsWith(`.${grantedDomain}`);
+function userlandCapability(issuer: UserlandApprovalIssuer, choice: string): string {
+  return `${USERLAND_CAPABILITY_PREFIX}${issuer.kind}/${encoded(issuer.id)}/${encoded(choice)}`;
+}
+
+function parseUserlandCapability(capability: string): {
+  issuer: UserlandApprovalIssuer;
+  choice: string;
+} {
+  const parts = capability.split("/");
+  const [prefix, kind, issuerId, choice] = parts;
+  if (
+    parts.length !== 4 ||
+    prefix !== "userland.choice" ||
+    !kind ||
+    !issuerId ||
+    !choice ||
+    !["panel", "app", "worker", "do", "extension"].includes(kind)
+  ) {
+    throw new Error(`Invalid userland approval capability ${capability}`);
+  }
+  return {
+    issuer: {
+      kind: kind as UserlandApprovalIssuer["kind"],
+      id: decoded(issuerId, "userland issuer"),
+    },
+    choice: decoded(choice, "userland choice"),
+  };
+}
+
+function userlandIssuedBy(principal: ApprovalPrincipal): string {
+  return [
+    "userland",
+    principal.callerKind,
+    encoded(principal.callerId),
+    encoded(principal.repoPath),
+    encoded(principal.effectiveVersion),
+  ].join(":");
+}
+
+function parseUserlandIssuedBy(value: string): ApprovalPrincipal {
+  const parts = value.split(":");
+  const [prefix, callerKind, callerId, repoPath, effectiveVersion] = parts;
+  if (
+    parts.length !== 5 ||
+    prefix !== "userland" ||
+    !callerKind ||
+    !callerId ||
+    !repoPath ||
+    !effectiveVersion ||
+    !["panel", "app", "worker", "do", "extension"].includes(callerKind)
+  ) {
+    throw new Error(`Invalid userland approval issuer principal ${value}`);
+  }
+  return {
+    callerKind: callerKind as ApprovalPrincipal["callerKind"],
+    callerId: decoded(callerId, "userland caller"),
+    repoPath: decoded(repoPath, "userland repository"),
+    effectiveVersion: decoded(effectiveVersion, "userland effective version"),
+  };
+}
+
+function userlandSubject(
+  principal: ApprovalPrincipal,
+  scope: UserlandApprovalGrantScope
+): Principal {
+  if (scope === "version") {
+    const caller = userlandVersionGrantRequiresCaller(principal)
+      ? encoded(principal.callerId)
+      : "-";
+    return `code:userland/${encoded(principal.repoPath)}/${caller}@${encoded(principal.effectiveVersion)}`;
+  }
+  return `session:userland/${encoded(principal.callerId)}`;
+}
+
+function userlandGrantFromRow(row: GrantRow): UserlandApprovalGrant {
+  const { issuer, choice } = parseUserlandCapability(String(row["capability"]));
+  const principal = parseUserlandIssuedBy(String(row["issued_by"]));
+  const subject = String(row["subject"]);
+  const scope: UserlandApprovalGrantScope = subject.startsWith("code:userland/")
+    ? "version"
+    : row["session_id"] === null
+      ? "caller"
+      : "session";
+  if (scope === "version") {
+    const match = /^code:userland\/([^/]+)\/([^@]+)@(.+)$/.exec(subject);
+    if (!match) throw new Error(`Invalid version-scoped userland subject ${subject}`);
+    const [, repository, , effectiveVersion] = match;
+    if (!repository || !effectiveVersion) {
+      throw new Error(`Invalid version-scoped userland subject ${subject}`);
+    }
+    principal.repoPath = decoded(repository, "userland subject repository");
+    principal.effectiveVersion = decoded(effectiveVersion, "userland subject effective version");
+  } else if (!subject.startsWith("session:userland/")) {
+    throw new Error(`Invalid caller-scoped userland subject ${subject}`);
+  }
+  return {
+    principal: {
+      callerId: principal.callerId,
+      callerKind: principal.callerKind,
+      repoPath: principal.repoPath,
+      effectiveVersion: principal.effectiveVersion,
+    },
+    issuer,
+    subject: { id: String(row["resource_key"]) },
+    choice,
+    grantedAt: Number(row["created_at"]),
+    scope,
+  };
+}
+
+function userlandEffectiveIssuer(grant: UserlandApprovalGrant): UserlandApprovalIssuer {
+  if (grant.issuer) return grant.issuer;
+  if ((grant.scope ?? "caller") === "version" && grant.principal.repoPath) {
+    return { kind: grant.principal.callerKind, id: grant.principal.repoPath };
+  }
+  return { kind: grant.principal.callerKind, id: grant.principal.callerId };
+}
+
+function userlandGrantApplies(grant: UserlandApprovalGrant, principal: ApprovalPrincipal): boolean {
+  if ((grant.scope ?? "caller") !== "version") {
+    return grant.principal.callerId === principal.callerId;
+  }
+  return (
+    grant.principal.callerKind === principal.callerKind &&
+    (!userlandVersionGrantRequiresCaller(grant.principal) ||
+      grant.principal.callerId === principal.callerId) &&
+    grant.principal.repoPath === principal.repoPath &&
+    grant.principal.effectiveVersion === principal.effectiveVersion
+  );
+}
+
+function userlandVersionGrantRequiresCaller(
+  principal: Pick<UserlandApprovalGrant["principal"], "repoPath" | "effectiveVersion">
+): boolean {
+  return principal.effectiveVersion === "internal" || principal.repoPath === "vibestudio/internal";
+}
+
+function rowToGrant(row: GrantRow): AuthorityGrant {
+  const subject = String(row["subject"]) as Principal;
+  if (!/^(host|user|code|session|mission):/.test(subject))
+    throw new Error(`Invalid grant subject ${subject}`);
+  const lineage = JSON.parse(String(row["lineage_at_consent"])) as unknown;
+  if (!Array.isArray(lineage) || !lineage.every((value) => typeof value === "string")) {
+    throw new Error(`Grant ${String(row["id"])} has invalid lineage_at_consent`);
+  }
+  const constraints = {
+    ...(row["session_id"] === null ? {} : { sessionId: String(row["session_id"]) }),
+    ...(row["invocation_digest"] === null
+      ? {}
+      : { invocationDigest: String(row["invocation_digest"]) }),
+    ...(row["mission_subject"] === null
+      ? {}
+      : { missionSubject: String(row["mission_subject"]) as `mission:${string}` }),
+    ...(row["envelope_id"] === null ? {} : { envelopeId: String(row["envelope_id"]) }),
+    lineageAtConsent: lineage,
+  };
+  return {
+    id: String(row["id"]),
+    effect: String(row["effect"]) as "allow" | "deny",
+    capability: String(row["capability"]),
+    resource: scopeFromRow(String(row["resource_scope"]), String(row["resource_key"])),
+    subject,
+    constraints,
+    issuedBy: String(row["issued_by"]),
+    provenance: String(row["provenance"]),
+    createdAt: Number(row["created_at"]),
+    ...(row["expires_at"] === null ? {} : { expiresAt: Number(row["expires_at"]) }),
+    ...(row["revoked_at"] === null ? {} : { revokedAt: Number(row["revoked_at"]) }),
+    ...(row["consumed_at"] === null ? {} : { consumedAt: Number(row["consumed_at"]) }),
+  };
+}
+
+function validateGrantInput(input: IssueAuthorityGrantInput): void {
+  if (!input.capability.trim()) throw new Error("Grant capability is required");
+  if (!/^(host|user|code|session|mission):.+/.test(input.subject))
+    throw new Error("Grant subject is not canonical");
+  if (input.provenance === "critical-confirmation") {
+    if (
+      input.effect !== "allow" ||
+      !input.subject.startsWith("session:") ||
+      !input.constraints?.invocationDigest
+    ) {
+      throw new Error(
+        "Critical confirmation must be a session allow bound to an invocation digest"
+      );
+    }
+  }
+  if (input.effect === "allow" && input.constraints?.lineageAtConsent === undefined) {
+    throw new Error("Every allow grant must record lineageAtConsent");
+  }
+}
+
+function scopeFromRow(kind: string, key: string): ResourceScope {
+  switch (kind) {
+    case "exact":
+      return { kind, key };
+    case "prefix":
+      return { kind, prefix: key };
+    case "origin":
+      return { kind, origin: key };
+    case "domain":
+      return { kind, domain: key };
+    case "network":
+      return { kind, value: "*" };
+    default:
+      throw new Error(`Unknown authority resource scope ${kind}`);
+  }
+}
+
+function resourceKeyOf(scope: ResourceScope): string {
+  switch (scope.kind) {
+    case "exact":
+      return scope.key;
+    case "prefix":
+      return scope.prefix;
+    case "origin":
+      return scope.origin;
+    case "domain":
+      return scope.domain;
+    case "network":
+      return "*";
+  }
+}
+
+export function authorityResourceForApprovalScope(scope: ApprovalResourceScope): ResourceScope {
+  switch (scope.kind) {
+    case "exact":
+      return { kind: "exact", key: scope.key };
+    case "origin":
+      return { kind: "origin", origin: scope.origin };
+    case "domain":
+      return { kind: "domain", domain: scope.domain };
+    case "network":
+      return { kind: "network", value: "*" };
+  }
+}
+
+export function approvalScopeForAuthorityResource(scope: ResourceScope): ApprovalResourceScope {
+  switch (scope.kind) {
+    case "exact":
+      return { kind: "exact", key: scope.key };
+    case "origin":
+      return { kind: "origin", origin: scope.origin };
+    case "domain":
+      return { kind: "domain", domain: scope.domain };
+    case "network":
+      return { kind: "network", value: "*" };
+    case "prefix":
+      return { kind: "exact", key: scope.prefix };
+  }
+}
+
+function chunks<T>(values: readonly T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size)
+    result.push(values.slice(index, index + size));
+  return result;
+}
+
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+function ulid(at = Date.now()): string {
+  if (!Number.isSafeInteger(at) || at < 0 || at > 0xffffffffffff)
+    throw new Error("ULID timestamp is out of range");
+  let time = BigInt(at);
+  let head = "";
+  for (let index = 0; index < 10; index += 1) {
+    head = CROCKFORD.charAt(Number(time & 31n)) + head;
+    time >>= 5n;
+  }
+  const bytes = randomBytes(10);
+  let random = 0n;
+  for (const byte of bytes) random = (random << 8n) | BigInt(byte);
+  let tail = "";
+  for (let index = 0; index < 16; index += 1) {
+    tail = CROCKFORD.charAt(Number(random & 31n)) + tail;
+    random >>= 5n;
+  }
+  return head + tail;
 }

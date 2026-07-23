@@ -13,6 +13,7 @@ import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDis
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { RpcCausalParent } from "@vibestudio/rpc";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import {
   parseVcsSemanticRequest,
@@ -40,7 +41,11 @@ export interface VcsServiceDeps {
 type CausalRequest<T> = {
   input: T;
   ingress: {
-    causalParent: ServiceContext["causalParent"] | null;
+    causalParent: RpcCausalParent | null;
+    contextIntegrity: {
+      class: "internal" | "external";
+      externalKeys: readonly string[];
+    };
   };
 };
 
@@ -190,18 +195,37 @@ async function reachableContextAuthorities(
 }
 
 function ingressFor(ctx: ServiceContext): CausalRequest<never>["ingress"] {
+  const fact = ctx.authorization?.contextIntegrity;
+  if (!fact) {
+    throw new ServiceError(
+      "vcs",
+      "ingress",
+      "Semantic VCS ingress requires resolved context-integrity authority",
+      "EACCES"
+    );
+  }
   return {
     causalParent: ctx.causalParent ?? null,
+    contextIntegrity:
+      fact.class === "external"
+        ? { class: "external", externalKeys: [...fact.externalKeys] }
+        : { class: "internal", externalKeys: [] },
   };
 }
 
 export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   const invoke = async <T>(ctx: ServiceContext, method: string, input: unknown): Promise<T> => {
+    const ingress = ingressFor(ctx);
     return method === "vcsPush"
-      ? deps.workspaceVcs.semanticPublishCall<T>(input, ctx.causalParent ?? null, ctx.caller)
+      ? deps.workspaceVcs.semanticPublishCall<T>(
+          input,
+          ingress.causalParent,
+          ctx.caller,
+          ingress.contextIntegrity
+        )
       : deps.workspaceVcs.semanticCall<T>(method, {
           input,
-          ingress: ingressFor(ctx),
+          ingress,
         } satisfies CausalRequest<unknown>);
   };
 
@@ -269,7 +293,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     name: "vcs",
     description:
       "One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.",
-    authority: { principals: ["user", "code", "host", "entity"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: vcsMethods,
     handler: defineServiceHandler("vcs", vcsMethods, handlers),
   };

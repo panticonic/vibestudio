@@ -7,6 +7,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import * as zlib from "node:zlib";
 import { WebSocketServer } from "ws";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type {
@@ -71,11 +72,11 @@ function loadBrandAsset(filename: string): Buffer | null {
 const BRAND_FAVICON_ICO = loadBrandAsset("favicon.ico");
 const BRAND_FAVICON_PNG = loadBrandAsset("favicon-64.png");
 const BRAND_FAVICON_SVG = loadBrandAsset("favicon.svg");
-const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#111"/><path d="M7 25h18M14 25V13l-8 5M14 13l5-3M18 15l5 5M18 15l7-2" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
-const BRAND_MARK_WHITE_SVG = loadBrandAsset("vibestudio-mark-white.svg");
-const DEFAULT_BRAND_MARK_WHITE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 904 904" fill="none"><path d="M116 805H788" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M496 805V350L204 536" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M155 608L496 392" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M280 238L414 372L179 519" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M302 184L430 312" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M338 88L510 278" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M265 127L291 153" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M496 278L557 180C592 123 552 80 507 87C470 93 450 121 450 165V236" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M525 355L616 222C653 168 728 189 737 238C743 274 724 295 690 303L538 342L633 437" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M554 578V431L709 579V394" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-const BRAND_MARK_WHITE_DATA_URL = `data:image/svg+xml;base64,${(
-  BRAND_MARK_WHITE_SVG ?? Buffer.from(DEFAULT_BRAND_MARK_WHITE_SVG)
+const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="g" x1="5" y1="4" x2="27" y2="28"><stop stop-color="#6D28D9"/><stop offset="1" stop-color="#EC4899"/></linearGradient></defs><rect width="32" height="32" rx="7" fill="#100B18"/><path d="M23 8C12 5 6 11 9 18c2 4 8 4 12 3M10 23c8 5 16 0 13-7-2-4-6-5-10-4" fill="none" stroke="url(#g)" stroke-width="4" stroke-linecap="round"/></svg>`;
+const BRAND_SYMBOL_SVG = loadBrandAsset("vibestudio-symbol.svg");
+const DEFAULT_BRAND_SYMBOL_SVG = DEFAULT_FAVICON_SVG;
+const BRAND_SYMBOL_DATA_URL = `data:image/svg+xml;base64,${(
+  BRAND_SYMBOL_SVG ?? Buffer.from(DEFAULT_BRAND_SYMBOL_SVG)
 ).toString("base64")}`;
 
 // ---------------------------------------------------------------------------
@@ -103,6 +104,7 @@ interface CachedBuild {
   htmlArtifact: BuildArtifactManifestEntry & { content: string };
   metadata: BuildMetadata;
   revision: number;
+  compressedArtifacts: Map<string, Promise<Buffer>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +150,44 @@ function isPanelAssetRequest(resource: string): boolean {
     /\.css(?:\.map)?$/iu.test(normalized) ||
     /\.(?:png|jpe?g|gif|svg|webp|avif|ico|woff2?|ttf|otf|wasm)$/iu.test(normalized)
   );
+}
+
+type PanelContentEncoding = "br" | "gzip";
+
+function preferredContentEncoding(
+  value: string | string[] | undefined
+): PanelContentEncoding | null {
+  if (!value) return null;
+  const accepted = (Array.isArray(value) ? value.join(",") : value)
+    .split(",")
+    .map((part) => {
+      const [name, ...parameters] = part.trim().toLowerCase().split(";");
+      const q = parameters
+        .map((parameter) => parameter.trim())
+        .find((parameter) => parameter.startsWith("q="));
+      return { name, quality: q ? Number(q.slice(2)) : 1 };
+    })
+    .filter(({ quality }) => Number.isFinite(quality) && quality > 0);
+  const quality = (encoding: PanelContentEncoding) =>
+    Math.max(0, ...accepted.filter(({ name }) => name === encoding).map(({ quality }) => quality));
+  const brotliQuality = quality("br");
+  const gzipQuality = quality("gzip");
+  if (brotliQuality === 0 && gzipQuality === 0) return null;
+  return brotliQuality >= gzipQuality ? "br" : "gzip";
+}
+
+function compressArtifact(body: Buffer, encoding: PanelContentEncoding): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const callback = (error: Error | null, result: Buffer) => {
+      if (error) reject(error);
+      else resolve(result);
+    };
+    if (encoding === "br") {
+      zlib.brotliCompress(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } }, callback);
+      return;
+    }
+    zlib.gzip(body, { level: zlib.constants.Z_BEST_SPEED }, callback);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +305,7 @@ export class PanelHttpServer {
       htmlArtifact,
       metadata: buildResult.metadata,
       revision,
+      compressedArtifacts: new Map<string, Promise<Buffer>>(),
     };
     this.servingCache.set(this.buildCacheKey(source, ref), cachedBuild);
     this.activatedBuildCache.set(buildResult.buildKey, cachedBuild);
@@ -308,8 +349,12 @@ export class PanelHttpServer {
    * The supplied factory is lazy so duplicate entity activations and HTTP
    * requests share one build flight without even asking BuildV2 twice.
    */
-  primeBuild(source: string, ref: string | undefined, getBuild: () => Promise<BuildResult>): void {
-    void this.ensureBuild(source, ref, getBuild);
+  primeBuild(
+    source: string,
+    ref: string | undefined,
+    getBuild: () => Promise<BuildResult>
+  ): Promise<void> {
+    return this.ensureBuild(source, ref, getBuild) ?? Promise.resolve();
   }
 
   async stop(): Promise<void> {
@@ -394,9 +439,15 @@ export class PanelHttpServer {
         url.searchParams.get("buildKey") || this.buildKeyFromReferer(req) || undefined;
       this.logPanelResourceRequest(req, res, parsed.source, parsed.resource, routeLabel);
       if (buildKey) {
-        this.resolveAndServeActivatedBuild(res, parsed.source, parsed.resource, buildKey);
+        await this.resolveAndServeActivatedBuild(
+          req,
+          res,
+          parsed.source,
+          parsed.resource,
+          buildKey
+        );
       } else {
-        await this.resolveAndServeBuild(res, parsed.source, routeLabel, parsed.resource, ref);
+        await this.resolveAndServeBuild(req, res, parsed.source, routeLabel, parsed.resource, ref);
       }
       return;
     }
@@ -450,6 +501,7 @@ export class PanelHttpServer {
    * than returning an HTML `202` placeholder for an asset request.
    */
   private async resolveAndServeBuild(
+    req: import("http").IncomingMessage,
     res: import("http").ServerResponse,
     source: string,
     panelLabel: string,
@@ -460,7 +512,7 @@ export class PanelHttpServer {
 
     const cached = this.servingCache.get(flightKey);
     if (cached) {
-      this.servePanelResource(res, cached, resource);
+      await this.servePanelResource(req, res, cached, resource);
       return;
     }
 
@@ -474,7 +526,7 @@ export class PanelHttpServer {
 
     const build = this.servingCache.get(flightKey);
     if (build) {
-      this.servePanelResource(res, build, resource);
+      await this.servePanelResource(req, res, build, resource);
       return;
     }
 
@@ -565,12 +617,13 @@ export class PanelHttpServer {
     }
   }
 
-  private resolveAndServeActivatedBuild(
+  private async resolveAndServeActivatedBuild(
+    req: import("http").IncomingMessage,
     res: import("http").ServerResponse,
     source: string,
     resource: string,
     buildKey: string
-  ): void {
+  ): Promise<void> {
     if (!/^[0-9a-f]{64}$/.test(buildKey)) {
       res.writeHead(400, { "Content-Type": "text/plain" });
       res.end("Invalid panel build key");
@@ -602,6 +655,7 @@ export class PanelHttpServer {
         htmlArtifact,
         metadata: result.metadata,
         revision: ++this.buildRevisionCounter,
+        compressedArtifacts: new Map<string, Promise<Buffer>>(),
       };
       this.activatedBuildCache.set(buildKey, build);
     }
@@ -611,7 +665,7 @@ export class PanelHttpServer {
       res.end(`Activated build ${buildKey} does not belong to panel ${source}`);
       return;
     }
-    this.servePanelResource(res, build, resource);
+    await this.servePanelResource(req, res, build, resource);
   }
 
   private contextIdFromReferer(req: import("http").IncomingMessage): string | null {
@@ -643,13 +697,12 @@ export class PanelHttpServer {
   <style>
     :root {
       color-scheme: light dark;
-      --page-bg: radial-gradient(circle at top, #fffbeb 0%, #f8fafc 58%);
-      --heading: #111827;
-      --muted: #64748b;
-      --accent: #b45309;
-      --spinner-track: #e2e8f0;
-      --mark-filter: brightness(0) saturate(100%);
-      --mark-shadow: drop-shadow(0 18px 24px rgba(15, 23, 42, 0.12));
+      --page-bg: radial-gradient(circle at top, #f5edff 0%, #fcfaff 58%);
+      --heading: #24152f;
+      --muted: #685875;
+      --accent: #6d28d9;
+      --spinner-track: #e4d8ed;
+      --mark-shadow: drop-shadow(0 18px 24px rgba(109, 40, 217, 0.16));
     }
     html { min-height: 100%; background: var(--page-bg); }
     body { box-sizing: border-box; min-height: 100vh; font-family: ui-sans-serif, system-ui, sans-serif; max-width: 500px; margin: 0 auto; padding: 4rem 1rem; text-align: center; color: var(--heading); }
@@ -657,17 +710,16 @@ export class PanelHttpServer {
     p { color: var(--muted); line-height: 1.6; }
     code { color: var(--accent); }
     .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: var(--mark-shadow); }
-    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; filter: var(--mark-filter); }
-    .spinner { width: 24px; height: 24px; border: 3px solid var(--spinner-track); border-top-color: #f59e0b;
+    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .spinner { width: 24px; height: 24px; border: 3px solid var(--spinner-track); border-top-color: #a874ff;
                border-radius: 50%; animation: spin 0.8s linear infinite; margin: 1rem auto; }
     @media (prefers-color-scheme: dark) {
       :root {
-        --page-bg: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%);
-        --heading: #f8fafc;
-        --muted: #9ca3af;
-        --accent: #facc15;
-        --spinner-track: #303a4f;
-        --mark-filter: none;
+        --page-bg: radial-gradient(circle at top, #21122f 0%, #100b18 58%);
+        --heading: #fbf7ff;
+        --muted: #b8a9c5;
+        --accent: #a874ff;
+        --spinner-track: #49305f;
         --mark-shadow: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35));
       }
     }
@@ -677,7 +729,7 @@ export class PanelHttpServer {
   <meta http-equiv="refresh" content="2">
 </head>
 <body>
-  <div class="brand-mark"><img src="${BRAND_MARK_WHITE_DATA_URL}" alt="" aria-hidden="true"></div>
+  <div class="brand-mark"><img src="${BRAND_SYMBOL_DATA_URL}" alt="" aria-hidden="true"></div>
   <h1>Building Panel</h1>
   <div class="spinner"></div>
   <p>The panel <code>${escapeHtml(panelLabel)}</code> is still building. This page will refresh automatically.</p>
@@ -706,15 +758,14 @@ export class PanelHttpServer {
   <style>
     :root {
       color-scheme: light dark;
-      --page-bg: radial-gradient(circle at top, #fff7ed 0%, #f8fafc 58%);
-      --heading: #111827;
-      --muted: #64748b;
-      --accent: #b45309;
+      --page-bg: radial-gradient(circle at top, #f5edff 0%, #fcfaff 58%);
+      --heading: #24152f;
+      --muted: #685875;
+      --accent: #6d28d9;
       --error-bg: #fff1f2;
       --error-border: #fecdd3;
       --error-text: #b91c1c;
-      --mark-filter: brightness(0) saturate(100%);
-      --mark-shadow: drop-shadow(0 18px 24px rgba(15, 23, 42, 0.12));
+      --mark-shadow: drop-shadow(0 18px 24px rgba(109, 40, 217, 0.16));
     }
     html { min-height: 100%; background: var(--page-bg); }
     body { box-sizing: border-box; min-height: 100vh; font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 4rem 1rem; text-align: center; color: var(--heading); }
@@ -724,24 +775,23 @@ export class PanelHttpServer {
     pre { background: var(--error-bg); border: 1px solid var(--error-border); padding: 1rem; border-radius: 10px; text-align: left; overflow-x: auto; font-size: 0.85rem; color: var(--error-text); }
     a { color: var(--accent); }
     .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: var(--mark-shadow); }
-    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; filter: var(--mark-filter); }
+    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
     @media (prefers-color-scheme: dark) {
       :root {
-        --page-bg: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%);
-        --heading: #f8fafc;
-        --muted: #9ca3af;
-        --accent: #f59e0b;
-        --error-bg: #101318;
-        --error-border: #303a4f;
+        --page-bg: radial-gradient(circle at top, #21122f 0%, #100b18 58%);
+        --heading: #fbf7ff;
+        --muted: #b8a9c5;
+        --accent: #a874ff;
+        --error-bg: #170f20;
+        --error-border: #49305f;
         --error-text: #fecaca;
-        --mark-filter: none;
         --mark-shadow: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35));
       }
     }
   </style>
 </head>
 <body>
-  <div class="brand-mark"><img src="${BRAND_MARK_WHITE_DATA_URL}" alt="" aria-hidden="true"></div>
+  <div class="brand-mark"><img src="${BRAND_SYMBOL_DATA_URL}" alt="" aria-hidden="true"></div>
   <h1>Build Failed</h1>
   <p>The panel <code>${escapeHtml(source)}</code> failed to build:</p>
   <pre>${escapeHtml(error)}</pre>
@@ -757,14 +807,15 @@ export class PanelHttpServer {
   // Panel resource serving
   // =========================================================================
 
-  private servePanelResource(
+  private async servePanelResource(
+    req: import("http").IncomingMessage,
     res: import("http").ServerResponse,
     build: CachedBuild,
     resource: string
-  ): void {
+  ): Promise<void> {
     const artifact = this.resolvePanelArtifact(build, resource);
     if (artifact) {
-      this.writeArtifact(res, build.revision, artifact);
+      await this.writeArtifact(req, res, build, artifact);
       return;
     }
 
@@ -794,32 +845,59 @@ export class PanelHttpServer {
     return build.artifacts.find((artifact) => artifact.path === normalized) ?? null;
   }
 
-  private writeArtifact(
+  private async writeArtifact(
+    req: import("http").IncomingMessage,
     res: import("http").ServerResponse,
-    revision: number,
+    build: CachedBuild,
     artifact: BuildArtifactManifestEntry & { content: string }
-  ): void {
+  ): Promise<void> {
+    // Every non-document panel output has a content-derived filename. The HTML
+    // remains the mutable pointer to a build; its JS, CSS, maps, chunks and
+    // assets can be retained indefinitely by both Electron and mobile clients.
     const cacheControl =
-      artifact.role === "asset" || artifact.role === "map"
-        ? "public, max-age=31536000, immutable"
-        : "no-store";
+      artifact.role === "html" ? "no-store" : "public, max-age=31536000, immutable";
     if (artifact.encoding === "base64") {
       const body = Buffer.from(artifact.content, "base64");
       res.writeHead(200, {
         "Content-Type": artifact.contentType,
         "Content-Length": body.length,
         "Cache-Control": cacheControl,
-        "X-Vibestudio-Build-Revision": String(revision),
+        "X-Vibestudio-Build-Revision": String(build.revision),
       });
       res.end(body);
       return;
     }
+
+    const body = Buffer.from(artifact.content);
+    const encoding =
+      body.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
+    let compressedBody: Buffer | null = null;
+    if (encoding) {
+      const cacheKey = `${encoding}:${artifact.path}`;
+      let compressed = build.compressedArtifacts.get(cacheKey);
+      if (!compressed) {
+        compressed = compressArtifact(body, encoding);
+        build.compressedArtifacts.set(cacheKey, compressed);
+      }
+      try {
+        compressedBody = await compressed;
+      } catch (error) {
+        build.compressedArtifacts.delete(cacheKey);
+        log.warn(
+          `Failed to ${encoding}-compress panel artifact ${artifact.path}: ${String(error)}`
+        );
+      }
+    }
     res.writeHead(200, {
       "Content-Type": artifact.contentType,
+      "Content-Length": compressedBody?.length ?? body.length,
       "Cache-Control": cacheControl,
-      "X-Vibestudio-Build-Revision": String(revision),
+      ...(encoding && compressedBody
+        ? { "Content-Encoding": encoding, Vary: "Accept-Encoding" }
+        : {}),
+      "X-Vibestudio-Build-Revision": String(build.revision),
     });
-    res.end(artifact.content);
+    res.end(compressedBody ?? artifact.content);
   }
 
   // =========================================================================
@@ -844,25 +922,25 @@ export class PanelHttpServer {
   <title>Vibestudio Panels</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
-    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
-    h1 { color: #f8fafc; }
-    code { background: #101318; border: 1px solid #303a4f; padding: 0.1em 0.4em; border-radius: 5px; font-size: 0.8em; color: #d1d5db; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #fbf7ff; background: radial-gradient(circle at top, #21122f 0%, #100b18 58%); }
+    h1 { color: #fbf7ff; }
+    code { background: #170f20; border: 1px solid #49305f; padding: 0.1em 0.4em; border-radius: 5px; font-size: 0.8em; color: #e4d8ed; }
     ul { list-style: none; padding: 0; }
-    li { margin: 0.8rem 0; padding: 0.8rem 0; border-bottom: 1px solid #222834; }
-    a { color: #f59e0b; text-decoration: none; font-weight: 600; }
+    li { margin: 0.8rem 0; padding: 0.8rem 0; border-bottom: 1px solid #352244; }
+    a { color: #a874ff; text-decoration: none; font-weight: 600; }
     a:hover { text-decoration: underline; }
     .brand-header { display: flex; align-items: center; gap: 1rem; margin: 0 0 1.5rem; }
     .brand-mark { width: 58px; height: 58px; filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35)); }
     .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
-    .sub { color: #6b7280; margin-left: 0.5em; }
-    .empty { color: #9ca3af; }
+    .sub { color: #8f7c9e; margin-left: 0.5em; }
+    .empty { color: #b8a9c5; }
     .badge { font-size: 0.7em; padding: 0.15em 0.5em; border-radius: 3px; margin-left: 0.5em; text-transform: uppercase; font-weight: 600; }
     .badge.running { background: #1b5e20; color: #81c784; }
   </style>
 </head>
 <body>
   <div class="brand-header">
-    <div class="brand-mark"><img src="${BRAND_MARK_WHITE_DATA_URL}" alt="" aria-hidden="true"></div>
+    <div class="brand-mark"><img src="${BRAND_SYMBOL_DATA_URL}" alt="" aria-hidden="true"></div>
     <h1>Vibestudio Panels</h1>
   </div>
   ${

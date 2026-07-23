@@ -219,7 +219,7 @@ export class PanelRuntimeLeaseController {
     const view = this.deps.getPanelView();
     const hostedBefore = new Map<
       string,
-      { source: string; contextId: string; stateArgsJson: string }
+      { source: string; contextId: string; stateArgsJson: string; buildKey: string | null }
     >();
     if (view) {
       for (const { panelId } of this.deps.registry.listPanels()) {
@@ -231,6 +231,7 @@ export class PanelRuntimeLeaseController {
           source: current.source,
           contextId: current.contextId,
           stateArgsJson: JSON.stringify(current.stateArgs ?? {}),
+          buildKey: panel.buildKey ?? null,
         });
       }
     }
@@ -250,7 +251,15 @@ export class PanelRuntimeLeaseController {
       if (stateArgsJson !== before.stateArgsJson) {
         this.deps.sendPanelEvent(panelId, "runtime:stateArgsChanged", current.stateArgs ?? {});
       }
-      if (current.source === before.source && current.contextId === before.contextId) continue;
+      const runtimeImageBecameReady =
+        before.buildKey !== (panel.buildKey ?? null) && this.hasCompleteExecutionIdentity(panel);
+      if (
+        current.source === before.source &&
+        current.contextId === before.contextId &&
+        !runtimeImageBecameReady
+      ) {
+        continue;
+      }
       if (current.source.startsWith("browser:") || before.source.startsWith("browser:")) continue;
       this.explicitTitlePanelIds.delete(panelId);
       this.ensureStateArgsPush(panelId);
@@ -405,13 +414,6 @@ export class PanelRuntimeLeaseController {
     this.locallyLoadingSlots.add(panelId);
     try {
       this.destroyViewIfPartitionChanged(view, panelId, snapshot);
-      const panel = this.deps.registry.getPanel(panelId);
-      if (!snapshot.source.startsWith("browser:") && !this.hasCompleteExecutionIdentity(panel)) {
-        const message =
-          "Panel unavailable: its restored runtime has no complete immutable execution identity. Rebuild the panel before loading it.";
-        this.markPanelLoadError(panelId, message);
-        throw new Error(message);
-      }
       await this.acquireRuntimeLease(panelId, leaseMode);
       if (snapshot.source.startsWith("browser:")) {
         const url = snapshot.source.slice("browser:".length);
@@ -427,6 +429,19 @@ export class PanelRuntimeLeaseController {
         return;
       }
 
+      const panel = this.deps.registry.getPanel(panelId);
+      if (!this.hasCompleteExecutionIdentity(panel)) {
+        if (panel?.artifacts.buildState === "error") {
+          throw new Error(
+            panel.artifacts.error ?? "Panel unavailable: its runtime image could not be prepared."
+          );
+        }
+        await this.loadPreparingPanelView(panelId, snapshot);
+        this.resources.track(panelId);
+        await this.resources.enforceCap(panelId);
+        return;
+      }
+
       const panelUrl = this.buildPanelUrl(panelId, snapshot);
       await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
       this.recordViewMutation();
@@ -436,16 +451,6 @@ export class PanelRuntimeLeaseController {
     } finally {
       this.locallyLoadingSlots.delete(panelId);
     }
-  }
-
-  beginNavigation(panelId: string): void {
-    this.explicitTitlePanelIds.delete(panelId);
-    this.ensureStateArgsPush(panelId);
-  }
-
-  prepareViewForSnapshot(panelId: string, snapshot: PanelSnapshot): void {
-    const view = this.deps.getPanelView();
-    if (view) this.destroyViewIfPartitionChanged(view, panelId, snapshot);
   }
 
   async acquireRuntimeLease(panelId: string, leaseMode: "acquire" | "takeOver"): Promise<string> {
@@ -551,16 +556,42 @@ export class PanelRuntimeLeaseController {
     }
     const panel = this.deps.registry.getPanel(panelId);
     if (!this.hasCompleteExecutionIdentity(panel)) {
-      this.markPanelLoadError(
-        panelId,
-        "Panel unavailable: its restored runtime has no complete immutable execution identity. Rebuild the panel before loading it."
-      );
+      if (panel?.artifacts.buildState === "error") {
+        this.markPanelLoadError(
+          panelId,
+          panel.artifacts.error ?? "Panel unavailable: its runtime image could not be prepared."
+        );
+        return;
+      }
+      await this.loadPreparingPanelView(panelId, snapshot);
       return;
     }
     const panelUrl = this.buildPanelUrl(panelId, snapshot);
     await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
     this.recordViewMutation();
     this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl);
+  }
+
+  /**
+   * Materialize the native host immediately while the server seals the runtime
+   * image. The same view is navigated to the immutable build URL when the
+   * panel-tree snapshot publishes its build identity.
+   */
+  private async loadPreparingPanelView(panelId: string, snapshot: PanelSnapshot): Promise<void> {
+    const view = this.deps.getPanelView();
+    if (!view) return;
+    await view.createViewForPanel(panelId, "about:blank", snapshot.contextId);
+    this.recordViewMutation();
+    const panel = this.deps.registry.getPanel(panelId);
+    if (!panel) return;
+    this.deps.registry.updateArtifacts(panelId, {
+      ...panel.artifacts,
+      htmlPath: "about:blank",
+      buildState: "building",
+      buildProgress: "Preparing panel runtime...",
+      error: undefined,
+    });
+    this.deps.registry.notifyPanelTreeUpdate();
   }
 
   private updateWorkspacePanelArtifacts(
@@ -596,7 +627,7 @@ export class PanelRuntimeLeaseController {
       panel.executionDigest &&
       /^[0-9a-f]{64}$/.test(panel.executionDigest) &&
       panel.authorityRequests &&
-      panel.authorityDelegations
+      panel.authorityEvalCeilings
     );
   }
 

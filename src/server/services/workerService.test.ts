@@ -57,26 +57,34 @@ function createDeps() {
       },
     ],
   };
+  const workerNodes = [
+    {
+      kind: "worker",
+      name: "example-store",
+      relativePath: "workers/example-store",
+      manifest: {
+        durable: { classes: [{ className: "ExampleStoreDO" }] },
+      },
+    },
+    {
+      kind: "worker",
+      name: "stateless-api",
+      relativePath: "workers/stateless-api",
+      manifest: { entry: "worker.ts" },
+    },
+  ];
   return {
     buildSystem: {
-      getGraph: () => ({
-        allNodes: () => [
-          {
-            kind: "worker",
-            name: "example-store",
-            relativePath: "workers/example-store",
-            manifest: {
-              durable: { classes: [{ className: "ExampleStoreDO" }] },
-            },
-          },
-          {
-            kind: "worker",
-            name: "stateless-api",
-            relativePath: "workers/stateless-api",
-            manifest: { entry: "worker.ts" },
-          },
-        ],
-      }),
+      getGraph: () => ({ allNodes: () => workerNodes }),
+      listBuildUnits: async () =>
+        workerNodes.map((node) => ({
+          unitPath: node.relativePath,
+          unitName: node.name,
+          kind: node.kind,
+          stateHash: "state:test",
+          effectiveVersion: `ev:${node.name}`,
+          manifest: node.manifest,
+        })),
     },
     workspaceDecls,
   };
@@ -90,7 +98,7 @@ function ungrantedExtensionCaller() {
     effectiveVersion: "ev-test",
     executionDigest: "0".repeat(64),
     requested: [],
-    delegations: [],
+    evalCeilings: [],
   });
 }
 
@@ -124,11 +132,60 @@ function browserDataExtensionCaller() {
         resource: { kind: "prefix", prefix: "" },
       },
     ],
-    delegations: [],
+    evalCeilings: [],
   });
 }
 
 describe("workerService workspace service resolution", () => {
+  it("keeps product-sealed services out of dynamic userland-provider approval", async () => {
+    const deps = createDeps();
+    const assertUserlandServiceExposure = vi.fn(async () => {});
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({
+        ...(deps as object),
+        assertUserlandServiceExposure,
+        buildSystem: {
+          ...deps.buildSystem,
+          getEffectiveVersion: () => {
+            throw new Error("product services must not ask for a workspace EV");
+          },
+        },
+      } as never)
+    );
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(panelCtx, "workers", "resolveService", [
+        "vibestudio.gad.workspace.v1",
+        null,
+      ])
+    ).resolves.toMatchObject({ origin: "product", source: "vibestudio/internal" });
+    expect(assertUserlandServiceExposure).not.toHaveBeenCalled();
+  });
+
+  it("binds dynamic workspace-service approval to the provider's exact EV", async () => {
+    const deps = createDeps();
+    const assertUserlandServiceExposure = vi.fn(async () => {});
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({
+        ...(deps as object),
+        assertUserlandServiceExposure,
+        buildSystem: { ...deps.buildSystem, getEffectiveVersion: () => "ev-example-store" },
+      } as never)
+    );
+    dispatcher.markInitialized();
+
+    await dispatcher.dispatch(panelCtx, "workers", "resolveService", ["example.store.v1", "chat"]);
+
+    expect(assertUserlandServiceExposure).toHaveBeenCalledWith(expect.anything(), {
+      name: "channel",
+      provider: "workers/example-store",
+      providerEv: "ev-example-store",
+    });
+  });
+
   it("lists every launchable worker with its real manifest entry point", async () => {
     const deps = createDeps();
     const dispatcher = createTestServiceDispatcher();
@@ -150,6 +207,40 @@ describe("workerService workspace service resolution", () => {
     ]);
   });
 
+  it("lists worker sources from the verified caller's exact context graph", async () => {
+    const deps = createDeps();
+    const listBuildUnits = vi.fn(async () => [
+      {
+        unitPath: "workers/context-only",
+        unitName: "context-only",
+        kind: "worker" as const,
+        stateHash: "state:context",
+        effectiveVersion: "ev:context-only",
+        manifest: {
+          entry: "index.ts",
+          durable: { classes: [{ className: "ContextOnlyDO" }] },
+        },
+      },
+    ]);
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({
+        ...(deps as object),
+        buildSystem: { ...deps.buildSystem, listBuildUnits },
+        getCallerContextId: () => "ctx-local",
+      } as never)
+    );
+    dispatcher.markInitialized();
+
+    await expect(dispatcher.dispatch(panelCtx, "workers", "listSources", [])).resolves.toEqual([
+      expect.objectContaining({
+        source: "workers/context-only",
+        classes: [{ className: "ContextOnlyDO" }],
+      }),
+    ]);
+    expect(listBuildUnits).toHaveBeenCalledWith("ctx:ctx-local", ["worker"]);
+  });
+
   it("lists and resolves manifest-declared services", async () => {
     const deps = createDeps();
     const dispatcher = createTestServiceDispatcher();
@@ -160,8 +251,8 @@ describe("workerService workspace service resolution", () => {
       {
         origin: "product",
         name: "gad.workspace",
-        title: "GAD workspace graph",
-        description: "Product-sealed semantic workspace authority",
+        title: "Workspace history",
+        description: "Read or update your workspace's collaboration and version history.",
         protocols: ["vibestudio.gad.workspace.v1"],
         source: "vibestudio/internal",
         kind: "durable-object",
@@ -174,6 +265,7 @@ describe("workerService workspace service resolution", () => {
         kind: "durable-object",
         protocols: ["example.store.v1"],
         source: "workers/example-store",
+        docsId: "workspace:channel",
         className: "ExampleStoreDO",
       }),
       expect.objectContaining({
@@ -197,6 +289,7 @@ describe("workerService workspace service resolution", () => {
     ).resolves.toMatchObject({
       kind: "durable-object",
       name: "channel",
+      protocol: "example.store.v1",
       source: "workers/example-store",
       className: "ExampleStoreDO",
       objectKey: "chat-1",
@@ -464,6 +557,24 @@ describe("workerService workspace service resolution", () => {
     dispatcher.registerService(
       createWorkerService({
         ...(deps as object),
+        buildSystem: {
+          ...deps.buildSystem,
+          listBuildUnits: async (ref?: string) =>
+            ref === "ctx:ctx-poems"
+              ? [
+                  {
+                    unitPath: "workers/poem-collection-store",
+                    unitName: "poem-collection-store",
+                    kind: "worker" as const,
+                    stateHash: "state:poems",
+                    effectiveVersion: "ev:poems",
+                    manifest: {
+                      durable: { classes: [{ className: "PoemStore" }] },
+                    },
+                  },
+                ]
+              : deps.buildSystem.listBuildUnits(),
+        },
         getCallerContextId: (callerId: string) => (callerId === "panel-test" ? "ctx-poems" : null),
         loadContextDeclarations: async (contextId: string) =>
           contextId === "ctx-poems" ? contextDecls : null,
@@ -560,11 +671,11 @@ describe("workerService workspace service resolution", () => {
     });
   });
 
-  it("lets an entity-bound agent resolve a service that explicitly admits entities", async () => {
+  it("does not treat an entity binding as an authorizing origin for a gated service", async () => {
     const deps = createDeps();
     deps.workspaceDecls.services = deps.workspaceDecls.services.map((service) =>
       service.name === "channel"
-        ? { ...service, authority: { principals: ["code", "user", "entity"] } }
+        ? { ...service, authority: { principals: ["code", "user"] } }
         : service
     );
     const dispatcher = new ServiceDispatcher();
@@ -594,9 +705,15 @@ describe("workerService workspace service resolution", () => {
 
     await expect(
       dispatcher.dispatch({ caller }, "workers", "resolveService", ["example.store.v1", "chat-1"])
-    ).resolves.toMatchObject({
-      name: "channel",
-      targetId: "do:workers/example-store:ExampleStoreDO:chat-1",
+    ).rejects.toMatchObject({
+      code: "EACQUIRE",
+      errorData: {
+        acquisition: {
+          capability: "workspace-service:channel",
+          resourceKey: "do:workers/example-store:ExampleStoreDO:chat-1",
+          tier: "gated",
+        },
+      },
     });
   });
 

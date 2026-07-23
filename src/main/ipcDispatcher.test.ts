@@ -96,7 +96,7 @@ function makeDispatcher(opts: {
 }) {
   ipcHandlers.clear();
   ipcInvokeHandlers.clear();
-  const dispatcher = createTestServiceDispatcher();
+  const dispatcher = createTestServiceDispatcher({ openMethods: ["electron-test.getInfo"] });
   opts.configureDispatcher?.(dispatcher);
   dispatcher.markInitialized();
   const serverClient = {
@@ -570,6 +570,13 @@ describe("IpcDispatcher", () => {
         repoPath: "apps/shell",
         effectiveVersion: "ev-shell",
         executionDigest: "a".repeat(64),
+        requested: [
+          {
+            capability: "service:electron-test.getInfo",
+            resource: { kind: "exact", key: "service:electron-test.getInfo" },
+          },
+        ],
+        evalCeilings: [],
       }),
       configureDispatcher: (dispatcher) => {
         dispatcher.registerService({

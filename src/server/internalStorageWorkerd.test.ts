@@ -2,12 +2,13 @@ import { mkdtempSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import * as esbuild from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
+import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
 import { DODispatch } from "./doDispatch.js";
 import { SEMANTIC_CONTROL_PLANE } from "./internalDOs/controlPlane.js";
 import { INTERNAL_DO_SOURCE, type InternalDOBundle } from "./internalDOs/internalDoLoader.js";
@@ -20,7 +21,14 @@ import {
 } from "./workerdManager.js";
 import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
+import { attestWorkspaceDoRpc } from "./services/authorityRuntime.js";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { BuildResult } from "./buildV2/buildStore.js";
+import {
+  collectWorkspaceRpcCatalog,
+  type WorkspaceRpcMethodDoc,
+} from "./buildV2/workspaceRpcCatalog.js";
+import { createHostDoAuthorityAttester } from "./bootstrap/workerd.js";
 import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
@@ -28,6 +36,13 @@ import {
 
 let compiledWorkerdPrograms: WorkerdProgramSources;
 let compiledInternalDOBundle: InternalDOBundle;
+
+const PUBSUB_WORKSPACE_SERVICE = {
+  source: "workers/pubsub-channel",
+  name: "pubsub.channel.v1",
+  authority: { principals: ["host", "user", "code", "session"] },
+  durableObject: { className: "PubSubChannel" },
+} satisfies WorkspaceServiceDecl;
 
 beforeAll(async () => {
   const [internalDoBuild, programs] = await Promise.all([
@@ -107,7 +122,7 @@ async function createWorkerdHarness(
         buildKey,
         executionDigest: "a".repeat(64),
         authorityRequests: [],
-        authorityDelegations: [],
+        authorityEvalCeilings: [],
       };
     },
     getBuildByKey: (key: string) => builds.get(key) ?? null,
@@ -117,6 +132,12 @@ async function createWorkerdHarness(
     getInternalDoEnv: () => ({}),
   };
   manager.bindWorkspaceProvider(provider);
+  const attestHostDoCall = createHostDoAuthorityAttester({
+    manager,
+    workspaceId: "workspace:internal-workerd-test",
+    services: [PUBSUB_WORKSPACE_SERVICE],
+    callerId: "internal-workerd-test",
+  });
 
   const loaderServer = createServer(async (req, res) => {
     const u = req.url ?? "";
@@ -208,6 +229,7 @@ async function createWorkerdHarness(
       workerdUrl: `http://127.0.0.1:${port}`,
       workerdGatewayToken: manager.getWorkerdGatewayToken(),
       workerdDispatchSecret: manager.getDispatchSecret(),
+      authorization: attestHostDoCall(ref, method),
     });
   };
 
@@ -224,6 +246,14 @@ function createDODispatch(manager: WorkerdManager, tokenManager: TokenManager): 
     if (!port) throw new Error("workerd port is not available");
     return `http://127.0.0.1:${port}`;
   });
+  dispatch.setAuthorityAttester(
+    createHostDoAuthorityAttester({
+      manager,
+      workspaceId: "workspace:internal-workerd-test",
+      services: [PUBSUB_WORKSPACE_SERVICE],
+      callerId: "internal-workerd-test",
+    })
+  );
   return dispatch;
 }
 
@@ -239,10 +269,20 @@ async function bundleWorker(source: string, entryPoint: string, ev: string): Pro
     external: ["node:*", "electron"],
     logLevel: "silent",
   });
-  return buildResult(source, ev, result.outputFiles[0]!.text);
+  return buildResult(
+    source,
+    ev,
+    result.outputFiles[0]!.text,
+    collectWorkspaceRpcCatalog(dirname(entryPoint))
+  );
 }
 
-function buildResult(source: string, ev: string, bundle: string): BuildResult {
+function buildResult(
+  source: string,
+  ev: string,
+  bundle: string,
+  workspaceRpcCatalog: WorkspaceRpcMethodDoc[] = []
+): BuildResult {
   const buildKey = `build:${source}:${ev}`;
   return {
     dir: `/tmp/vibestudio-${ev}-build`,
@@ -256,7 +296,8 @@ function buildResult(source: string, ev: string, bundle: string): BuildResult {
       ev,
       sourceStateHash: "state:test",
       sourcemap: false,
-      authority: { requests: [], delegations: [] },
+      authority: { requests: [], evalCeilings: [] },
+      workspaceRpcCatalog,
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -415,16 +456,16 @@ describe("internal storage DOs under workerd", () => {
     expect(manager.getBootGeneration()).toBeGreaterThanOrEqual(1);
   });
 
-  it("EvalDO durable job queue: startRun idempotent, getRun reflects status, reset cancels (preserving runs)", async () => {
-    // The EvalDO's SQLite-only job-queue surface (startRun/getRun/reset) — no sandbox engine, so it
-    // runs end-to-end under real workerd. `callDurableObject` dispatches as a `server` caller, which
-    // the server-only EvalDO requires.
+  it("EvalDO durable job queue: startRun schedules, remains idempotent, and persists a terminal", async () => {
+    // With no eval engine declared, background execution fails immediately. That is useful here:
+    // the real workerd test proves startRun acknowledges the durable row, schedules under the DO
+    // lifetime, and makes the terminal failure observable without a held host request.
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "EvalDO" }]);
     const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "job-queue-test" };
 
-    // startRun inserts a pending row and returns it.
+    // The first call acknowledges the newly inserted row before background guest work runs.
     expect(
       await harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "1+1" })
     ).toEqual({
@@ -432,35 +473,40 @@ describe("internal storage DOs under workerd", () => {
       status: "pending",
     });
 
-    // Idempotent on runId and exact input: a crash replay returns the existing
-    // row, while reuse for different work is rejected instead of aliasing two
-    // executions behind one durable identity.
-    expect(
-      await harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "1+1" })
-    ).toEqual({ runId: "run-1", status: "pending" });
+    // Idempotent on runId and exact input: replay returns the same row in whichever durable state
+    // it has reached, while different work cannot alias the identity.
+    const replay = (await harness.callDurableObject(ref, "startRun", {
+      runId: "run-1",
+      code: "1+1",
+    })) as { runId: string; status: string };
+    expect(replay.runId).toBe("run-1");
+    expect(["pending", "running", "done"]).toContain(replay.status);
     await expect(
       harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "DIFFERENT" })
     ).rejects.toThrow("runId run-1 was reused with different input");
 
-    // getRun reflects the durable status; an unknown runId reports 'unknown'.
-    expect(await harness.callDurableObject(ref, "getRun", "run-1")).toMatchObject({
-      status: "pending",
-    });
+    // getRun reaches the canonical terminal without relying on a held executeRun response.
+    let observed = (await harness.callDurableObject(ref, "getRun", "run-1")) as {
+      status: string;
+      result?: { success?: boolean; error?: string };
+    };
+    for (let attempt = 0; attempt < 20 && observed.status !== "done"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      observed = (await harness.callDurableObject(ref, "getRun", "run-1")) as typeof observed;
+    }
+    expect(observed).toMatchObject({ status: "done", result: { success: false } });
     expect(await harness.callDurableObject(ref, "getRun", "nope")).toEqual({ status: "unknown" });
 
-    // reset cancels the pending run AND preserves the runs table (getRun still finds it as cancelled).
+    // Reset preserves terminal history.
     expect(await harness.callDurableObject(ref, "reset")).toEqual({ ok: true });
     expect(await harness.callDurableObject(ref, "getRun", "run-1")).toMatchObject({
-      status: "cancelled",
+      status: "done",
     });
 
     // A fresh run after reset is independent.
     expect(
       await harness.callDurableObject(ref, "startRun", { runId: "run-2", code: "2+2" })
-    ).toEqual({
-      runId: "run-2",
-      status: "pending",
-    });
+    ).toMatchObject({ runId: "run-2" });
   }, 30_000);
 
   it("round-trips entity activate / resolve / retire / gc through WorkspaceDO under workerd", async () => {
@@ -566,7 +612,7 @@ describe("internal storage DOs under workerd", () => {
           reason: "raw",
           deadlineMs: 1_000,
         })
-      ).rejects.toThrow(/not exposed|403/);
+      ).rejects.toThrow(/no direct authority declaration|403/);
 
       await doDispatch.dispatch(workspaceRef, "lifecycleLeaseUpsert", {
         source: probeRef.source,
@@ -804,6 +850,37 @@ describe("internal storage DOs under workerd", () => {
           callerKind: "panel",
           callerPanelId: "panel-delivery",
           userId: "user-1",
+          authorization: (() => {
+            const methodAuthority = manager!.resolveDoRpcMethodAuthority(
+              channelRef.source,
+              channelRef.className,
+              channelRef.objectKey,
+              "subscribe"
+            );
+            if (!methodAuthority)
+              throw new Error("subscribe is absent from the exact build catalog");
+            return attestWorkspaceDoRpc({
+              caller: createVerifiedCaller("panel-delivery", "panel", null, null, {
+                userId: "user-1",
+                handle: "user1",
+              }),
+              source: channelRef.source,
+              className: channelRef.className,
+              objectKey: channelRef.objectKey,
+              method: "subscribe",
+              workspaceId: "workspace:internal-workerd-test",
+              workspaceMember: true,
+              sessionId: "test:subscribe",
+              service: {
+                name: PUBSUB_WORKSPACE_SERVICE.name,
+                principals: PUBSUB_WORKSPACE_SERVICE.authority.principals,
+              },
+              methodAuthority: {
+                effect: methodAuthority.effect,
+                tier: methodAuthority.access?.tier ?? "open",
+              },
+            });
+          })(),
         },
         controller.signal
       );

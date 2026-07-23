@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
 import { ServerUnitApprovalCoordinator } from "./unitApprovalCoordinator.js";
 
-function unit(kind: "extension" | "app", name: string): UnitBatchEntry {
+function unit(kind: "extension" | "app" | "panel" | "worker", name: string): UnitBatchEntry {
   return {
     unitKind: kind,
     unitName: name,
@@ -11,7 +11,7 @@ function unit(kind: "extension" | "app", name: string): UnitBatchEntry {
     target: kind === "app" ? "electron" : null,
     source: {
       kind: "workspace-repo",
-      repo: `${kind === "app" ? "apps" : "extensions"}/${name}`,
+      repo: `${kind}s/${name}`,
       ref: "main",
     },
     ev: `${name}-ev`,
@@ -187,6 +187,48 @@ describe("ServerUnitApprovalCoordinator", () => {
     resolveDecision("once");
     await pending;
     expect(applyApp).toHaveBeenCalledOnce();
+  });
+
+  it("holds startup publication until every runtime kind has joined the shared batch", async () => {
+    vi.useFakeTimers();
+    try {
+      const approvalQueue = { request: vi.fn(async () => "once" as const) };
+      const coordinator = new ServerUnitApprovalCoordinator({
+        approvalQueue,
+        delayMs: 1,
+        autoPublishStartup: false,
+      });
+      const panel = coordinator.enqueue({
+        trigger: "startup",
+        entries: [unit("panel", "chat")],
+        applyApproved: vi.fn(async () => undefined),
+        applyDenied: vi.fn(),
+      });
+      const worker = coordinator.enqueue({
+        trigger: "startup",
+        entries: [unit("worker", "agent")],
+        applyApproved: vi.fn(async () => undefined),
+        applyDenied: vi.fn(),
+      });
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(approvalQueue.request).not.toHaveBeenCalled();
+
+      await coordinator.publishPending("startup");
+      await Promise.all([panel, worker]);
+      expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+      expect(approvalQueue.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Approve workspace units",
+          units: [
+            expect.objectContaining({ unitKind: "panel", unitName: "chat" }),
+            expect.objectContaining({ unitKind: "worker", unitName: "agent" }),
+          ],
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("exposes auto-approved activation settlement to startup readiness", async () => {

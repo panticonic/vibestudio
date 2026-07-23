@@ -263,7 +263,7 @@ export class PanelView implements PanelViewLike {
           buildKey: panel.buildKey,
           executionDigest: panel.executionDigest,
           requested: panel.authorityRequests,
-          delegations: panel.authorityDelegations,
+          evalCeilings: panel.authorityEvalCeilings,
         }
       : undefined;
     if (this.viewManager.hasView(panelId)) {

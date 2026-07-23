@@ -1,7 +1,59 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import {
+  describeCapability,
+  summarizeAuthorityManifest,
+  type CapabilityPresentationResolver,
+  type CapabilityRequesterKind,
+} from "@vibestudio/shared/authorityPresentation";
+import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 
 export type UnitKind = "extension" | "app";
+
+/** Read the explicit manifest reviewed for a unit version and produce the same
+ * exact + human-oriented change packet consumed by desktop and mobile. */
+export function readUnitAuthorityReview(
+  unitPath: string,
+  label: string,
+  previous: UnitAuthorityManifest = { requests: [], evalCeilings: [] },
+  presentationFor?: CapabilityPresentationResolver,
+  requesterKind?: CapabilityRequesterKind
+) {
+  return authorityReviewFromPackageJson(
+    fs.readFileSync(path.join(unitPath, "package.json"), "utf8"),
+    label,
+    previous,
+    presentationFor,
+    requesterKind
+  );
+}
+
+/** Build a review packet from the candidate package.json itself.  Source-change
+ * review uses this form so approval is bound to the proposed repository state,
+ * never to a mutable checkout that may be ahead of or behind that state. */
+export function authorityReviewFromPackageJson(
+  packageJsonSource: string,
+  label: string,
+  previous: UnitAuthorityManifest = { requests: [], evalCeilings: [] },
+  presentationFor?: CapabilityPresentationResolver,
+  requesterKind?: CapabilityRequesterKind
+) {
+  const packageJson = JSON.parse(packageJsonSource) as {
+    vibestudio?: { authority?: unknown };
+  };
+  if (packageJson.vibestudio?.authority === undefined) {
+    throw new Error(`${label} must declare vibestudio.authority`);
+  }
+  const manifest = parseUnitAuthorityManifest(
+    packageJson.vibestudio.authority,
+    `${label} vibestudio.authority`
+  );
+  const resolver = presentationFor ?? describeCapability;
+  return summarizeAuthorityManifest(manifest, previous, (capability) =>
+    resolver(capability, requesterKind)
+  );
+}
 
 export interface UnitDescriptor<Kind extends UnitKind = UnitKind> {
   kind: Kind;
@@ -291,8 +343,13 @@ export interface UnitHostOptions<
   resolveNode(source: string): Node;
   candidateIdentity(node: Node, decl: Decl): UnitBuildIdentity<Entry["unitKind"]>;
   trustResolver?: UnitTrustResolver<Entry>;
+  /** Durable decisions for exact canonical identities, independent of whether
+   * a target has ever been built or activated. */
+  approvalStore?: UnitIdentityApprovalStore;
   makePendingEntry(node: Node, decl: Decl, building?: boolean): Entry;
   applyTrusted(node: Node, decl: Decl): Promise<void>;
+  /** Lower groups settle before higher groups; units within one group run concurrently. */
+  applyGroup?(node: Node, decl: Decl): number;
   removeUndeclared(entry: Entry): Promise<void>;
   emitRemoved(entry: Entry): void;
   notifyUnresolved(sources: string[]): void;
@@ -309,7 +366,7 @@ export interface UnitHostOptions<
 }
 
 export type UnitReconcileTrigger = "startup" | "meta-change";
-export type UnitApprovalDecision = "once" | "session" | "version" | "deny";
+export type UnitApprovalDecision = "once" | "session" | "version" | "deny" | "dismiss";
 
 export interface UnitReconcileOptions {
   trigger?: UnitReconcileTrigger;
@@ -385,113 +442,8 @@ function unitBatchApprovalDescription(descriptor: UnitDescriptor, count: number)
   return `This workspace uses ${count} ${privilege} ${label} that ${verb} approval to run ${runtime}.`;
 }
 
-interface UnitSourceChangeGrantFile {
-  grants: Array<{ key: string; expiresAt: number }>;
-}
-
-/**
- * Persistent per-unit dev-session source-change grants. These are intentionally
- * keyed by callers and unit/repo/branch by the host that owns the decision.
- */
-export class UnitSourceChangeGrantStore {
-  private readonly filePath: string;
-  private grants = new Map<string, number>();
-
-  constructor(opts: { statePath: string }) {
-    this.filePath = path.join(opts.statePath, "units", "source-change-grants.json");
-    this.load();
-  }
-
-  hasActive(key: string, now = Date.now()): boolean {
-    const expiresAt = this.grants.get(key);
-    if (!expiresAt) return false;
-    if (expiresAt > now) return true;
-    this.grants.delete(key);
-    this.save();
-    return false;
-  }
-
-  grant(key: string, ttlMs: number, now = Date.now()): void {
-    this.grants.set(key, now + ttlMs);
-    this.save();
-  }
-
-  private load(): void {
-    try {
-      const parsed = JSON.parse(
-        fs.readFileSync(this.filePath, "utf8")
-      ) as UnitSourceChangeGrantFile;
-      const now = Date.now();
-      this.grants = new Map(
-        (Array.isArray(parsed.grants) ? parsed.grants : [])
-          .filter(
-            (grant) =>
-              typeof grant.key === "string" &&
-              typeof grant.expiresAt === "number" &&
-              grant.expiresAt > now
-          )
-          .map((grant) => [grant.key, grant.expiresAt])
-      );
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.warn("[UnitSourceChangeGrantStore] Failed to load grants:", err);
-      }
-      this.grants = new Map();
-    }
-  }
-
-  private save(): void {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    const tmp = `${this.filePath}.tmp.${process.pid}.${Date.now()}`;
-    const payload: UnitSourceChangeGrantFile = {
-      grants: [...this.grants.entries()].map(([key, expiresAt]) => ({ key, expiresAt })),
-    };
-    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
-    fs.renameSync(tmp, this.filePath);
-  }
-}
-
-export type UnitSourceChangeDecision = "once" | "session" | "version" | "deny";
-export type UnitUserlandCallerKind = "panel" | "app" | "worker" | "do";
-
-export interface UnitSourceChangeCallerIdentity {
-  callerKind: string;
-  repoPath: string;
-  effectiveVersion: string;
-}
-
-export interface UnitSourceChangeCaller {
-  runtime: { id: string; kind: string };
-  code?: UnitSourceChangeCallerIdentity | null;
-  /** Host-verified requesting account, when the source change has user lineage. */
-  subject?: { userId: string; handle: string } | null;
-}
-
-export interface UnitSourceChangeRequest {
-  caller: UnitSourceChangeCaller;
-  repoPath: string;
-  branch: string;
-  commit: string;
-}
-
-export interface UnitSourceChangeAuthorizationDecision {
-  allowed: boolean;
-  reason?: string;
-}
-
-export interface UnitSourceChangeHandler {
-  authorizeSourceChange(
-    request: UnitSourceChangeRequest
-  ): Promise<UnitSourceChangeAuthorizationDecision> | UnitSourceChangeAuthorizationDecision;
-}
-
-export interface UnitSourceChangeTarget {
-  sourceRoot: string;
-  getHandler(): UnitSourceChangeHandler | null | undefined;
-}
-
-export interface UnitMetaChangeApprovalProvider<ApprovalEntry = unknown> {
-  metaChangeApprovalForCommit(commit: string):
+export interface UnitChangeApprovalProvider<ApprovalEntry = unknown> {
+  unitChangeApprovalForCommit(commit: string):
     | Promise<{ units: ApprovalEntry[]; identityKeys: string[] }>
     | {
         units: ApprovalEntry[];
@@ -500,100 +452,9 @@ export interface UnitMetaChangeApprovalProvider<ApprovalEntry = unknown> {
   acceptPreapprovedTrust(keys: Iterable<string>): void;
 }
 
-export interface InstalledUnitForSourceChange<
-  Entry extends UnitRegistryEntryBase,
-  Node extends UnitGraphNode,
-> {
+export interface InstalledUnit<Entry extends UnitRegistryEntryBase, Node extends UnitGraphNode> {
   entry: Entry;
   node: Node;
-}
-
-export interface UnitSourceChangeApprovalContext<
-  Entry extends UnitRegistryEntryBase,
-  Node extends UnitGraphNode,
-> {
-  request: UnitSourceChangeRequest;
-  repoPath: string;
-  installed: InstalledUnitForSourceChange<Entry, Node>;
-  identity: UnitSourceChangeCallerIdentity;
-  callerKind: UnitUserlandCallerKind;
-  sessionGrantKey: string;
-}
-
-export interface UnitSourceChangeAuthorizerOptions<
-  Entry extends UnitRegistryEntryBase,
-  Node extends UnitGraphNode,
-> {
-  descriptor: UnitDescriptor<Entry["unitKind"]>;
-  grantStore: Pick<UnitSourceChangeGrantStore, "hasActive" | "grant">;
-  grantTtlMs: number;
-  findInstalledByRepo(repoPath: string): InstalledUnitForSourceChange<Entry, Node> | null;
-  requestApproval(
-    ctx: UnitSourceChangeApprovalContext<Entry, Node>
-  ): Promise<UnitSourceChangeDecision>;
-}
-
-export async function authorizeUnitSourceChange<
-  Entry extends UnitRegistryEntryBase,
-  Node extends UnitGraphNode,
->(
-  opts: UnitSourceChangeAuthorizerOptions<Entry, Node>,
-  request: UnitSourceChangeRequest
-): Promise<UnitSourceChangeAuthorizationDecision> {
-  const repoPath = normalizeUnitRepoPath(request.repoPath);
-  const branch = normalizeUnitRef(request.branch);
-  const normalizedRequest = { ...request, repoPath, branch };
-  const installed = opts.findInstalledByRepo(repoPath);
-  if (!installed) return { allowed: true };
-  if (!sourceChangeTouchesUnitRef(branch, installed.entry.source.ref)) {
-    return { allowed: true };
-  }
-
-  if (request.caller.runtime.kind === "shell" || request.caller.runtime.kind === "server") {
-    return { allowed: true };
-  }
-
-  const sessionGrantKey = unitChangeSessionGrantKey(
-    request.caller.runtime.id,
-    installed.entry.name,
-    repoPath,
-    branch
-  );
-  if (opts.grantStore.hasActive(sessionGrantKey)) {
-    return { allowed: true };
-  }
-
-  const callerKind = unitUserlandCallerKind(request.caller.runtime.kind);
-  if (!callerKind) {
-    return {
-      allowed: false,
-      reason: `${capitalize(opts.descriptor.approvalFraming.unitLabel)} source changes from ${request.caller.runtime.kind} callers are not supported`,
-    };
-  }
-
-  const identity = request.caller.code;
-  if (!identity || identity.callerKind !== request.caller.runtime.kind) {
-    return { allowed: false, reason: `Unknown caller identity: ${request.caller.runtime.id}` };
-  }
-
-  const decision = await opts.requestApproval({
-    request: normalizedRequest,
-    repoPath,
-    installed,
-    identity,
-    callerKind,
-    sessionGrantKey,
-  });
-  if (decision === "deny") {
-    return {
-      allowed: false,
-      reason: `${capitalize(opts.descriptor.approvalFraming.unitLabel)} source change denied`,
-    };
-  }
-  if (decision === "session") {
-    opts.grantStore.grant(sessionGrantKey, opts.grantTtlMs);
-  }
-  return { allowed: true };
 }
 
 export function normalizeUnitRepoPath(repoPath: string): string {
@@ -614,20 +475,6 @@ export function unitChangeSessionGrantKey(
   branch: string
 ): string {
   return `${callerId}\x00${unitName}\x00${repoPath}\x00${branch}`;
-}
-
-function unitUserlandCallerKind(kind: string): UnitUserlandCallerKind | null {
-  if (kind === "panel" || kind === "app" || kind === "worker" || kind === "do") return kind;
-  return null;
-}
-
-function sourceChangeTouchesUnitRef(branch: string, ref: string): boolean {
-  return normalizeUnitRef(branch) === normalizeUnitRef(ref);
-}
-
-function capitalize(value: string): string {
-  if (value.length === 0) return value;
-  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
 }
 
 export class UnitHost<
@@ -651,7 +498,9 @@ export class UnitHost<
   }
 
   acceptPreapprovedTrust(keys: Iterable<string>): void {
-    for (const key of keys) {
+    const accepted = [...keys];
+    this.opts.approvalStore?.approveMany(accepted);
+    for (const key of accepted) {
       this.preapprovedTrust.add(key);
     }
   }
@@ -810,7 +659,7 @@ export class UnitHost<
     } as Partial<Entry>);
   }
 
-  findInstalledByRepo(repoPath: string): InstalledUnitForSourceChange<Entry, Node> | null {
+  findInstalledByRepo(repoPath: string): InstalledUnit<Entry, Node> | null {
     const normalizedRepo = normalizeUnitRepoPath(repoPath);
     for (const entry of this.opts.registry.list()) {
       let node: Node;
@@ -867,8 +716,14 @@ export class UnitHost<
       onStaged: () => void;
     }
   ): Promise<void> {
+    // Preapproval is bound to the complete canonical build identity, so it is
+    // safe to retain until the declaration carrying that exact identity is
+    // actually reconciled. Startup may review every declared unit in one
+    // batch, then activate only a host target's critical subset before the
+    // background pass reaches the remaining units. Clearing the whole set on
+    // that subset pass would discard valid user decisions and cause a second
+    // prompt for the same reviewed versions.
     const preApproved = this.preapprovedTrust;
-    this.preapprovedTrust = new Set();
     const resolved: Array<ResolvedUnitDeclaration<Decl, Node>> = [];
     const unresolved: string[] = [];
     for (const decl of declared) {
@@ -886,12 +741,11 @@ export class UnitHost<
 
     for (const { node, decl } of resolved) {
       const entry = this.opts.registry.get(node.name);
-      const trust = this.trustResolver.resolve({
-        identity: this.opts.candidateIdentity(node, decl),
-        entry,
-        preapprovedIdentityKeys: preApproved,
-      });
+      const trust = this.resolveCandidateTrust(node, decl, entry, preApproved);
       if (trust.decision !== "needs-approval") {
+        if (trust.decision === "preapproved") {
+          this.preapprovedTrust.delete(trust.identityKey);
+        }
         // Register a building entry up front so readiness probes see the unit
         // as in-progress from the moment it is classified, not from whenever
         // its build slot starts.
@@ -946,7 +800,7 @@ export class UnitHost<
 
     // Apply trusted units concurrently, mirroring the post-approval path.
     // Serializing them here turned startup reconcile into a chain of builds.
-    await Promise.all(trusted.map(({ node, decl }) => this.opts.applyTrusted(node, decl)));
+    await this.applyTrustedInGroups(trusted);
   }
 
   private async promptAndApply(
@@ -959,26 +813,57 @@ export class UnitHost<
         entries,
         trigger,
         applyApproved: async () => {
-          await Promise.all(items.map(({ node, decl }) => this.opts.applyTrusted(node, decl)));
+          await this.applyTrustedInGroups(items);
         },
         applyDenied: () => this.opts.onApprovalDenied(items),
       });
       return;
     }
     const decision = await this.opts.requestApproval(entries, trigger);
-    if (decision === "deny") {
+    if (decision === "deny" || decision === "dismiss") {
       this.opts.onApprovalDenied(items);
       return;
     }
-    await Promise.all(items.map(({ node, decl }) => this.opts.applyTrusted(node, decl)));
+    await this.applyTrustedInGroups(items);
+  }
+
+  private async applyTrustedInGroups(
+    items: Array<ResolvedUnitDeclaration<Decl, Node>>
+  ): Promise<void> {
+    const groups = new Map<number, Array<ResolvedUnitDeclaration<Decl, Node>>>();
+    for (const item of items) {
+      const group = this.opts.applyGroup?.(item.node, item.decl) ?? 0;
+      const members = groups.get(group) ?? [];
+      members.push(item);
+      groups.set(group, members);
+    }
+    for (const group of [...groups.keys()].sort((a, b) => a - b)) {
+      await Promise.all(
+        groups.get(group)!.map(({ node, decl }) => this.opts.applyTrusted(node, decl))
+      );
+    }
   }
 
   private trustForCandidate(node: Node, decl: Decl, entry: Entry | null): UnitTrustResolution {
+    return this.resolveCandidateTrust(node, decl, entry);
+  }
+
+  private resolveCandidateTrust(
+    node: Node,
+    decl: Decl,
+    entry: Entry | null,
+    preapprovedIdentityKeys?: ReadonlySet<string>
+  ): UnitTrustResolution {
     const identity = this.opts.candidateIdentity(node, decl);
-    return this.trustResolver.resolve({
+    const resolved = this.trustResolver.resolve({
       identity,
       entry,
+      preapprovedIdentityKeys,
     });
+    if (resolved.decision !== "needs-approval") return resolved;
+    return this.opts.approvalStore?.has(resolved.identityKey)
+      ? { decision: "preapproved", identityKey: resolved.identityKey }
+      : resolved;
   }
 
   private tryResolveNode(source: string): Node | null {
@@ -1078,6 +963,74 @@ export interface UnitRegistryOptions<Entry extends UnitRegistryEntryBase> {
   unitKind: Entry["unitKind"];
   isEntry?: (value: unknown) => value is Entry;
   normalizeEntry?: (entry: Entry) => Entry;
+}
+
+export interface UnitIdentityApprovalStore {
+  has(identityKey: string): boolean;
+  approveMany(identityKeys: Iterable<string>): void;
+}
+
+interface UnitIdentityApprovalFile {
+  schemaVersion: 1;
+  unitKind: UnitKind;
+  identityKeys: string[];
+}
+
+/**
+ * Durable exact-version review decisions. This is deliberately distinct from
+ * the activation registry: a user may approve mobile or terminal code on
+ * desktop long before that target is first launched.
+ */
+export class FileUnitIdentityApprovalStore implements UnitIdentityApprovalStore {
+  private readonly filePath: string;
+  private readonly unitKind: UnitKind;
+  private readonly identityKeys = new Set<string>();
+
+  constructor(opts: { statePath: string; unitKind: UnitKind }) {
+    this.unitKind = opts.unitKind;
+    this.filePath = path.join(opts.statePath, "units", opts.unitKind, "approvals.json");
+    try {
+      const parsed = JSON.parse(
+        fs.readFileSync(this.filePath, "utf8")
+      ) as Partial<UnitIdentityApprovalFile>;
+      if (
+        parsed.schemaVersion !== 1 ||
+        parsed.unitKind !== opts.unitKind ||
+        !Array.isArray(parsed.identityKeys) ||
+        parsed.identityKeys.some((key) => typeof key !== "string")
+      ) {
+        throw new Error(`Unsupported or invalid ${opts.unitKind} approval-store schema`);
+      }
+      for (const key of parsed.identityKeys) this.identityKeys.add(key);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
+  has(identityKey: string): boolean {
+    return this.identityKeys.has(identityKey);
+  }
+
+  approveMany(identityKeys: Iterable<string>): void {
+    let changed = false;
+    for (const key of identityKeys) {
+      if (!this.identityKeys.has(key)) {
+        this.identityKeys.add(key);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+    const tmp = `${this.filePath}.tmp.${process.pid}.${Date.now()}`;
+    const payload: UnitIdentityApprovalFile = {
+      schemaVersion: 1,
+      unitKind: this.unitKind,
+      identityKeys: [...this.identityKeys].sort(),
+    };
+    fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`);
+    fs.renameSync(tmp, this.filePath);
+  }
+
 }
 
 export class UnitRegistry<Entry extends UnitRegistryEntryBase> {

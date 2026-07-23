@@ -52,7 +52,9 @@ export function createLiveCallerGate(deps: {
     const liveAgentOwner = (): string | null => {
       const binding = caller.agentBinding;
       if (!binding || caller.runtime.id !== `agent:${binding.entityId}`) return null;
-      const credential = deps.deviceAuthStore.getAgentCredential(binding.agentId);
+      const agentId = caller.agentCredentialId;
+      if (!agentId) return null;
+      const credential = deps.deviceAuthStore.getAgentCredential(agentId);
       if (
         !credential ||
         credential.revokedAt !== undefined ||
@@ -62,7 +64,7 @@ export function createLiveCallerGate(deps: {
         return null;
       }
       const entity = deps.entityCache.resolveActive(binding.entityId);
-      if (!bindingForLiveAgentEntity(entity, binding.agentId)) return null;
+      if (!bindingForLiveAgentEntity(entity, agentId)) return null;
       return ownerForLiveAgentEntity(entity);
     };
     const subject = caller.subject;

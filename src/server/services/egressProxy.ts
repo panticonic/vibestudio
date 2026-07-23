@@ -36,9 +36,14 @@ import {
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
 import { CredentialLifecycleError, type CredentialLifecycle } from "./credentialLifecycle.js";
 import { deleteDynamicProperty } from "../../lintHelpers";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import { requestCapabilityPermission } from "./capabilityPermission.js";
+import type {
+  HostAuthorityEffect,
+  ServiceContext,
+  VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
+import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 import { connect as netConnect, isIP } from "node:net";
 import type { ResolvedCodeIdentity } from "./principalIdentity.js";
 import { bridgeDuplexSockets } from "../socketBridge.js";
@@ -97,14 +102,29 @@ export interface EgressProxyDeps {
   credentialStore: CredentialStore;
   auditLog: Pick<AuditLog, "append">;
   approvalQueue?: ApprovalQueue;
-  grantStore?: CapabilityGrantStore;
+  authorizeEffect?(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void>;
   sessionGrantStore?: CredentialSessionGrantStore;
   credentialUseGrantStore?: CredentialUseGrantStoreLike;
   credentialLifecycle?: Pick<CredentialLifecycle, "refreshIfNeeded" | "refreshCredential">;
+  recordExternalIngestion?: (caller: VerifiedCaller, url: URL, via: string) => void | Promise<void>;
+  authorizeInternalRequest?: (input: {
+    caller: VerifiedCaller;
+    targetUrl: URL;
+    method: string;
+    headers: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
+  }) => boolean | Promise<boolean>;
+  authorizePlatformRpcCallback?: (input: {
+    targetUrl: URL;
+    method: string;
+    authorization: string;
+    runtimeId: string;
+  }) => boolean | Promise<boolean>;
 }
 
 interface RequestAttribution extends ResolvedCodeIdentity {
   policyKey: string;
+  /** Stable owner of an eval-authored request; absent for installed code. */
+  agentId?: string;
 }
 
 interface Authorization {
@@ -399,6 +419,11 @@ export class EgressProxy {
           body: body as BodyInit | undefined,
         });
         const responseBody = new Uint8Array(await response.arrayBuffer());
+        await this.deps.recordExternalIngestion?.(
+          params.caller,
+          new URL(response.url || targetUrl.toString()),
+          "egress-proxy"
+        );
         return {
           statusCode: response.status,
           bytesIn: responseBody.byteLength,
@@ -488,6 +513,12 @@ export class EgressProxy {
           // undici requires half-duplex to be declared for stream bodies.
           ...(bodyIsStream ? { duplex: "half" } : {}),
         } as RequestInit);
+
+        await this.deps.recordExternalIngestion?.(
+          params.caller,
+          new URL(upstream.url || targetUrl.toString()),
+          "egress-proxy-stream"
+        );
 
         if (upstream.status === 401 && this.canForceRefreshCredential(authorization.credential)) {
           const responseBody = new Uint8Array(await upstream.arrayBuffer());
@@ -726,7 +757,7 @@ export class EgressProxy {
       return;
     }
 
-    if (this.isPlatformRpcCallback(req, targetUrl)) {
+    if (await this.isPlatformRpcCallback(req, targetUrl)) {
       try {
         const forwardResult = await this.forwardHttpRequest(
           req,
@@ -791,7 +822,7 @@ export class EgressProxy {
     }
   }
 
-  private isPlatformRpcCallback(req: IncomingMessage, targetUrl: URL): boolean {
+  private async isPlatformRpcCallback(req: IncomingMessage, targetUrl: URL): Promise<boolean> {
     const method = (req.method ?? "GET").toUpperCase();
     if (method !== "POST") return false;
     if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") return false;
@@ -799,7 +830,14 @@ export class EgressProxy {
     if (!isLoopbackHostname(targetUrl.hostname)) return false;
     const auth = this.readHeader(req, "authorization");
     if (!auth?.startsWith("Bearer ")) return false;
-    return !!this.readHeader(req, RPC_RUNTIME_ID_HEADER);
+    const runtimeId = this.readHeader(req, RPC_RUNTIME_ID_HEADER);
+    if (!runtimeId || !this.deps.authorizePlatformRpcCallback) return false;
+    return this.deps.authorizePlatformRpcCallback({
+      targetUrl,
+      method,
+      authorization: auth,
+      runtimeId,
+    });
   }
 
   private preparePlatformRpcHeaders(
@@ -850,6 +888,7 @@ export class EgressProxy {
         caller: params.caller,
         targetUrl,
         method: params.method,
+        inputHeaders: params.inputHeaders,
         credentialId: params.credentialId,
         credentialUse: params.credentialUse ?? "fetch",
         gitIntent: params.gitIntent,
@@ -969,6 +1008,7 @@ export class EgressProxy {
     caller: VerifiedCaller | null;
     targetUrl: URL;
     method: string;
+    inputHeaders: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
     credentialId?: string;
     credentialUse: CredentialBindingUse;
     gitIntent?: GitIntentMetadata;
@@ -987,7 +1027,15 @@ export class EgressProxy {
           )
         : null;
       if (caller && attribution && !credential) {
-        await this.authorizeRawEgress(caller, attribution, params.targetUrl, params.method);
+        const internallyAuthorized = await this.deps.authorizeInternalRequest?.({
+          caller,
+          targetUrl: params.targetUrl,
+          method: params.method,
+          headers: params.inputHeaders,
+        });
+        if (!internallyAuthorized) {
+          await this.authorizeRawEgress(caller, attribution, params.targetUrl, params.method);
+        }
       }
       return {
         attribution,
@@ -1058,48 +1106,60 @@ export class EgressProxy {
     targetUrl: URL,
     method: string
   ): Promise<void> {
-    if (!this.deps.approvalQueue || !this.deps.grantStore) {
+    if (!this.deps.authorizeEffect) {
       throw new ForwardRejection(403, "Raw network egress approval is unavailable");
     }
     const origin = targetUrl.origin;
-    const authorization = await requestCapabilityPermission(
-      {
-        approvalQueue: this.deps.approvalQueue,
-        grantStore: this.deps.grantStore,
-      },
-      {
-        caller,
-        capability: RAW_EGRESS_CAPABILITY,
-        dedupKey: `raw-egress:${caller.runtime.id}:${origin}`,
-        resource: {
-          type: "url-origin",
-          label: "Target origin",
-          value: origin,
-          key: origin,
-          scope: { kind: "origin", origin },
-        },
-        operation: {
-          kind: "network",
-          verb: "Connect",
-          object: {
-            type: "url-origin",
-            label: "Target origin",
-            value: origin,
-          },
-          groupKey: `raw-egress:${caller.runtime.id}:${origin}`,
-        },
-        title: `Connect to ${origin}`,
-        description: "Allow this requester to make raw network requests to this origin.",
-        details: [
-          { label: "Method", value: method },
-          { label: "Target origin", value: origin },
-          { label: "Source", value: attribution.repoPath },
-        ],
-        deniedReason: "Raw network egress denied",
-      }
+    const presentation = describeCapability(
+      RAW_EGRESS_CAPABILITY,
+      caller.runtime.kind === "do"
+        ? "durable-object"
+        : caller.runtime.kind === "panel" ||
+            caller.runtime.kind === "app" ||
+            caller.runtime.kind === "worker" ||
+            caller.runtime.kind === "extension"
+          ? caller.runtime.kind
+          : undefined
     );
-    if (!authorization.allowed) {
-      throw new ForwardRejection(403, authorization.reason ?? "Raw network egress denied");
+    try {
+      await this.deps.authorizeEffect({ caller, authorityAcquisition: "wait" } as ServiceContext, {
+        service: "gateway",
+        method: "fetch",
+        capability: RAW_EGRESS_CAPABILITY,
+        resourceKey: origin,
+        requirement: requirementForPrincipals(
+          ["host", "user", "code", "session"],
+          RAW_EGRESS_CAPABILITY
+        ),
+        tier: "gated",
+        sessionAdmission: "family",
+        args: [method, targetUrl.toString()],
+        preparedStateDigest: sha256Canonical({ origin, method }),
+        sensitivity: "write",
+        challenge: {
+          dedupKey: `raw-egress:${caller.runtime.id}:${origin}`,
+          resource: { type: "url-origin", label: "Website", value: origin },
+          operation: {
+            kind: "network",
+            verb: "connect to a website",
+            object: { type: "url-origin", label: "Website", value: origin },
+            groupKey: `raw-egress:${caller.runtime.id}:${origin}`,
+          },
+          title: `Connect to ${origin}`,
+          description: presentation.description,
+          details: [
+            { label: "Method", value: method },
+            { label: "Website", value: origin },
+            { label: "Source", value: attribution.repoPath },
+          ],
+          deniedReason: "Raw network egress denied",
+        },
+      });
+    } catch (error) {
+      throw new ForwardRejection(
+        403,
+        error instanceof Error ? error.message : "Raw network egress denied"
+      );
     }
   }
 
@@ -1265,7 +1325,7 @@ export class EgressProxy {
         credential.metadata?.["oauthTokenOrigin"],
       ]),
     });
-    if (decision === "deny") {
+    if (decision === "deny" || decision === "dismiss") {
       throw new ForwardRejection(
         403,
         "credential-caller-not-granted",
@@ -1311,10 +1371,10 @@ export class EgressProxy {
         return false;
       }
       if (decision === "session") return approval.callerId === attribution.callerId;
-      return (
-        approval.repoPath === attribution.repoPath &&
-        approval.effectiveVersion === attribution.effectiveVersion
-      );
+      return attribution.agentId
+        ? approval.requester?.stableIdentityKey === attribution.agentId
+        : approval.repoPath === attribution.repoPath &&
+            approval.effectiveVersion === attribution.effectiveVersion;
     }, "once");
   }
 
@@ -1330,7 +1390,7 @@ export class EgressProxy {
     if (!identity) {
       throw new ForwardRejection(403, `Unknown caller identity: ${callerId}`, "unknown-caller");
     }
-    if (!identity.executionDigest || !identity.requested || !identity.delegations) {
+    if (!identity.executionDigest || !identity.requested || !identity.evalCeilings) {
       throw new ForwardRejection(
         403,
         `Caller has no sealed execution authority: ${callerId}`,
@@ -1344,8 +1404,11 @@ export class EgressProxy {
       effectiveVersion: identity.effectiveVersion,
       executionDigest: identity.executionDigest,
       requested: identity.requested,
-      delegations: identity.delegations,
+      evalCeilings: identity.evalCeilings,
       policyKey: `${identity.repoPath}:${identity.callerId}`,
+      ...(caller.sessionOrigin === true
+        ? { agentId: identity.evalOrigin?.ownerId ?? caller.agentBinding?.entityId }
+        : {}),
     };
   }
 
@@ -1470,6 +1533,7 @@ export class EgressProxy {
         caller,
         targetUrl,
         method: "CONNECT",
+        inputHeaders: req.headers,
         credentialUse: "fetch",
       });
     } catch (error) {
@@ -2055,9 +2119,10 @@ function isCallerAllowed(
       grant.resource === resource.resource &&
       grant.action === resource.action &&
       !!attribution &&
-      grant.scope === "version" &&
-      grant.repoPath === attribution.repoPath &&
-      grant.effectiveVersion === attribution.effectiveVersion
+      (grant.scope === "agent"
+        ? !!attribution.agentId && grant.agentId === attribution.agentId
+        : grant.repoPath === attribution.repoPath &&
+          grant.effectiveVersion === attribution.effectiveVersion)
   );
 }
 
@@ -2689,12 +2754,14 @@ function grantForDecision(
     grantedAt,
     grantedBy: decision,
   };
-  return {
-    ...base,
-    scope: "version",
-    repoPath: attribution.repoPath,
-    effectiveVersion: attribution.effectiveVersion,
-  };
+  return attribution.agentId
+    ? { ...base, scope: "agent", agentId: attribution.agentId }
+    : {
+        ...base,
+        scope: "version",
+        repoPath: attribution.repoPath,
+        effectiveVersion: attribution.effectiveVersion,
+      };
 }
 
 function upsertCredentialUseGrant(
@@ -2714,7 +2781,7 @@ function credentialUseGrantKey(grant: CredentialUseGrant): string {
     grant.resource,
     grant.action,
     grant.scope,
-    grant.repoPath,
-    grant.effectiveVersion,
+    grant.scope === "version" ? grant.repoPath : grant.agentId,
+    grant.scope === "version" ? grant.effectiveVersion : "",
   ].join("\x00");
 }

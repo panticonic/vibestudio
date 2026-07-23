@@ -3,7 +3,6 @@ import { DatabaseSync } from "node:sqlite";
 import type { DurableObjectContext, SqlResult } from "@vibestudio/durable";
 import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import { BrowserDataDO, isBrowserDataDirectCaller } from "./browserDataDO.js";
-import { productCodeHasCapability } from "../services/productAuthorityGrants.js";
 
 const caller = (callerKind: string, callerId = "x"): AuthenticatedCaller =>
   ({ callerId, callerKind }) as AuthenticatedCaller;
@@ -30,13 +29,6 @@ describe("BrowserDataDO direct authority", () => {
     expect(isBrowserDataDirectCaller(caller("do", "do:agent"), BROKER)).toBe(false);
     expect(isBrowserDataDirectCaller(caller("worker", "worker:1"), BROKER)).toBe(false);
     expect(isBrowserDataDirectCaller(null, BROKER)).toBe(false);
-  });
-
-  it("grants exact browser-data RPC capabilities only to the sealed broker source", () => {
-    expect(productCodeHasCapability("extensions/browser-data", "rpc:getCookies")).toBe(true);
-    expect(productCodeHasCapability("extensions/browser-data", "rpc:getPasswords")).toBe(true);
-    expect(productCodeHasCapability("extensions/news", "rpc:getCookies")).toBe(false);
-    expect(productCodeHasCapability("extensions/evil", "rpc:getPasswords")).toBe(false);
   });
 });
 

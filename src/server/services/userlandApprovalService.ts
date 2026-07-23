@@ -27,7 +27,7 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EntityRecord, RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import type { UserlandApprovalGrantStore } from "./userlandApprovalGrantStore.js";
+import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
 const SERVICE_NAME = "userlandApproval";
 /**
@@ -51,6 +51,14 @@ function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOptio
     principal.requesterCategory === "internal-service" ||
     principal.requester?.category === "eval" ||
     principal.requester?.category === "internal-service";
+  const identityIsAgent =
+    principal.requesterCategory === "agent" ||
+    principal.requesterCategory === "eval" ||
+    principal.requester?.category === "agent" ||
+    principal.requester?.category === "eval" ||
+    principal.requester?.category === "worker" ||
+    principal.requester?.category === "durable-object";
+  const identityLabel = identityIsAgent ? "this agent" : "this workspace service";
   return [
     {
       value: "once",
@@ -66,9 +74,13 @@ function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOptio
     },
     {
       value: "version",
-      label: identityScoped ? "Trust identity" : "Trust version",
+      label: identityScoped
+        ? identityIsAgent
+          ? "Trust this agent"
+          : "Trust this workspace service"
+        : "Trust this version",
       description: identityScoped
-        ? "Remember for this exact runtime identity."
+        ? `Remember for ${identityLabel}. Its executable capabilities remain limited by version review.`
         : "Remember for this exact code version.",
       tone: "primary",
     },
@@ -93,7 +105,10 @@ function scopedOptionsFor(
 
 export function createUserlandApprovalService(deps: {
   approvalQueue: ApprovalQueue;
-  grantStore: Pick<UserlandApprovalGrantStore, "lookup" | "record" | "revoke" | "list">;
+  grantStore: Pick<
+    CapabilityGrantStore,
+    "lookupUserland" | "recordUserland" | "revokeUserland" | "listUserland"
+  >;
   resolveRuntimeEntity?: (id: string) => Promise<EntityRecord | null>;
   onExternalApprovalExpired?: (details: {
     channelId: string;
@@ -332,16 +347,12 @@ export function createUserlandApprovalService(deps: {
       promptOptions === "scoped"
         ? scopedOptionsFor(principal, decoratedReq)
         : (decoratedReq.options ?? BINARY_OPTIONS);
-    const hit = deps.grantStore.lookup(principal, decoratedReq.subject.id, issuer);
+    const hit = deps.grantStore.lookupUserland(principal, decoratedReq.subject.id, issuer);
     if (hit) {
       if (isCachedChoiceValid(promptOptions, options, hit.choice)) {
         return { kind: "choice", choice: hit.choice };
       }
-      try {
-        await deps.grantStore.revoke(principal, decoratedReq.subject.id, issuer);
-      } catch (err) {
-        console.warn("[UserlandApprovalService] Failed to revoke stale approval grant:", err);
-      }
+      await deps.grantStore.revokeUserland(principal, decoratedReq.subject.id, issuer);
     }
 
     const result = await deps.approvalQueue.requestUserland({
@@ -355,40 +366,34 @@ export function createUserlandApprovalService(deps: {
     if (result.kind === "choice") {
       const resolved = resolvePromptChoice(promptOptions, options, result.choice);
       if (!resolved.record) return { kind: "choice", choice: resolved.choice };
-      try {
-        await deps.grantStore.record(
-          principal,
-          decoratedReq.subject,
-          resolved.choice,
-          Date.now(),
-          issuer,
-          resolved.scope
-        );
-        if (typeof deps.approvalQueue.resolveMatchingUserland === "function") {
-          deps.approvalQueue.resolveMatchingUserland((approval) => {
-            if (approval.kind !== "userland") return false;
-            // Userland approvals always have a panel/app/worker/do principal; the
-            // "system" principal is only used for host-initiated prompts.
-            if (approval.callerKind === "system") return false;
-            if (approval.promptOptions !== "scoped") return false;
-            if (!approval.options.some((option) => option.value === result.choice)) return false;
-            const hit = deps.grantStore.lookup(
-              {
-                callerId: approval.callerId,
-                callerKind: approval.callerKind,
-                repoPath: approval.repoPath,
-                effectiveVersion: approval.effectiveVersion,
-              },
-              approval.subject.id,
-              approval.issuer
-            );
-            return (
-              !!hit && isCachedChoiceValid(approval.promptOptions, approval.options, hit.choice)
-            );
-          }, result.choice);
-        }
-      } catch (err) {
-        console.warn("[UserlandApprovalService] Failed to persist approval grant:", err);
+      await deps.grantStore.recordUserland(
+        principal,
+        decoratedReq.subject,
+        resolved.choice,
+        Date.now(),
+        issuer,
+        resolved.scope
+      );
+      if (typeof deps.approvalQueue.resolveMatchingUserland === "function") {
+        deps.approvalQueue.resolveMatchingUserland((approval) => {
+          if (approval.kind !== "userland") return false;
+          // Userland approvals always have a panel/app/worker/do principal; the
+          // "system" principal is only used for host-initiated prompts.
+          if (approval.callerKind === "system") return false;
+          if (approval.promptOptions !== "scoped") return false;
+          if (!approval.options.some((option) => option.value === result.choice)) return false;
+          const hit = deps.grantStore.lookupUserland(
+            {
+              callerId: approval.callerId,
+              callerKind: approval.callerKind,
+              repoPath: approval.repoPath,
+              effectiveVersion: approval.effectiveVersion,
+            },
+            approval.subject.id,
+            approval.issuer
+          );
+          return !!hit && isCachedChoiceValid(approval.promptOptions, approval.options, hit.choice);
+        }, result.choice);
       }
       return { kind: "choice", choice: resolved.choice };
     }
@@ -527,12 +532,15 @@ export function createUserlandApprovalService(deps: {
         if (!principal) return { kind: "uncallable", reason: "no-user-context" };
         // Re-parse for transform application — see comment in `request`.
         const subjectId = userlandApprovalSubjectIdSchema.parse(rawSubjectId);
-        return deps.grantStore.revoke(principal, subjectId, extensionIssuer(ctx));
+        return deps.grantStore.revokeUserland(principal, subjectId, extensionIssuer(ctx));
       },
       list: async (ctx) => {
         const principal = await resolvePrincipal(ctx, "list");
         if (!principal) return [];
-        return deps.grantStore.list(principal, extensionIssuer(ctx)) as UserlandApprovalGrant[];
+        return deps.grantStore.listUserland(
+          principal,
+          extensionIssuer(ctx)
+        ) as UserlandApprovalGrant[];
       },
     }),
   };

@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createVerifiedCaller,
   ServiceAccessError,
-  ServiceDispatcher,
   ServiceError,
 } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import {
   createUserlandApprovalService,
@@ -50,7 +50,12 @@ function createDeps() {
       requestExternalAgent,
       settleExternalAgent,
     } as Partial<ApprovalQueue> as ApprovalQueue,
-    grantStore: { lookup, record, revoke, list },
+    grantStore: {
+      lookupUserland: lookup,
+      recordUserland: record,
+      revokeUserland: revoke,
+      listUserland: list,
+    },
     resolveRuntimeEntity,
   });
   return {
@@ -72,6 +77,14 @@ const workerCtx: ServiceContext = {
     callerKind: "worker",
     repoPath: "workers/alpha",
     effectiveVersion: "hash-1",
+    executionDigest: "a".repeat(64),
+    requested: [
+      {
+        capability: "approvals.read",
+        resource: { kind: "exact", key: "approvals.read" },
+      },
+    ],
+    evalCeilings: [],
   }),
 };
 const doCtx: ServiceContext = {
@@ -80,6 +93,14 @@ const doCtx: ServiceContext = {
     callerKind: "do",
     repoPath: "workers/alpha",
     effectiveVersion: "hash-1",
+    executionDigest: "b".repeat(64),
+    requested: [
+      {
+        capability: "approvals.read",
+        resource: { kind: "exact", key: "approvals.read" },
+      },
+    ],
+    evalCeilings: [],
   }),
 };
 const extensionCtx: ServiceContext = {
@@ -105,7 +126,7 @@ const validRequest = {
 describe("userlandApprovalService", () => {
   it("allows panels, workers, DOs, and extensions but rejects shell/server through policy", async () => {
     const { service } = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(service);
     dispatcher.markInitialized();
 
@@ -233,7 +254,7 @@ describe("userlandApprovalService", () => {
     expect(queued).toHaveBeenCalledTimes(1);
   });
 
-  it("continues to prompt if stale-grant revocation fails", async () => {
+  it("fails closed before prompting if stale-grant revocation fails", async () => {
     const { service, lookup, revoke, queued } = createDeps();
     lookup.mockReturnValueOnce({
       principal: {
@@ -248,18 +269,13 @@ describe("userlandApprovalService", () => {
     });
     revoke.mockRejectedValueOnce(new Error("disk full"));
     queued.mockResolvedValueOnce({ kind: "choice", choice: "allow" });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    await expect(service.handler(workerCtx, "request", [validRequest])).resolves.toEqual({
-      kind: "choice",
-      choice: "allow",
-    });
-    expect(queued).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    await expect(service.handler(workerCtx, "request", [validRequest])).rejects.toThrow(
+      "disk full"
+    );
+    expect(queued).not.toHaveBeenCalled();
   });
 
-  it("persists choices, skips dismissals, and logs persistence failures without changing the result", async () => {
+  it("persists choices, skips dismissals, and surfaces persistence failures", async () => {
     const { service, queued, record } = createDeps();
 
     await expect(service.handler(workerCtx, "request", [validRequest])).resolves.toEqual({
@@ -287,17 +303,13 @@ describe("userlandApprovalService", () => {
     });
     expect(record).not.toHaveBeenCalled();
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     queued.mockResolvedValueOnce({ kind: "choice", choice: "allow" });
     record.mockImplementationOnce(async () => {
       throw new Error("disk full");
     });
-    await expect(service.handler(workerCtx, "request", [validRequest])).resolves.toEqual({
-      kind: "choice",
-      choice: "allow",
-    });
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    await expect(service.handler(workerCtx, "request", [validRequest])).rejects.toThrow(
+      "disk full"
+    );
   });
 
   it("supports a one-time envelope only when it names a declared custom choice", async () => {
@@ -507,7 +519,15 @@ describe("userlandApprovalService", () => {
     const { service } = createDeps();
 
     await expect(
-      service.handler(workerCtx, "requestAs", [workerCtx.caller.code, validRequest])
+      service.handler(workerCtx, "requestAs", [
+        {
+          callerId: "worker:alpha",
+          callerKind: "worker",
+          repoPath: "workers/alpha",
+          effectiveVersion: "hash-1",
+        },
+        validRequest,
+      ])
     ).rejects.toMatchObject({ code: "EACCES" });
   });
 

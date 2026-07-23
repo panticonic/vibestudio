@@ -14,10 +14,32 @@ import type { AuthorityRequirement, PrincipalKind } from "@vibestudio/rpc";
 import type { MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import type { CatalogEntry } from "@vibestudio/service-schemas/docs";
 import { serializeMethod } from "./serialize.js";
+import { methodTier } from "@vibestudio/shared/authority/tierTable";
+import type { MethodTierDecision } from "@vibestudio/shared/authority/tierTable";
 
 export interface BuildCatalogDeps {
   definitions: ServiceDefinition[];
   runtimeSurfaces?: { panel?: RuntimeSurface; workerRuntime?: RuntimeSurface };
+  workspaceCapabilities?: readonly WorkspaceCapabilityCatalogEntry[];
+  tierLookup?: (method: string) => MethodTierDecision | null;
+}
+
+export interface WorkspaceCapabilityCatalogEntry {
+  name: string;
+  title?: string;
+  description?: string;
+  source: string;
+  protocols: readonly string[];
+  principals: readonly PrincipalKind[];
+  providerEffectiveVersion?: string;
+  providerBuildError?: string;
+  methods?: readonly {
+    name: string;
+    signature: string;
+    description?: string;
+    access?: Record<string, unknown>;
+  }[];
+  target: { kind: "durable-object"; className: string } | { kind: "worker"; routePath: string };
 }
 
 const RUNTIME_TARGET_CALLERS: Record<RuntimeSurfaceTarget, CallerKind[]> = {
@@ -45,15 +67,23 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
       access: { principals: def.authority.principals },
     });
     for (const [methodName, method] of agentFacingMethods) {
+      const qualifiedMethod = `${def.name}.${methodName}`;
+      const reviewedTier = method.tier ?? (deps.tierLookup ?? methodTier)(qualifiedMethod);
+      if (!reviewedTier) throw new Error(`Catalog method ${qualifiedMethod} has no reviewed tier`);
       const ser = serializeMethod(method);
       const principals = authorityPrincipals(method, def);
-      const access = { ...(method.access ?? {}), principals };
+      const access = {
+        ...(method.access ?? {}),
+        principals,
+        tier: reviewedTier.tier,
+        sessionAdmission: reviewedTier.session,
+      };
       entries.push({
-        id: `service:${def.name}.${methodName}`,
+        id: `service:${qualifiedMethod}`,
         surface: "service",
-        qualifiedName: `${def.name}.${methodName}`,
+        qualifiedName: qualifiedMethod,
         parent: `service:${def.name}`,
-        title: `${def.name}.${methodName}`,
+        title: qualifiedMethod,
         ...(method.description ? { description: method.description } : {}),
         access,
         argsSchema: ser.argsSchema,
@@ -87,7 +117,11 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         qualifiedName: name,
         title: name,
         ...(description ? { description } : {}),
-        ...(entry.members ? { members: entry.members } : {}),
+        // Advertise only members that docs_open can actually describe. A
+        // runtime namespace may expose extra ergonomic values, but presenting
+        // those names as catalog children while get(id) returns null makes the
+        // discovery contract self-contradictory.
+        ...(documentedMembers.length > 0 ? { members: documentedMembers } : {}),
         access: { callers },
       });
       // A schemaRef is an implementation-only bridge from an ergonomic runtime
@@ -105,6 +139,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
           qualifiedName: `${name}.${member}`,
           parent: runtimeId,
           title: `${name}.${member}`,
+          ...(generated?.signature ? { signature: generated.signature } : {}),
           ...(serialized.description ? { description: serialized.description } : {}),
           access: { ...(serialized.access ?? {}), callers },
           ...(serialized.argsSchema ? { argsSchema: serialized.argsSchema } : {}),
@@ -112,6 +147,56 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
           ...(serialized.examples ? { examples: serialized.examples } : {}),
         });
       }
+    }
+  }
+
+  for (const declared of deps.workspaceCapabilities ?? []) {
+    const methodNames = (declared.methods ?? []).map((method) => method.name).sort();
+    entries.push({
+      id: `workspace:${declared.name}`,
+      surface: "workspace",
+      qualifiedName: declared.name,
+      title: declared.title ?? declared.name,
+      ...(declared.description ? { description: declared.description } : {}),
+      ...(methodNames.length > 0 ? { members: methodNames } : {}),
+      access: {
+        capability: `workspace-service:${declared.name}`,
+        principals: [...declared.principals],
+        source: declared.source,
+        protocols: [...declared.protocols],
+        target: declared.target,
+        ...(declared.providerEffectiveVersion
+          ? { providerEffectiveVersion: declared.providerEffectiveVersion }
+          : {}),
+        ...(declared.providerBuildError
+          ? { availability: "build-error", providerBuildError: declared.providerBuildError }
+          : { availability: "ready" }),
+      },
+    });
+    for (const method of declared.methods ?? []) {
+      entries.push({
+        id: `workspace:${declared.name}.${method.name}`,
+        surface: "workspace",
+        qualifiedName: `${declared.name}.${method.name}`,
+        parent: `workspace:${declared.name}`,
+        title: `${declared.name}.${method.name}`,
+        ...(method.description ? { description: method.description } : {}),
+        signature: method.signature,
+        access: {
+          capability: `workspace-service:${declared.name}`,
+          principals: [...declared.principals],
+          source: declared.source,
+          protocols: [...declared.protocols],
+          target: declared.target,
+          receiver: method.access ?? {},
+          ...(declared.providerEffectiveVersion
+            ? { providerEffectiveVersion: declared.providerEffectiveVersion }
+            : {}),
+          ...(declared.providerBuildError
+            ? { availability: "build-error", providerBuildError: declared.providerBuildError }
+            : { availability: "ready" }),
+        },
+      });
     }
   }
 
@@ -171,12 +256,12 @@ function presentationPrincipals(callerKind: CallerKind): PrincipalKind[] {
     case "shell":
       return ["user"];
     case "agent":
-      return ["entity", "user"];
+      return ["session", "user"];
     case "panel":
     case "app":
     case "worker":
     case "do":
     case "extension":
-      return ["code", "user", "entity"];
+      return ["code", "session", "user"];
   }
 }

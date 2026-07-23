@@ -19,9 +19,11 @@ const PREPARED_SERVICE = {
     {
       capability: "service:credentials.listStoredCredentials",
       resource: { kind: "exact" as const, key: "workspace:test" },
+      tier: "gated" as const,
+      evidence: "exact" as const,
     },
   ],
-  authorityDelegations: [],
+  authorityEvalCeilings: [],
 };
 
 describe("requireActiveExecutionIdentity", () => {
@@ -33,9 +35,11 @@ describe("requireActiveExecutionIdentity", () => {
           {
             capability: "service:workspace-state.alarmClear",
             resource: { kind: "exact", key: "workspace:test" },
+            tier: "gated",
+            evidence: "exact",
           },
         ],
-        authorityDelegations: [],
+        authorityEvalCeilings: [],
       })
     ).toEqual({
       activeExecutionDigest: "a".repeat(64),
@@ -44,18 +48,20 @@ describe("requireActiveExecutionIdentity", () => {
           {
             capability: "service:workspace-state.alarmClear",
             resource: { kind: "exact", key: "workspace:test" },
+            tier: "gated",
+            evidence: "exact",
           },
         ],
-        delegations: [],
+        evalCeilings: [],
       },
     });
   });
 
   it.each([
-    { executionDigest: undefined, authorityRequests: [], authorityDelegations: [] },
-    { executionDigest: "effective-version", authorityRequests: [], authorityDelegations: [] },
-    { executionDigest: "a".repeat(64), authorityRequests: undefined, authorityDelegations: [] },
-    { executionDigest: "a".repeat(64), authorityRequests: [], authorityDelegations: undefined },
+    { executionDigest: undefined, authorityRequests: [], authorityEvalCeilings: [] },
+    { executionDigest: "effective-version", authorityRequests: [], authorityEvalCeilings: [] },
+    { executionDigest: "a".repeat(64), authorityRequests: undefined, authorityEvalCeilings: [] },
+    { executionDigest: "a".repeat(64), authorityRequests: [], authorityEvalCeilings: undefined },
   ])("fails closed for an incomplete identity: %o", (prepared) => {
     expect(() => requireActiveExecutionIdentity(prepared)).toThrow();
   });
@@ -76,7 +82,7 @@ describe("declaredWorkspaceServiceActivationInput", () => {
       activeExecutionDigest: "a".repeat(64),
       activeAuthority: {
         requests: PREPARED_SERVICE.authorityRequests,
-        delegations: [],
+        evalCeilings: [],
       },
       className: "ModelSettingsDO",
       key: "workspace-model-settings",

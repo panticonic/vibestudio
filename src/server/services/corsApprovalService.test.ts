@@ -1,166 +1,62 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { describe, expect, it, vi } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-
-import type { ApprovalQueue } from "./approvalQueue.js";
-import { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { describe, expect, it } from "vitest";
 import { createCorsApprovalService } from "./corsApprovalService.js";
 
-function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cors-approval-"));
-}
-
-function createApprovalQueueMock(
-  decision: Awaited<ReturnType<ApprovalQueue["request"]>> = "session"
-): ApprovalQueue {
-  return {
-    request: vi.fn(async () => decision),
-    requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
-    requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
-    requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
-    requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
-    presentDeviceCode: vi.fn(() => ({
-      approvalId: "device-code-test",
-      cancelled: new AbortController().signal,
-      dispose: vi.fn(),
-    })),
-    resolve: vi.fn(),
-    resolveUserland: vi.fn(),
-    requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
-    resolveExternalAgent: vi.fn(),
-    settleExternalAgent: vi.fn(() => 0),
-    resolveExternalAgentByRequest: vi.fn(async () => 0),
-    submitClientConfig: vi.fn(),
-    submitSecretInput: vi.fn(),
-    submitCredentialInput: vi.fn(),
-    listPending: vi.fn(() => []),
-    cancelForCaller: vi.fn(),
-  };
+function panelCaller() {
+  return createVerifiedCaller("panel-1", "panel", {
+    callerId: "panel-1",
+    callerKind: "panel",
+    repoPath: "panels/chat",
+    effectiveVersion: "version-1",
+    executionDigest: "a".repeat(64),
+    requested: [
+      {
+        capability: "network.response.read",
+        resource: { kind: "origin", origin: "https://api.example.com" },
+      },
+    ],
+    evalCeilings: [],
+  });
 }
 
 describe("corsApprovalService", () => {
-  it("approval-gates DO access to target origins", async () => {
-    const approvalQueue = createApprovalQueueMock("session");
-    const service = createCorsApprovalService({
-      approvalQueue,
-      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-    });
-    const ctx = {
-      caller: createVerifiedCaller("do:workers/agent-worker:AiChatWorker:agent-1", "do", {
-        callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
-        callerKind: "do",
-        repoPath: "workers/agent-worker",
-        effectiveVersion: "version-1",
-      }),
-    };
-
-    await expect(
-      service.handler(ctx, "authorize", [
+  it("selects one semantic approval leaf for the exact response origin", async () => {
+    const service = createCorsApprovalService();
+    const prepare = service.authorityPreparation?.["corsApproval.authorize.target"];
+    expect(
+      prepare?.({ caller: panelCaller() }, [
         {
           targetUrl: "https://api.example.com/v1/models",
           requestOrigin: "http://localhost:9100",
         },
       ])
-    ).resolves.toMatchObject({ allowed: true, decision: "session" });
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    ).toEqual([
       expect.objectContaining({
-        callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
-        callerKind: "do",
-        repoPath: "workers/agent-worker",
-      })
-    );
-  });
-
-  it("approval-gates panel access to target origins", async () => {
-    const approvalQueue = createApprovalQueueMock("session");
-    const service = createCorsApprovalService({
-      approvalQueue,
-      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-    });
-    const ctx = {
-      caller: createVerifiedCaller("panel-1", "panel", {
-        callerId: "panel-1",
-        callerKind: "panel",
-        repoPath: "workspace/panels/chat",
-        effectiveVersion: "version-1",
+        capability: "network.response.read",
+        resourceKey: "https://api.example.com",
       }),
-    };
-
-    await expect(
-      service.handler(ctx, "authorize", [
-        {
-          targetUrl: "https://api.example.com/v1/models",
-          requestOrigin: "http://localhost:9100",
-        },
-      ])
-    ).resolves.toMatchObject({ allowed: true, decision: "session" });
-    await expect(
-      service.handler(ctx, "authorize", [
-        {
-          targetUrl: "https://api.example.com/v1/other",
-          requestOrigin: "http://localhost:9100",
-        },
-      ])
-    ).resolves.toMatchObject({ allowed: true });
-
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability: "cors-response-read",
-        resource: {
-          type: "url-origin",
-          label: "Target origin",
-          value: "https://api.example.com",
-        },
-      })
-    );
+    ]);
   });
 
-  it("approval-gates app access to target origins", async () => {
-    const approvalQueue = createApprovalQueueMock("session");
-    const service = createCorsApprovalService({
-      approvalQueue,
-      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-    });
-    const ctx = {
-      caller: createVerifiedCaller("@workspace-apps/shell", "app", {
-        callerId: "@workspace-apps/shell",
-        callerKind: "app",
-        repoPath: "apps/shell",
-        effectiveVersion: "version-1",
-      }),
-    };
-
+  it("reports the dispatcher decision without running a second approval path", async () => {
+    const service = createCorsApprovalService();
     await expect(
-      service.handler(ctx, "authorize", [
+      service.handler(
         {
-          targetUrl: "https://api.example.com/v1/models",
-          requestOrigin: "http://localhost:9100",
+          caller: panelCaller(),
+          authorityDecisions: new Map([["network.response.read", "session"]]),
         },
-      ])
-    ).resolves.toMatchObject({ allowed: true, decision: "session" });
-
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        callerId: "@workspace-apps/shell",
-        callerKind: "app",
-        repoPath: "apps/shell",
-      })
-    );
+        "authorize",
+        [{ targetUrl: "https://api.example.com/v1/models" }]
+      )
+    ).resolves.toEqual({ allowed: true, decision: "session" });
   });
 
-  it("rejects callers without verified code identity", async () => {
-    const service = createCorsApprovalService({
-      approvalQueue: createApprovalQueueMock(),
-      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-    });
-
-    await expect(
-      service.handler({ caller: createVerifiedCaller("panel-1", "panel") }, "authorize", [
-        { targetUrl: "https://api.example.com/" },
-      ])
-    ).resolves.toMatchObject({ allowed: false, reason: "Unknown capability caller: panel-1" });
+  it("rejects invalid targets before prompting", async () => {
+    const service = createCorsApprovalService();
+    const prepare = service.authorityPreparation?.["corsApproval.authorize.target"];
+    expect(() => prepare?.({ caller: panelCaller() }, [{ targetUrl: "file:///tmp/data" }])).toThrow(
+      "CORS target must be an http(s) URL"
+    );
   });
 });

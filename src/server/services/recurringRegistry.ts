@@ -6,7 +6,7 @@ import type {
   WorkspaceRecurringDecl,
 } from "@vibestudio/workspace-contracts/types";
 import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
-import type { UnitMetaChangeApprovalProvider } from "@vibestudio/unit-host";
+import type { UnitChangeApprovalProvider } from "@vibestudio/unit-host";
 import type { DoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { RecurringJobRow } from "../internalDOs/workspaceDO.js";
@@ -578,9 +578,9 @@ function scheduleLabel(decl: WorkspaceRecurringDecl): string {
  */
 export function createRecurringMetaChangeProvider(
   deps: RecurringMetaChangeProviderDeps
-): UnitMetaChangeApprovalProvider<UnitBatchEntry> {
+): UnitChangeApprovalProvider<UnitBatchEntry> {
   return {
-    async metaChangeApprovalForCommit(
+    async unitChangeApprovalForCommit(
       commit: string
     ): Promise<{ units: UnitBatchEntry[]; identityKeys: string[] }> {
       const proposed = await readRecurringAtState(deps, commit);

@@ -34,10 +34,22 @@ export type StartupMode =
     }
   | {
       kind: "local";
+      /**
+       * Whether this launch explicitly selected the local workspace or merely
+       * resolved it as the fallback for an automatic "resume where I left off"
+       * launch. Only the latter may be replaced by a saved remote connection.
+       */
+      connectionIntent: "local" | "resume-saved-remote";
       wsDir: string;
       workspaceName: string;
       workspaceId: string;
       isEphemeral: boolean;
+      /**
+       * A new development session replaces any prior hub-owned `dev`
+       * lifecycle; an internal Electron relaunch resumes the lifecycle it
+       * already created. Non-ephemeral workspaces carry null.
+       */
+      ephemeralLifecycle: "replace" | "resume" | null;
       autoApproveStartupUnits: boolean;
     };
 
@@ -96,11 +108,11 @@ export function resolveStartupMode(
         `Ephemeral development launches use the canonical workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}"`
       );
     }
-    return resolveEphemeralDevStartupMode();
+    return resolveEphemeralDevStartupMode("resume");
   }
 
   if (hasExplicitWorkspaceSelection()) {
-    return resolveLocalStartupMode(centralData);
+    return resolveLocalStartupMode(centralData, undefined, "local");
   }
 
   if (process.argv.includes(CHOOSE_CONNECTION_ARG) && opts?.interactiveDesktop === true) {
@@ -113,8 +125,13 @@ export function resolveStartupMode(
   }
 
   // Pre-session startup has no authenticated user. Use the catalog's machine
-  // MRU for bootstrap; authenticated resume cursors are resolved by the hub.
-  return resolveLocalStartupMode(centralData);
+  // MRU as the local fallback; only an ordinary interactive launch may resume
+  // a saved remote connection. Headless hosts always own a local workspace.
+  return resolveLocalStartupMode(
+    centralData,
+    undefined,
+    opts?.interactiveDesktop === true ? "resume-saved-remote" : "local"
+  );
 }
 
 function hasExplicitWorkspaceSelection(): boolean {
@@ -175,24 +192,29 @@ export function ephemeralWorkspaceRelaunchArgs(rawArgs = process.argv.slice(1)):
  * reserved for desktop state and durable reach identity; the hub owns the
  * random source/state checkout used by the workspace child.
  */
-export function resolveEphemeralDevStartupMode(): LocalStartupMode {
+export function resolveEphemeralDevStartupMode(
+  ephemeralLifecycle: "replace" | "resume" = "replace"
+): LocalStartupMode {
   const wsDir = path.join(getCentralConfigDirectory(), "workspaces", EPHEMERAL_DEV_WORKSPACE_NAME);
   log.info(`[Workspace] Selected hub-owned ephemeral workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}"`);
   return {
     kind: "local",
+    connectionIntent: "local",
     wsDir,
     workspaceName: EPHEMERAL_DEV_WORKSPACE_NAME,
     // Provisional until the hub returns its opaque registry id. Main replaces
     // this immediately after the server session is established.
     workspaceId: EPHEMERAL_DEV_WORKSPACE_NAME,
     isEphemeral: true,
+    ephemeralLifecycle,
     autoApproveStartupUnits: false,
   };
 }
 
 export function resolveLocalStartupMode(
   centralData: CentralDataManager,
-  preferredName?: string
+  preferredName?: string,
+  connectionIntent: LocalStartupMode["connectionIntent"] = "local"
 ): LocalStartupMode {
   // Local mode: resolve workspace from disk
   const wsName = resolveWorkspaceName() ?? preferredName;
@@ -213,10 +235,12 @@ export function resolveLocalStartupMode(
     ((startup.resolved.created || createdInApp) && !isEphemeral);
   return {
     kind: "local",
+    connectionIntent,
     wsDir: startup.resolved.wsDir,
     workspaceName: startup.resolved.name,
     workspaceId: startup.resolved.workspace.config.id,
     isEphemeral,
+    ephemeralLifecycle: null,
     autoApproveStartupUnits,
   };
 }

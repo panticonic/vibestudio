@@ -36,34 +36,32 @@ describe("ConsoleStreamer", () => {
     expect(sink.chunks).toEqual(["a", "b\nc"]);
   });
 
-  it("finalFlush drains everything buffered, including lines pushed during the last in-flight forward", async () => {
-    const sink = gatedSink();
-    const s = new ConsoleStreamer(sink.forward);
+  it("close aborts a stuck forward and never waits for progress delivery", async () => {
+    let signal: AbortSignal | undefined;
+    const s = new ConsoleStreamer(async (_chunk, nextSignal) => {
+      signal = nextSignal;
+      await new Promise<void>(() => {});
+    });
 
     s.push("one");
     await tick();
-    s.push("two"); // buffered behind the in-flight "one"
-    sink.release(); // let "one" finish; its completion kicks "two"
+    expect(signal?.aborted).toBe(false);
 
-    const done = s.finalFlush();
-    await tick();
-    s.push("three"); // arrives while "two" is in flight → must still be drained
-    sink.release(); // "two" done → kicks "three"
-    await tick();
-    sink.release(); // "three" done
-    await done;
+    s.push("two");
+    s.close();
+    expect(signal?.aborted).toBe(true);
 
-    expect(sink.chunks).toEqual(["one", "two", "three"]);
+    s.push("ignored after close");
   });
 
-  it("finalFlush resolves immediately when nothing was pushed", async () => {
+  it("close is immediate when nothing was pushed", () => {
     const sink = gatedSink();
     const s = new ConsoleStreamer(sink.forward);
-    await s.finalFlush();
+    s.close();
     expect(sink.chunks).toEqual([]);
   });
 
-  it("a failing forward never rejects push/finalFlush (best-effort) and keeps draining", async () => {
+  it("a failing forward remains best-effort and keeps draining while open", async () => {
     const seen: string[] = [];
     let first = true;
     const s = new ConsoleStreamer(async (chunk) => {
@@ -76,7 +74,8 @@ describe("ConsoleStreamer", () => {
     s.push("x");
     await tick();
     s.push("y");
-    await expect(s.finalFlush()).resolves.toBeUndefined();
+    await tick();
     expect(seen).toEqual(["x", "y"]); // second chunk still forwarded after the first threw
+    s.close();
   });
 });

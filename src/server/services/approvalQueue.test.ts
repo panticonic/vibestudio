@@ -228,6 +228,19 @@ describe("approvalQueue", () => {
       })
     ).resolves.toBe("once");
 
+    await expect(
+      queue.request({
+        kind: "capability",
+        callerId: "worker-1",
+        callerKind: "worker",
+        repoPath: "workers/example",
+        effectiveVersion: "hash-2",
+        capability: "workspace-service:models",
+        title: "Use AI model settings",
+        allowedDecisions: ["session", "version", "deny"],
+      })
+    ).resolves.toBe("session");
+
     expect(queue.listPending()).toEqual([]);
     expect(emit).not.toHaveBeenCalledWith("shell-approval:pending-changed", expect.anything());
   });
@@ -357,6 +370,21 @@ describe("approvalQueue", () => {
     await expect(promise).resolves.toBe("once");
     expect(queue.listPending()).toEqual([]);
     expect(emit).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps dismissal distinct from an explicit deny", async () => {
+    const { queue } = createQueue();
+    const decision = queue.request({
+      kind: "capability",
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      capability: "external-browser-open",
+      title: "Open external browser",
+    });
+    await queue.resolve(queue.listPending()[0]!.approvalId, "dismiss");
+    await expect(decision).resolves.toBe("dismiss");
   });
 
   it("can isolate one-shot capability approvals from concurrent waiters", async () => {

@@ -2,7 +2,13 @@ import type { PrincipalKind } from "@vibestudio/rpc";
 import { PRODUCT_WORKSPACE_SERVICES } from "@vibestudio/shared/productWorkspaceServices.mjs";
 
 const INTERNAL_DO_SOURCE = "vibestudio/internal";
-const PRINCIPAL_KINDS: ReadonlySet<string> = new Set(["host", "user", "device", "code", "entity"]);
+const PRINCIPAL_KINDS: ReadonlySet<string> = new Set([
+  "host",
+  "user",
+  "code",
+  "session",
+  "mission",
+]);
 
 export interface ReviewedInternalDurableObjectTarget {
   source: typeof INTERNAL_DO_SOURCE;

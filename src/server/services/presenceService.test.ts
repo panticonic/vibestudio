@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { createPresenceService, createPresenceTracker } from "./presenceService.js";
 
 describe("presenceService", () => {
   it("lets userland callers read active panel owners but not claim ownership", async () => {
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createPresenceService({ presence: createPresenceTracker() }));
     dispatcher.markInitialized();
 
@@ -33,6 +34,6 @@ describe("presenceService", () => {
         "markPanelActive",
         ["panel:nav-b"]
       )
-    ).rejects.toThrow(/not accessible to panel callers/);
+    ).rejects.toThrow(/no authority branch admits the code origin/);
   });
 });

@@ -74,6 +74,24 @@ export class WorkspaceEntityStore {
     return record;
   }
 
+  /**
+   * Reserve stable coordinates for a panel without making it executable.
+   * Connection grants and code-principal resolution remain fail-closed until
+   * advanceExecution() commits the sealed runtime image.
+   */
+  async reservePanel(input: EntityActivateInput): Promise<EntityRecord> {
+    const record = await this.dispatch<EntityRecord>("entityReservePanel", input);
+    this.deps.entityCache._onActivate(record);
+    return record;
+  }
+
+  /** Complete a reserved executable entity, or atomically advance an active one. */
+  async advanceExecution(input: EntityActivateInput): Promise<EntityRecord> {
+    const record = await this.dispatch<EntityRecord>("entityAdvanceExecution", input);
+    this.deps.entityCache._onActivate(record);
+    return record;
+  }
+
   /** Retire a WorkspaceDO entity and mirror the retirement. Null if already gone. */
   async retire(id: string): Promise<EntityRecord | null> {
     const record = await this.dispatch<EntityRecord | null>("entityRetire", id);
@@ -113,6 +131,11 @@ export class WorkspaceEntityStore {
     return kind
       ? this.dispatch<EntityRecord[]>("entityListActiveByKind", kind)
       : this.dispatch<EntityRecord[]>("entityListActive");
+  }
+
+  /** All active or retired entity records that establish a context's creator lineage. */
+  listByContext(contextId: string): Promise<EntityRecord[]> {
+    return this.dispatch<EntityRecord[]>("entityListByContext", contextId);
   }
 
   // --- context-relationship registry (durable edges, no cache mirror) ---

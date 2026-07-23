@@ -45,7 +45,12 @@ export class LifecycleProbeDO extends DurableObjectBase {
     return { ok: true };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   lifecycleEvents(): Array<{ kind: string; input: unknown; bootGeneration: string | null }> {
     this.ensureReady();
     return this.sql
@@ -62,7 +67,12 @@ export class LifecycleProbeDO extends DurableObjectBase {
       }));
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   currentBootGeneration(): string | null {
     const value = this.env["WORKERD_BOOT_GENERATION"];
     return typeof value === "string" ? value : null;
@@ -71,7 +81,12 @@ export class LifecycleProbeDO extends DurableObjectBase {
   /** Hold the inbound request open for `ms`, then return — an empirical probe for
    *  whether real workerd caps a long-held DO `fetch` handler (it should not; a DO
    *  is not a regular Worker with the ~30s wall limit). */
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async sleepProbe(ms: number): Promise<{ requestedMs: number; ok: true }> {
     await new Promise((resolve) => setTimeout(resolve, ms));
     return { requestedMs: ms, ok: true };
@@ -85,7 +100,12 @@ export class LifecycleProbeDO extends DurableObjectBase {
    * `ran_at - started_at ≈ 3s` ⇒ ran continuously in the background; `≈` the gap
    * until the next request ⇒ the isolate froze and only resumed when re-woken.
    */
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async bgRunProbe(delayMs = 3000): Promise<{ hasWaitUntil: boolean }> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS bg (k TEXT PRIMARY KEY, v TEXT)`);
     this.sql.exec(`INSERT OR REPLACE INTO bg (k, v) VALUES ('started_at', ?)`, String(Date.now()));
@@ -117,7 +137,12 @@ export class LifecycleProbeDO extends DurableObjectBase {
     return { hasWaitUntil: typeof wu === "function" };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async bgRunResult(): Promise<Record<string, string>> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS bg (k TEXT PRIMARY KEY, v TEXT)`);
     const out: Record<string, string> = {};

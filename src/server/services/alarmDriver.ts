@@ -35,7 +35,8 @@ export class AlarmDriver {
   private readonly workspaceRef: DORef;
   private readonly concurrency: number;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private stopped = false;
+  /** Admission is closed until start() runs after runtime restoration. */
+  private stopped = true;
   /**
    * One scheduler operation owns the driver at a time. Requests are booleans,
    * not a promise chain, so a burst of alarm mutations coalesces to one refresh.

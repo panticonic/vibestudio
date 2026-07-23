@@ -1,14 +1,14 @@
 import type { AuthorityGrant, Principal, PrincipalKind } from "@vibestudio/rpc";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
+import { scopeCovers } from "@vibestudio/shared/authorization";
 import { getProductBootManifest } from "../internalDOs/productBootManifest.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import { PRODUCT_AUTHORITY_GRANT_CATALOG } from "./productAuthorityGrantCatalog.generated.js";
-import { PRODUCT_DIRECT_AUTHORITY_CAPABILITIES } from "./productDirectAuthorityCapabilities.generated.js";
-import { EXTENSION_RUNTIME_BASE_CAPABILITIES } from "@vibestudio/shared/authorityManifest";
 
-// P0 ADMISSION INPUT — scheduled to freeze in docs/capability-model-redesign.md
-// P2. This compatibility resolver is retained only until the redesigned grant
-// store owns capability acquisition; additions require explicit catalog review.
+// Product bootstrap grants are derived only from authenticated invocation facts:
+// the receiver's live declaration decides which principal family is admitted,
+// while installed code is additionally bounded by its exact sealed manifest.
+// Static source censuses are audit evidence, never runtime authority inputs.
 
 export interface ProductGrantInput {
   caller: VerifiedCaller;
@@ -17,108 +17,55 @@ export interface ProductGrantInput {
   resourceKey: string;
   sessionId: string;
   now: number;
+  /** Undefined only for the temporary direct-RPC admission bridge. */
+  tier?: "open" | "gated" | "critical";
   grantStore?: CapabilityGrantStore;
   grantCode?: boolean;
 }
 
 /**
- * Resolve reviewed product/selector grants plus live user decisions. The
- * catalog contains exact host-service methods, so registering a new method
- * never grants it. Code grants additionally bind to the verified source line
- * and exact digest carried by `caller.code`.
+ * Resolve host bootstrap admission plus live user decisions. Receiver
+ * requirements remain the authority boundary; code admission additionally
+ * binds to the exact requests sealed into `caller.code`.
  */
 export function productAuthorityGrants(input: ProductGrantInput): AuthorityGrant[] {
   const grants: AuthorityGrant[] = [];
-  for (const kind of ["host", "user", "device", "entity"] as const) {
+  // Critical effects are never standing product authority. Service-tier user
+  // and session origins acquire through the unified store; sealed shipped code
+  // and the product host retain only the exact reviewed admission snapshot.
+  if (input.tier === "critical") return grants;
+  // Users are trusted principals in the product threat model. Their live,
+  // authenticated calls receive the reviewed receiver capability at open and
+  // gated tiers; untrusted content acts through code/session origins instead
+  // and therefore cannot inherit this admission. Critical effects still take
+  // the fresh-confirmation path above.
+  const admittedPrincipals = ["host", "user"] as const;
+  for (const kind of admittedPrincipals) {
     const subject = input.principals[kind];
-    if (!subject || !productPrincipalHasCapability(kind, input.capability)) continue;
+    if (!subject) continue;
     grants.push(productGrant(subject, input.capability, input.resourceKey, input.now));
   }
 
-  const code = input.principals.code;
+  const code = input.principals["code"];
   const identity = input.caller.code;
-  if (!code || !identity || input.grantCode === false) return grants;
-  const grantSubject = {
-    callerId: identity.callerId,
-    repoPath: identity.repoPath,
-    effectiveVersion: identity.effectiveVersion,
-  };
+  // A manifest is a request, never an approval. Only a host-stamped active
+  // unit incarnation may turn its exact sealed requests into version-bound
+  // authority. Unit retirement/version change removes that live fact.
+  if (!code || !identity || input.grantCode !== true) return grants;
 
-  // The shared childRuntime performs this tiny activation protocol for every
-  // verified extension build, including extensions created after the checked-
-  // in product catalog was generated. The build must still have sealed the
-  // request; this grant only supplies the other half of that intersection.
-  const runtimeAllows =
-    identity.callerKind === "extension" &&
-    EXTENSION_RUNTIME_BASE_CAPABILITIES.includes(input.capability);
-  const productAllows =
-    runtimeAllows || productCodeHasCapability(identity.repoPath, input.capability);
-  const userAllows = input.grantStore?.hasGrant(input.capability, input.resourceKey, grantSubject);
-  if (productAllows || userAllows) {
+  if (
+    identity.requested?.some(
+      (request) =>
+        capabilityPatternCovers(request.capability, input.capability) &&
+        scopeCovers(request.resource, input.resourceKey)
+    )
+  ) {
     grants.push({
       ...productGrant(code, input.capability, input.resourceKey, input.now),
-      provenance: runtimeAllows
-        ? "extension-runtime-authority-v1"
-        : productAllows
-          ? "product-authority-catalog-v1"
-          : "user-capability-grant",
-    });
-  }
-  if (input.grantStore?.hasDenial(input.capability, input.resourceKey, grantSubject)) {
-    grants.push({
-      ...productGrant(code, input.capability, input.resourceKey, input.now),
-      effect: "deny",
-      provenance: "user-capability-denial",
+      provenance: "sealed-manifest-admission-v1",
     });
   }
   return grants;
-}
-
-export function productCodeHasCapability(repoPath: string, capability: string): boolean {
-  const exact = PRODUCT_AUTHORITY_GRANT_CATALOG.codeCapabilitiesBySource[
-    repoPath as keyof typeof PRODUCT_AUTHORITY_GRANT_CATALOG.codeCapabilitiesBySource
-  ] as readonly string[] | undefined;
-  if (!exact?.includes(capability)) return false;
-  if (capability.startsWith("workspace-service:")) {
-    return workspaceServicePrincipals(capability).includes("code");
-  }
-  if (capability.startsWith("rpc:")) {
-    return (PRODUCT_DIRECT_AUTHORITY_CAPABILITIES as readonly string[]).includes(capability);
-  }
-  return true;
-}
-
-export function productPrincipalHasCapability(
-  kind: Exclude<PrincipalKind, "code">,
-  capability: string
-): boolean {
-  if (
-    [
-      "panel-hosting",
-      "window-management",
-      "open-external",
-      "native-menus",
-      "notifications",
-    ].includes(capability)
-  ) {
-    return kind === "host" || kind === "user";
-  }
-  if (capability === "devHost.admin") return kind === "host" || kind === "user";
-  if (capability.startsWith("workspace-service:")) {
-    return workspaceServicePrincipals(capability).includes(kind);
-  }
-  return (
-    PRODUCT_AUTHORITY_GRANT_CATALOG.principalCapabilities[kind] as readonly string[]
-  ).includes(capability);
-}
-
-function workspaceServicePrincipals(capability: string): readonly PrincipalKind[] {
-  const name = capability.slice("workspace-service:".length);
-  return (
-    PRODUCT_AUTHORITY_GRANT_CATALOG.workspaceServicePrincipalsByName[
-      name as keyof typeof PRODUCT_AUTHORITY_GRANT_CATALOG.workspaceServicePrincipalsByName
-    ] ?? []
-  );
 }
 
 function productGrant(
@@ -134,7 +81,6 @@ function productGrant(
     effect: "allow",
     issuedBy: getProductBootManifest().hostPrincipal,
     createdAt: now,
-    binding: { kind: "principal" },
-    provenance: "product-authority-catalog-v1",
+    provenance: "reviewed-product-admission-v1",
   };
 }

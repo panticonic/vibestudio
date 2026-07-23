@@ -12,7 +12,6 @@ import type {
   PanelLifecycleResult,
   PanelNavigationState,
   PanelRecoverySnapshot,
-  PanelSnapshot,
   PanelTreeSnapshot,
   PaletteCommand,
   ThemeConfig,
@@ -94,8 +93,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   private currentTheme: "light" | "dark" = "dark";
   /** App-wide theme identity, broadcast to panels alongside appearance. */
   private currentThemeConfig: ThemeConfig = {
-    accentColor: "amber",
-    grayColor: "slate",
+    accentColor: "violet",
+    grayColor: "mauve",
     radius: "medium",
     scaling: "100%",
     panelBackground: "translucent",
@@ -284,12 +283,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       contextId?: string;
     } | null;
     if (!result) return null;
-    await this.rebuildViewAfterServerNavigate(
-      panelId,
-      result.source ?? source,
-      result.contextId,
-      options
-    );
     return { id: result.id ?? panelId, title: result.title ?? "" };
   }
 
@@ -307,37 +300,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       contextId?: string;
     } | null;
     if (!result) return null;
-    await this.rebuildViewAfterServerNavigate(panelId, result.source ?? "", result.contextId);
     return { id: result.id ?? panelId, title: result.title ?? "" };
-  }
-
-  /**
-   * Rebuild a panel's view after a server-side navigate/history mutation. The
-   * desktop applies the broadcast to its registry mirror but does NOT re-sync the
-   * panelManager's entity cache, so we explicitly refresh it (otherwise the lease
-   * would target the retired previous entity). Browser panels are driven by their
-   * own webContents (already navigated), so they only record the source change.
-   */
-  private async rebuildViewAfterServerNavigate(
-    panelId: string,
-    newSource: string,
-    contextId: string | undefined,
-    options?: Record<string, unknown>
-  ): Promise<void> {
-    if (!newSource || newSource.startsWith("browser:")) return;
-    await this.shellCore.refreshSlotEntity(asPanelSlotId(panelId));
-    this.runtime.beginNavigation(panelId);
-    if (contextId) {
-      this.runtime.prepareViewForSnapshot(panelId, {
-        source: newSource,
-        contextId,
-        options: {},
-      } as PanelSnapshot);
-    }
-    await this.attachCreatedPanel(
-      { panelId, title: "", contextId, source: newSource, options },
-      { focus: true }
-    );
   }
 
   async createBrowserUrlPanel(
@@ -521,25 +484,28 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     for (const entry of this.registry.listPanels()) {
       const panel = this.registry.getPanel(entry.panelId);
       if (!panel || getPanelSource(panel) !== source) continue;
-      const viewUrl = this.hasPanelView(entry.panelId)
-        ? (this.getPanelUrl(entry.panelId) ?? undefined)
-        : undefined;
       if (error) {
         this.registry.updateArtifacts(entry.panelId, {
           ...panel.artifacts,
-          htmlPath: viewUrl,
           buildState: "error",
           buildRevision: this.runtime.getBuildRevision(source),
           error,
           buildProgress: error,
         });
       } else {
+        // A source build completing does not select an immutable runtime image
+        // for every slot that references that source. The authoritative tree
+        // supplies that identity, and createViewForPanel's completed navigation
+        // is the readiness signal. Treating this broadcast as activation both
+        // fabricated "ready" state for unloaded slots and tried to reconstruct
+        // URLs before their sealed buildKey had reached the desktop.
         this.registry.updateArtifacts(entry.panelId, {
           ...panel.artifacts,
-          htmlPath: viewUrl,
-          buildState: "ready",
           buildRevision: this.runtime.getBuildRevision(source),
-          buildProgress: undefined,
+          buildProgress:
+            panel.artifacts.buildState === "ready"
+              ? undefined
+              : "Build complete — waiting for runtime activation",
           error: undefined,
         });
       }

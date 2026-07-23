@@ -1,6 +1,10 @@
 import type { UnitRegistryEntryBase } from "@vibestudio/unit-host";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
+import type {
+  UserlandApprovalChoice as SharedUserlandApprovalChoice,
+  UserlandApprovalRequest as SharedUserlandApprovalRequest,
+} from "@vibestudio/shared/approvals";
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
@@ -29,32 +33,9 @@ export interface ExtensionInvocation {
   };
 }
 
-export interface UserlandApprovalRequest {
-  subject: { id: string; label?: string };
-  title: string;
-  summary?: string;
-  warning?: string;
-  details?: Array<{ label: string; value: string; format?: "plain" | "markdown" | "code" }>;
-  positiveEvidence?: Array<{
-    label: string;
-    value: string;
-    format?: "plain" | "markdown" | "code";
-  }>;
-  severity?: "standard" | "dangerous";
-  defaultAction?: "allow" | "deny";
-  promptOptions?: "scoped" | "choices";
-  options?: Array<{
-    value: string;
-    label: string;
-    description?: string;
-    tone?: "primary" | "danger" | "neutral";
-  }>;
-}
-
-export type UserlandApprovalChoice =
-  | { kind: "choice"; choice: string }
-  | { kind: "dismissed" }
-  | { kind: "uncallable"; reason: "no-user-context" };
+/** The one shared approval-card contract used by extensions, workers, desktop, and mobile. */
+export type UserlandApprovalRequest = SharedUserlandApprovalRequest;
+export type UserlandApprovalChoice = SharedUserlandApprovalChoice;
 
 export interface ExtensionSource {
   kind: "workspace-repo";

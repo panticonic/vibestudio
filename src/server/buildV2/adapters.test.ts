@@ -39,13 +39,15 @@ describe("reactAdapter", () => {
   it("dedupes react + react-dom across chunks", () => {
     expect(adapter.dedupePackages).toContain("react");
     expect(adapter.dedupePackages).toContain("react-dom");
+    expect(adapter.dedupePackages).toContain("@radix-ui/react-icons");
+    expect(adapter.dedupePackages).toContain("@radix-ui/themes");
   });
 
   it("generates an entry that mounts via autoMountReactPanel and imports radix styles", () => {
     const entry = adapter.generateEntry("expose", "entry");
-    // References the React auto-mount helper from @workspace/react.
+    // References the focused React auto-mount entry rather than the full hooks barrel.
     expect(entry).toContain("autoMountReactPanel");
-    expect(entry).toContain("@workspace/react");
+    expect(entry).toContain("@workspace/react/auto-mount");
     // Imports the radix design-system stylesheet so panels render without a CDN.
     expect(entry).toContain("@radix-ui/themes/styles.css");
     // Imports both the expose side-effect file and the user entry module.

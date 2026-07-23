@@ -69,7 +69,7 @@ function makeRecord(
     ...(opts?.activeAuthority
       ? { activeAuthority: opts.activeAuthority }
       : executable
-        ? { activeAuthority: { requests: [], delegations: [] } }
+        ? { activeAuthority: { requests: [], evalCeilings: [] } }
         : {}),
     key: id,
     createdAt: Date.now(),
@@ -95,6 +95,10 @@ type TestRpcServer = {
   sessions: { hasSession(callerId: string): boolean };
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>;
   pendingAuthentications: Map<unknown, ReturnType<typeof setTimeout> | null>;
+  verifiedCallerFor(
+    callerId: string,
+    callerKind: CallerKind
+  ): ReturnType<typeof createVerifiedCaller>;
   connectionReconnectWaiters: Map<string, { resolve: () => void; reject: (err: Error) => void }>;
   reconnectWaiters: Map<
     string,
@@ -129,6 +133,15 @@ type TestRpcServer = {
     method: string,
     args: unknown[]
   ): Promise<unknown>;
+  directDOAuthorization(input: {
+    caller: ReturnType<typeof createVerifiedCaller>;
+    ref: { source: string; className: string; objectKey: string };
+    method: string;
+    args: readonly unknown[];
+    readOnly?: boolean;
+    waitForAuthority?: boolean;
+    signal?: AbortSignal;
+  }): Promise<import("@vibestudio/rpc").DirectAuthorityAttestation>;
   streamCallTarget(targetId: string, method: string, ...args: unknown[]): Promise<Response>;
   relayTargetStream(
     caller: ReturnType<typeof createVerifiedCaller>,
@@ -1933,8 +1946,15 @@ describe("RpcServer relay behavior", () => {
         effectiveVersion: "ev-chat",
         activeExecutionDigest: "a".repeat(64),
         activeAuthority: {
-          requests: [{ capability: "rpc:subscribe", resource: { kind: "prefix", prefix: "" } }],
-          delegations: [],
+          requests: [
+            {
+              capability: "rpc:subscribe",
+              resource: { kind: "prefix", prefix: "" },
+              tier: "gated",
+              evidence: "intentional-broad",
+            },
+          ],
+          evalCeilings: [],
         },
       })
     );
@@ -1957,8 +1977,9 @@ describe("RpcServer relay behavior", () => {
       effectiveVersion: "ev-chat",
       executionDigest: "a".repeat(64),
       requested: [{ capability: "rpc:subscribe", resource: { kind: "prefix", prefix: "" } }],
-      delegations: [],
+      evalCeilings: [],
     });
+    client.caller.codeApproved = true;
     const request = {
       type: "stream-request" as const,
       requestId: "routed-stream-authority-1",
@@ -1986,6 +2007,238 @@ describe("RpcServer relay behavior", () => {
           capability: "rpc:subscribe",
         }),
       ],
+    });
+  });
+
+  it("routes missing critical direct authority through the shared acquisition protocol", async () => {
+    const request = vi.fn(() => ({
+      acquisitionId: "acq:remove-member",
+      ownerRuntimeId: "panel:nav-a",
+      snapshotDigest: "d".repeat(64),
+      capability: "channel.members.remove",
+      resourceKey: "do:workers/pubsub-channel:PubSubChannel:chat-a",
+      tier: "critical" as const,
+      cardType: "confirm.critical" as const,
+      renderedAction: "remove someone from a shared conversation",
+      pending: true,
+    }));
+    const { server } = createServer({
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:channel",
+          methodEffect: { kind: "semantic", capability: "channel.members.remove" },
+          methodCapability: "channel.members.remove",
+          methodTier: "critical",
+          principals: ["code"],
+        },
+      ],
+      directAuthorityAcquirer: {
+        request,
+        acquire: vi.fn(),
+        consume: vi.fn(() => true),
+        invalidate: vi.fn(),
+      },
+    });
+    const caller = createVerifiedCaller("panel:nav-a", "panel", {
+      callerId: "panel:nav-a",
+      callerKind: "panel",
+      repoPath: "panels/chat",
+      effectiveVersion: "ev-chat",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "channel.members.remove", resource: { kind: "prefix", prefix: "" } },
+        { capability: "workspace-service:channel", resource: { kind: "prefix", prefix: "" } },
+      ],
+      evalCeilings: [],
+    });
+    delete caller.codeApproved;
+
+    await expect(
+      testServer(server).directDOAuthorization({
+        caller,
+        ref: {
+          source: "workers/pubsub-channel",
+          className: "PubSubChannel",
+          objectKey: "chat-a",
+        },
+        method: "removeMember",
+        args: [{ userId: "user-2" }],
+      })
+    ).rejects.toMatchObject({
+      code: "EACQUIRE",
+      errorData: { acquisition: { acquisitionId: "acq:remove-member" } },
+    });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tier: "critical",
+        renderedAction: "remove a person from a shared conversation",
+        snapshot: expect.objectContaining({
+          capability: "channel.members.remove",
+          targetCapability: "workspace-service:channel",
+        }),
+      })
+    );
+  });
+
+  it("preserves the active build's exact runtime-intrinsic effect in direct attestations", async () => {
+    const { server } = createServer({
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:probe",
+          methodEffect: { kind: "runtime-intrinsic" },
+          methodTier: "open",
+          principals: ["code"],
+        },
+      ],
+    });
+    const caller = createVerifiedCaller("panel:nav-a", "panel", {
+      callerId: "panel:nav-a",
+      callerKind: "panel",
+      repoPath: "panels/chat",
+      effectiveVersion: "ev-chat",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "workspace-service:probe", resource: { kind: "prefix", prefix: "" } },
+      ],
+      evalCeilings: [],
+    });
+    caller.codeApproved = true;
+
+    const attestation = await testServer(server).directDOAuthorization({
+      caller,
+      ref: {
+        source: "workers/probe",
+        className: "ProbeDO",
+        objectKey: "probe-a",
+      },
+      method: "seedRows",
+      args: [],
+    });
+
+    expect(attestation).toMatchObject({
+      effect: { kind: "runtime-intrinsic" },
+      capability: "workspace-service:probe",
+      targetCapability: "workspace-service:probe",
+    });
+  });
+
+  it("enforces gated workspace-service admission even when the direct method is open", async () => {
+    const request = vi.fn(() => ({
+      acquisitionId: "acq:channel",
+      ownerRuntimeId: "panel:nav-a",
+      snapshotDigest: "d".repeat(64),
+      capability: "workspace-service:channel",
+      resourceKey: "do:workers/pubsub-channel:PubSubChannel:chat-a",
+      tier: "gated" as const,
+      cardType: "permission.gated" as const,
+      renderedAction: "use a workspace service",
+      pending: true,
+    }));
+    const { server } = createServer({
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:channel",
+          methodEffect: { kind: "workspace-service" },
+          methodCapability: "workspace-service:channel",
+          methodTier: "open",
+          principals: ["code"],
+        },
+      ],
+      directAuthorityAcquirer: {
+        request,
+        acquire: vi.fn(),
+        consume: vi.fn(() => true),
+        invalidate: vi.fn(),
+      },
+    });
+    const caller = createVerifiedCaller("panel:nav-a", "panel", {
+      callerId: "panel:nav-a",
+      callerKind: "panel",
+      repoPath: "panels/chat",
+      effectiveVersion: "ev-chat",
+      executionDigest: "a".repeat(64),
+      requested: [
+        {
+          capability: "workspace-service:channel",
+          resource: { kind: "prefix", prefix: "" },
+        },
+      ],
+      evalCeilings: [],
+    });
+    delete caller.codeApproved;
+
+    await expect(
+      testServer(server).directDOAuthorization({
+        caller,
+        ref: {
+          source: "workers/pubsub-channel",
+          className: "PubSubChannel",
+          objectKey: "chat-a",
+        },
+        method: "subscribe",
+        args: ["panel:nav-a", {}],
+      })
+    ).rejects.toMatchObject({ code: "EACQUIRE" });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tier: "gated",
+        snapshot: expect.objectContaining({ capability: "workspace-service:channel" }),
+      })
+    );
+  });
+
+  it("keeps an agent binding as a relationship fact rather than inventing a session origin", async () => {
+    const mission = {
+      missionId: "mission-local-model",
+      closureDigest: "closure-1",
+      harness: { unit: "workers/agent-worker", ev: "ev-agent" },
+    };
+    const contextIntegrity = {
+      class: "external" as const,
+      latchEpoch: 3,
+      externalKeys: ["web:models.example"],
+    };
+    const { server, entityCache } = createServer({
+      missionFactForSession: (sessionId) => (sessionId === "channel-stable" ? mission : null),
+      contextIntegrityFactForSession: (sessionId) => {
+        expect(sessionId).toBe("channel-stable");
+        return contextIntegrity;
+      },
+    });
+    const targetId = "do:workers/local-model:AiChatWorker:model-a";
+    entityCache._onActivate(makeRecord(targetId, "do", { repoPath: "workers/local-model" }));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+    const fetchMock = vi.fn().mockResolvedValue(new Response("streamed", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createClient("agent:local-model");
+    client.caller = createVerifiedCaller(
+      "agent:local-model",
+      "agent",
+      null,
+      {
+        agentId: "agent:local-model",
+        entityId: "agent:local-model",
+        contextId: "ctx-model",
+        channelId: "channel-stable",
+      },
+      { userId: "user-1", handle: "user1" }
+    );
+    await handleRoute(server, client, targetId, {
+      type: "stream-request",
+      requestId: "transport-request-is-not-session",
+      fromId: "agent:local-model",
+      method: "chat",
+      args: [],
+    });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const relayed = JSON.parse(String((init as RequestInit).body)) as RpcEnvelope;
+    expect(relayed.delivery.caller.authorization?.context).toMatchObject({
+      authorizingOrigin: { kind: "user", principal: "user:user-1" },
+      session: { id: "channel-stable", mission },
+      contextIntegrity,
     });
   });
 
@@ -2228,6 +2481,37 @@ describe("RpcServer live caller gate", () => {
 });
 
 describe("RpcServer caller identity", () => {
+  it("retains sealed code attribution without granting an unapproved exact version", () => {
+    const isCodeApproved = vi.fn(() => false);
+    const { server, entityCache } = createServer({ isCodeApproved });
+    entityCache._onActivate(
+      makeRecord("worker:review-me", "worker", {
+        repoPath: "workers/review-me",
+        effectiveVersion: "ev-review-me",
+        activeAuthority: {
+          requests: [
+            {
+              capability: "notifications",
+              resource: { kind: "exact", key: "workspace" },
+              tier: "gated",
+              evidence: "exact",
+            },
+          ],
+          evalCeilings: [],
+        },
+      })
+    );
+
+    const caller = testServer(server).verifiedCallerFor("worker:review-me", "worker");
+
+    expect(caller.code).toMatchObject({
+      repoPath: "workers/review-me",
+      effectiveVersion: "ev-review-me",
+    });
+    expect(caller.codeApproved).toBeUndefined();
+    expect(isCodeApproved).toHaveBeenCalledWith(caller.code);
+  });
+
   it("accepts an existing exact causal parent only for the presenter's bound trajectory", async () => {
     const { server, entityCache } = createServer();
     const binding = {

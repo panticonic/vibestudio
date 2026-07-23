@@ -18,8 +18,9 @@
  *
  * DESIGN NOTE (build-key hermeticity): computeBuildKey additionally folds in a
  * "root-dependency fingerprint" hashed from host-root package/lock/workspace
- * files plus the nested workspace package/lock/workspace/tsconfig files (see
- * computeRootDependencyFingerprint). These files are read off live disk. The
+ * files, the exact local `packages/*` implementation trees workspace builds
+ * can bundle, plus nested workspace package/lock/workspace/tsconfig files (see
+ * computeRootDependencyFingerprint). These inputs are read off live disk. The
  * app/workspace roots are now injected explicitly (setBuildRootConfig) rather
  * than guessed from process.cwd(). A future design step should move these inputs
  * into GAD workspace state so the whole build key is derived from
@@ -226,10 +227,10 @@ export function persistEvState(state: Omit<PersistedEvState, "version">): void {
  * Increment when build logic changes (plugins, esbuild options, shims) OR when
  * the build-key derivation itself changes, to invalidate all cached builds.
  *
- * "20": build inputs, EVs, and dependency fingerprints now retain the full
- * SHA-256. Short cache identifiers must never leak into executable identity.
+ * "21": panel/browser bundles use linked external source maps, preload
+ * runtime/bootstrap assets, and deduplicate shared React/Radix dependencies.
  */
-const BUILD_CACHE_VERSION = "20";
+const BUILD_CACHE_VERSION = "22";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the
@@ -281,6 +282,8 @@ export interface RootDependencyFingerprintInfo {
 let injectedAppRoot: string | null = null;
 let injectedWorkspaceRoot: string | null = null;
 let rootFingerprintLogged = false;
+let localPackageFingerprintCache: { root: string; files: RootDependencyFingerprintFile[] } | null =
+  null;
 
 /**
  * Inject the host app root and optional workspace root used to locate the
@@ -295,6 +298,7 @@ export function setBuildRootConfig(
 ): void {
   injectedAppRoot = config?.appRoot ?? null;
   injectedWorkspaceRoot = config?.workspaceRoot ?? null;
+  localPackageFingerprintCache = null;
 }
 
 function resolveAppRoot(): { root: string; source: RootDependencyFingerprintInfo["rootSource"] } {
@@ -306,6 +310,78 @@ function resolveAppRoot(): { root: string; source: RootDependencyFingerprintInfo
 
 function fullHash(data: crypto.BinaryLike): string {
   return crypto.createHash("sha256").update(data).digest("hex");
+}
+
+const IGNORED_LOCAL_PACKAGE_ENTRIES = new Set([
+  ".DS_Store",
+  ".cache",
+  ".git",
+  ".turbo",
+  "coverage",
+  "node_modules",
+]);
+
+function localPackageTreeHash(packageDir: string): string {
+  const hash = crypto.createHash("sha256");
+  const visit = (dir: string, relativeDir: string): void => {
+    const entries = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (IGNORED_LOCAL_PACKAGE_ENTRIES.has(entry.name) || entry.name.endsWith(".tsbuildinfo")) {
+        continue;
+      }
+      const absolute = path.join(dir, entry.name);
+      const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        visit(absolute, relative);
+      } else if (entry.isSymbolicLink()) {
+        hash.update(`link\0${relative}\0${fs.readlinkSync(absolute)}\0`);
+      } else if (entry.isFile()) {
+        hash.update(`file\0${relative}\0`);
+        hash.update(fs.readFileSync(absolute));
+        hash.update("\0");
+      }
+    }
+  };
+  visit(packageDir, "");
+  return hash.digest("hex");
+}
+
+/**
+ * Aggregate each host-local package into one observable input. Workspace
+ * bundles resolve these packages through the root workspace, so lockfile-only
+ * identity is unsound: a source/dist edit must invalidate every consuming
+ * workspace build even when no manifest changed.
+ */
+function localPackageFingerprintInputs(root: string): RootDependencyFingerprintFile[] {
+  if (localPackageFingerprintCache?.root === root) {
+    return localPackageFingerprintCache.files;
+  }
+  const packagesDir = path.join(root, "packages");
+  let directories: fs.Dirent[] = [];
+  try {
+    directories = fs
+      .readdirSync(packagesDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    // A packaged deployment may have no host-local package workspace.
+  }
+  const files = directories.flatMap((entry): RootDependencyFingerprintFile[] => {
+    const packageDir = path.join(packagesDir, entry.name);
+    if (!fs.existsSync(path.join(packageDir, "package.json"))) return [];
+    return [
+      {
+        file: `packages/${entry.name}/**`,
+        path: packageDir,
+        present: true,
+        contentHash: localPackageTreeHash(packageDir),
+      },
+    ];
+  });
+  localPackageFingerprintCache = { root, files };
+  return files;
 }
 
 function dependencyFingerprintInputs(root: string): Array<{ file: string; path: string }> {
@@ -334,7 +410,7 @@ function computeRootDependencyFingerprint(): RootDependencyFingerprintInfo {
 
   const hash = crypto.createHash("sha256");
   // Domain tag; bumped when the input set/encoding changes.
-  hash.update("root-deps-v3\0");
+  hash.update("root-deps-v4\0");
 
   const files: RootDependencyFingerprintFile[] = [];
   for (const input of dependencyFingerprintInputs(root)) {
@@ -358,6 +434,13 @@ function computeRootDependencyFingerprint(): RootDependencyFingerprintInfo {
     }
     files.push({ file, path: filePath, present, contentHash });
   }
+  for (const input of localPackageFingerprintInputs(root)) {
+    hash.update(input.file);
+    hash.update("\0tree\0");
+    hash.update(input.contentHash ?? "absent");
+    hash.update("\0");
+    files.push(input);
+  }
 
   const info: RootDependencyFingerprintInfo = {
     root,
@@ -368,11 +451,14 @@ function computeRootDependencyFingerprint(): RootDependencyFingerprintInfo {
 
   if (!rootFingerprintLogged) {
     rootFingerprintLogged = true;
-    const summary = info.files
+    const ordinaryFiles = info.files.filter((file) => !file.file.endsWith("/**"));
+    const localPackages = info.files.filter((file) => file.file.endsWith("/**"));
+    const summary = ordinaryFiles
       .map((f) => `${f.file}=${f.present ? (f.contentHash ?? "?") : "absent"}`)
       .join(" ");
     console.log(
-      `[BuildV2] root-deps fingerprint ${info.value} (root=${info.root} via ${info.rootSource}): ${summary}`
+      `[BuildV2] root-deps fingerprint ${info.value} (root=${info.root} via ${info.rootSource}): ` +
+        `${summary}; ${localPackages.length} local package implementation tree(s)`
     );
   }
 

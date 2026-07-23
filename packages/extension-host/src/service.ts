@@ -23,6 +23,7 @@ import type {
   BuildProviderTarget,
 } from "@vibestudio/shared/buildProvider";
 import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibestudio/shared/approvals";
+import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import {
   parseWorkspaceConfigContentWithId,
   resolveDeclaredExtensions,
@@ -35,23 +36,25 @@ import {
 import {
   UnitHost,
   UnitRegistry,
-  UnitSourceChangeGrantStore,
   UnitTrustResolver,
-  authorizeUnitSourceChange,
+  FileUnitIdentityApprovalStore,
   collectTransitiveUnitDependencyEvs,
   createPendingUnitRegistryEntry,
   createUnitBuildIdentity,
   createUnitBatchEntryBase,
+  canonicalUnitBuildIdentity,
   findUnitGraphNode,
   normalizeUnitRepoPath as normalizeRepoPath,
   normalizeUnitRef as normalizeRef,
   requestUnitBatchApproval,
+  readUnitAuthorityReview,
+  authorityReviewFromPackageJson,
   unitBuildIdentityFromRegistryEntry,
   type UnitDeclaration,
   type UnitApprovalCoordinator,
   type UnitBuildIdentity,
   type UnitDescriptor,
-  type UnitMetaChangeApprovalProvider,
+  type UnitChangeApprovalProvider,
   type UnitReconcileTrigger,
   type UnitWorkspaceStatus,
 } from "@vibestudio/unit-host";
@@ -115,6 +118,16 @@ interface BuildSystemLike {
     artifacts: ExtensionBuildArtifactLike[];
   } | null;
   getEffectiveVersion(unitName: string): string | null;
+  resolveBuildUnitIdentity?(
+    unitPath: string,
+    ref?: string
+  ): Promise<{
+    unitPath: string;
+    unitName: string;
+    effectiveVersion: string;
+    dependencyEvs: Record<string, string>;
+    externalDeps: Record<string, string>;
+  } | null>;
   getExternalDeps(unitName: string): Record<string, string>;
   getGraph(): {
     allNodes(): Array<{
@@ -151,8 +164,8 @@ interface ExtensionBuildMetadataLike {
   sourceStateHash?: string | null;
   execution?: { executionDigest: string };
   authority?: {
-    requests: readonly import("@vibestudio/rpc").CapabilityScope[];
-    delegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
+    requests: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
+    evalCeilings: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityCeiling[];
   };
   details?:
     | {
@@ -220,7 +233,7 @@ interface ApprovalQueueLike {
           units: PendingUnitBatchApproval["units"];
           configWrite?: PendingUnitBatchApproval["configWrite"];
         }
-  ): Promise<"once" | "session" | "version" | "deny">;
+  ): Promise<"once" | "session" | "version" | "deny" | "dismiss">;
 }
 
 interface NotificationServiceLike {
@@ -232,6 +245,7 @@ export interface ExtensionHostDeps {
   workspacePath: string;
   workspaceId: string;
   readWorkspaceFileAtState(stateHash: string, filePath: string): Promise<string | null>;
+  describeCapability?: CapabilityPresentationResolver;
   buildSystem: BuildSystemLike;
   tokenManager: TokenManager;
   eventService: EventService;
@@ -261,7 +275,7 @@ export interface ExtensionHostDeps {
   hostProviderContracts: Readonly<Record<string, readonly string[]>>;
 }
 
-export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
+export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
   readonly registry: UnitRegistry<RegistryEntry>;
   readonly processes: ExtensionProcessManager;
   private readonly extensionTrustResolver: UnitTrustResolver<RegistryEntry>;
@@ -279,7 +293,6 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   private activeInvocations = new Map<string, ActiveExtensionInvocation>();
   private registeredBuildProviderTargets = new Map<string, Set<BuildProviderTarget>>();
   private activationTails = new Map<string, Promise<void>>();
-  private readonly sourceChangeGrants: UnitSourceChangeGrantStore;
 
   constructor(private readonly deps: ExtensionHostDeps) {
     this.registry = new UnitRegistry<RegistryEntry>({
@@ -289,7 +302,6 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     this.extensionTrustResolver = new UnitTrustResolver<RegistryEntry>({
       entryIdentity: (entry) => this.registryEntryBuildIdentity(entry),
     });
-    this.sourceChangeGrants = new UnitSourceChangeGrantStore({ statePath: deps.statePath });
     this.processes = new ExtensionProcessManager({
       onStatus: (name, status, error) => {
         if (status === "running") {
@@ -356,8 +368,13 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       resolveNode: (source) => this.findExtensionNode(source),
       candidateIdentity: (node, decl) => this.declarationBuildIdentity(node, decl.ref),
       trustResolver: this.extensionTrustResolver,
+      approvalStore: new FileUnitIdentityApprovalStore({
+        statePath: deps.statePath,
+        unitKind: "extension",
+      }),
       makePendingEntry: (node, decl, building) => this.pendingEntryFor(node, decl, building),
       applyTrusted: (node, decl) => this.applyDeclared(node, decl),
+      applyGroup: (node) => (this.activatesEagerly(node) ? 0 : 1),
       removeUndeclared: async (entry) => {
         this.unregisterBuildProvidersFor(entry.name);
         try {
@@ -462,6 +479,18 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   }
 
   /**
+   * Describe every declaration that still needs an exact-version decision
+   * without building or activating it. Startup uses this planning phase to put
+   * deferred extensions in the same review as apps, panels, and workers.
+   */
+  reviewDeclared(
+    declared: UnitDeclaration[]
+  ): { units: UnitBatchEntry[]; identityKeys: string[] } {
+    const review = this.unitHost.approvalForDeclarations(declared);
+    return { units: review.entries, identityKeys: review.identityKeys };
+  }
+
+  /**
    * Test/diagnostic hook: resolves once the synchronous reconcile AND any
    * background joint-approval flow it kicked off have settled.
    */
@@ -491,7 +520,13 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
           this.validateExtensionManifestAtPath(node.path, node.name),
         needsBuildRefresh: (entry) => this.needsBuildRefresh(entry, node),
         buildAndActivate: async (_node, d) => this.buildAndActivate(node.name, d.ref),
-        activateCurrent: async () => this.activate(node.name),
+        activateCurrent: async () => {
+          if (this.activatesEagerly(node)) {
+            await this.ensureActivated(node.name);
+          } else {
+            this.registry.patch(node.name, { status: "available", lastError: null });
+          }
+        },
       });
     } catch (error) {
       console.error(
@@ -564,13 +599,89 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     await this.processes.shutdown();
   }
 
-  async metaChangeApprovalForCommit(
+  async unitChangeApprovalForCommit(
     commit: string
   ): Promise<{ units: UnitBatchEntry[]; identityKeys: string[] }> {
-    const approval = this.unitHost.approvalForDeclarations(
-      await this.readDeclaredExtensionsFromCommit(commit)
-    );
-    return { units: approval.entries, identityKeys: approval.identityKeys };
+    const units: UnitBatchEntry[] = [];
+    const identityKeys: string[] = [];
+    for (const declaration of await this.readDeclaredExtensionsFromCommit(commit)) {
+      const candidate = await this.deps.buildSystem.resolveBuildUnitIdentity?.(
+        declaration.source,
+        commit
+      );
+      if (!candidate) {
+        throw new Error(`Cannot resolve extension ${declaration.source} at ${commit}`);
+      }
+      const packageJsonSource = await this.deps.readWorkspaceFileAtState(
+        commit,
+        `${candidate.unitPath}/package.json`
+      );
+      if (!packageJsonSource) {
+        throw new Error(
+          `Candidate extension manifest is missing at ${candidate.unitPath}/package.json`
+        );
+      }
+      const packageJson = JSON.parse(packageJsonSource) as {
+        name?: unknown;
+        version?: unknown;
+        vibestudio?: { displayName?: unknown; authority?: unknown; extension?: unknown };
+      };
+      if (packageJson.name !== candidate.unitName || !packageJson.vibestudio?.extension) {
+        throw new Error(`Candidate extension package does not match ${candidate.unitName}`);
+      }
+      const capabilities = extensionRuntimeCapabilities();
+      const identity = createUnitBuildIdentity({
+        unitKind: "extension" as const,
+        name: candidate.unitName,
+        sourceRepo: candidate.unitPath,
+        ref: declaration.ref,
+        effectiveVersion: candidate.effectiveVersion,
+        dependencyEvs: candidate.dependencyEvs,
+        externalDeps: candidate.externalDeps,
+        capabilities,
+      });
+      const identityKey = canonicalUnitBuildIdentity(identity);
+      const active = this.registry.get(candidate.unitName);
+      if (
+        active?.activeBundleKey &&
+        canonicalUnitBuildIdentity(this.registryEntryBuildIdentity(active)) === identityKey
+      ) {
+        continue;
+      }
+      const previousAuthority = active?.activeBundleKey
+        ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
+            requests: [],
+            evalCeilings: [],
+          })
+        : { requests: [], evalCeilings: [] };
+      units.push({
+        ...createUnitBatchEntryBase({
+          unitKind: "extension",
+          name: candidate.unitName,
+          displayName:
+            typeof packageJson.vibestudio.displayName === "string"
+              ? packageJson.vibestudio.displayName
+              : candidate.unitName,
+          version: typeof packageJson.version === "string" ? packageJson.version : "unknown",
+          sourceRepo: candidate.unitPath,
+          ref: declaration.ref,
+          effectiveVersion: candidate.effectiveVersion,
+          dependencyEvs: candidate.dependencyEvs,
+          externalDeps: candidate.externalDeps,
+        }),
+        target: null,
+        capabilities,
+        authority: authorityReviewFromPackageJson(
+          packageJsonSource,
+          candidate.unitName,
+          previousAuthority,
+          this.deps.describeCapability,
+          "extension"
+        ),
+      });
+      identityKeys.push(identityKey);
+    }
+    return { units, identityKeys };
   }
 
   acceptPreapprovedTrust(keys: Iterable<string>): void {
@@ -643,8 +754,12 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     // can park a low-value call to an already-running extension behind an unrelated pending
     // extension approval, which in turn can wedge eval/tool callers that are just awaiting an
     // extension-backed helper.
-    await this.whenReconciled();
-    const entry = this.lookupForInvoke(name);
+    await this.whenDeclarationsStaged();
+    let entry = this.lookupForInvoke(name);
+    if (!entry) {
+      await this.waitForTargetActivation(name, ctx.signal);
+      entry = this.lookupForInvoke(name);
+    }
     if (!entry) {
       throw new ServiceError(
         "extensions",
@@ -653,15 +768,8 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         "ENOEXT"
       );
     }
+    await this.ensureTargetRunning(entry, ctx.signal, operation);
     const invocation = this.createTrackedInvocation(ctx, entry.name, invocationMethod);
-    if (!this.processes.isRunning(entry.name)) {
-      throw new ServiceError(
-        "extensions",
-        operation,
-        `Extension is not running: ${entry.name}`,
-        "ENOTREADY"
-      );
-    }
     try {
       return await call(entry, invocation);
     } catch (error) {
@@ -842,8 +950,12 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     args: unknown[]
   ): Promise<Response> {
     // See invoke(): stream calls should not wait behind unrelated extension approval/build work.
-    await this.whenReconciled();
-    const entry = this.lookupForInvoke(name);
+    await this.whenDeclarationsStaged();
+    let entry = this.lookupForInvoke(name);
+    if (!entry) {
+      await this.waitForTargetActivation(name, ctx.signal);
+      entry = this.lookupForInvoke(name);
+    }
     if (!entry) {
       throw new ServiceError(
         "extensions",
@@ -861,15 +973,8 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         "ENOTIMPL"
       );
     }
+    await this.ensureTargetRunning(entry, ctx.signal, "invokeStream");
     const invocation = this.createTrackedInvocation(ctx, entry.name, method);
-    if (!this.processes.isRunning(entry.name)) {
-      throw new ServiceError(
-        "extensions",
-        "invokeStream",
-        `Extension is not running: ${entry.name}`,
-        "ENOTREADY"
-      );
-    }
     try {
       const response = await this.deps.extensionTransport.streamCallTarget(
         entry.name,
@@ -949,7 +1054,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       effectiveVersion: entry.activeEv,
       executionDigest,
       requested: authority.requests,
-      delegations: authority.delegations,
+      evalCeilings: authority.evalCeilings,
     };
   }
 
@@ -1013,6 +1118,82 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     }
     const entry = this.registry.get(resolvedName);
     return entry?.activeBundleKey ? entry : null;
+  }
+
+  /**
+   * A declared, already-approved extension may still be completing its first
+   * build when a panel reaches it. Await only that extension's existing
+   * activation. This neither starts an install nor waits behind unrelated
+   * approvals/builds, and an active previous version remains immediately
+   * callable while an update is prepared.
+   */
+  private async waitForTargetActivation(name: string, signal?: AbortSignal): Promise<void> {
+    let canonicalName = name;
+    try {
+      canonicalName = this.findExtensionNode(name).name;
+    } catch {
+      // Unknown and undeclared names retain the normal fail-fast ENOEXT path.
+    }
+    const entry = this.registry.get(canonicalName);
+    if (!entry || entry.activeBundleKey || entry.status !== "building") return;
+    const activation = this.activationTails.get(canonicalName);
+    if (!activation) return;
+    if (!signal) {
+      await activation;
+      return;
+    }
+    if (signal.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      signal.addEventListener("abort", onAbort, { once: true });
+      void activation.then(
+        () => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(error);
+        }
+      );
+    });
+  }
+
+  private async ensureTargetRunning(
+    entry: RegistryEntry,
+    signal: AbortSignal | undefined,
+    operation: "invoke" | "invokeProvider" | "invokeStream"
+  ): Promise<void> {
+    if (this.processes.isRunning(entry.name)) return;
+    try {
+      await this.processes.whenRunning(entry.name, signal);
+      return;
+    } catch (error) {
+      const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+      if (code !== "ENOTREADY") {
+        throw new ServiceError(
+          "extensions",
+          operation,
+          error instanceof Error ? error.message : `Extension is not running: ${entry.name}`,
+          "ENOTREADY"
+        );
+      }
+    }
+    const activation = this.activationTails.get(entry.name);
+    if (activation) {
+      await activation;
+      if (this.processes.isRunning(entry.name)) return;
+    }
+    try {
+      await this.ensureActivated(entry.name);
+    } catch (error) {
+      throw new ServiceError(
+        "extensions",
+        operation,
+        error instanceof Error ? error.message : `Extension failed to start: ${entry.name}`,
+        "ENOTREADY"
+      );
+    }
   }
 
   private extensionNotInstalledMessage(name: string): string {
@@ -1409,49 +1590,6 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     return filtered.slice(-limit);
   }
 
-  async authorizeSourceChange(request: {
-    caller: VerifiedCaller;
-    repoPath: string;
-    branch: string;
-    commit: string;
-  }): Promise<{ allowed: boolean; reason?: string }> {
-    const repoPath = normalizeRepoPath(request.repoPath);
-    if (repoPath === "meta") {
-      return { allowed: true };
-    }
-    return authorizeUnitSourceChange(
-      {
-        descriptor: EXTENSION_UNIT_DESCRIPTOR,
-        grantStore: this.sourceChangeGrants,
-        grantTtlMs: EXTENSION_DEV_SESSION_TTL_MS,
-        findInstalledByRepo: (source) => this.unitHost.findInstalledByRepo(source),
-        requestApproval: async ({ request: sourceChange, installed, identity, callerKind }) =>
-          this.deps.approvalQueue.request({
-            kind: "unit-batch",
-            callerId: sourceChange.caller.runtime.id,
-            callerKind,
-            ...(sourceChange.caller.subject
-              ? { requestedByUserId: sourceChange.caller.subject.userId }
-              : {}),
-            repoPath: identity.repoPath,
-            effectiveVersion: identity.effectiveVersion,
-            dedupKey: `unit-source-change:extension:${installed.entry.name}:${sourceChange.branch}`,
-            trigger: "source-change",
-            title: `${installed.entry.name} source change`,
-            description: "Accepting this push updates trusted native extension code.",
-            units: [
-              {
-                ...this.buildBatchEntry(installed.node, installed.entry.source.ref),
-                ev: installed.entry.activeEv,
-              },
-            ],
-            configWrite: null,
-          }),
-      },
-      request
-    );
-  }
-
   private async readDeclaredExtensionsFromCommit(commit: string): Promise<UnitDeclaration[]> {
     try {
       const content = await this.deps.readWorkspaceFileAtState(commit, "meta/vibestudio.yml");
@@ -1468,6 +1606,13 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     node: ReturnType<ExtensionHost["findExtensionNode"]>,
     ref: string
   ): UnitBatchEntry {
+    const active = this.registry.get(node.name);
+    const previousAuthority = active?.activeBundleKey
+      ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
+          requests: [],
+          evalCeilings: [],
+        })
+      : { requests: [], evalCeilings: [] };
     return {
       ...createUnitBatchEntryBase({
         unitKind: "extension",
@@ -1482,6 +1627,13 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       }),
       target: null,
       capabilities: extensionRuntimeCapabilities(),
+      authority: readUnitAuthorityReview(
+        node.path,
+        node.name,
+        previousAuthority,
+        this.deps.describeCapability,
+        "extension"
+      ),
     };
   }
 
@@ -1606,6 +1758,16 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     await this.runActivationExclusive(name, () => this.activateOnce(name));
   }
 
+  private async ensureActivated(name: string): Promise<void> {
+    await this.runActivationExclusive(name, async () => {
+      // Recheck inside the serialized operation. Multiple consumers can all
+      // observe an idle target before the first queued activation starts; a
+      // pre-queue check would make each one restart the child in turn.
+      if (this.processes.isRunning(name)) return;
+      await this.activateOnce(name);
+    });
+  }
+
   private async activateOnce(name: string): Promise<void> {
     const entry = this.registry.get(name);
     if (!entry?.activeBundleKey) throw new Error(`Extension has no active approved build: ${name}`);
@@ -1635,6 +1797,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   private async buildAndActivateOnce(name: string, ref?: string): Promise<void> {
     const node = this.findExtensionNode(name);
     const previous = this.registry.get(node.name);
+    const shouldRun = this.activatesEagerly(node) || this.processes.isRunning(node.name);
     this.unitHost.markBuilding(node.name);
     const build = await this.deps.buildSystem.getBuild(node.name, ref);
     const activeSourceHash = requireBuildSourceStateHash(node.name, build);
@@ -1651,8 +1814,9 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       dependencyEvs: activeDependencyEvs,
       externalDeps: activeExternalDeps,
       runtimeDepsKey: extensionMetadataDetails(build.metadata)?.runtimeDepsKey ?? null,
-      status: "building",
+      status: shouldRun ? "building" : "available",
     });
+    if (!shouldRun) return;
     try {
       await this.activateOnce(node.name);
     } catch (err) {
@@ -1814,10 +1978,14 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       nameOrRepo
     );
     const events = node.manifest.extension?.activationEvents ?? ["*"];
-    if (events.some((event) => event !== "*")) {
-      throw new Error(`Extension ${node.name} only supports eager activation in v1`);
+    if (events.length !== 1 || (events[0] !== "*" && events[0] !== "onInvoke")) {
+      throw new Error(`Extension ${node.name} declares an unknown activation event`);
     }
     return node;
+  }
+
+  private activatesEagerly(node: ReturnType<ExtensionHost["findExtensionNode"]>): boolean {
+    return (node.manifest.extension?.activationEvents ?? ["*"]).includes("*");
   }
 
   private storageDirFor(name: string): string {
@@ -1898,7 +2066,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       ],
       configWrite: null,
     });
-    if (decision === "deny") {
+    if (decision === "deny" || decision === "dismiss") {
       throw new ServiceError("extensions", "reload", "Extension reload approval denied", "EACCES");
     }
   }
@@ -2123,8 +2291,6 @@ function extensionPrimaryArtifactPath(build: {
   }
   return path.join(build.dir, artifact.path);
 }
-
-const EXTENSION_DEV_SESSION_TTL_MS = 4 * 60 * 60 * 1000;
 
 function extensionRuntimeCapabilities(): string[] {
   return ["node:fs", "node:child_process", "node:net", "node:process", "userland:*"];

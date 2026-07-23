@@ -31,6 +31,51 @@ function makeStore(handlers: Record<string, (...args: unknown[]) => unknown>) {
 }
 
 describe("WorkspaceEntityStore", () => {
+  it("mirrors reservation and activation as one durable panel lifecycle", async () => {
+    const reserved = {
+      ...RECORD,
+      id: "panel:nav-1",
+      kind: "panel" as const,
+      source: { repoPath: "panels/editor", effectiveVersion: "" },
+      key: "nav-1",
+      status: "preparing" as const,
+    };
+    const active = {
+      ...reserved,
+      source: { repoPath: "panels/editor", effectiveVersion: "ev-1" },
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "e".repeat(64),
+      status: "active" as const,
+    };
+    const { store, entityCache, calls } = makeStore({
+      entityReservePanel: () => reserved,
+      entityAdvanceExecution: () => active,
+    });
+
+    await store.reservePanel({
+      kind: "panel",
+      source: reserved.source,
+      contextId: reserved.contextId,
+      key: reserved.key,
+    });
+    expect(entityCache.resolve(reserved.id)?.status).toBe("preparing");
+    expect(entityCache.resolveActive(reserved.id)).toBeNull();
+
+    await store.advanceExecution({
+      kind: "panel",
+      source: active.source,
+      activeBuildKey: active.activeBuildKey,
+      activeExecutionDigest: active.activeExecutionDigest,
+      contextId: active.contextId,
+      key: active.key,
+    });
+    expect(entityCache.resolveActive(active.id)).toEqual(active);
+    expect(calls.map((call) => call.method)).toEqual([
+      "entityReservePanel",
+      "entityAdvanceExecution",
+    ]);
+  });
+
   it("activate pairs the durable write with the cache mirror atomically", async () => {
     const { store, entityCache, calls } = makeStore({ entityActivate: () => RECORD });
 

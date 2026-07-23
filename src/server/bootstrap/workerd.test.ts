@@ -69,7 +69,7 @@ describe("workerd bootstrap policy", () => {
     });
 
     expect(services.map(({ name, dependencies }) => ({ name, dependencies }))).toEqual([
-      { name: "workerdManager", dependencies: ["fsService"] },
+      { name: "workerdManager", dependencies: ["fsService", "rpcServer"] },
       { name: "doDispatch", dependencies: ["workerdManager"] },
       { name: "workerdWorkspace", dependencies: ["workerdManager", "buildSystem"] },
     ]);

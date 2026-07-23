@@ -8,7 +8,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import type { IncomingMessage, ServerResponse } from "http";
+import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "http";
+import { gunzipSync } from "node:zlib";
 
 // ---------------------------------------------------------------------------
 // extractSourcePath is module-private, so we test the regex logic directly.
@@ -97,18 +98,21 @@ const { PanelHttpServer } = await import("./panelHttpServer.js");
 function createMockResponse(): ServerResponse & {
   body?: unknown;
   statusCodeWritten?: number;
+  headersWritten?: OutgoingHttpHeaders;
 } {
   const res = {
     headersSent: false,
   } as unknown as ServerResponse & {
     body?: unknown;
     statusCodeWritten?: number;
+    headersWritten?: OutgoingHttpHeaders;
     headersSent: boolean;
   };
   res.setHeader = vi.fn() as unknown as ServerResponse["setHeader"];
-  res.writeHead = vi.fn((statusCode: number) => {
+  res.writeHead = vi.fn((statusCode: number, headers?: OutgoingHttpHeaders) => {
     res.headersSent = true;
     res.statusCodeWritten = statusCode;
+    res.headersWritten = headers;
     return res;
   }) as unknown as ServerResponse["writeHead"];
   res.end = vi.fn((body?: unknown) => {
@@ -400,6 +404,40 @@ describe("PanelHttpServer build cache", () => {
     expect(response.statusCodeWritten).toBe(200);
     expect(response.body).toBe("console.log('hi')");
     expect(getBuildByKey).toHaveBeenCalledWith(BUILD_KEY);
+  });
+
+  it("compresses cacheable panel startup artifacts for desktop and mobile clients", async () => {
+    const server = new PanelHttpServer();
+    const source = "console.log('startup');\n".repeat(512);
+    const compressedBuild = {
+      ...buildResult,
+      artifacts: buildResult.artifacts.map((artifact) =>
+        artifact.role === "primary" ? { ...artifact, content: source } : artifact
+      ),
+    } as typeof buildResult;
+    server.storeBuild("panels/my-app", compressedBuild);
+
+    const response = await handlePanelRequest(server, "/panels/my-app/bundle.js", {
+      "accept-encoding": "br;q=0.1, gzip;q=1",
+      "user-agent": "Vibestudio-Mobile",
+    });
+
+    expect(response.headersWritten).toMatchObject({
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Content-Encoding": "gzip",
+      Vary: "Accept-Encoding",
+    });
+    expect(Buffer.isBuffer(response.body)).toBe(true);
+    expect(gunzipSync(response.body as Buffer).toString()).toBe(source);
+  });
+
+  it("keeps the mutable panel HTML pointer out of persistent caches", async () => {
+    const server = new PanelHttpServer();
+    server.storeBuild("panels/my-app", buildResult);
+
+    const response = await handlePanelRequest(server, "/panels/my-app/");
+
+    expect(response.headersWritten?.["Cache-Control"]).toBe("no-store");
   });
 
   it("does not serve a main entry artifact for a referer-less ref-pinned asset path", async () => {

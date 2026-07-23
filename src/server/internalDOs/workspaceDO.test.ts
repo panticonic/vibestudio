@@ -27,9 +27,14 @@ const WORKSPACE_TABLES = [
 const CURRENT_SCHEMA_VERSION = WorkspaceDO.schemaVersion;
 const ACTIVE_AUTHORITY: UnitAuthorityManifest = {
   requests: [
-    { capability: "service:panel.getInfo", resource: { kind: "exact", key: "panel:getInfo" } },
+    {
+      capability: "service:panel.getInfo",
+      resource: { kind: "exact", key: "panel:getInfo" },
+      tier: "gated",
+      evidence: "exact",
+    },
   ],
-  delegations: [],
+  evalCeilings: [],
 };
 
 async function createDbAtSchemaVersion(schemaVersion: number) {
@@ -84,16 +89,31 @@ function activateAlarmKey(
 }
 
 describe("WorkspaceDO exact pre-release schema", () => {
-  it("rejects older workspace state instead of translating partial identities", async () => {
-    const db = await createDbAtSchemaVersion(CURRENT_SCHEMA_VERSION - 1);
-    db.run(`INSERT INTO state (key, value) VALUES ('application-state', 'obsolete')`);
-
-    await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
-      /predates production baseline 24/
+  it("migrates the v24 production schema to the preparing lifecycle without losing rows", async () => {
+    const first = await createTestDO(WorkspaceDOTestable);
+    const existing = first.instance.entityActivate(panelInput());
+    first.db.run(`DELETE FROM _vibestudio_schema_migrations`);
+    first.db.run(
+      `INSERT INTO _vibestudio_schema_migrations (version, name, applied_at)
+       VALUES (24, 'fresh-install:workspace-state-v24', 1)`
     );
-    expect(db.exec(`SELECT value FROM state WHERE key = 'application-state'`)[0]!.values).toEqual([
-      ["obsolete"],
+    first.db.run(`UPDATE state SET value = '24' WHERE key = 'schema_version'`);
+
+    const migrated = await createTestDO(WorkspaceDOTestable, undefined, { db: first.db });
+    expect(migrated.instance.entityResolve(existing.id)).toMatchObject({
+      id: existing.id,
+      status: "active",
+    });
+    expect(
+      first.db.exec(`SELECT version, name FROM _vibestudio_schema_migrations ORDER BY version`)[0]!
+        .values
+    ).toEqual([
+      [24, "fresh-install:workspace-state-v24"],
+      [25, "introduce-preparing-panel-lifecycle"],
     ]);
+    expect(
+      first.db.exec(`SELECT value FROM state WHERE key = 'schema_version'`)[0]!.values
+    ).toEqual([["25"]]);
   });
 
   it("creates one exact fresh schema containing the complete execution identity", async () => {
@@ -190,6 +210,31 @@ describe("WorkspaceDO.entityActivate", () => {
     });
   });
 
+  it("reserves a non-executable panel and activates that same incarnation in place", () => {
+    const reserved = instance.entityReservePanel(
+      panelInput({ source: { repoPath: SOURCE, effectiveVersion: "" } })
+    );
+
+    expect(reserved).toMatchObject({
+      id: canonicalEntityId({ kind: "panel", key: "entry-1" }),
+      status: "preparing",
+      source: { repoPath: SOURCE, effectiveVersion: "" },
+    });
+    expect(instance.entityResolveActive(reserved.id)).toBeNull();
+
+    const activated = instance.entityAdvanceExecution(preparedPanelInput());
+    expect(activated).toMatchObject({
+      id: reserved.id,
+      status: "active",
+      source: { repoPath: SOURCE, effectiveVersion: expect.any(String) },
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+      createdAt: reserved.createdAt,
+    });
+    expect(instance.entityResolveActive(reserved.id)?.id).toBe(reserved.id);
+  });
+
   it("rejects malformed or unbound immutable build keys at the durable boundary", () => {
     expect(() =>
       instance.entityActivate(
@@ -221,14 +266,43 @@ describe("WorkspaceDO.entityActivate", () => {
     ).toThrow(/activeBuildKey/);
   });
 
+  it("advances a live identity only through the complete sealed execution transition", () => {
+    const initial = instance.entityActivate(preparedPanelInput());
+    const advanced = instance.entityAdvanceExecution(
+      preparedPanelInput({
+        source: { repoPath: SOURCE, effectiveVersion: "v2" },
+        activeBuildKey: "c".repeat(64),
+        activeExecutionDigest: "d".repeat(64),
+      })
+    );
+
+    expect(advanced).toMatchObject({
+      id: initial.id,
+      source: { repoPath: SOURCE, effectiveVersion: "v2" },
+      activeBuildKey: "c".repeat(64),
+      activeExecutionDigest: "d".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+      createdAt: initial.createdAt,
+    });
+    expect(() =>
+      instance.entityAdvanceExecution(
+        preparedPanelInput({
+          source: { repoPath: "panels/other", effectiveVersion: "v3" },
+          activeBuildKey: "e".repeat(64),
+          activeExecutionDigest: "f".repeat(64),
+        })
+      )
+    ).toThrow(/Identity collision/);
+  });
+
   it("rejects malformed active authority at the durable write boundary", () => {
     expect(() =>
       instance.entityActivate(
         panelInput({
-          activeAuthority: { requests: [], delegations: [], extra: true } as never,
+          activeAuthority: { requests: [], evalCeilings: [], extra: true } as never,
         })
       )
-    ).toThrow(/must contain exactly requests and delegations arrays/);
+    ).toThrow(/unknown field.*extra/);
   });
 
   it("rejects non-canonical execution identity on new activations", () => {

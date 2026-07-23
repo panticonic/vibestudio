@@ -20,8 +20,8 @@ export interface VcsDurabilityBootstrapDeps {
     effectiveVersion: string;
     buildKey: string;
     executionDigest: string;
-    authorityRequests: readonly import("@vibestudio/rpc").CapabilityScope[];
-    authorityDelegations: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
+    authorityRequests: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
+    authorityEvalCeilings: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityCeiling[];
   }): void;
   activateSemanticWorkspace(workspaceVcs: WorkspaceVcs): Promise<void>;
 }

@@ -64,6 +64,9 @@ export class CounterDO extends DurableObject {
     this.ctx.storage.sql.exec("INSERT INTO c (n) VALUES (1)");
     ws.send("echo:" + msg + ":" + this.env.WORKER_CLASS_NAME);
   }
+  async webSocketClose(ws, code, reason) {
+    ws.close(code, reason);
+  }
 }
 export default { fetch() { return new Response("counter host"); } };`;
 
@@ -81,7 +84,7 @@ function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
       ev,
       sourceStateHash: "state:test",
       sourcemap: false,
-      authority: { requests: [], delegations: [] },
+      authority: { requests: [], evalCeilings: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -149,7 +152,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
         buildKey: `build:${source}:${b.metadata.ev}`,
         executionDigest: "a".repeat(64),
         authorityRequests: [],
-        authorityDelegations: [],
+        authorityEvalCeilings: [],
       };
     },
     getBuildByKey: (key: string) => {
@@ -310,12 +313,22 @@ describe("UniversalDO facet host (real workerd)", () => {
           "X-Vibestudio-Dispatch-Secret": manager.getDispatchSecret(),
         },
       });
+      let received: string | null = null;
       const timer = setTimeout(() => reject(new Error("WS timeout")), 8_000);
       ws.on("open", () => ws.send("ping"));
       ws.on("message", (d: Buffer) => {
+        received = d.toString();
+        // Supply a protocol-valid status so the pre-auto-reply compatibility
+        // path can echo it from webSocketClose and complete the handshake.
+        ws.close(1000, "test complete");
+      });
+      ws.on("close", () => {
         clearTimeout(timer);
-        ws.close();
-        resolve(d.toString());
+        if (received === null) {
+          reject(new Error("WebSocket closed before the facet replied"));
+          return;
+        }
+        resolve(received);
       });
       ws.on("error", (e: Error) => {
         clearTimeout(timer);

@@ -126,8 +126,10 @@ export const TERMINAL_SHIM_TERMINAL_SIZE = `${TERMINAL_SHIM_MODULE}/node/termina
 export interface FrameworkModuleContract {
   /** Adapter id (see `adapters/index.ts`). */
   readonly framework: string;
-  /** Default workspace module the generated entry imports. */
+  /** Workspace dependency whose presence selects this framework. */
   readonly module: string;
+  /** Focused auto-mount module imported by the generated entry. */
+  readonly entryModule: string;
   /** Name of the mount function the generated entry calls. */
   readonly autoMountExport: string;
 }
@@ -136,6 +138,7 @@ export interface FrameworkModuleContract {
 export const SHOULD_AUTO_MOUNT_EXPORT = "shouldAutoMount";
 
 export const REACT_FRAMEWORK_MODULE = "@workspace/react";
+export const REACT_FRAMEWORK_ENTRY_MODULE = "@workspace/react/auto-mount";
 export const SVELTE_FRAMEWORK_MODULE = "@workspace/svelte";
 
 /**
@@ -143,13 +146,25 @@ export const SVELTE_FRAMEWORK_MODULE = "@workspace/svelte";
  * the first entry whose module appears in a unit's dependencies wins.
  */
 export const FRAMEWORK_MODULES: readonly FrameworkModuleContract[] = [
-  { framework: "react", module: REACT_FRAMEWORK_MODULE, autoMountExport: "autoMountReactPanel" },
-  { framework: "svelte", module: SVELTE_FRAMEWORK_MODULE, autoMountExport: "autoMountSveltePanel" },
+  {
+    framework: "react",
+    module: REACT_FRAMEWORK_MODULE,
+    entryModule: REACT_FRAMEWORK_ENTRY_MODULE,
+    autoMountExport: "autoMountReactPanel",
+  },
+  {
+    framework: "svelte",
+    module: SVELTE_FRAMEWORK_MODULE,
+    entryModule: SVELTE_FRAMEWORK_MODULE,
+    autoMountExport: "autoMountSveltePanel",
+  },
 ];
 
 /** Default entry module for a framework id, or null for frameworks without one (vanilla). */
 export function frameworkEntryModule(framework: string): string | null {
-  return FRAMEWORK_MODULES.find((contract) => contract.framework === framework)?.module ?? null;
+  return (
+    FRAMEWORK_MODULES.find((contract) => contract.framework === framework)?.entryModule ?? null
+  );
 }
 
 /**

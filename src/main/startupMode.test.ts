@@ -84,6 +84,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
   it("launches the local default/last workspace by default", () => {
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
       kind: "local",
+      connectionIntent: "resume-saved-remote",
       workspaceName: "test-workspace",
     });
   });
@@ -91,6 +92,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
   it("launches the local workspace non-interactively (headless) when none is explicitly selected", () => {
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: false })).toMatchObject({
       kind: "local",
+      connectionIntent: "local",
       wsDir: "/tmp/vibestudio-test-workspace",
       workspaceId: "test-workspace",
     });
@@ -101,10 +103,12 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
       kind: "local",
+      connectionIntent: "local",
       wsDir: "/tmp/workspaces/dev",
       workspaceName: "dev",
       workspaceId: "dev",
       isEphemeral: true,
+      ephemeralLifecycle: "replace",
       autoApproveStartupUnits: false,
     });
     expect(mockResolveLocalWorkspaceStartup).not.toHaveBeenCalled();
@@ -193,10 +197,12 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
       kind: "local",
+      connectionIntent: "local",
       wsDir: "/tmp/workspaces/dev",
       workspaceName: "dev",
       workspaceId: "dev",
       isEphemeral: true,
+      ephemeralLifecycle: "resume",
       autoApproveStartupUnits: false,
     });
     expect(mockResolveLocalWorkspaceStartup).not.toHaveBeenCalled();
@@ -250,6 +256,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
       kind: "local",
+      connectionIntent: "resume-saved-remote",
       workspaceName: "default",
       autoApproveStartupUnits: true,
     });
@@ -257,6 +264,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
   it("auto-approves shipped startup units for every newly created named workspace", () => {
     setArgv(["--workspace", "my-first-workspace", "--workspace-create-if-missing"]);
+    mockResolveWorkspaceName.mockReturnValue("my-first-workspace");
     mockResolveLocalWorkspaceStartup.mockReturnValueOnce({
       resolved: {
         wsDir: "/tmp/vibestudio-my-first-workspace",
@@ -269,6 +277,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
       kind: "local",
+      connectionIntent: "local",
       workspaceName: "my-first-workspace",
       autoApproveStartupUnits: true,
     });
@@ -277,6 +286,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
   it("honors the startup-unit auto-approval env for explicit workspaces", () => {
     process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] = "1";
     setArgv(["--workspace", "e2e-explicit"]);
+    mockResolveWorkspaceName.mockReturnValue("e2e-explicit");
     mockResolveLocalWorkspaceStartup.mockReturnValueOnce({
       resolved: {
         wsDir: "/tmp/vibestudio-e2e-explicit",
@@ -289,6 +299,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
       kind: "local",
+      connectionIntent: "local",
       workspaceName: "e2e-explicit",
       autoApproveStartupUnits: true,
     });
@@ -303,10 +314,12 @@ describe("shouldRequestSingleInstanceLock", () => {
       mod.shouldRequestSingleInstanceLock(
         {
           kind: "local",
+          connectionIntent: "local",
           wsDir: "/workspace",
           workspaceName: "dev",
           workspaceId: "dev",
           isEphemeral: true,
+          ephemeralLifecycle: "replace",
           autoApproveStartupUnits: false,
         },
         { isHeadlessHost: false, isDevelopment: true }
@@ -321,10 +334,12 @@ describe("shouldRequestSingleInstanceLock", () => {
       mod.shouldRequestSingleInstanceLock(
         {
           kind: "local",
+          connectionIntent: "resume-saved-remote",
           wsDir: "/workspace",
           workspaceName: "default",
           workspaceId: "default",
           isEphemeral: false,
+          ephemeralLifecycle: null,
           autoApproveStartupUnits: false,
         },
         { isHeadlessHost: false, isDevelopment: false }

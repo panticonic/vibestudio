@@ -11,7 +11,10 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type {
+  PreparedAuthoritySelection,
+  ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   runtimeMethods,
@@ -34,12 +37,13 @@ import {
   type RuntimeAgentBindingInput,
   type RuntimeEntityCreateSpec,
   type RuntimeEntityHandle,
+  type RuntimePanelEntityCreateSpec,
   type WorkspaceContext,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import {
-  requireContextBoundaryPermission,
+  prepareContextBoundarySelection,
   type ContextBoundaryAction,
   type ContextBoundaryDeps,
 } from "./contextBoundary.js";
@@ -99,6 +103,11 @@ export interface RuntimeEntityHooks {
     input: LifecyclePrepareInput
   ) => Promise<LifecyclePrepareResult>;
 
+  /** Seal external RPC admission and drain calls accepted before retirement. */
+  sealAndDrainEntityRelays?: (entityId: string) => Promise<void>;
+  /** Release the process-local retirement seal after retire commits or aborts. */
+  releaseEntityRelaySeal?: (entityId: string) => void;
+
   /**
    * Clone a DO's durable SQLite storage to a new instance key (server-internal
    * `workerdManager.cloneDO`). Used by `cloneContext`; never exposed to userland.
@@ -127,8 +136,8 @@ export interface PreparedRuntimeExecution {
   effectiveVersion: string;
   buildKey?: string;
   executionDigest?: string;
-  authorityRequests?: readonly import("@vibestudio/rpc").CapabilityScope[];
-  authorityDelegations?: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityDelegation[];
+  authorityRequests?: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
+  authorityEvalCeilings?: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityCeiling[];
 }
 
 /** Disposable host projection directories for semantic contexts. */
@@ -209,45 +218,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   const store = deps.entityStore;
   const retirementChains = new Map<string, Promise<unknown>>();
 
-  /**
-   * The context-boundary gate for DIRECT (userland) entity launch/destroy/
-   * context ops. Trusted chrome/server callers bypass — they cannot be prompted
-   * (no code identity), and the only `server` entrants are (a) panel-mediated
-   * calls already gated at the panel layer or (b) genuine system creation
-   * (seed/CLI), which is free. Runs BEFORE any side effect, so denial is
-   * non-destructive.
-   */
-  async function gateContextLaunch(
-    caller: VerifiedCaller,
-    targetContextId: string,
-    action: ContextBoundaryAction,
-    originContextIdOverride?: string | null
-  ): Promise<void> {
-    // Panel-tree bridge calls retain the initiating entity id for durable
-    // lineage while using the server caller kind. They are already gated at
-    // the panel-tree boundary and must retain trusted-host authority here.
-    if (
-      caller.runtime.kind === "server" ||
-      isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })
-    ) {
-      return;
-    }
-    const originContextId =
-      originContextIdOverride === undefined
-        ? await store.resolveContext(caller.runtime.id)
-        : originContextIdOverride;
-    if (await callerOwnsLifecycleContext(caller, originContextId, targetContextId)) return;
-    const result = await requireContextBoundaryPermission(deps.contextBoundary, {
-      subjectCaller: caller,
-      originContextId,
-      targetContextId,
-      action,
-    });
-    if (!result.allowed) {
-      throw new Error(result.reason ?? "Context-boundary denied");
-    }
-  }
-
   function isTrustedRuntimeHost(caller: VerifiedCaller): boolean {
     return caller.runtime.kind === "shell" || caller.runtime.kind === "server";
   }
@@ -282,7 +252,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   async function resolveAgentBinding(
     caller: VerifiedCaller,
     method: string,
-    contextId: string,
+    requestedContextId: string | undefined,
     binding: RuntimeAgentBindingInput | undefined
   ): Promise<RuntimeAgentBinding | undefined> {
     if (!binding) return undefined;
@@ -301,7 +271,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         `runtime.createEntity agentBinding references an inactive entity: ${binding.entityId}`
       );
     }
-    if (bound.contextId !== contextId) {
+    if (requestedContextId !== undefined && bound.contextId !== requestedContextId) {
       throw new Error("runtime.createEntity agentBinding context does not match the bound entity");
     }
     if (!isTrustedRuntimeHost(caller) && !callerOwnsEntity(caller, bound)) {
@@ -331,25 +301,51 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     return owner ? callerOwnsEntity(caller, owner) : false;
   }
 
-  async function resolveContextPolicy(
+  /** Resolve one current host-derived context leaf without prompting or mutating. */
+  async function prepareContextBoundary(
+    caller: VerifiedCaller,
+    targetContextId: string,
+    action: ContextBoundaryAction,
+    originContextIdOverride?: string | null
+  ): Promise<PreparedAuthoritySelection[]> {
+    // Panel-tree bridge calls retain the initiating entity id for durable
+    // lineage while using the server caller kind. They are already gated at
+    // the panel-tree boundary and retain trusted-host authority here.
+    if (
+      caller.runtime.kind === "server" ||
+      isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })
+    ) {
+      return [];
+    }
+    const originContextId =
+      originContextIdOverride === undefined
+        ? await store.resolveContext(caller.runtime.id)
+        : originContextIdOverride;
+    if (await callerOwnsLifecycleContext(caller, originContextId, targetContextId)) return [];
+    const selection = prepareContextBoundarySelection(deps.contextBoundary, {
+      subjectCaller: caller,
+      originContextId,
+      targetContextId,
+      action,
+    });
+    return selection ? [selection] : [];
+  }
+
+  async function resolveTargetContext(
     caller: VerifiedCaller,
     requested: string | null | undefined,
-    spec: RuntimeEntityCreateSpec
+    agentBinding: RuntimeAgentBinding | undefined
   ): Promise<string> {
-    // Empty/omitted ⇒ a brand-new context (fresh ⇒ free, no gate).
-    if (requested == null || requested === "") {
-      return randomUUID();
-    }
-    if (!isExtensionOrchestratedCreate(caller, spec)) {
-      await gateContextLaunch(caller, requested, {
-        kind: "runtime",
-        verb: `Create ${spec.kind}`,
-        targetLabel: spec.source,
-        targetLabelName: "Source",
-        groupKey: `context-boundary:${requested}:${spec.source}`,
-      });
-    }
-    return requested;
+    if (requested != null && requested !== "") return requested;
+    // An external agent relay belongs to the bound entity's verified context;
+    // the caller never has to repeat that authority-bearing coordinate.
+    if (agentBinding) return agentBinding.contextId;
+    // Child runtimes inherit their verified caller's semantic workspace. This
+    // is what makes context-local authored code immediately launchable through
+    // workers.create()/runtime.createEntity without a second, forgeable context
+    // argument. Root host callers have no runtime context and therefore mint an
+    // isolated root, preserving the explicit session/bootstrap use case.
+    return (await store.resolveContext(caller.runtime.id)) ?? randomUUID();
   }
 
   /** Ensure one durable semantic workspace context before attaching an entity. */
@@ -358,49 +354,152 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     return buildWorkspaceContext(contextId);
   }
 
-  async function createEntity(
-    caller: VerifiedCaller,
-    rawSpec: RuntimeEntityCreateSpec
-  ): Promise<RuntimeEntityHandle> {
-    const spec = rawSpec;
-    if (spec.kind === "app") {
-      const callerKind = caller.runtime.kind;
-      if (callerKind !== "shell" && callerKind !== "server") {
-        throw new Error("App runtime entities are host-managed");
-      }
+  function assertCreateEntityAllowed(caller: VerifiedCaller, spec: RuntimeEntityCreateSpec): void {
+    if (spec.kind === "app" && !isTrustedRuntimeHost(caller)) {
+      throw new Error("App runtime entities are host-managed");
     }
     if (spec.kind === "session") {
-      const callerKind = caller.runtime.kind;
-      // Session entities are host-managed, EXCEPT an extension may create a
-      // source-tagged session for a launch it owns. The source tag distinguishes
-      // an orchestrated launch from an ad-hoc device session.
-      const orchestratorExtension = callerKind === "extension" && Boolean(spec.source);
-      if (callerKind !== "shell" && callerKind !== "server" && !orchestratorExtension) {
+      const orchestratorExtension = caller.runtime.kind === "extension" && Boolean(spec.source);
+      if (!isTrustedRuntimeHost(caller) && !orchestratorExtension) {
         throw new Error("Session runtime entities are host-managed");
       }
     }
-    // Gate (context-boundary) then prepare+activate. The gate is the ONLY caller
-    // of the boundary check on this path; `activateEntity` is gate-free so internal
-    // orchestration (cloneContext) can create clones after a single source-gate.
-    const contextId = await resolveContextPolicy(caller, spec.contextId, spec);
     if (bindingFromSpec(spec) && selfAgentChannelFromSpec(spec)) {
       throw new Error(
         "runtime.createEntity cannot combine an external agent relay binding with a self-agent channel"
       );
     }
+  }
+
+  async function createEntity(
+    caller: VerifiedCaller,
+    rawSpec: RuntimeEntityCreateSpec
+  ): Promise<RuntimeEntityHandle> {
+    const spec = rawSpec;
+    assertCreateEntityAllowed(caller, spec);
+    const requestedContextId =
+      spec.contextId == null || spec.contextId === "" ? undefined : spec.contextId;
     const agentBinding = await resolveAgentBinding(
       caller,
       "createEntity",
-      contextId,
+      requestedContextId,
       bindingFromSpec(spec)
     );
+    const contextId = await resolveTargetContext(caller, spec.contextId, agentBinding);
     return activateEntity(caller, spec, contextId, agentBinding, selfAgentChannelFromSpec(spec));
+  }
+
+  const panelHandle = (record: EntityRecord): RuntimeEntityHandle => ({
+    id: record.id,
+    kind: "panel",
+    source: record.source,
+    ...(record.activeBuildKey ? { buildKey: record.activeBuildKey } : {}),
+    ...(record.activeExecutionDigest ? { executionDigest: record.activeExecutionDigest } : {}),
+    ...(record.activeAuthority
+      ? {
+          authorityRequests: record.activeAuthority.requests,
+          authorityEvalCeilings: record.activeAuthority.evalCeilings,
+        }
+      : {}),
+    contextId: record.contextId,
+    targetId: record.id,
+  });
+
+  /**
+   * Commit only the panel's durable coordinates. The preparing record is not an
+   * executable principal, so a host may safely attach a native view while build
+   * preparation continues.
+   */
+  async function reservePanelEntity(
+    caller: VerifiedCaller,
+    spec: RuntimePanelEntityCreateSpec
+  ): Promise<RuntimeEntityHandle> {
+    if (!isTrustedRuntimeHost(caller)) {
+      throw new Error("Deferred panel runtime entities are host-managed");
+    }
+    const contextId = await resolveTargetContext(caller, spec.contextId, undefined);
+    const key = spec.key ?? randomUUID();
+    const record = await store.reservePanel({
+      kind: "panel",
+      source: { repoPath: spec.source, effectiveVersion: "" },
+      contextId,
+      key,
+      stateArgs: spec.stateArgs,
+      parentId: caller.runtime.id,
+      ownerUserId: caller.subject?.userId,
+    });
+    return panelHandle(record);
+  }
+
+  /**
+   * Complete one reserved panel incarnation in place. Build preparation and
+   * semantic-context materialization are independent and therefore run
+   * concurrently; the single durable advance is the activation boundary.
+   */
+  async function activatePanelEntity(
+    caller: VerifiedCaller,
+    spec: RuntimePanelEntityCreateSpec
+  ): Promise<RuntimeEntityHandle> {
+    if (!isTrustedRuntimeHost(caller)) {
+      throw new Error("Deferred panel runtime entities are host-managed");
+    }
+    if (!spec.key) {
+      throw new Error("activatePanelEntity requires the reserved panel key");
+    }
+    const canonicalId = canonicalEntityId({ kind: "panel", key: spec.key });
+    const existing = await store.resolveRecord(canonicalId);
+    if (!existing || existing.kind !== "panel") {
+      throw new Error(`Unknown reserved panel entity ${canonicalId}`);
+    }
+    if (existing.source.repoPath !== spec.source) {
+      throw new Error(
+        `Reserved panel ${canonicalId} belongs to ${existing.source.repoPath}, not ${spec.source}`
+      );
+    }
+    if (
+      existing.status === "active" &&
+      existing.activeBuildKey &&
+      existing.activeExecutionDigest &&
+      existing.activeAuthority
+    ) {
+      return panelHandle(existing);
+    }
+    if (existing.status !== "preparing") {
+      throw new Error(`Reserved panel ${canonicalId} is ${existing.status}`);
+    }
+
+    const [prepared] = await Promise.all([
+      deps.hooks.preparePanel({ source: spec.source, ref: spec.ref }),
+      setUpContext(existing.contextId),
+    ]);
+    if (!prepared.buildKey || !/^[0-9a-f]{64}$/.test(prepared.buildKey)) {
+      throw new Error(
+        `Panel ${canonicalId} preparation did not select an immutable BuildV2 artifact`
+      );
+    }
+    const { activeExecutionDigest, activeAuthority } = requireActiveExecutionIdentity(
+      prepared,
+      `panel ${canonicalId}`
+    );
+    const record = await store.advanceExecution({
+      kind: "panel",
+      source: { repoPath: spec.source, effectiveVersion: prepared.effectiveVersion },
+      activeBuildKey: prepared.buildKey,
+      activeExecutionDigest,
+      activeAuthority,
+      contextId: existing.contextId,
+      key: existing.key,
+      stateArgs: existing.stateArgs,
+      parentId: existing.parentId,
+      ownerUserId: existing.ownerUserId,
+    });
+    return panelHandle(record);
   }
 
   /**
    * Prepare runtime resources for an entity and commit its durable row — WITHOUT
-   * the context-boundary gate. `createEntity` calls this after gating; `cloneContext`
-   * calls it per-clone after a single gate on the source context. `parentId` is the
+   * context-boundary resolution. `createEntity` calls this after dispatcher enforcement;
+   * `cloneContext` calls it per clone after one prepared source-context leaf. `parentId` is the
    * caller, so a cloneContext caller owns (and may freely destroy) the clones.
    */
   async function activateEntity(
@@ -599,7 +698,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       ...(record.activeAuthority
         ? {
             authorityRequests: record.activeAuthority.requests,
-            authorityDelegations: record.activeAuthority.delegations,
+            authorityEvalCeilings: record.activeAuthority.evalCeilings,
           }
         : {}),
       contextId: record.contextId,
@@ -621,16 +720,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       caller.runtime.kind === "extension" && ctx.chainCaller
         ? await store.resolveContext(ctx.chainCaller.callerId)
         : undefined;
-    // Reusing a named foreign context is gated because it joins an existing
-    // semantic timeline; a fresh/omitted context id is isolated.
-    if (args.contextId != null && args.contextId !== "") {
-      await gateContextLaunch(
-        caller,
-        args.contextId,
-        { kind: "runtime", verb: "Set up context" },
-        delegatedOwnerContextId
-      );
-    }
     const contextId = args.contextId ?? randomUUID();
     const context = await setUpContext(contextId);
     await deps.contextFolders.ensureContextFolder(contextId);
@@ -656,24 +745,34 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
 
   /**
    * Durable retire + cleanup hooks for ONE entity, WITHOUT the context-boundary
-   * gate. `retireEntity` calls this after gating; `cloneContext` rollback and
-   * `destroyContext` call it directly (their gate is on the context as a whole).
+   * boundary resolution. `retireEntity` calls this after dispatcher enforcement;
+   * `cloneContext` rollback and `destroyContext` call it directly after their whole-context leaf.
    */
   async function retireRecord(id: string): Promise<EntityRecord | null> {
     return serializeByKey(retirementChains, id, async () => {
-      const active = await store.resolveRecord(id);
-      if (!active || active.status !== "active") return null;
-      const released = await deps.hooks.releaseEntity(active, {
-        epoch: `retire:${randomUUID()}`,
-        mode: "retire",
-        reason: "entity_retire",
-        deadlineMs: 0,
-      });
-      if (released.status === "failed") {
-        throw new Error(`Entity ${id} refused terminal lifecycle release`);
+      const current = await store.resolveRecord(id);
+      if (!current || current.status === "retired") return null;
+      if (current.status === "active") {
+        const released = await deps.hooks.releaseEntity(current, {
+          epoch: `retire:${randomUUID()}`,
+          mode: "retire",
+          reason: "entity_retire",
+          deadlineMs: 0,
+        });
+        if (released.status === "failed") {
+          throw new Error(`Entity ${id} refused terminal lifecycle release`);
+        }
       }
 
-      const record = await store.retire(id);
+      let record: EntityRecord | null;
+      try {
+        record = await store.retire(id);
+      } finally {
+        // On success, the cache is already inactive before the seal is
+        // released. On failure, the durable row remains active and relays must
+        // be admitted again so retirement can be retried.
+        deps.hooks.releaseEntityRelaySeal?.(id);
+      }
       if (!record) return null;
       try {
         await deps.hooks.onRetire(record);
@@ -685,24 +784,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     });
   }
 
-  async function retireEntity(
-    caller: VerifiedCaller,
-    id: string,
-    removeContext?: boolean
-  ): Promise<void> {
-    // Gate BEFORE mutating. Resolve the target's context via the DURABLE store
-    // (the active cache may already be evicting it). A null/unknown/already-
-    // retired target ⇒ the retire below no-ops ⇒ allow.
-    const target = await store.resolveRecord(id);
-    if (target?.status === "active" && !callerOwnsEntity(caller, target)) {
-      await gateContextLaunch(caller, target.contextId, {
-        kind: "runtime",
-        verb: removeContext ? "Retire entity and remove context" : "Retire entity",
-        targetLabel: id,
-        targetLabelName: "Runtime entity",
-        ...(removeContext ? { severity: "severe" as const } : {}),
-      });
-    }
+  async function retireEntity(id: string, removeContext?: boolean): Promise<void> {
     const record = await retireRecord(id);
     if (!record) return;
     // Agent credentials follow the entity: revoke outstanding credentials + the
@@ -770,13 +852,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     const recursive = args.recursive === true;
     // `include` scopes the ROOT context only; recursive descendants clone in full.
     const rootInclude = args.include ? new Set(args.include) : null;
-    await gateContextLaunch(caller, sourceContextId, {
-      kind: "runtime",
-      verb: "Clone context",
-      targetLabel: sourceContextId,
-      targetLabelName: "Source context",
-    });
-
     // Resolve the source contexts to clone: the root, plus (recursive) its
     // transitive LIFECYCLE subtree. Lineage (fork) edges are NEVER followed — a
     // forked conversation is provenance, not a subordinate world.
@@ -963,27 +1038,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
    * its edge rows + VCS state + folder. `gate` is true only for the destroy
    * ROOT — lifecycle descendants reached via cascade are owned by construction.
    */
-  async function destroyOneContext(
-    caller: VerifiedCaller,
-    contextId: string,
-    gate: boolean
-  ): Promise<void> {
+  async function destroyOneContext(contextId: string): Promise<void> {
     const entities = (await store.listActive()).filter((e) => e.contextId === contextId);
-    if (gate) {
-      // Ownership bypass: a context whose every active entity you launched is
-      // yours to destroy. Otherwise gate (gateContextLaunch still frees your own
-      // context + trusted chrome). An empty context falls through to the gate.
-      const owned = entities.length > 0 && entities.every((e) => e.parentId === caller.runtime.id);
-      if (!owned) {
-        await gateContextLaunch(caller, contextId, {
-          kind: "runtime",
-          verb: "Destroy context",
-          targetLabel: contextId,
-          targetLabelName: "Context",
-          severity: "severe",
-        });
-      }
-    }
     for (const e of entities) {
       const rec = await retireRecord(e.id);
       // DO storage is NOT reclaimed by retire (kept for re-attach) — a full context
@@ -1012,13 +1068,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
    * destroying a conversation never destroys its forks. `recursive:false`
    * destroys only this context (any lifecycle children are left for the TTL sweep).
    */
-  async function destroyContext(
-    caller: VerifiedCaller,
-    args: { contextId: string; recursive?: boolean }
-  ): Promise<void> {
+  async function destroyContext(args: { contextId: string; recursive?: boolean }): Promise<void> {
     const recursive = args.recursive ?? true;
     const seen = new Set<string>();
-    const teardown = async (contextId: string, gate: boolean): Promise<void> => {
+    const teardown = async (contextId: string): Promise<void> => {
       if (seen.has(contextId)) return;
       seen.add(contextId);
       if (recursive) {
@@ -1027,11 +1080,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           kind: "lifecycle",
         });
         // Post-order: leaves first, then the parent.
-        for (const child of children) await teardown(child.contextId, false);
+        for (const child of children) await teardown(child.contextId);
       }
-      await destroyOneContext(caller, contextId, gate);
+      await destroyOneContext(contextId);
     };
-    await teardown(args.contextId, true);
+    await teardown(args.contextId);
   }
 
   /**
@@ -1117,13 +1170,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     }
   ): Promise<{ contextId: string }> {
     await assertSubagentOwnerAllowed(caller, args);
-    await gateContextLaunch(caller, args.parentContextId, {
-      kind: "runtime",
-      verb: "Create subagent context",
-      targetLabel: args.ownerEntityId,
-      targetLabelName: "Owner entity",
-      groupKey: `context-boundary:subagent:${args.parentContextId}:${args.ownerEntityId}`,
-    });
 
     const contextId = deriveContextId(args.targetKey);
     // Order mirrors cloneContext: fork semantic state, then materialize its projection.
@@ -1142,6 +1188,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     id: string;
     kind: string;
     source: string;
+    key: string;
     contextId: string;
     title?: string;
     createdAt: number;
@@ -1161,6 +1208,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         id: record.id,
         kind: record.kind,
         source: record.source.repoPath,
+        key: record.key,
         contextId: record.contextId,
         title,
         createdAt: record.createdAt,
@@ -1177,17 +1225,128 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     description: "Runtime entity creation and retirement",
     authority: { principals: ["code", "user", "host"] },
     methods: runtimeMethods,
+    authorityPreparation: {
+      "runtime.createEntity.contextBoundary": async (ctx, [rawSpec]) => {
+        const spec = rawSpec as RuntimeEntityCreateSpec;
+        assertCreateEntityAllowed(ctx.caller, spec);
+        if (
+          spec.contextId == null ||
+          spec.contextId === "" ||
+          isExtensionOrchestratedCreate(ctx.caller, spec)
+        ) {
+          return [];
+        }
+        return prepareContextBoundary(ctx.caller, spec.contextId, {
+          kind: "runtime",
+          verb: `Create ${spec.kind}`,
+          targetLabel: spec.source,
+          targetLabelName: "Source",
+          groupKey: `context-boundary:${spec.contextId}:${spec.source}`,
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+      },
+      "runtime.retireEntity.contextBoundary": async (ctx, [rawArgs]) => {
+        const { id, removeContext } = rawArgs as { id: string; removeContext?: boolean };
+        const target = await store.resolveRecord(id);
+        if (!target || target.status !== "active" || callerOwnsEntity(ctx.caller, target))
+          return [];
+        return prepareContextBoundary(ctx.caller, target.contextId, {
+          kind: "runtime",
+          verb: removeContext ? "Retire entity and remove context" : "Retire entity",
+          targetLabel: id,
+          targetLabelName: "Runtime entity",
+          ...(removeContext ? { severity: "severe" as const } : {}),
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+      },
+      "runtime.createContext.contextBoundary": async (ctx, [rawArgs]) => {
+        const { contextId } = rawArgs as { contextId?: string };
+        if (contextId == null || contextId === "") return [];
+        const delegatedOwnerContextId =
+          ctx.caller.runtime.kind === "extension" && ctx.chainCaller
+            ? await store.resolveContext(ctx.chainCaller.callerId)
+            : undefined;
+        return prepareContextBoundary(
+          ctx.caller,
+          contextId,
+          {
+            kind: "runtime",
+            verb: "Set up context",
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          },
+          delegatedOwnerContextId
+        );
+      },
+      "runtime.cloneContext.contextBoundary": async (ctx, [rawArgs]) => {
+        const { sourceContextId } = rawArgs as { sourceContextId: string };
+        return prepareContextBoundary(ctx.caller, sourceContextId, {
+          kind: "runtime",
+          verb: "Clone context",
+          targetLabel: sourceContextId,
+          targetLabelName: "Source context",
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+      },
+      "runtime.destroyContext.contextBoundary": async (ctx, [rawArgs]) => {
+        const { contextId } = rawArgs as { contextId: string };
+        // Ownership is durable context provenance, not a property of the live
+        // roster. Headless cleanup unsubscribes/retires its last entity before
+        // deleting the context; active-only inference would misclassify that
+        // creator-owned empty context as foreign and leak it fail-closed.
+        const entities = await store.listByContext(contextId);
+        const byId = new Map(entities.map((entity) => [entity.id, entity]));
+        const owned =
+          entities.length > 0 &&
+          entities.every((entity) => {
+            const visited = new Set<string>([entity.id]);
+            let parentId = entity.parentId;
+            while (parentId && byId.has(parentId)) {
+              if (visited.has(parentId)) return false;
+              visited.add(parentId);
+              parentId = byId.get(parentId)?.parentId;
+            }
+            return parentId === ctx.caller.runtime.id;
+          });
+        if (owned) return [];
+        return prepareContextBoundary(ctx.caller, contextId, {
+          kind: "runtime",
+          verb: "Destroy context",
+          targetLabel: contextId,
+          targetLabelName: "Context",
+          severity: "severe",
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+      },
+      "runtime.createSubagentContext.contextBoundary": async (ctx, [rawArgs]) => {
+        const args = rawArgs as {
+          parentContextId: string;
+          ownerEntityId: string;
+          targetKey: string;
+        };
+        await assertSubagentOwnerAllowed(ctx.caller, args);
+        return prepareContextBoundary(ctx.caller, args.parentContextId, {
+          kind: "runtime",
+          verb: "Create subagent context",
+          targetLabel: args.ownerEntityId,
+          targetLabelName: "Owner entity",
+          groupKey: `context-boundary:subagent:${args.parentContextId}:${args.ownerEntityId}`,
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+      },
+    },
     handler: defineServiceHandler("runtime", runtimeMethods, {
       createEntity: (ctx, [spec]) => createEntity(ctx.caller, spec),
+      reservePanelEntity: (ctx, [spec]) => reservePanelEntity(ctx.caller, spec),
+      activatePanelEntity: (ctx, [spec]) => activatePanelEntity(ctx.caller, spec),
       retireEntity: async (ctx, [{ id, removeContext }]) => {
-        await retireEntity(ctx.caller, id, removeContext);
+        await retireEntity(id, removeContext);
       },
       listEntities: (_ctx, [input]) => listEntities(input?.kind),
       resolveContext: (_ctx, [id]) => resolveContext(id),
       createContext: (ctx, [{ contextId }]) => createContext(ctx, { contextId }),
       cloneContext: (ctx, [cloneArgs]) => cloneContext(ctx.caller, cloneArgs),
       destroyContext: async (ctx, [{ contextId, recursive }]) => {
-        await destroyContext(ctx.caller, { contextId, recursive });
+        await destroyContext({ contextId, recursive });
       },
       listOwnedContexts: (_ctx, [listArgs]) => listOwnedContexts(listArgs),
       recordContextEdge: async (ctx, [edgeArgs]) => {

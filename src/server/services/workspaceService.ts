@@ -6,7 +6,7 @@
  * that control plane.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
@@ -25,6 +25,7 @@ import type {
 } from "@vibestudio/shared/hostTargets";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
 import type {
   WorkspaceAppVersions,
   WorkspaceHeartbeatSelector,
@@ -36,6 +37,7 @@ import type {
   WorkspaceUnitStatus,
 } from "@vibestudio/service-schemas/workspace";
 import type { ApprovalQueue } from "./approvalQueue.js";
+import type { ContextIngestionRecorder } from "./contextIntegrityStore.js";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { listWorkspaceSkillEntries } from "../vcsHost/workspaceSkills.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
@@ -64,6 +66,8 @@ export interface WorkspaceServiceDeps {
   treeScanner?: WorkspaceTreeScanner;
   getConfig: () => WorkspaceConfig;
   setConfigField: (key: string, value: unknown, ctx: ServiceContext) => void | Promise<void>;
+  /** Durably advance a model session's content latch before read bytes are returned. */
+  recordContextIngestion?: ContextIngestionRecorder;
   /** Workspace-unit operational status rows, including extension health. */
   listUnits?: () => Promise<WorkspaceUnitStatus[]> | WorkspaceUnitStatus[];
   /** Restart a workspace unit through the owning manager. */
@@ -295,12 +299,54 @@ function safeSubjectSegment(value: string): string {
   return cleaned.slice(0, 48) || "unknown";
 }
 
-function describeJson(value: unknown): string {
+function describeValue(value: unknown): { value: string; format: "plain" | "tree" } {
   try {
-    return `\`\`\`json\n${truncateApprovalValue(JSON.stringify(value, null, 2), 900).replace(/```/g, "'''")}\n\`\`\``;
+    const brief = describeValueBrief(value);
+    const yaml = toYamlish(value, 0).trim();
+    const lines = yaml.split("\n");
+    if (lines.length <= 2) return { value: brief, format: "plain" };
+    return { value: `${brief}\n${truncateApprovalValue(yaml, 800)}`, format: "tree" };
   } catch {
-    return "```text\n[unserializable value]\n```";
+    return { value: "[complex value]", format: "plain" };
   }
+}
+
+function describeValueBrief(value: unknown): string {
+  if (value == null) return "none";
+  if (typeof value === "string") return value.length > 80 ? `${value.slice(0, 77)}...` : value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "empty list";
+    const items = value.filter((v): v is string => typeof v === "string");
+    if (items.length === value.length && items.length <= 3) return items.join(", ");
+    return `${value.length} item${value.length === 1 ? "" : "s"}`;
+  }
+  if (typeof value === "object") {
+    const keys = Object.keys(value);
+    if (keys.length === 0) return "empty";
+    if (keys.length <= 3) return keys.join(", ");
+    return `${keys.length} settings`;
+  }
+  return String(value);
+}
+
+function toYamlish(value: unknown, depth: number): string {
+  const indent = "  ".repeat(depth);
+  if (value == null) return "~";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  if (Array.isArray(value))
+    return value.map((v) => `\n${indent}- ${toYamlish(v, depth + 1)}`).join("");
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return entries
+      .map(([k, v]) => {
+        const child = toYamlish(v, depth + 1);
+        return child.includes("\n") ? `\n${indent}${k}:${child}` : `\n${indent}${k}: ${child}`;
+      })
+      .join("");
+  }
+  return String(value);
 }
 
 type WorkspaceApprovalDetail = { label: string; value: string; format?: ApprovalDetailFormat };
@@ -420,7 +466,40 @@ async function requireWorkspaceApproval(
 }
 
 export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefinition {
+  const stampDerivedRead = async (
+    ctx: ServiceContext,
+    repositoryId: string,
+    fileId: string,
+    content: string,
+    via: string
+  ): Promise<void> => {
+    if (!deps.recordContextIngestion || !ctx.caller.agentBinding) return;
+    const digest = createHash("sha256").update(content, "utf8").digest("hex");
+    await deps.recordContextIngestion(ctx, {
+      key: `file:${encodeURIComponent(repositoryId)}/${encodeURIComponent(fileId)}@${digest}`,
+      via,
+      classification: "derived",
+    });
+  };
   const activeWorkspaceName = () => deps.activeWorkspaceName ?? deps.getConfig().id;
+  const stampExternalUnitLogs = async (
+    ctx: ServiceContext,
+    name: string,
+    logs: readonly WorkspaceUnitLogRecord[],
+    via: string
+  ): Promise<void> => {
+    if (logs.length === 0) return;
+    const key = logs.some((entry) => entry.kind === "panel")
+      ? `log:panel:${name}`
+      : logs.some((entry) => entry.source === "lifecycle")
+        ? "log:build"
+        : "log:server";
+    await deps.recordContextIngestion?.(ctx, {
+      key,
+      via,
+      classification: "external",
+    });
+  };
   const { workspace } = deps;
 
   return {
@@ -444,6 +523,11 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
 
       getConfig: () => deps.getConfig(),
 
+      validateConfig: (_ctx, [content]) => {
+        parseWorkspaceConfigContentWithId(content, deps.getConfig().id);
+        return { valid: true as const };
+      },
+
       // -----------------------------------------------------------------
       // Writes
       // -----------------------------------------------------------------
@@ -451,9 +535,9 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       setInitPanels: async (ctx, [initPanels]) => {
         await requireWorkspaceApproval(deps, ctx, "setInitPanels", {
           target: deps.getConfig().id,
-          title: "Change initial workspace panels?",
-          summary: "This panel or worker wants to change the panels opened for this workspace.",
-          details: [{ label: "Init panels", value: describeJson(initPanels), format: "markdown" }],
+          title: "Change startup panels?",
+          summary: "Changes which panels open when this workspace starts.",
+          details: [{ label: "Panels to open", ...describeValue(initPanels) }],
         });
         await deps.setConfigField("initPanels", initPanels, ctx);
       },
@@ -461,12 +545,12 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       setConfigField: async (ctx, [key, value]) => {
         await requireWorkspaceApproval(deps, ctx, "setConfigField", {
           target: key,
-          title: "Change workspace config?",
-          summary: "This panel or worker wants to write a field in meta/vibestudio.yml.",
-          warning: "Changing workspace config can affect how the workspace starts and runs.",
+          title: "Change a workspace setting?",
+          summary: "Changes a workspace setting.",
+          warning: "This affects how your workspace starts and runs.",
           details: [
-            { label: "Config key", value: key },
-            { label: "New value", value: describeJson(value), format: "markdown" },
+            { label: "Setting", value: key },
+            { label: "New value", ...describeValue(value) },
           ],
         });
         await deps.setConfigField(key, value, ctx);
@@ -476,23 +560,41 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       // Agent resource loading (filesystem reads from the workspace tree)
       // -----------------------------------------------------------------
 
-      getAgentsMd: async () => {
+      getAgentsMd: async (ctx) => {
         // Read the workspace-level AGENTS.md from meta/. Missing file is not
         // an error — an empty string lets the agent resource loader fall back.
         const filePath = path.join(workspace.path, "meta", "AGENTS.md");
         try {
-          return await fs.readFile(filePath, "utf-8");
+          const content = await fs.readFile(filePath, "utf-8");
+          await stampDerivedRead(ctx, "meta", "AGENTS.md", content, "prompt-agents-md");
+          return content;
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
           throw err;
         }
       },
 
-      listSkills: () => listWorkspaceSkillEntries(workspace.path),
+      listSkills: async (ctx) => {
+        const entries = await listWorkspaceSkillEntries(workspace.path);
+        for (const entry of entries) {
+          const content = await fs.readFile(path.join(workspace.path, entry.skillPath), "utf8");
+          await stampDerivedRead(ctx, entry.dirPath, "SKILL.md", content, "prompt-skill-index");
+        }
+        return entries;
+      },
 
-      readSkill: async (_ctx, [nameOrPath]) => {
+      readSkill: async (ctx, [nameOrPath]) => {
         const skillMdPath = await resolveSkillMdPath(workspace.path, nameOrPath);
-        return fs.readFile(skillMdPath, "utf-8");
+        const content = await fs.readFile(skillMdPath, "utf-8");
+        const relative = path.relative(workspace.path, skillMdPath).replaceAll(path.sep, "/");
+        await stampDerivedRead(
+          ctx,
+          path.posix.dirname(relative),
+          path.posix.basename(relative),
+          content,
+          "skill-read"
+        );
+        return content;
       },
 
       sourceTree: () => {
@@ -544,14 +646,17 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         await deps.restartUnit(ctx, name);
       },
 
-      "units.logs": (_ctx, [name, opts]) => {
+      "units.logs": async (ctx, [name, opts]) => {
         if (!deps.listUnitLogs) return [];
-        return deps.listUnitLogs(name, opts);
+        const logs = await deps.listUnitLogs(name, opts);
+        await stampExternalUnitLogs(ctx, name, logs, "workspace-units:logs");
+        return logs;
       },
 
-      "units.diagnostics": async (_ctx, [name, opts]) => {
+      "units.diagnostics": async (ctx, [name, opts]) => {
         if (!deps.unitDiagnostics) {
           const logs = deps.listUnitLogs ? await deps.listUnitLogs(name, opts) : [];
+          await stampExternalUnitLogs(ctx, name, logs, "workspace-units:diagnostics");
           return {
             unit: null,
             logs,
@@ -561,7 +666,21 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
             capacity: { entries: 0, errors: 0 },
           };
         }
-        return deps.unitDiagnostics(name, opts);
+        const diagnostics = await deps.unitDiagnostics(name, opts);
+        await stampExternalUnitLogs(
+          ctx,
+          name,
+          [...diagnostics.logs, ...diagnostics.errors],
+          "workspace-units:diagnostics"
+        );
+        if (diagnostics.builds.length > 0) {
+          await deps.recordContextIngestion?.(ctx, {
+            key: "log:build",
+            via: "workspace-units:diagnostics",
+            classification: "external",
+          });
+        }
+        return diagnostics;
       },
 
       "units.versions": (_ctx, [name]) => {

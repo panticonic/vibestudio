@@ -5,8 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import type { ApprovalQueue } from "./approvalQueue.js";
-import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 import { createGitInteropService } from "./gitInteropService.js";
@@ -69,13 +67,6 @@ function panelServiceContext(): ServiceContext {
   } as ServiceContext;
 }
 
-function grantStore(): CapabilityGrantStore {
-  return {
-    hasGrant: vi.fn(() => false),
-    grant: vi.fn(),
-  } as unknown as CapabilityGrantStore;
-}
-
 function diskConfigPersistence(workspacePath: string) {
   const configPath = path.join(workspacePath, "meta", "vibestudio.yml");
   const render = (nextConfig: WorkspaceConfig): string => {
@@ -94,13 +85,6 @@ function diskConfigPersistence(workspacePath: string) {
         })
       : BASE_WORKSPACE_CONFIG;
   return {
-    workspaceConfigMutationWouldChange: vi.fn(
-      async (mutate: (current: WorkspaceConfig) => WorkspaceConfig) => {
-        const nextConfig = mutate(currentConfig());
-        const before = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf-8") : "";
-        return before !== render(nextConfig);
-      }
-    ),
     persistWorkspaceConfigMutation: vi.fn(
       async ({ mutate }: { mutate: (current: WorkspaceConfig) => WorkspaceConfig }) => {
         const nextConfig = mutate(currentConfig());
@@ -166,7 +150,7 @@ describe("gitInteropService", () => {
     });
   });
 
-  it("uses one config-write approval before importing a project that edits vibestudio.yml", async () => {
+  it("publishes the protected config mutation before cloning an imported project", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
     const cloneRepo = vi.fn(async () => undefined);
@@ -175,16 +159,12 @@ describe("gitInteropService", () => {
       YAML.stringify(BASE_WORKSPACE_CONFIG),
       "utf-8"
     );
-    const approvalQueue = {
-      request: vi.fn(async () => "once" as const),
-    } as unknown as ApprovalQueue & { request: ReturnType<typeof vi.fn> };
+    const persistence = diskConfigPersistence(workspacePath);
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
       invokeGitProvider: cloneProvider(cloneRepo),
-      approvalQueue,
-      grantStore: grantStore(),
-      ...diskConfigPersistence(workspacePath),
+      ...persistence,
     });
 
     await service.handler(panelServiceContext(), "importProject", [
@@ -198,23 +178,19 @@ describe("gitInteropService", () => {
       },
     ]);
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
+    expect(persistence.persistWorkspaceConfigMutation).toHaveBeenCalledTimes(1);
+    expect(persistence.persistWorkspaceConfigMutation).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "meta-change",
-        title: "Import external Git project",
-        units: [],
-        configWrite: {
-          repoPath: "meta",
-          summary:
-            "meta/vibestudio.yml records origin=github.com/werg/bgkit.git for projects/bgkit on vibestudio-bridge",
-        },
+        summary:
+          "meta/vibestudio.yml records origin=github.com/werg/bgkit.git for projects/bgkit on vibestudio-bridge",
       })
+    );
+    expect(persistence.persistWorkspaceConfigMutation.mock.invocationCallOrder[0]).toBeLessThan(
+      cloneRepo.mock.invocationCallOrder[0]!
     );
   });
 
-  it("does not clone when config-write approval is denied", async () => {
+  it("does not clone when the protected config publication is denied", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
     const cloneRepo = vi.fn(async () => undefined);
@@ -223,16 +199,13 @@ describe("gitInteropService", () => {
       YAML.stringify(BASE_WORKSPACE_CONFIG),
       "utf-8"
     );
-    const approvalQueue = {
-      request: vi.fn().mockResolvedValueOnce("deny"),
-    } as unknown as ApprovalQueue & { request: ReturnType<typeof vi.fn> };
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
       invokeGitProvider: cloneProvider(cloneRepo),
-      approvalQueue,
-      grantStore: grantStore(),
-      ...diskConfigPersistence(workspacePath),
+      persistWorkspaceConfigMutation: vi.fn(async () => {
+        throw new Error("Protected workspace update denied");
+      }),
     });
 
     await expect(
@@ -246,7 +219,7 @@ describe("gitInteropService", () => {
           },
         },
       ])
-    ).rejects.toThrow("Workspace config edit denied");
+    ).rejects.toThrow("Protected workspace update denied");
 
     expect(cloneRepo).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
@@ -265,10 +238,6 @@ describe("gitInteropService", () => {
       workspacePath,
       workspaceConfig,
       invokeGitProvider: cloneProvider(cloneRepo),
-      approvalQueue: {
-        request: vi.fn(async () => "once" as const),
-      } as unknown as ApprovalQueue,
-      grantStore: grantStore(),
       ...diskConfigPersistence(workspacePath),
     });
 
@@ -295,7 +264,7 @@ describe("gitInteropService", () => {
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
   });
 
-  it("imports configured workspace dependencies without prompting for another approval", async () => {
+  it("imports dependencies already present in protected workspace config", async () => {
     const workspacePath = tempWorkspace();
     const cloneRepo = vi.fn(async () => undefined);
     const workspaceConfig: WorkspaceConfig = {
@@ -327,15 +296,10 @@ describe("gitInteropService", () => {
       YAML.stringify(workspaceConfig),
       "utf-8"
     );
-    const approvalQueue = {
-      request: vi.fn(async () => "deny" as const),
-    } as unknown as ApprovalQueue & { request: ReturnType<typeof vi.fn> };
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
       invokeGitProvider: cloneProvider(cloneRepo),
-      approvalQueue,
-      grantStore: grantStore(),
       ...diskConfigPersistence(workspacePath),
     });
 
@@ -359,7 +323,6 @@ describe("gitInteropService", () => {
       skipped: [],
       failed: [],
     });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(cloneRepo).toHaveBeenCalledWith(expect.anything(), "projects/bgkit");
   });
 
@@ -417,7 +380,6 @@ describe("gitInteropService", () => {
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
-      workspaceConfigMutationWouldChange: vi.fn(async () => true),
       persistWorkspaceConfigMutation,
     });
 

@@ -109,4 +109,40 @@ describe("BuildSystemV2 startup", () => {
     expect(workspacePackage?.present).toBe(true);
     expect(workspacePackage?.path).toBe(path.join(dependencyWorkspaceRoot, "package.json"));
   });
+
+  it("reuses a settled immutable runtime binding without re-resolving protected main", async () => {
+    const panelDir = path.join(workspaceRoot, "panels", "cached");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-panels/cached",
+        version: "0.1.0",
+        type: "module",
+        vibestudio: {
+          title: "Cached",
+          authority: { requests: [], evalCeilings: [] },
+        },
+      })
+    );
+    fs.writeFileSync(
+      path.join(panelDir, "index.html"),
+      '<!doctype html><html><body><script type="module" src="./index.ts"></script></body></html>'
+    );
+    fs.writeFileSync(path.join(panelDir, "index.ts"), 'document.body.textContent = "ready";\n');
+
+    const source = fakeWorkspaceSource(workspaceRoot);
+    const ensureFresh = vi.spyOn(source, "ensureFresh");
+    const { initBuildSystemV2 } = await import("./index.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, [
+      path.join(process.cwd(), "node_modules"),
+    ]);
+
+    const first = await buildSystem.bindRuntimeImage("panels/cached");
+    const callsAfterFirstBinding = ensureFresh.mock.calls.length;
+    const second = await buildSystem.bindRuntimeImage("panels/cached");
+
+    expect(second).toEqual(first);
+    expect(ensureFresh).toHaveBeenCalledTimes(callsAfterFirstBinding);
+  });
 });

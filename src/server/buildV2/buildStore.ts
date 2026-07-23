@@ -121,6 +121,7 @@ export type BuildMetadataDetails =
         contractVersion: string;
       } | null;
     }
+  | { kind: "library"; format: "cjs" | "async-cjs" }
   | { kind: "generic" };
 
 export interface BuildMetadata {
@@ -137,6 +138,11 @@ export interface BuildMetadata {
   framework?: string;
   /** Authority sealed from the exact materialized source manifest. */
   authority?: UnitAuthorityManifest;
+  /**
+   * Caller-facing direct-RPC documentation extracted from this exact worker
+   * source state. Discovery only: grants and receiver enforcement never consume it.
+   */
+  workspaceRpcCatalog?: import("./workspaceRpcCatalog.js").WorkspaceRpcMethodDoc[];
   /** Derived by the store from immutable inputs; callers may not supply it. */
   execution?: BuildExecutionIdentity;
   details: BuildMetadataDetails;
