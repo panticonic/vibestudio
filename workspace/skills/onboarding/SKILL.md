@@ -46,7 +46,7 @@ eval({ code: `
   const storedCredentials = await services.credentials.listStoredCredentials().catch(() => []);
   const google = await getGoogleOnboardingStatus()
     .catch(error => ({ error: error instanceof Error ? error.message : String(error) }));
-  const importHistory = await browserData.getImportHistory().catch(() => []);
+  const importJobs = await browserData.listImportJobs().catch(() => []);
   const searchProvider = await getActiveSearchProvider().catch(() => "duckduckgo");
   const panels = await fs.readdir("panels").catch(() => []);
   const providerIds = [...new Set(storedCredentials.map(c =>
@@ -59,7 +59,7 @@ eval({ code: `
     storedCredentialCount: storedCredentials.length,
     google,
     searchProvider,
-    browserImportCount: importHistory.length,
+    browserImportCount: importJobs.length,
     panelCount: panels.length,
   };
 `

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "behavior": "creation",
+      "contract": "explicit atomic structure; subscribe cannot create",
+      "policyChange": null,
+      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+    },
+    {
+      "behavior": "first-subscribe",
+      "contract": "admission only; never freezes structure",
+      "policyChange": null,
+      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+    },
+    {
+      "behavior": "subsequent-subscribe",
+      "contract": "live admission policy",
+      "policyChange": null,
+      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+    },
+    {
+      "behavior": "invitation",
+      "contract": "discovery metadata for ordinary workspace channels",
+      "policyChange": null,
+      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+    },
+    {
+      "behavior": "visibility",
+      "contract": "workspace discovery plus explicit channel policy",
+      "policyChange": null,
+      "parityAssertion": "workspace/workers/gad-store/gadStore.test.ts"
+    },
+    {
+      "behavior": "presence",
+      "contract": "multi-human presence retained",
+      "policyChange": null,
+      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+    },
+    {
+      "behavior": "presentation-mutation",
+      "contract": "immutable structure revision plus authorized presentation revision",
+      "policyChange": null,
+      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+    },
+    {
+      "behavior": "fork-clone",
+      "contract": "new structure revision with explicit origin and context rewrite",
+      "policyChange": null,
+      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+    },
+    {
+      "behavior": "owner-loss",
+      "contract": "structure retained; explicit administrative recovery",
+      "policyChange": null,
+      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+    },
+    {
+      "behavior": "deletion",
+      "contract": "tombstoned and reconnect fails deterministically",
+      "policyChange": null,
+      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+    },
+    {
+      "behavior": "reconnect",
+      "contract": "same structure/admission; no authority creation",
+      "policyChange": null,
+      "parityAssertion": "workspace/packages/pubsub/src/rpc-client.test.ts"
+    },
+    {
+      "behavior": "system-agent",
+      "contract": "exact-principal locked admission expressible without host special case",
+      "policyChange": null,
+      "parityAssertion": "packages/shared/src/channelStructure.ts"
+    }
+  ]
+}

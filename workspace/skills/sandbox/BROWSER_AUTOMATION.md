@@ -437,20 +437,22 @@ console.log("Dashboard:", dashboardData);
 import { openPanel } from "@workspace/runtime";
 import { browserData } from "@workspace/runtime";
 
-// Step 1: Import cookies from Chrome
-const browsers = await browserData.detectBrowsers();
-const chrome = browsers.find((b) => b.name === "chrome");
-if (chrome) {
+// Step 1: Import cookies from an opaque Chrome source on a trusted host.
+const hosts = await browserData.listImportHosts();
+const host = hosts.find((candidate) => candidate.connected);
+if (host) {
+  const sources = await browserData.listImportSources(host.hostId);
+  const chrome = sources.find((source) => source.browser === "chrome");
+  if (!chrome) throw new Error("Chrome is not available on the selected host");
   await browserData.startImport({
-    browser: "chrome",
-    profile: chrome.profiles[0] ?? chrome.dataDir,
+    hostId: host.hostId,
+    sourceId: chrome.sourceId,
     dataTypes: ["cookies"],
   });
-  console.log("Cookies imported and synced to browser session");
+  console.log("Cookies imported into the canonical browser environment");
 }
 
-// Re-running startImport for the same browser/profile is incremental. It pulls
-// new or changed source records without duplicating existing stored data.
+// Re-running startImport for the same host/source is deterministic.
 
 // Step 2: Open browser — now has imported cookies
 const browser = await openPanel("https://github.com");

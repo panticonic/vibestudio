@@ -269,34 +269,36 @@ it — run browser-data work from panel code or an
 ```tsx
 import { browserData } from "@workspace/runtime";
 
-const browsers = await browserData.detectBrowsers();
-const chrome = browsers.find((b) => b.name === "chrome");
-if (chrome) {
-  const defaultProfile = chrome.profiles.find((p) => p.isDefault) || chrome.profiles[0];
-  const result = await browserData.startImport({
-    browser: "chrome",
-    profile: defaultProfile,
+const hosts = await browserData.listImportHosts();
+const host = hosts.find((candidate) => candidate.connected);
+if (host) {
+  const sources = await browserData.listImportSources(host.hostId);
+  const chrome = sources.find((source) => source.browser === "chrome");
+  if (!chrome) throw new Error("Chrome is not available on the selected host");
+  const job = await browserData.startImport({
+    hostId: host.hostId,
+    sourceId: chrome.sourceId,
     dataTypes: ["cookies", "bookmarks", "history"],
   });
-  console.log("Import result:", result);
+  console.log("Import job:", job.jobId, job.phase);
 
   // Optional: recreate current source-browser HTTP(S) tabs as Vibestudio panels.
+  const tabs = await browserData.listOpenTabs(host.hostId, chrome.sourceId);
   const opened = await browserData.openTabsAsPanels({
-    browser: "chrome",
-    profile: defaultProfile,
+    hostId: host.hostId,
+    sourceId: chrome.sourceId,
+    selection: tabs.map((tab) => tab.tabId),
   });
   console.log("Opened tabs:", opened);
 }
 
-// Export everything:
-const dump = await browserData.exportAll();
+const bookmarks = await browserData.exportBookmarks("json");
 ```
 
-`startImport` is incremental for the same browser/profile: reruns update changed
-source records and add newly discovered records without duplicating bookmarks,
-history visits, cookies, passwords, autofill values, search engines,
-permissions, or favicons. `openTabsAsPanels()` is intentionally not idempotent;
-it creates panels each time it is called.
+Profiles and filesystem paths never enter userland. `startImport` is
+deterministic for the same opaque host/source pair; reruns update changed
+source records without duplicating canonical data. `openTabsAsPanels()` is
+intentionally not idempotent; it creates panels each time it is called.
 
 ## Interactive Cookie Manager (Inline UI)
 
@@ -304,19 +306,22 @@ it creates panels each time it is called.
 inline_ui({
   code: `
 import { useState, useEffect } from "react";
-import { Button, Flex, Text, Table, Badge, TextField } from "@radix-ui/themes";
-import { TrashIcon } from "@radix-ui/react-icons";
+import { Button, Flex, Text, Table, TextField } from "@radix-ui/themes";
 import { browserData } from "@workspace/runtime";
 
 export default function CookieManager({ props, chat }) {
   const [cookies, setCookies] = useState([]);
   const [filter, setFilter] = useState("");
 
-  const load = () => browserData.getCookies(filter || undefined).then(setCookies);
+  const load = () => browserData.getCookieSnapshot().then(({ cookies }) =>
+    setCookies(filter
+      ? cookies.filter(cookie => cookie.domain.includes(filter))
+      : cookies)
+  );
   useEffect(() => { load(); }, [filter]);
 
-  const handleDelete = async (id) => {
-    await browserData.deleteCookie(id);
+  const clearOrigin = async (origin) => {
+    await browserData.clearCookiesForOrigin(origin);
     load();
   };
 
@@ -337,13 +342,13 @@ export default function CookieManager({ props, chat }) {
         </Table.Header>
         <Table.Body>
           {cookies.slice(0, 50).map(c => (
-            <Table.Row key={c.id}>
+            <Table.Row key={[c.name, c.domain, c.path, c.partitionKey || ""].join("|")}>
               <Table.Cell><Text size="1">{c.domain}</Text></Table.Cell>
               <Table.Cell><Text size="1">{c.name}</Text></Table.Cell>
-              <Table.Cell><Text size="1" color="gray">{c.expiration_date ? new Date(c.expiration_date * 1000).toLocaleDateString() : "session"}</Text></Table.Cell>
+              <Table.Cell><Text size="1" color="gray">{c.expirationDate ? new Date(c.expirationDate * 1000).toLocaleDateString() : "session"}</Text></Table.Cell>
               <Table.Cell>
-                <Button size="1" variant="ghost" color="red" onClick={() => handleDelete(c.id)}>
-                  <TrashIcon />
+                <Button size="1" variant="ghost" color="red" onClick={() => clearOrigin((c.secure ? "https://" : "http://") + c.domain.replace(/^\\./, ""))}>
+                  Clear site
                 </Button>
               </Table.Cell>
             </Table.Row>
@@ -456,16 +461,18 @@ import { browserData } from "@workspace/runtime";
 // Open the site in a browser panel
 const handle = await openPanel("https://github.com");
 
-// Import cookies from Chrome for that domain
-const browsers = await browserData.detectBrowsers();
-const chrome = browsers.find((b) => b.name === "chrome");
-if (chrome) {
+// Import cookies from a trusted host's opaque Chrome source.
+const hosts = await browserData.listImportHosts();
+const host = hosts.find((candidate) => candidate.connected);
+if (host) {
+  const sources = await browserData.listImportSources(host.hostId);
+  const chrome = sources.find((source) => source.browser === "chrome");
+  if (!chrome) throw new Error("Chrome is not available on the selected host");
   await browserData.startImport({
-    browser: "chrome",
-    profile: chrome.profiles[0] ?? chrome.dataDir,
+    hostId: host.hostId,
+    sourceId: chrome.sourceId,
     dataTypes: ["cookies"],
   });
-  // Electron syncs imported cookies to browser panels automatically.
-  // Repeat imports are safe; unchanged cookies are not duplicated.
+  // BrowserDataDO is authoritative; Electron reconciles its cookie projection.
 }
 ```

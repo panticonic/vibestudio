@@ -1,0 +1,293 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "surface": "runtime.createEntity",
+      "selector": "head/state/artifact",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "surface-adapter",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/services/runtimeService.test.ts"
+    },
+    {
+      "surface": "ensureDurableObjectEntity",
+      "selector": "head/state/artifact",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "next-request",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/universalDoHost.test.ts"
+    },
+    {
+      "surface": "workerd.startWorker",
+      "selector": "head/state/artifact",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "next-request",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/workerdManager.test.ts"
+    },
+    {
+      "surface": "worker-push-rebuild",
+      "selector": "matching-head",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "next-request",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/workerdManager.test.ts"
+    },
+    {
+      "surface": "durable-object-push-rebuild",
+      "selector": "matching-head",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "next-request",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/dynamicWorkerHost.test.ts"
+    },
+    {
+      "surface": "eval-do",
+      "selector": "exact-product-seed",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "new-eval-incarnation",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/services/evalService.test.ts"
+    },
+    {
+      "surface": "vcs-store",
+      "selector": "exact-product-seed",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "bootstrap-manifest",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/internalDOs/workspaceDO.test.ts"
+    },
+    {
+      "surface": "agent-spawn",
+      "selector": "resolved-exact-artifact",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "launch",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "workspace/packages/agentic-do/src/agent-loop-driver.test.ts"
+    },
+    {
+      "surface": "panel",
+      "selector": "selected-source-ref",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "explicit-reload-or-navigation",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/panelRuntimeRegistration.ts"
+    },
+    {
+      "surface": "electron-app",
+      "selector": "resolved-exact-artifact",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "load-update",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/appHost.test.ts"
+    },
+    {
+      "surface": "react-native-app",
+      "selector": "resolved-exact-artifact",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "mobile-install",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/appHost.test.ts"
+    },
+    {
+      "surface": "terminal-app",
+      "selector": "resolved-exact-artifact",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "process-restart",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/terminalAppRunner.test.ts"
+    },
+    {
+      "surface": "extension",
+      "selector": "resolved-exact-artifact",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "supervised-restart",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "packages/extension-host/src/service.test.ts"
+    },
+    {
+      "surface": "dev-host-current-client",
+      "selector": "exact-context-snapshot",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "validated-client-ready",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "src/server/services/devHostService.test.ts"
+    },
+    {
+      "surface": "dev-host-isolated",
+      "selector": "exact-context-snapshot",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "candidate-promotion",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "workspace/extensions/dev-host/lifecycle.test.ts"
+    },
+    {
+      "surface": "claude-code",
+      "selector": "host-plugin-plus-context-state",
+      "executableIdentity": "full-execution-digest",
+      "adoption": "managed-process-launch",
+      "rollback": "last-good-remains-authoritative",
+      "inFlightWork": "preserved-until-surface-boundary",
+      "durableStorage": "stable-logical-entity-namespace",
+      "visibleProgress": "surface-specific-existing-loading-or-status",
+      "provenance": [
+        "source-state",
+        "recipe",
+        "build-key",
+        "artifact-digest",
+        "execution-digest"
+      ],
+      "parityAssertion": "workspace/extensions/claude-code/index.test.ts"
+    }
+  ]
+}

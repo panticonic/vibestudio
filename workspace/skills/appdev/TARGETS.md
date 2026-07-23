@@ -28,6 +28,9 @@ Important behavior:
 - App IPC identity is `callerKind: "app"` and `callerId` is the app package
   name.
 - Host capabilities are derived from the approved app manifest.
+- Camera, microphone, and location requests require both the matching manifest
+  capability and a site-origin permission approval. Declaring a capability
+  makes the request eligible; it does not grant device access by itself.
 - Updates to an already-loaded Electron app use `adoptionPolicy: "prompt"`.
   The existing view stays loaded until the user chooses `Load update` from a
   notification or the App updates settings section.

@@ -250,7 +250,7 @@ const build = await chat.rpc.call("main", "build.getBuild", ["panels/my-app"]);
 
 // Browser data (panel/component runtime; resolves the manifest-declared broker)
 import { browserData } from "@workspace/runtime";
-const browsers = await browserData.detectBrowsers();
+const importHosts = await browserData.listImportHosts();
 
 // Workers (running worker instances)
 const instances = await chat.rpc.call("main", "runtime.listEntities", [{ kind: "worker" }]);

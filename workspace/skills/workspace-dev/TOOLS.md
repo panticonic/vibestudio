@@ -422,50 +422,37 @@ await services.extensions.invoke("@workspace-extensions/test-runner", "run", [{
 import { browserData } from "@workspace/runtime";
 ```
 
-Available methods:
+Core method groups:
 
-| Method                                               | Description                                                  |
-| ---------------------------------------------------- | ------------------------------------------------------------ |
-| `browserData.detectBrowsers()`                       | Detect all installed browsers and their profiles             |
-| `browserData.startImport(request)`                   | Incrementally import data from a browser profile             |
-| `browserData.getOpenTabs(request)`                   | Preview current Firefox/Chrome-family tabs                   |
-| `browserData.openTabsAsPanels(request)`              | Open current HTTP(S) tabs as Vibestudio browser panels       |
-| `browserData.getImportHistory()`                     | Get log of past imports                                      |
-| `browserData.getBookmarks(folderPath?)`              | Get bookmarks in a folder                                    |
-| `browserData.searchBookmarks(query)`                 | Search bookmarks by title/URL                                |
-| `browserData.addBookmark(bookmark)`                  | Add a bookmark                                               |
-| `browserData.deleteBookmark(id)`                     | Delete a bookmark                                            |
-| `browserData.getHistory(query)`                      | Query unified imported + Vibestudio browser-panel history    |
-| `browserData.searchHistory(query, limit?)`           | Full-text search history                                     |
-| `browserData.clearAllHistory()`                      | Clear all history                                            |
-| `browserData.getPasswords()`                         | Get all stored passwords                                     |
-| `browserData.getPasswordForSite(url)`                | Get passwords for a specific site                            |
-| `browserData.addPassword(pw)`                        | Add a password                                               |
-| `browserData.getCookies(domain?)`                    | Get cookies, optionally filtered by domain                   |
-| `browserData.clearCookies(domain?)`                  | Clear cookies                                                |
-| `browserData.getSearchEngines()`                     | Get configured search engines                                |
-| `browserData.setDefaultEngine(id)`                   | Set the default search engine                                |
-| `browserData.getAutofillSuggestions(field, prefix?)` | Get autofill suggestions                                     |
-| `browserData.getPermissions(origin?)`                | Get site permissions                                         |
-| `browserData.setPermission(origin, perm, setting)`   | Set a site permission                                        |
-| `browserData.exportBookmarks(format)`                | Export bookmarks (`"html"`, `"json"`, `"chrome-json"`)       |
-| `browserData.exportPasswords(format)`                | Export passwords (`"csv-chrome"`, `"csv-firefox"`, `"json"`) |
-| `browserData.exportCookies(format)`                  | Export cookies (`"json"`, `"netscape-txt"`)                  |
-| `browserData.exportAll()`                            | Full JSON export of all data                                 |
+| Methods                                                                                                                  | Purpose                                                      |
+| ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| `listImportHosts`, `listImportSources`, `previewImport`, `startImport`, `cancelImport`, `getImportJob`, `listImportJobs` | Discover opaque browser sources and manage import jobs       |
+| `listOpenTabs`, `openTabsAsPanels`                                                                                       | Preview source tabs and open selected HTTP(S) tabs as panels |
+| `getBookmarks`, `addBookmark`, `updateBookmark`, `deleteBookmark`, `moveBookmark`, `searchBookmarks`                     | Manage bookmarks                                             |
+| `getHistory`, `searchHistory`, `deleteHistoryEntry`, `deleteHistoryRange`, `clearAllHistory`                             | Manage browsing history                                      |
+| `getPasswords`, `getPasswordForSite`, password mutation methods                                                          | Manage saved credentials                                     |
+| `getFormFillSuggestions` and form-fill mutation methods                                                                  | Manage structured non-payment form-fill values               |
+| `getCookieSnapshot`, `getCookiesForOrigin`, `applyCookieMutations`, site/all clear methods                               | Read and mutate the canonical cookie jar                     |
+| `getSitePreferences`, `setSiteZoom`, download and favicon methods                                                        | Manage browser chrome state                                  |
+| `exportBookmarks`, `exportPasswords`, `exportCookies`                                                                    | Export supported data                                        |
 
-`startImport` is source-keyed and incremental for the same browser/profile.
-Repeat imports update changed records and add new records without duplicating
-bookmarks, history visits, cookies, passwords, autofill values, search engines,
-permissions, or favicons. `openTabsAsPanels` is an action and creates panels on
-each call.
+Use `await help("browserData")` for the complete live surface. Site permissions
+are approval records, not browser-data records, and imported profiles and paths
+are never exposed.
 
-#### Detect and import
+`startImport` is source-keyed and deterministic. Repeat imports update changed
+records and add new records without duplicating canonical data.
+`openTabsAsPanels` is an action and creates panels on each call.
+
+#### Discover import sources
 
 ```
 eval({ code: `
   import { browserData } from "@workspace/runtime";
-  const browsers = await browserData.detectBrowsers();
-  console.log(browsers.map(b => b.displayName + ": " + b.profiles.length + " profiles"));
+  const hosts = await browserData.listImportHosts();
+  for (const host of hosts) {
+    console.log(host.displayName, await browserData.listImportSources(host.hostId));
+  }
 `
 })
 ```
@@ -475,19 +462,18 @@ eval({ code: `
 ```
 eval({ code: `
   import { browserData } from "@workspace/runtime";
-  const browsers = await browserData.detectBrowsers();
-  const chrome = browsers.find(b => b.name === "chrome");
+  const hosts = await browserData.listImportHosts();
+  const host = hosts.find(h => h.connected);
+  if (!host) { console.log("No import host connected"); return; }
+  const sources = await browserData.listImportSources(host.hostId);
+  const chrome = sources.find(source => source.browser === "chrome");
   if (!chrome) { console.log("Chrome not found"); return; }
-  const profile = chrome.profiles.find(p => p.isDefault) || chrome.profiles[0];
-  const results = await browserData.startImport({
-    browser: "chrome",
-    profile,
+  const job = await browserData.startImport({
+    hostId: host.hostId,
+    sourceId: chrome.sourceId,
     dataTypes: ["bookmarks", "history", "cookies"],
   });
-  for (const r of results) {
-    console.log(r.dataType + ": " + r.itemCount + " imported, " + r.skippedCount + " skipped");
-    if (r.warnings.length) console.log("  warnings:", r.warnings);
-  }
+  console.log("Import job:", job.jobId, job.phase);
 `
 })
 ```

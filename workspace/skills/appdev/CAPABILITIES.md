@@ -30,22 +30,27 @@ Example:
 
 ## Known Capabilities
 
-| Capability | Meaning |
-| --- | --- |
-| `panel-hosting` | App can manage host panel layout, visibility, theme CSS, overlays, and shell-like view controls. Use only for shell/chrome apps. |
-| `incoming-pair-links` | Electron app can receive `vibestudio://connect` deep links from the host. |
-| `notifications` | App can use notification surfaces or native notification permission where available. |
-| `open-external` | App can request system-browser external opens through host-gated APIs. |
-| `window-management` | App can access host window/fullscreen/display-capture style operations where implemented. |
-| `native-menus` | App can own or update native menu surfaces. |
-| `fs-read` | Electron app can relay read-only filesystem server RPC through the host. |
-| `fs-write` | Electron app can relay write-capable filesystem server RPC through the host. |
-| `camera` | React Native app expects native camera access. |
-| `keychain` | React Native app expects native secure credential/keychain access. |
-| `clipboard` | React Native app expects native clipboard access. |
+| Capability            | Meaning                                                                                                                          |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `panel-hosting`       | App can manage host panel layout, visibility, theme CSS, overlays, and shell-like view controls. Use only for shell/chrome apps. |
+| `incoming-pair-links` | Electron app can receive `vibestudio://connect` deep links from the host.                                                        |
+| `notifications`       | App can use notification surfaces or native notification permission where available.                                             |
+| `open-external`       | App can request system-browser external opens through host-gated APIs.                                                           |
+| `window-management`   | App can access host window/fullscreen/display-capture style operations where implemented.                                        |
+| `native-menus`        | App can own or update native menu surfaces.                                                                                      |
+| `fs-read`             | Electron app can relay read-only filesystem server RPC through the host.                                                         |
+| `fs-write`            | Electron app can relay write-capable filesystem server RPC through the host.                                                     |
+| `camera`              | Electron or React Native app expects camera access. Electron still requires a site-origin approval.                              |
+| `microphone`          | Electron app may request microphone access after a site-origin approval.                                                         |
+| `location`            | Electron app may request geolocation access after a site-origin approval.                                                        |
+| `keychain`            | React Native app expects native secure credential/keychain access.                                                               |
+| `clipboard`           | React Native app expects native clipboard access.                                                                                |
 
 The exact supported set is host-target-specific. Electron rejects unsupported
-host capabilities before loading an app view.
+host capabilities before loading an app view. For camera, microphone, and
+location, the manifest is a static eligibility gate; the existing browser-site
+approval queue still decides once/session/always/block for the requesting
+origin.
 
 ## `panel-hosting`
 

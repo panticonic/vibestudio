@@ -8,27 +8,27 @@ For standard forms with typed fields. No code needed.
 
 ### Parameters
 
-| Param | Type | Description |
-|-------|------|-------------|
-| `title` | string | Form title |
-| `fields` | FieldDefinition[] | Field definitions |
-| `values` | Record | Pre-populated values |
-| `submitLabel` | string | Submit button text (default: "Submit") |
-| `cancelLabel` | string | Cancel button text (default: "Cancel") |
-| `severity` | `"info" \| "warning" \| "danger"` | Visual severity |
-| `hideSubmit` | boolean | Hide submit button |
-| `hideCancel` | boolean | Hide cancel button |
+| Param         | Type                              | Description                            |
+| ------------- | --------------------------------- | -------------------------------------- |
+| `title`       | string                            | Form title                             |
+| `fields`      | FieldDefinition[]                 | Field definitions                      |
+| `values`      | Record                            | Pre-populated values                   |
+| `submitLabel` | string                            | Submit button text (default: "Submit") |
+| `cancelLabel` | string                            | Cancel button text (default: "Cancel") |
+| `severity`    | `"info" \| "warning" \| "danger"` | Visual severity                        |
+| `hideSubmit`  | boolean                           | Hide submit button                     |
+| `hideCancel`  | boolean                           | Hide cancel button                     |
 
 ### Field Types
 
-| Type | Extra Props | Description |
-|------|------------|-------------|
-| `string` | — | Text input |
-| `number` | — | Number input |
-| `boolean` | — | Checkbox |
-| `select` | `options: { value, label }[]` | Dropdown |
-| `slider` | `min`, `max` | Range slider |
-| `segmented` | `options: { value, label }[]` | Segmented control |
+| Type          | Extra Props                   | Description                                                 |
+| ------------- | ----------------------------- | ----------------------------------------------------------- |
+| `string`      | —                             | Text input                                                  |
+| `number`      | —                             | Number input                                                |
+| `boolean`     | —                             | Checkbox                                                    |
+| `select`      | `options: { value, label }[]` | Dropdown                                                    |
+| `slider`      | `min`, `max`                  | Range slider                                                |
+| `segmented`   | `options: { value, label }[]` | Segmented control                                           |
 | `multiSelect` | `options: { value, label }[]` | Multiple checkboxes with Select all / Deselect all controls |
 
 Choice fields (`select`, `segmented`, and `multiSelect`) show an automatic
@@ -81,12 +81,12 @@ For complex interactions that schema-based forms can't express.
 
 ### Parameters
 
-| Param | Type | Description |
-|-------|------|-------------|
-| `code` | string | TSX source code. Provide either `code` or `path` |
-| `path` | string | Context-relative TSX file to load instead of inline code |
+| Param     | Type                     | Description                                               |
+| --------- | ------------------------ | --------------------------------------------------------- |
+| `code`    | string                   | TSX source code. Provide either `code` or `path`          |
+| `path`    | string                   | Context-relative TSX file to load instead of inline code  |
 | `imports` | `Record<string, string>` | Explicit package versions, same semantics as eval imports |
-| `title` | string | Container header title |
+| `title`   | string                   | Container header title                                    |
 
 File-loaded feedback components support static relative imports from the entry
 file and infer bare package imports from the nearest `package.json` when
@@ -161,11 +161,16 @@ import { Button, Flex, Text, Select } from "@radix-ui/themes";
 import { browserData } from "@workspace/runtime";
 
 export default function BrowserPicker({ onSubmit, onCancel, chat }) {
-  const [browsers, setBrowsers] = useState([]);
+  const [sources, setSources] = useState([]);
   const [selected, setSelected] = useState("");
 
   useEffect(() => {
-    browserData.detectBrowsers().then(setBrowsers);
+    browserData.listImportHosts().then(async hosts => {
+      const host = hosts.find(candidate => candidate.connected);
+      if (!host) return;
+      const next = await browserData.listImportSources(host.hostId);
+      setSources(next.map(source => ({ ...source, hostId: host.hostId })));
+    });
   }, []);
 
   return (
@@ -174,14 +179,16 @@ export default function BrowserPicker({ onSubmit, onCancel, chat }) {
       <Select.Root value={selected} onValueChange={setSelected}>
         <Select.Trigger placeholder="Choose browser..." />
         <Select.Content>
-          {browsers.map(b => (
-            <Select.Item key={b.name} value={b.name}>{b.displayName} ({b.profiles.length} profiles)</Select.Item>
+          {sources.map(source => (
+            <Select.Item key={source.sourceId} value={source.sourceId}>
+              {source.displayName} ({source.localDataSetCount} local data sets)
+            </Select.Item>
           ))}
         </Select.Content>
       </Select.Root>
       <Flex gap="2" justify="end">
         <Button variant="soft" onClick={onCancel}>Cancel</Button>
-        <Button onClick={() => onSubmit({ browser: selected, profiles: browsers.find(b => b.name === selected)?.profiles })} disabled={!selected}>
+        <Button onClick={() => onSubmit(sources.find(source => source.sourceId === selected))} disabled={!selected}>
           Import
         </Button>
       </Flex>

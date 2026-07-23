@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "productPrincipal": "host:<full-product-build-digest>",
+  "root": "verified-product-boot-manifest",
+  "nodes": [
+    {
+      "id": "boot-manifest",
+      "trust": "sealed-host-root",
+      "artifact": "content-addressed"
+    },
+    {
+      "id": "content-store",
+      "trust": "bootstrap",
+      "artifact": "manifest-entry"
+    },
+    {
+      "id": "execution-artifact-store",
+      "trust": "bootstrap",
+      "artifact": "manifest-entry"
+    },
+    {
+      "id": "workspace-do-substrate",
+      "trust": "bootstrap",
+      "artifact": "manifest-entry"
+    },
+    {
+      "id": "authority-grant-store",
+      "trust": "bootstrap",
+      "artifact": "manifest-entry"
+    },
+    {
+      "id": "context-binding",
+      "trust": "bootstrap",
+      "artifact": "manifest-entry"
+    },
+    {
+      "id": "ordinary-product-seeds",
+      "trust": "ordinary-runtime",
+      "artifact": "exact-artifacts"
+    }
+  ],
+  "edges": [
+    [
+      "boot-manifest",
+      "content-store"
+    ],
+    [
+      "content-store",
+      "execution-artifact-store"
+    ],
+    [
+      "execution-artifact-store",
+      "workspace-do-substrate"
+    ],
+    [
+      "workspace-do-substrate",
+      "authority-grant-store"
+    ],
+    [
+      "authority-grant-store",
+      "context-binding"
+    ],
+    [
+      "context-binding",
+      "ordinary-product-seeds"
+    ]
+  ],
+  "forbiddenAboveRoot": [
+    "EvalDO",
+    "VCS product service",
+    "browser data",
+    "webhook handlers",
+    "System Agent"
+  ],
+  "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#bootstrap-acyclic"
+}

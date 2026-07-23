@@ -18,7 +18,7 @@ eval({ code: `
   const storedCredentials = await services.credentials.listStoredCredentials().catch(() => []);
   const google = await getGoogleOnboardingStatus()
     .catch(error => ({ error: error instanceof Error ? error.message : String(error) }));
-  const importHistory = await browserData.getImportHistory().catch(() => []);
+  const importJobs = await browserData.listImportJobs().catch(() => []);
   const searchProvider = await getActiveSearchProvider().catch(() => "duckduckgo");
   const panels = await fs.readdir("panels").catch(() => []);
   const providerIds = [...new Set(storedCredentials.map(c =>
@@ -31,7 +31,7 @@ eval({ code: `
     storedCredentialCount: storedCredentials.length,
     google,
     searchProvider, // "tavily" | "brave" | "exa" | "duckduckgo"
-    browserImportCount: importHistory.length,
+    browserImportCount: importJobs.length,
     panelCount: panels.length,
   };
 `
@@ -111,8 +111,8 @@ concise plain-text list:
    does not require importing browser data.
 2. **Import browser data** — bring in cookies, bookmarks, passwords, history,
    and optionally current open tabs from Chrome/Firefox/etc. when they want
-   local browser state in Vibestudio. Repeat imports are incremental for the same
-   browser/profile.
+   local browser state in Vibestudio. Repeat imports are deterministic for the
+   same trusted host/source pair.
 3. **Build something** — scaffold and launch a panel app.
 4. **Organize workspaces** — create, fork, or switch workspaces.
 5. **Explore capabilities** — inspect runtime APIs and live examples.
@@ -204,30 +204,31 @@ during a conversation. Use `packages/agentic-do/SKILL.md` for either path.
 
 If the user wants to bring in their existing browser data (cookies for authentication, bookmarks, passwords), use the **browser-import** skill at `extensions/browser-data/SKILL.md`.
 
-Quick start — detect what browsers are available:
+Quick start — discover trusted import hosts and the installed browsers they
+expose:
 
 ```
 eval({ code: `
   import { browserData } from "@workspace/runtime";
-  const browsers = await browserData.detectBrowsers();
-  for (const b of browsers) {
-    const status = b.tccBlocked ? " (blocked — needs permission)" : "";
-    console.log(b.displayName + status + " — " + b.profiles.length + " profile(s)");
-    for (const p of b.profiles) {
-      console.log("  " + p.displayName + (p.isDefault ? " (default)" : ""));
-    }
+  const hosts = await browserData.listImportHosts();
+  for (const host of hosts) {
+    const sources = await browserData.listImportSources(host.hostId);
+    console.log(host.label, sources.map(source => ({
+      sourceId: source.sourceId,
+      browser: source.displayName,
+      status: source.status,
+    })));
   }
-  return browsers;
+  return hosts;
 `
 })
 ```
 
-Then ask the user which browser/profile to import from and which data types they want. See the `browser-import` skill docs for:
+Then ask the user which host/browser source and data types they want. Source
+profiles and filesystem paths remain private to the trusted provider. See the
+canonical [browser environment skill](../../extensions/browser-data/SKILL.md)
+for preview, import jobs, cancellation, open tabs, and browser-data management.
 
-- [DISCOVERY.md](../../extensions/browser-data/references/DISCOVERY.md) — browser detection and profile enumeration
-- [IMPORT.md](../../extensions/browser-data/references/IMPORT.md) — running imports
-- [COOKIES.md](../../extensions/browser-data/references/COOKIES.md) — cookie management and session sync
-- [PASSWORDS.md](../../extensions/browser-data/references/PASSWORDS.md) — password vault
 - [BOOKMARKS.md](../../extensions/browser-data/references/BOOKMARKS.md) — bookmark browsing
 - [WORKFLOWS.md](../../extensions/browser-data/references/WORKFLOWS.md) — end-to-end recipes
 
