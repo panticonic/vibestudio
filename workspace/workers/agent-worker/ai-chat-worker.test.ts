@@ -65,6 +65,9 @@ class TestableAiChatWorker extends AiChatWorker {
       this.lifecycleLeaseCalls.push({ method, input: args[0] });
       return undefined;
     }
+    if (target === "main" && method === "contextIntegrity.ingest") {
+      return { class: "internal", latchEpoch: 0, externalKeys: [] };
+    }
     throw new Error(`unexpected rpc ${target}.${method}`);
   });
 

@@ -1442,6 +1442,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     generation: number;
     controller: AbortController;
     terminal: Promise<void>;
+    acknowledged: boolean;
   }
 
   let subscriptionGeneration = 0;
@@ -1462,6 +1463,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     });
     let acknowledged = false;
 
+    let subscription!: ActiveSubscription;
     const terminal = (async () => {
       try {
         const response = await rpc.stream(
@@ -1478,6 +1480,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           if (record.kind === "subscribed") {
             if (acknowledged) throw new Error("Channel subscription sent more than one ACK");
             acknowledged = true;
+            subscription.acknowledged = true;
             await applySubscribeAckFallback(record.result);
             resolveAck();
             continue;
@@ -1511,7 +1514,8 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       }
     })();
     terminal.catch(() => {});
-    activeSubscription = { generation, controller, terminal };
+    subscription = { generation, controller, terminal, acknowledged: false };
+    activeSubscription = subscription;
     await ack;
   }
 
@@ -1990,11 +1994,13 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     })();
   }
 
-  function close(): void {
+  let closePromise: Promise<void> | null = null;
+
+  function close(): Promise<void> {
+    if (closePromise) return closePromise;
     closed = true;
     unregisterResubscribe?.();
     unregisterColdRecover?.();
-    activeSubscription?.controller.abort();
     rejectReady(new PubSubError("connection closed before ready", "connection"));
     eventsFanout.close();
     // Reject all pending method calls so callers don't hang
@@ -2013,6 +2019,29 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     }
     executingMethods.clear();
     for (const handler of disconnectHandlers) handler();
+
+    const subscription = activeSubscription;
+    closePromise = (async () => {
+      let leaveError: unknown;
+      try {
+        // Before the subscribe ACK there is no admitted participant to leave;
+        // cancelling that pending resource is complete cleanup. After the ACK,
+        // self-leave is the one cooperative terminal: the channel drains the
+        // participant's accepted delivery lane before removing its authority
+        // anchor and closing the response stream.
+        if (subscription?.acknowledged) {
+          await callChannel("unsubscribe", pid);
+        }
+      } catch (error) {
+        leaveError = error;
+      } finally {
+        subscription?.controller.abort();
+        await subscription?.terminal.catch(() => undefined);
+        if (activeSubscription === subscription) activeSubscription = null;
+      }
+      if (leaveError !== undefined) throw leaveError;
+    })();
+    return closePromise;
   }
 
   async function sendRaw(_message: Record<string, unknown>): Promise<void> {

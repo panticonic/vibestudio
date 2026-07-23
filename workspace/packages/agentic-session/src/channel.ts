@@ -30,11 +30,8 @@ export interface SubscribeHeadlessAgentOptions {
   objectKey: string;
   /** Channel ID to subscribe to */
   channelId: string;
-  /**
-   * Context ID for the spawned agent. Omit to let runtime.createEntity mint a
-   * fresh isolated context for this headless agent.
-   */
-  contextId?: string;
+  /** Explicit context owned by the caller for the spawned agent. */
+  contextId: string;
   /**
    * Pi-native pass-through config. Common keys are `model`,
    * `thinkingLevel`, `approvalLevel`, `systemPrompt`, and
@@ -76,7 +73,7 @@ export async function subscribeHeadlessAgent(
       className: opts.className,
       key: opts.objectKey,
       channelId: opts.channelId,
-      ...(opts.contextId ? { contextId: opts.contextId } : {}),
+      contextId: opts.contextId,
       config: subscriptionConfig,
       retireEntityOnSubscribeFailure: true,
       missingContextErrorMessage:
@@ -89,6 +86,27 @@ export async function subscribeHeadlessAgent(
     targetId: handle.targetId,
     contextId,
   };
+}
+
+/**
+ * Allocate the lifecycle boundary for an isolated headless session.
+ *
+ * Runtime entity creation inherits the verified caller context when no
+ * context is supplied. Isolation is therefore an explicit context operation,
+ * not an overloaded meaning of an omitted createEntity field.
+ */
+export async function createHeadlessAgentContext(opts: {
+  rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
+}): Promise<string> {
+  const value = await opts.rpcCall("main", "runtime.createContext", [{}]);
+  const contextId =
+    value && typeof value === "object" && typeof (value as { contextId?: unknown }).contextId === "string"
+      ? (value as { contextId: string }).contextId
+      : "";
+  if (!contextId) {
+    throw new Error("runtime.createContext did not return a contextId for headless isolation");
+  }
+  return contextId;
 }
 
 export async function retireHeadlessAgent(opts: {

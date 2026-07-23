@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import {
+  createHeadlessAgentContext,
   destroyHeadlessAgentContext,
   getRecommendedChannelConfig,
   retireHeadlessAgent,
@@ -83,37 +84,11 @@ describe("subscribeHeadlessAgent — unified contract", () => {
     expect(result.contextId).toBe("ctx-1");
   });
 
-  it("lets runtime.createEntity mint an isolated context when none is supplied", async () => {
-    const captured: { createSpec?: Record<string, unknown>; config?: Record<string, unknown> } = {};
-    const rpcCall = makeRpcCall(captured);
+  it("allocates isolated headless contexts through the explicit context API", async () => {
+    const rpcCall = vi.fn(async () => ({ contextId: "ctx-isolated" }));
 
-    const result = await subscribeHeadlessAgent({
-      rpcCall,
-      source: "workers/agent-worker",
-      className: "AiChatWorker",
-      objectKey: "obj-1",
-      channelId: "ch-1",
-    });
-
-    expect(captured.createSpec).toEqual({
-      kind: "do",
-      source: "workers/agent-worker",
-      className: "AiChatWorker",
-      key: "obj-1",
-      stateArgs: { agentConfig: { approvalLevel: 2 } },
-      agentChannelId: "ch-1",
-    });
-    expect(result.contextId).toBe("ctx-minted");
-    expect(rpcCall).toHaveBeenLastCalledWith(
-      "do:workers/agent-worker:AiChatWorker:obj-1",
-      "subscribeChannel",
-      [
-        expect.objectContaining({
-          channelId: "ch-1",
-          contextId: "ctx-minted",
-        }),
-      ],
-    );
+    await expect(createHeadlessAgentContext({ rpcCall })).resolves.toBe("ctx-isolated");
+    expect(rpcCall).toHaveBeenCalledWith("main", "runtime.createContext", [{}]);
   });
 
   it("retires the runtime entity if subscription fails after creation", async () => {
@@ -149,32 +124,12 @@ describe("subscribeHeadlessAgent — unified contract", () => {
     });
   });
 
-  it("retires the runtime entity if an isolated spawn does not return a context", async () => {
-    const calls: Array<{ target: string; method: string; args: unknown[] }> = [];
-    const rpcCall = vi.fn(async (target: string, method: string, args: unknown[]) => {
-      calls.push({ target, method, args });
-      if (method === "runtime.createEntity") {
-        return {
-          id: "do:workers/agent-worker:AiChatWorker:obj-1",
-          targetId: "do:workers/agent-worker:AiChatWorker:obj-1",
-        };
-      }
-      return undefined;
-    });
+  it("rejects malformed explicit context allocation results", async () => {
+    const rpcCall = vi.fn(async () => ({}));
 
-    await expect(subscribeHeadlessAgent({
-      rpcCall,
-      source: "workers/agent-worker",
-      className: "AiChatWorker",
-      objectKey: "obj-1",
-      channelId: "ch-1",
-    })).rejects.toThrow("runtime.createEntity did not return a contextId");
-
-    expect(calls[calls.length - 1]).toEqual({
-      target: "main",
-      method: "runtime.retireEntity",
-      args: [{ id: "do:workers/agent-worker:AiChatWorker:obj-1" }],
-    });
+    await expect(createHeadlessAgentContext({ rpcCall })).rejects.toThrow(
+      "runtime.createContext did not return a contextId"
+    );
   });
 
   it("does not pass a systemPrompt by default", async () => {

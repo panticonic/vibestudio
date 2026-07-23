@@ -129,6 +129,41 @@ const turn1 = ids.turnId("chan-1", "env-1", "agent:self");
 const msg0 = ids.messageId(turn1, 0);
 
 describe("agent-loop core lifecycle", () => {
+  it("journals a pre-model infrastructure failure as a terminal failed turn", () => {
+    const s = scenario();
+
+    dispatch(s, {
+      type: "command",
+      command: {
+        kind: "prompt-failed",
+        channelId: "chan-1",
+        source: { envelopeId: "env-1" },
+        content: "hello",
+        senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
+        reason: "prompt resource unavailable",
+        code: "prompt_artifact_load_failed",
+      },
+    });
+
+    expect(kinds(s)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.failed",
+      "turn.closed",
+    ]);
+    expect(s.log[2]).toMatchObject({
+      payload: {
+        reason: "prompt resource unavailable",
+        recoverable: false,
+        code: "prompt_artifact_load_failed",
+      },
+      causality: { turnId: turn1 },
+      publish: true,
+    });
+    expect(s.state.openTurn).toBeNull();
+    expect(pendingEffectIds(s)).toEqual([]);
+  });
+
   it("prompt opens a turn, journals before dispatch, and closes on a text-only reply", () => {
     const s = scenario();
     prompt(s);
@@ -224,6 +259,58 @@ describe("agent-loop core lifecycle", () => {
     });
     expect(s.state.openTurn).toBeNull();
     expect(pendingEffectIds(s)).toEqual([]);
+  });
+
+  it("settles an infrastructure-failed invocation and closes the owning turn", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [{ type: "toolCall", id: "tc-infra", name: "read", arguments: { path: "a.ts" } }],
+      stopReason: "completed",
+    });
+
+    resolveEffect(s, ids.invocationEffect("tc-infra"), {
+      kind: "tool",
+      result: { error: "package linker unavailable", code: "package_load_failed" },
+      isError: true,
+      reason: "package linker unavailable",
+      terminalOutcome: "infrastructure_error",
+    });
+
+    const terminal = s.log.find(
+      (row) => row.envelopeId === ids.invocationTerminal("tc-infra")
+    )!;
+    expect(terminal).toMatchObject({
+      payloadKind: "invocation.failed",
+      payload: {
+        terminalOutcome: "infrastructure_error",
+        reason: "package linker unavailable",
+      },
+    });
+    expect(s.log.filter((row) => row.payloadKind === "message.started")).toHaveLength(1);
+    expect(s.state.openTurn).toBeNull();
+    expect(pendingEffectIds(s)).toEqual([]);
+  });
+
+  it("keeps an authored tool failure recoverable inside the turn", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [{ type: "toolCall", id: "tc-user", name: "read", arguments: { path: "missing" } }],
+      stopReason: "completed",
+    });
+
+    resolveEffect(s, ids.invocationEffect("tc-user"), {
+      kind: "tool",
+      result: { error: "missing" },
+      isError: true,
+      reason: "missing",
+    });
+
+    expect(s.state.openTurn).not.toBeNull();
+    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
   });
 
   it("stamps tier secondary on tool-call (intermediate) messages and primary on the final answer", () => {
@@ -1323,6 +1410,69 @@ describe("channel tools", () => {
     });
     const effects = derivePendingEffects(s.state);
     expect(effects).toEqual([expect.objectContaining({ kind: "channel_call", method: "eval" })]);
+  });
+
+  it("routes against the roster captured for the model call when presence changes in flight", () => {
+    const panelRoster: AgentLoopConfig["roster"] = {
+      participants: [
+        {
+          participantId: "panel:user",
+          ref: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+          type: "panel",
+          methods: [{ name: "set_title" }],
+        },
+      ],
+    };
+    const s = scenario({ roster: panelRoster });
+    prompt(s);
+
+    expect(s.state.inFlightModelCall?.request.channelToolOwners).toEqual({
+      set_title: panelRoster.participants[0]!.ref,
+    });
+
+    applyAppend(s, [
+      {
+        envelopeId: "roster-empty-while-model-runs",
+        payloadKind: "system.event",
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          kind: "roster.snapshot",
+          details: {
+            kind: "roster.snapshot",
+            roster: { participants: [] },
+          },
+        },
+      },
+    ]);
+    expect(s.state.config.roster.participants).toEqual([]);
+
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "tc-title",
+          name: "set_title",
+          arguments: { title: "Welcome to Vibestudio" },
+        },
+      ],
+      stopReason: "completed",
+    });
+
+    const started = s.log.find(
+      (row) => row.envelopeId === ids.invocationStart("tc-title")
+    )!;
+    expect(started.payload).toMatchObject({
+      transport: {
+        kind: "channel",
+        channelId: "chan-1",
+        transportCallId: ids.transportCallId("tc-title"),
+        target: { participantId: "panel:user" },
+      },
+    });
+    expect(derivePendingEffects(s.state)).toEqual([
+      expect.objectContaining({ kind: "channel_call", method: "set_title" }),
+    ]);
   });
 });
 

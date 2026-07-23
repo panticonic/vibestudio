@@ -347,6 +347,42 @@ describe("PubSubChannel", () => {
     });
   });
 
+  it("stamps the sender latch on the durable message and preserves exact outside lineage", async () => {
+    const { instance, gad } = await createGadBackedChannel();
+    setRpcCaller(instance, "agent:outside", "agent");
+    const caller = (
+      instance as unknown as {
+        _currentVerifiedCaller: {
+          authorization?: ReturnType<typeof createTestDirectAuthority>;
+        };
+      }
+    )._currentVerifiedCaller;
+    caller.authorization = createTestDirectAuthority({
+      callerKind: "agent",
+      method: "publish",
+      objectKey: "channel-1",
+    });
+    caller.authorization.context.contextIntegrity = {
+      class: "external",
+      latchEpoch: 2,
+      externalKeys: ["web:example.com", "msg:source/earlier"],
+    };
+
+    await instance.subscribe("agent:outside", {
+      contextId: "ctx-1",
+      name: "Outside agent",
+      type: "agent",
+    });
+    await instance.publish("agent:outside", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+    const page = await gad.instance.readChannelEnvelopes({ channelId: "channel-1" });
+    const envelope = page.items.at(-1);
+
+    expect(envelope).toMatchObject({
+      contentClass: "external",
+      externalKeys: ["web:example.com", "msg:source/earlier"],
+    });
+  });
+
   it("allows a panel caller to use its stable slot participant id", async () => {
     const { instance } = await createGadBackedChannel();
     setRpcCaller(instance, "panel:nav-current", "panel", "panel:slot-stable");
@@ -1131,6 +1167,49 @@ describe("PubSubChannel", () => {
     }
   });
 
+  it("surfaces non-lifecycle structured delivery failures", async () => {
+    const agentId = "do:workers/agent-worker:AiChatWorker:headless-denied";
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { instance } = await createGadBackedChannel({
+      rpcCall: async (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
+        if (target === agentId && method === "onChannelEnvelope") {
+          const err = new Error("authority denied") as Error & { code?: string };
+          err.code = "EACCES";
+          throw err;
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      setRpcCaller(instance, agentId, "durable-object");
+      await instance.subscribe(agentId, {
+        contextId: "ctx-1",
+        name: "Denied agent",
+        type: "agent",
+        receivesChannelEnvelopes: true,
+      });
+      setRpcCaller(instance, "panel:user", "panel");
+      await instance.subscribe("panel:user", {
+        contextId: "ctx-1",
+        name: "User",
+        type: "panel",
+      });
+      await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+      await vi.waitFor(() =>
+        expect(consoleError).toHaveBeenCalledWith(
+          expect.stringContaining(`[Channel] delivery failed for ${agentId}`),
+          expect.objectContaining({ code: "EACCES" })
+        )
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("delivers onChannelEnvelope only to DO participants that opted in (receivesChannelEnvelopes)", async () => {
     const envelopeTargets: string[] = [];
     const agentDoId = "do:workers/agent-worker:AiChatWorker:agent-x";
@@ -1500,11 +1579,11 @@ describe("PubSubChannel", () => {
             subject: expect.objectContaining({
               id: expect.stringMatching(/^channel\.inspectAgent:/u),
             }),
-            title: "Inspect agent debug data",
+            title: "View agent details",
             details: expect.arrayContaining([
-              { label: "Caller", value: "do do:vibestudio/internal:EvalDO:agent-eval" },
+              { label: "Requested by", value: "do do:vibestudio/internal:EvalDO:agent-eval" },
               { label: "Agent", value: targetPid },
-              { label: "Method", value: "getAgentSettings" },
+              { label: "Looking at", value: "getAgentSettings" },
             ]),
           }),
         ],
@@ -2278,6 +2357,7 @@ describe("PubSubChannel", () => {
           envelopeId: "invocation-agent-loop",
           actor: { kind: "agent", id: "do:agent", participantId: "do:agent" },
           payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+          annotations: { contentClass: "internal", externalKeys: [] },
           payload: {
             kind: "invocation.started",
             actor: { kind: "agent", id: "do:agent", participantId: "do:agent" },
@@ -3825,6 +3905,9 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
           authorization: createTestDirectAuthority({
             callerKind: kind as "panel" | "worker" | "server" | "do" | "shell",
             method: "appendSeed",
+            capability: "workspace-service:channel",
+            targetCapability: "workspace-service:channel",
+            targetPrincipals: ["host", "user", "code"],
             objectKey: "channel-1",
           }),
         })

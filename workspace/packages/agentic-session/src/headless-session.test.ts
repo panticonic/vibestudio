@@ -150,11 +150,9 @@ describe("HeadlessSession", () => {
   });
 
   it("set_title records the report title without touching the channel config", async () => {
-    // A headless client is a `do` caller; the channel's updateConfig is
-    // panel/server-only, so set_title must NOT route through the channel
-    // (that path fails with `caller kind "do" is not permitted`). Instead it
-    // stores the title on the session/report and best-effort publishes it via
-    // the `do`-permitted runtime.setTitle.
+    // A headless report has no user-facing runtime entity. Its transport DO is
+    // infrastructure and the channel config is panel/server-owned, so the
+    // title remains local report metadata.
     const config = createConfig();
     const session = HeadlessSession.create({ config });
     const updateChannelConfig = vi.fn(async () => undefined);
@@ -169,43 +167,18 @@ describe("HeadlessSession", () => {
     expect(result).toEqual({ ok: true });
     expect(session.title).toBe("Filesystem Report");
     expect(session.snapshot().title).toBe("Filesystem Report");
-    // The channel config (and thus the panel/server-gated updateConfig) is never touched.
+    // Neither the channel nor the transport DO is renamed.
     expect(updateChannelConfig).not.toHaveBeenCalled();
-    // It DOES publish the entity title via the do-permitted runtime.setTitle.
-    expect(config.rpc.call).toHaveBeenCalledWith("main", "runtime.setTitle", [
-      "Filesystem Report",
-      { explicit: true },
-    ]);
+    expect(config.rpc.call).not.toHaveBeenCalled();
   });
 
-  it("set_title surfaces a runtime.setTitle failure as a non-fatal warning", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const config = createConfig();
-    (config.rpc.call as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("registry down"));
-    const session = HeadlessSession.create({ config });
-    (session as any)._client = { updateChannelConfig: vi.fn() };
-
-    const methods = (session as any).buildDefaultMethods() as Record<
-      string,
-      { execute: (args: unknown) => Promise<unknown> }
-    >;
-    const result = await methods["set_title"]!.execute({ title: "Network Report" });
-
-    // The report title is still recorded; only the registry publish failed.
-    expect(result).toEqual({ ok: true, warnings: ["registry down"] });
-    expect(session.title).toBe("Network Report");
-    warn.mockRestore();
-  });
-
-  it("dispose is idempotent", () => {
+  it("dispose is idempotent", async () => {
     const session = HeadlessSession.create({
       config: createConfig(),
     });
 
-    expect(() => {
-      session.dispose();
-      session.dispose();
-    }).not.toThrow();
+    await expect(session.dispose()).resolves.toBeUndefined();
+    await expect(session.dispose()).resolves.toBeUndefined();
   });
 
   it("awaits the agent pause terminal before interrupt returns", async () => {
@@ -227,6 +200,19 @@ describe("HeadlessSession", () => {
     settle({ result: { paused: true } });
     await interrupt;
     expect(completed).toBe(true);
+  });
+
+  it("uses the direct agent lifecycle barrier when a headless RPC route is available", async () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    const rpcCall = vi.fn(async () => ({ interrupted: true }));
+    (session as any)._agentRpcCall = rpcCall;
+    (session as any)._channelId = "ch-direct";
+    (session as any)._client = { callMethod: vi.fn() };
+
+    await session.interrupt("agent-direct");
+
+    expect(rpcCall).toHaveBeenCalledWith("agent-direct", "interruptChannel", ["ch-direct"]);
+    expect((session as any)._client.callMethod).not.toHaveBeenCalled();
   });
 
   it("finishes shared-context unsubscribe before retiring the agent entity", async () => {
@@ -272,7 +258,7 @@ describe("HeadlessSession", () => {
     ]);
   });
 
-  it("recursively destroys a context minted for an isolated headless session", async () => {
+  it("unsubscribes before recursively destroying an isolated headless context", async () => {
     const session = HeadlessSession.create({ config: createConfig() });
     const calls: Array<{ target: string; method: string; args: unknown[] }> = [];
     (session as any)._agentEntityId = "do:workers/agent-worker:AiChatWorker:obj-1";
@@ -290,6 +276,11 @@ describe("HeadlessSession", () => {
     await session.close();
 
     expect(calls).toEqual([
+      {
+        target: "do:workers/agent-worker:AiChatWorker:obj-1",
+        method: "unsubscribeChannel",
+        args: ["ch-1"],
+      },
       {
         target: "main",
         method: "runtime.destroyContext",
@@ -321,11 +312,14 @@ describe("HeadlessSession", () => {
         message: "destroy failed",
       }),
     ]);
-    expect(calls).toEqual([{ target: "main", method: "runtime.destroyContext" }]);
+    expect(calls).toEqual([
+      { target: "agent-target", method: "unsubscribeChannel" },
+      { target: "main", method: "runtime.destroyContext" },
+    ]);
     warn.mockRestore();
   });
 
-  it("can detach local session state while remote cleanup continues", async () => {
+  it("does not detach local session state from remote cleanup", async () => {
     const session = HeadlessSession.create({
       config: createConfig(),
     });
@@ -346,7 +340,23 @@ describe("HeadlessSession", () => {
       }
     );
 
-    await expect(session.close({ waitForRemoteCleanup: false })).resolves.toBeUndefined();
+    let settled = false;
+    const closing = session.close().then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() =>
+      expect(calls).toEqual([
+        {
+          target: "do:workers/agent-worker:AiChatWorker:obj-1",
+          method: "unsubscribeChannel",
+          args: ["ch-1"],
+        },
+      ])
+    );
+    expect(settled).toBe(false);
+
+    releaseUnsubscribe?.();
+    await closing;
 
     expect(session.channelId).toBe(null);
     expect(calls).toEqual([
@@ -355,19 +365,15 @@ describe("HeadlessSession", () => {
         method: "unsubscribeChannel",
         args: ["ch-1"],
       },
+      {
+        target: "main",
+        method: "runtime.retireEntity",
+        args: [{ id: "do:workers/agent-worker:AiChatWorker:obj-1" }],
+      },
     ]);
-
-    releaseUnsubscribe?.();
-    await vi.waitFor(() => expect(calls).toHaveLength(2));
-
-    expect(calls[1]).toEqual({
-      target: "main",
-      method: "runtime.retireEntity",
-      args: [{ id: "do:workers/agent-worker:AiChatWorker:obj-1" }],
-    });
   });
 
-  it("destroys an owned context without waiting on the agent it is reclaiming", async () => {
+  it("waits for owned-context unsubscription before destroying the context", async () => {
     const session = HeadlessSession.create({ config: createConfig() });
     const calls: string[] = [];
     (session as any)._agentEntityId = "do:workers/agent-worker:AiChatWorker:obj-owned";
@@ -382,9 +388,9 @@ describe("HeadlessSession", () => {
       }
     );
 
-    await expect(session.close({ waitForRemoteCleanup: true })).resolves.toBeUndefined();
+    await expect(session.close()).resolves.toBeUndefined();
 
-    expect(calls).toEqual(["runtime.destroyContext"]);
+    expect(calls).toEqual(["unsubscribeChannel", "runtime.destroyContext"]);
     expect(session.snapshot().cleanupErrors).toEqual([]);
   });
 
@@ -585,7 +591,7 @@ describe("HeadlessSession", () => {
     ]);
   });
 
-  it("can create an agent in a runtime-minted isolated context", async () => {
+  it("creates an explicit isolated context before connecting or launching an agent", async () => {
     const originalConnect = HeadlessSession.prototype.connect;
     const order: string[] = [];
     const connect = vi
@@ -595,18 +601,21 @@ describe("HeadlessSession", () => {
         channelId: string,
         options?: { contextId?: string; methods?: Record<string, unknown> }
       ) {
-        order.push(`connect:${channelId}:${options?.contextId ?? "minted"}`);
+        order.push(`connect:${channelId}:${options?.contextId ?? "missing"}`);
         (this as unknown as { _channelId: string; _client: unknown })._channelId = channelId;
         (this as unknown as { _client: unknown })._client = { close: vi.fn() };
       });
     const rpcCall = vi.fn(async (target: string, method: string, args: unknown[]) => {
       order.push(`rpc:${target}:${method}`);
+      if (target === "main" && method === "runtime.createContext") {
+        return { contextId: "ctx-isolated" };
+      }
       if (target === "main" && method === "runtime.createEntity") {
-        expect(args[0]).not.toHaveProperty("contextId");
-        return { id: "entity-1", targetId: "agent-target", contextId: "ctx-minted" };
+        expect(args[0]).toHaveProperty("contextId", "ctx-isolated");
+        return { id: "entity-1", targetId: "agent-target", contextId: "ctx-isolated" };
       }
       if (target === "agent-target" && method === "subscribeChannel") {
-        expect(args[0]).toMatchObject({ channelId: "headless-1", contextId: "ctx-minted" });
+        expect(args[0]).toMatchObject({ channelId: "headless-1", contextId: "ctx-isolated" });
         return { ok: true, participantId: "do:agent" };
       }
       throw new Error(`unexpected RPC ${target}.${method}`);
@@ -628,12 +637,13 @@ describe("HeadlessSession", () => {
     }
 
     expect(order).toEqual([
-      "connect:headless-1:minted",
+      "rpc:main:runtime.createContext",
+      "connect:headless-1:ctx-isolated",
       "rpc:main:runtime.createEntity",
       "rpc:agent-target:subscribeChannel",
     ]);
     expect(session?.snapshot()).toMatchObject({
-      agentContextId: "ctx-minted",
+      agentContextId: "ctx-isolated",
       ownsAgentContext: true,
     });
   });

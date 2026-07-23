@@ -15,6 +15,7 @@ import type { Context, Message } from "@earendil-works/pi-ai";
 import {
   buildModelContext,
   classifyModelFailure,
+  type AgentState,
   type AgentTurnContextPolicy,
   type EffectOutcome,
   modelFailureInputFromUnknown,
@@ -292,6 +293,29 @@ function modelStreamSessionId(
   );
 }
 
+/** Credential-free activation evidence for diagnosing a model attempt that
+ * was journaled but never emitted a provider event. Keep this on the same
+ * module graph as the transport call so it describes the exact bundled
+ * runtime, not the host process. */
+export function modelTransportRuntimeEvidence(): {
+  workersFetchUpgradeAvailable: boolean;
+  ambientWebSocketAvailable: boolean;
+  vibestudioWebSocketRouteInstalled: boolean;
+} {
+  const globals = globalThis as typeof globalThis & {
+    WebSocketPair?: unknown;
+    WebSocket?: unknown;
+    __vibestudioPrepareModelWebSocket?: unknown;
+  };
+  return {
+    workersFetchUpgradeAvailable:
+      typeof globals.fetch === "function" && typeof globals.WebSocketPair === "function",
+    ambientWebSocketAvailable: typeof globals.WebSocket === "function",
+    vibestudioWebSocketRouteInstalled:
+      typeof globals.__vibestudioPrepareModelWebSocket === "function",
+  };
+}
+
 function hasToolCallBlock(blocks: readonly unknown[]): boolean {
   return blocks.some(
     (block) =>
@@ -513,13 +537,47 @@ function safeText(value: unknown): string {
 
 function deterministicTestModeModelOutcome(
   descriptor: ModelCallEffect,
+  state: AgentState,
+  systemPrompt: string,
   env?: Record<string, unknown>
 ): EffectOutcome | null {
   const testMode = env?.["VIBESTUDIO_TEST_MODE"];
   const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } })
     .process?.env;
   if (testMode !== "1" && processEnv?.["VIBESTUDIO_TEST_MODE"] !== "1") return null;
-  if (descriptor.request.provider !== "openai-codex") return null;
+
+  // This deterministic endpoint substitutes only for model inference,
+  // independently of whichever provider a fresh profile resolves. Honor
+  // an explicit first read action from the hydrated system prompt so E2E still
+  // exercises the real invocation, file transport, and continuation loop.
+  const firstAction = systemPrompt.match(/##\s+Your first action\b([\s\S]*?)(?=\n##\s|$)/i)?.[1];
+  const requestedRead = firstAction?.match(/\bread\(\s*["']([^"']+)["']\s*\)/)?.[1];
+  if (requestedRead && descriptor.request.activeToolNames.includes("read")) {
+    const turnOpenedAt = state.openTurn?.openedAtSeq ?? 0;
+    const readCompleted = state.entries.some(
+      (entry) =>
+        entry.kind === "tool-result" &&
+        entry.seq >= turnOpenedAt &&
+        entry.name === "read" &&
+        !entry.isError
+    );
+    if (!readCompleted) {
+      return {
+        kind: "model",
+        blocks: [
+          {
+            type: "toolCall",
+            id: `${descriptor.messageId}:test-read`,
+            name: "read",
+            arguments: { path: requestedRead },
+          },
+        ],
+        stopReason: "completed",
+        outcome: "tool_calls_only",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    }
+  }
   return {
     kind: "model",
     blocks: [
@@ -672,6 +730,7 @@ async function executeModelCall(
     signal,
     deps,
     onEphemeral,
+    onExecutionProgress,
     onModelExecutionAttempt,
   }: Parameters<EffectExecutor<ModelCallEffect>["execute"]>[0],
   progress: ModelCallProgress
@@ -681,6 +740,7 @@ async function executeModelCall(
     progress.stage = stage;
     progress.stageChangedAt = Date.now();
     progress.marks.push([stage, progress.stageChangedAt]);
+    onExecutionProgress?.(stage);
     traceModelCallStage(stage, descriptor, extra, deps.env);
   };
   trace("start");
@@ -702,7 +762,14 @@ async function executeModelCall(
   systemPromptPromise.catch(() => {});
   toolsJsonPromise.catch(() => {});
 
-  const testModeOutcome = deterministicTestModeModelOutcome(descriptor, deps.env);
+  const testModeEnabled =
+    deps.env?.["VIBESTUDIO_TEST_MODE"] === "1" ||
+    (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[
+      "VIBESTUDIO_TEST_MODE"
+    ] === "1";
+  const testModeOutcome = testModeEnabled
+    ? deterministicTestModeModelOutcome(descriptor, state, (await systemPromptPromise) ?? "", deps.env)
+    : null;
   if (testModeOutcome) {
     trace("test-mode.completed");
     return testModeOutcome;
@@ -882,6 +949,7 @@ async function executeModelCall(
     baseUrl: String(effectiveSpec.baseUrl ?? modelBaseUrl ?? ""),
     auth: request.auth ?? "url-bound",
     startedAt,
+    transportRuntime: modelTransportRuntimeEvidence(),
   });
   let attemptFinished = false;
   const finishAttempt = (

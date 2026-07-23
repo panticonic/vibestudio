@@ -104,6 +104,7 @@ import {
   createModelCredentialSentinel,
   installUrlBoundModelFetchProxy,
 } from "./model-fetch-proxy.js";
+import { modelTransportRuntimeEvidence } from "./effect-executors/index.js";
 import { prepareAgentToolArguments } from "./tool-arguments.js";
 
 export interface AgentToolExecutionContext {
@@ -292,6 +293,10 @@ export function resolveRespondFromHandles(
   return respondFrom.map((entry) => handleToId.get(entry) ?? entry);
 }
 
+function participantIdFromRef(ref: ParticipantRef): string {
+  return ref.participantId ?? ref.id;
+}
+
 function configuredParticipantHandle(config: unknown): string | null {
   if (!config || typeof config !== "object") return null;
   const handle = (config as Record<string, unknown>)["handle"];
@@ -448,6 +453,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     {
       resolve: (value: { content: unknown }) => void;
       reject: (error: Error) => void;
+      responderSessionId: string;
       timer?: ReturnType<typeof setTimeout>;
     }
   >();
@@ -1469,6 +1475,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       // inline_ui/feedback/action_bar). eval is a LOCAL tool now, not a channel method.
       const seenTools = new Set(registry.keys());
       for (const participant of this.rosterSnapshot(channelId)) {
+        if (participant.methods.length > 0) {
+          await this.recordDerivedSessionIngestion(
+            participant.participantId,
+            "participant-tool-advertisement"
+          );
+        }
         for (const method of participant.methods) {
           if (seenTools.has(method.name)) continue;
           seenTools.add(method.name);
@@ -1671,6 +1683,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             : null,
           limit: typeof input.limit === "number" ? input.limit : null,
         });
+        for (const result of recall.results) {
+          const origin =
+            result.actor && typeof result.actor === "object" && "id" in result.actor
+              ? String((result.actor as { id: unknown }).id)
+              : (result.eventId ?? "memory-unknown");
+          await this.recordDerivedSessionIngestion(origin, "memory-recall");
+        }
         const lines = recall.results.map((result) => {
           const where =
             result.path ??
@@ -1695,7 +1714,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel membership ───────────────────────────────────────────────────
 
-  @rpc({ principals: ["code"], sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async subscribeChannel(opts: {
     channelId: string;
     contextId: string;
@@ -1728,7 +1747,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       throw error;
     }
-    await this.ensurePromptArtifacts(opts.channelId);
     await this.ingestSubscriptionReplay(
       opts.channelId,
       result.envelope,
@@ -1782,7 +1800,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["code"], sensitivity: "write" })
+  @rpc({ principals: ["user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async unsubscribeChannel(channelId: string): Promise<{ ok: boolean }> {
     try {
       await this.driver.handleIncoming(channelId, {
@@ -1800,7 +1818,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel intake ───────────────────────────────────────────────────────
 
-  @rpc({ principals: ["code"], sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async onChannelEnvelope(channelId: string, envelope: RpcChannelMessage): Promise<void> {
     this.assertChannelDeliveryCaller("onChannelEnvelope");
     if (envelope.kind === "control") {
@@ -1833,14 +1851,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // roster to shouldRespond / maybeRefreshRoster.
     if (event.type === "presence") {
       this.participantCache.delete(channelId);
-      // A participant joined/left/updated mid-session: refresh the roster
-      // snapshot AND rebuild the model's tool artifact (journaling the snapshot
-      // alone does NOT rebuild it). Only recompose when the roster actually
-      // changed (maybeRefreshRoster is fingerprint-deduped). Best-effort; the
-      // refreshed tools land on the agent's next model request.
-      if (await this.maybeRefreshRoster(channelId)) {
-        await this.ensurePromptArtifacts(channelId).catch(() => undefined);
-      }
+      // A participant joined/left/updated mid-session: refresh the durable
+      // roster snapshot. Prompt/tool artifacts are materialized at the actual
+      // reasoning boundary, where their signature includes this snapshot.
+      // Idle membership must not start host RPC/build work that outlives the
+      // subscription or competes with lifecycle release.
+      await this.maybeRefreshRoster(channelId);
     }
     // A supervisor's task-channel progress mirror observes the raw agentic
     // stream before specialized routing consumes invocation traffic. In
@@ -1866,7 +1882,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // Like routeInvocationTerminal this must run before the message.completed
     // gate and self-sender skip (the channel journals terminals with us, the
     // caller, as sender).
-    if (this.settleChatOpCall(event)) return;
+    if (await this.settleChatOpCall(channelId, event)) return;
     // Outcome routing first: a channel invocation terminal for one of our
     // pending channel_call effects settles that effect. This must run BEFORE
     // the message.completed gate and the self-sender skip — the channel
@@ -1902,6 +1918,19 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const sourceMessageId =
       ((agentic as AgenticEvent).causality?.messageId as string | undefined) ?? undefined;
 
+    // Validate identity before recording ingestion or allowing a subclass to
+    // consume content. A transport envelope is not a durable source identity.
+    if (!sourceMessageId) {
+      throw new Error(
+        `channel input ${event.messageId} has no canonical source message identity; refusing an unwalkable turn`
+      );
+    }
+
+    // The host resolves this exact durable message's persisted class. Do not
+    // read a class from the delivered payload: a participant controls payload
+    // bytes, while the GAD provenance row is product-sealed.
+    await this.recordMessageIngestion(channelId, event, "channel-message");
+
     // Only an actual recipient (shouldRespond === true) emits a received ack.
     await this.publishReceivedAck(channelId, sourceMessageId);
 
@@ -1923,8 +1952,30 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     sourceMessageId: string | undefined
   ): Promise<void> {
     const agentic = event.payload as AgenticEvent | null;
-    await this.ensurePromptArtifacts(channelId);
     const metadata = this.turnMetadata(event);
+    const command = {
+      channelId,
+      source: { envelopeId: event.messageId },
+      ...(sourceMessageId ? { sourceMessageId } : {}),
+      content: this.turnContent(channelId, event),
+      senderRef: participantRefFromActor((agentic as AgenticEvent).actor),
+      agentHops: event.annotations?.["agentHops"] as number | undefined,
+      ...(metadata ? { metadata } : {}),
+    };
+    try {
+      await this.ensurePromptArtifacts(channelId);
+    } catch (error) {
+      await this.driver.handleIncoming(channelId, {
+        type: "command",
+        command: {
+          kind: "prompt-failed",
+          ...command,
+          reason: error instanceof Error ? error.message : String(error),
+          code: "prompt_artifact_load_failed",
+        },
+      });
+      return;
+    }
     await this.driver.handleIncoming(channelId, {
       type: "command",
       command: {
@@ -1933,13 +1984,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         // so backlog that arrived while the agent was down still gets a
         // response after replay.
         kind: "prompt",
-        channelId,
-        source: { envelopeId: event.messageId },
-        ...(sourceMessageId ? { sourceMessageId } : {}),
-        content: this.turnContent(channelId, event),
-        senderRef: participantRefFromActor((agentic as AgenticEvent).actor),
-        agentHops: event.annotations?.["agentHops"] as number | undefined,
-        ...(metadata ? { metadata } : {}),
+        ...command,
       },
     });
   }
@@ -1983,6 +2028,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (!sourceMessageId || !by) return true;
     if (kind === "message.edited") {
       const payload = (agentic as AgenticEvent<"message.edited">).payload;
+      await this.recordMessageIngestion(channelId, event, "channel-message-edit");
       await this.driver.handleIncoming(channelId, {
         type: "command",
         command: { kind: "edit", sourceMessageId, blocks: payload.blocks, by },
@@ -2031,9 +2077,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       unknown
     >;
     const isError = kind !== "invocation.completed";
+    const responderSessionId = participantIdFromRef(descriptor.target);
+    await this.recordMessageIngestion(channelId, event, "channel-tool-result");
+    const hydratedResult = await this.hydrateTransportValue(
+      payload["result"],
+      responderSessionId,
+      "channel-tool-result"
+    );
     let outcome: EffectOutcome;
     if (descriptor.purpose === "approval-form") {
-      const raw = await this.hydrateTransportValue(payload["result"]);
+      const raw = hydratedResult;
       const granted =
         !isError &&
         !!raw &&
@@ -2051,7 +2104,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     } else {
       outcome = {
         kind: "tool",
-        result: payload["result"] ?? payload["error"] ?? payload["reason"] ?? null,
+        result: hydratedResult ?? payload["error"] ?? payload["reason"] ?? null,
         isError,
         ...(typeof payload["reason"] === "string" ? { reason: payload["reason"] as string } : {}),
       };
@@ -2373,7 +2426,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Method calls (agent as PROVIDER) ─────────────────────────────────────
 
-  @rpc({ principals: ["code"], sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async onMethodCall(
     channelId: string,
     _transportCallId: string,
@@ -2397,7 +2450,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * below is in-memory or local SQLite; missing folded state remains explicitly
    * missing instead of being hydrated through GAD.
    */
-  @rpc({ principals: ["host", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
   async readAgentInspection(
     channelId: string,
     methodName: string
@@ -2432,9 +2485,19 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * stale, which is precisely when timeout/cancellation diagnostics need it.
    * The response contains no prompt, tool argument, credential, or secret.
    */
-  @rpc({ principals: ["host", "code"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
   async getModelExecutionEvidence(channelId: string): Promise<unknown> {
-    return this.driver.modelExecutionEvidence(channelId);
+    const evidence = await this.driver.modelExecutionEvidence(channelId);
+    return { ...evidence, transportRuntime: modelTransportRuntimeEvidence() };
+  }
+
+  /** Direct lifecycle barrier for non-interactive owners. Unlike the chat
+   * `pause` method this does not require the controller to remain a channel
+   * member while cancellation is already unwinding that membership. */
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  async interruptChannel(channelId: string): Promise<{ interrupted: true }> {
+    await this.driver.interruptChannel(channelId, false);
+    return { interrupted: true };
   }
 
   protected async handleStandardAgentMethodCall(
@@ -2634,7 +2697,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * `do:vibestudio/internal:EvalDO:<key>`. Any other caller is rejected; the
    * generic DO relay is open, so a sensitive receiver gates on receipt.
    */
-  @rpc({ principals: ["code"], sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async chatOp(channelId: string, op: string, args: unknown[]): Promise<unknown> {
     await this.assertOwnEvalCaller(channelId);
     const channel = this.createChannelClient(channelId);
@@ -2945,8 +3008,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       const entry: {
         resolve: (value: { content: unknown }) => void;
         reject: (error: Error) => void;
+        responderSessionId: string;
         timer?: ReturnType<typeof setTimeout>;
-      } = { resolve, reject };
+      } = { resolve, reject, responderSessionId: targetPid };
       if (timeoutMs && timeoutMs > 0) {
         entry.timer = setTimeout(() => {
           if (this.chatOpPendingCalls.delete(callId)) {
@@ -2981,7 +3045,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** Settle a pending chatOp relay call from a channel invocation terminal.
    *  Returns true when the event settled (or was a non-terminal phase of) one
    *  of our relay calls — so processChannelEvent stops routing it further. */
-  private settleChatOpCall(event: ChannelEvent): boolean {
+  private async settleChatOpCall(channelId: string, event: ChannelEvent): Promise<boolean> {
     if (this.chatOpPendingCalls.size === 0) return false;
     const agentic = event.payload as AgenticEvent | null;
     const kind = (agentic as { kind?: string } | null)?.kind ?? "";
@@ -3011,10 +3075,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       // Hydrate any stored-value refs the provider spilled, then resolve with
       // the delivered content (ChatMethodResult shape). hydrate is async; the
       // settle hook stays sync by resolving inside the promise chain.
-      void this.hydrateTransportValue(payload["result"]).then(
-        (content) => entry.resolve({ content }),
-        (err) => entry.reject(err instanceof Error ? err : new Error(String(err)))
-      );
+      void this.recordMessageIngestion(channelId, event, "chat-method-result")
+        .then(() =>
+          this.hydrateTransportValue(
+            payload["result"],
+            entry.responderSessionId,
+            "chat-method-result"
+          )
+        )
+        .then(
+          (content) => entry.resolve({ content }),
+          (err) => entry.reject(err instanceof Error ? err : new Error(String(err)))
+        );
     } else {
       const reason = payload["error"] ?? payload["reason"] ?? payload["result"] ?? null;
       const message =
@@ -3032,7 +3104,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   /** Channel DO settle path: terminals for our channel_call effects POST back
    *  here. Duplicate delivery is a no-op (deterministic terminal ids). */
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async deliverEffectOutcome(
     effectId: string,
     outcome: EffectOutcome,
@@ -3047,7 +3119,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  delivery no-ops once the row is gone. Eviction between defer and delivery
    *  is healed by lease-expiry redrive: the retried call re-attaches via its
    *  idempotencyKey / already-granted capability. */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async onDeferredResult(payload: {
     requestId: string;
     result?: unknown;
@@ -3062,11 +3134,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /**
-   * The deferral half of the agent's `eval` tool. Kicks off a server-held run (`eval.startRun`,
+   * The deferral half of the agent's `eval` tool. Kicks off a durable background run (`eval.startRun`,
    * idempotent on a deterministic effect id derived from `invocationId`, while keeping that run id
    * distinct from authorship. Crash-replay / deferRedrive therefore never duplicates the eval. It
    * returns `{deferred:true}` while in flight. The result normally
-   * arrives via the `onEvalComplete` push; if that was lost, a ~60s deferRedrive re-runs this and the
+   * arrives directly from this agent's own EvalDO; if that was lost, a ~60s deferRedrive re-runs this and the
    * `getRun` poll completes the invocation INLINE (`done` → result, `cancelled` → error).
    */
   protected async runDeferredEval(
@@ -3106,9 +3178,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       },
     ]);
     // `getRun` is a poll BACKSTOP, not the primary settle path — the run is already
-    // in flight server-side (startRun succeeded). If the poll THROWS (a transient
+    // in flight in its EvalDO (startRun succeeded). If the poll THROWS (a transient
     // RPC/store hiccup), do NOT surface it as the tool result: that would settle the
-    // invocation with a spurious error AND drop the real eval result when the held
+    // invocation with a spurious error AND drop the real eval result when the background
     // run later completes (the parked row would be gone). Instead PARK: return
     // `{deferred:true}` so the row stays leased for the `onEvalComplete` push (or the
     // ~60s deferRedrive, which re-polls) to settle. This keeps the run parked — it
@@ -3137,6 +3209,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         // distinguish it from a successful execution and explicitly classify
         // deliberate failures when appropriate.
         isError: status.result.success !== true,
+        ...(status.result.failureKind === "infrastructure"
+          ? { terminalOutcome: "infrastructure_error" as const }
+          : {}),
       };
     }
     if (status.status === "cancelled") {
@@ -3147,7 +3222,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   /**
    * Streamed eval console — the rolling-output sibling of `onEvalComplete`. The agent's eval runs in
-   * a server-side EvalDO; during the held run the EvalDO forwards buffered console chunks here (gated
+   * a server-side EvalDO; during the run the EvalDO forwards buffered console chunks here (gated
    * by `assertOwnEvalCaller`, exactly like the `chat` binding's `chatOp` — only this agent's own
    * EvalDO may act as it). Each chunk is published as an `invocation.output` event keyed to the eval
    * parent tool invocation (`agentInvocationId`), independently of the eval effect's `runId`, so the
@@ -3157,7 +3232,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * before completing, so every output precedes the `invocation.completed` terminal (the reducer drops
    * output after terminal).
    */
-  @rpc({ principals: ["code"], sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async onEvalProgress(payload: {
     runId: string;
     agentInvocationId: string;
@@ -3186,15 +3261,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * identity is carried separately for causality and never reconstructed from
    * the effect id. Duplicate settlement is an idempotent driver no-op.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async onEvalComplete(payload: {
     runId: string;
     agentInvocationId?: string;
     result?: EvalRunResult;
     channelId?: string;
   }): Promise<void> {
-    this.assertServerCaller("onEvalComplete");
     if (!payload.channelId || !payload.result) return;
+    await this.assertOwnEvalCaller(payload.channelId);
     const formatted = formatEvalResult(payload.result);
     await this.driver.deliverEffectOutcome(
       payload.runId,
@@ -3202,6 +3277,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         kind: "tool",
         result: { protocolContent: formatted.content, details: formatted.details },
         isError: payload.result.success !== true,
+        ...(payload.result.failureKind === "infrastructure"
+          ? { terminalOutcome: "infrastructure_error" as const }
+          : {}),
       },
       { channelId: payload.channelId }
     );
@@ -3275,10 +3353,38 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return byType;
   }
 
-  private async hydrateTransportValue(value: unknown): Promise<unknown> {
+  private async hydrateTransportValue(
+    value: unknown,
+    originSessionId?: string | null,
+    via = "channel-value-hydration"
+  ): Promise<unknown> {
+    if (originSessionId) await this.recordDerivedSessionIngestion(originSessionId, via);
     return hydrateStoredValueRefs(value, {
       getText: (digest) => this.rpc.call<string | null>("main", "blobstore.getText", [digest]),
     });
+  }
+
+  /** Advance the monotone latch before indirect userland content is exposed to
+   * prompt composition or a tool result. The server resolves the origin
+   * session's persisted class; unknown origins conservatively become external. */
+  private async recordDerivedSessionIngestion(originSessionId: string, via: string): Promise<void> {
+    if (!originSessionId || originSessionId === this.participantId()) return;
+    await this.rpc.call("main", "contextIntegrity.ingest", [
+      { key: `session:${originSessionId}`, via, classification: "derived" },
+    ]);
+  }
+
+  private async recordMessageIngestion(
+    channelId: string,
+    event: ChannelEvent,
+    via: string
+  ): Promise<void> {
+    if (!channelId || !event.messageId) {
+      throw new Error(`${via}: durable channel identity is required before content ingestion`);
+    }
+    await this.rpc.call("main", "contextIntegrity.ingest", [
+      { key: `msg:${channelId}/${event.messageId}`, via, classification: "derived" },
+    ]);
   }
 
   // ── Subclass conveniences ────────────────────────────────────────────────
@@ -3417,7 +3523,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** Per-channel fork preflight. Vets ONLY the named subscription (it must
    *  exist); a multi-channel agent forks the one channel and drops the rest in
    *  the clone (see {@link postClone}), so the old ≤1-subscription gate is gone. */
-  @rpc({ principals: ["host", "code"], sensitivity: "read" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
   async canFork(channelId: string): Promise<{ ok: boolean; reason?: string }> {
     if (!this.subscriptions.getParticipantId(channelId)) {
       return { ok: false, reason: `no subscription for channel ${channelId}` };
@@ -3425,7 +3531,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return { ok: true };
   }
 
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async postClone(
     _parentObjectKey: string,
     newChannelId: string,
@@ -3522,7 +3628,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * just created), so there is nothing to wipe: outbox/fold caches start empty.
    * The child boots knowing everything the parent knew at the fork point.
    */
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async initFromTrajectoryFork(opts: {
     parentLogId: string;
     seq: number;
@@ -4673,7 +4779,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * relay otherwise lets any DO forge a completion and drive the parent loop.
    * Idempotent: a duplicate / post-terminal call no-ops.
    */
-  @rpc({ principals: ["code"], sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async onSubagentComplete(payload: {
     runId: string;
     channelId?: string;
@@ -5184,10 +5290,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       participantId: this.participantId(),
       loops,
       outbox: inspectEffectOutbox(this.sql),
+      activeDispatches: this._driver?.activeDispatchDiagnostics?.(channelId) ?? [],
       subagentProgressOutbox: this.subagentRuns.progressDiagnostics(),
     };
   }
 
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
   async getDebugState(channelId?: string): Promise<Record<string, unknown>> {
     return this.activationDebugState(channelId);
   }

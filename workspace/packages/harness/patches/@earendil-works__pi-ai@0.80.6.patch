@@ -267,14 +267,18 @@ index 803c76af791714b0a9a8246c5aaa1837585db7a3..29459d4e2da0d997ab9039d4bdce129d
  function scheduleSessionWebSocketExpiry(sessionId, entry) {
      if (entry.idleTimer) {
          clearTimeout(entry.idleTimer);
-@@ -713,16 +850,23 @@ function scheduleSessionWebSocketExpiry(sessionId, entry) {
+@@ -713,16 +850,27 @@ function scheduleSessionWebSocketExpiry(sessionId, entry) {
  async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS, env) {
++    // Workers must use fetch-upgrade so service-bound/attributed fetch routes
++    // (including Vibestudio's credential-injecting egress binding) remain in
++    // the transport path. The ambient WebSocket constructor bypasses those
++    // bindings even when it exists.
++    const fetchUpgrade = await connectWebSocketViaFetchUpgrade(url, headers, signal, connectTimeoutMs);
++    if (fetchUpgrade) {
++        return fetchUpgrade;
++    }
      const WebSocketCtor = await getWebSocketConstructor(env);
      if (!WebSocketCtor) {
-+        const fetchUpgrade = await connectWebSocketViaFetchUpgrade(url, headers, signal, connectTimeoutMs);
-+        if (fetchUpgrade) {
-+            return fetchUpgrade;
-+        }
          throw new Error("WebSocket transport is not available in this runtime");
      }
      const wsHeaders = headersToRecord(headers);

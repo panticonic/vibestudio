@@ -98,6 +98,27 @@ class TestVessel extends AgentVesselBase {
     return { type: "agent", name: "TestAgent", handle: "testagent" } as ParticipantDescriptor;
   }
 
+  /** Context-integrity ingestion is a mandatory host boundary, not an HTTP
+   * concern of these channel-behavior tests. Keep every other RPC on the real
+   * client so tests that exercise transport behavior retain coverage. */
+  protected override get rpc(): DeferrableRpcClient {
+    const base = super.rpc;
+    return new Proxy(base, {
+      get(target, property, receiver) {
+        if (property === "call") {
+          return async (targetId: string, method: string, args: unknown[], options?: unknown) => {
+            if (targetId === "main" && method === "contextIntegrity.ingest") {
+              return { class: "internal", latchEpoch: 0, externalKeys: [] };
+            }
+            return target.call(targetId, method, args, options as never);
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
+
   protected override createChannelClient(channelId: string): ChannelClient {
     return this.makeChannelStub(channelId) as unknown as ChannelClient;
   }
@@ -305,6 +326,21 @@ class ReadyWakeProbe extends TestVessel {
   }
 }
 
+class LazyPromptProbe extends TestVessel {
+  readonly ensurePromptArtifactsSpy = vi.fn(async (_channelId: string) => {});
+  readonly wakeSpy = vi.fn(async (_channelId: string) => {});
+
+  protected override async ensurePromptArtifacts(channelId: string): Promise<void> {
+    await this.ensurePromptArtifactsSpy(channelId);
+  }
+
+  protected override get driver(): AgentLoopDriver {
+    return {
+      wake: this.wakeSpy,
+    } as unknown as AgentLoopDriver;
+  }
+}
+
 async function makeVessel(): Promise<TestVessel> {
   const { instance } = await createTestDO(TestVessel, TEST_AGENT_ENV);
   // Register a subscription row so the card path has a participant id, without
@@ -328,6 +364,18 @@ async function expectedEvalCaller(): Promise<string> {
 }
 
 describe("AgentVesselBase channel ready wake policy", () => {
+  it("does not materialize prompt artifacts for an idle subscription", async () => {
+    const { instance } = await createTestDO(LazyPromptProbe, TEST_AGENT_ENV);
+
+    await instance.subscribeChannel({
+      channelId: CHANNEL,
+      contextId: "ctx-1",
+      replay: false,
+    });
+
+    expect(instance.ensurePromptArtifactsSpy).not.toHaveBeenCalled();
+  });
+
   it("wakes every-envelope subscriptions after subscribe replay", async () => {
     const { instance } = await createTestDO(ReadyWakeProbe, TEST_AGENT_ENV);
 
@@ -695,7 +743,8 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
   it("delivers the formatted result to the parked effect using its distinct eval run id", async () => {
     const vessel = await makeVessel();
     const deliverSpy = stubDriver(vessel);
-    vessel.callerKindForTest = "server";
+    vessel.callerKindForTest = "do";
+    vessel.callerIdForTest = await expectedEvalCaller();
 
     await vessel.onEvalComplete({
       runId: ids.invocationEffect("inv-77"),
@@ -718,7 +767,8 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
   it("delivers a failed eval as a structured tool failure", async () => {
     const vessel = await makeVessel();
     const deliverSpy = stubDriver(vessel);
-    vessel.callerKindForTest = "server";
+    vessel.callerKindForTest = "do";
+    vessel.callerIdForTest = await expectedEvalCaller();
     await vessel.onEvalComplete({
       runId: "inv-78",
       result: { success: false, console: "", error: "boom" },
@@ -731,6 +781,35 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
     });
   });
 
+  it("marks an eval infrastructure failure as terminal for the owning turn", async () => {
+    const vessel = await makeVessel();
+    const deliverSpy = stubDriver(vessel);
+    vessel.callerKindForTest = "do";
+    vessel.callerIdForTest = await expectedEvalCaller();
+    await vessel.onEvalComplete({
+      runId: "inv-infra",
+      result: {
+        success: false,
+        console: "",
+        error: "package load failed",
+        failureKind: "infrastructure",
+        failureCode: "package_load_failed",
+      },
+      channelId: CHANNEL,
+    });
+    expect(deliverSpy.mock.calls[0]![1]).toMatchObject({
+      kind: "tool",
+      isError: true,
+      terminalOutcome: "infrastructure_error",
+      result: {
+        details: {
+          failureKind: "infrastructure",
+          failureCode: "package_load_failed",
+        },
+      },
+    });
+  });
+
   it("is a no-op without a channelId or result (can't route the resume)", async () => {
     const vessel = await makeVessel();
     const deliverSpy = stubDriver(vessel);
@@ -740,17 +819,18 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
-  it("refuses a non-server caller (open relay; only the server settles an eval)", async () => {
+  it("refuses a foreign DO (only this agent's own EvalDO settles an eval)", async () => {
     const vessel = await makeVessel();
     const deliverSpy = stubDriver(vessel);
-    vessel.callerKindForTest = "do"; // another DO trying to forge a completion
+    vessel.callerKindForTest = "do";
+    vessel.callerIdForTest = "do:vibestudio/internal:EvalDO:someoneelse";
     await expect(
       vessel.onEvalComplete({
         runId: "inv-80",
         result: { success: true, console: "" },
         channelId: CHANNEL,
       })
-    ).rejects.toThrow(/server-only/);
+    ).rejects.toThrow(/only this agent's own EvalDO/);
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
@@ -1165,6 +1245,25 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     ).resolves.toMatchObject({
       isError: true,
       result: { details: { success: false, error: "boom" } },
+    });
+  });
+
+  it("reports an inline infrastructure failure as terminal", async () => {
+    const probe = await makeGateProbe();
+    probe.getRunStatus = {
+      status: "done",
+      result: {
+        success: false,
+        console: "",
+        error: "link failed",
+        failureKind: "infrastructure",
+        failureCode: "package_load_failed",
+      },
+    };
+
+    await expect(probe.callGate(CHANNEL, "inv-infra", { code: "import('broken')" })).resolves.toMatchObject({
+      isError: true,
+      terminalOutcome: "infrastructure_error",
     });
   });
 

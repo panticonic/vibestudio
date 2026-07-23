@@ -97,7 +97,7 @@ export class SubscriptionManager {
       metadata["replay"] = opts.replay;
     }
 
-    this.closeLiveSubscription(opts.channelId);
+    await this.closeLiveSubscription(opts.channelId);
     const subscription = await this.channelFactory(opts.channelId).openSubscription(
       participantId,
       metadata
@@ -137,7 +137,7 @@ export class SubscriptionManager {
   async unsubscribeFromChannel(channelId: string): Promise<void> {
     const live = this.liveSubscriptions.get(channelId);
     if (!live) return;
-    this.closeLiveSubscription(channelId);
+    await this.closeLiveSubscription(channelId);
     await live.subscription.closed.catch(() => {});
   }
 
@@ -149,17 +149,17 @@ export class SubscriptionManager {
    */
   async releaseActivation(): Promise<number> {
     const live = [...this.liveSubscriptions.entries()];
-    for (const [channelId] of live) this.closeLiveSubscription(channelId);
+    await Promise.all(live.map(([channelId]) => this.closeLiveSubscription(channelId)));
     await Promise.all(live.map(([, entry]) => entry.subscription.closed.catch(() => {})));
     return live.length;
   }
 
-  private closeLiveSubscription(channelId: string): void {
+  private async closeLiveSubscription(channelId: string): Promise<void> {
     const live = this.liveSubscriptions.get(channelId);
     if (!live) return;
     this.liveSubscriptions.delete(channelId);
     if (live.retryTimer) clearTimeout(live.retryTimer);
-    live.subscription.close();
+    await live.subscription.close();
   }
 
   private watchUnexpectedClose(channelId: string, live: LiveSubscription): void {
@@ -197,7 +197,7 @@ export class SubscriptionManager {
         replay: true,
       });
       if (this.liveSubscriptions.get(channelId)?.generation !== live.generation) {
-        subscription.close();
+        await subscription.close();
         return;
       }
       recovered = {
@@ -214,7 +214,7 @@ export class SubscriptionManager {
       });
       this.watchUnexpectedClose(channelId, recovered);
     } catch {
-      subscription?.close();
+      await subscription?.close().catch(() => undefined);
       const currentGeneration = this.liveSubscriptions.get(channelId)?.generation;
       if (
         currentGeneration === live.generation ||

@@ -556,7 +556,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * server has already verified and decoded the Cloud Pub/Sub envelope; Gmail
    * interpretation and fanout stay here.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async onWebhookDelivery(event: WebhookDeliveryEvent): Promise<{ synced: string[] }> {
     if (event.payload.type !== "cloud-pubsub") return { synced: [] };
     const data = record(event.payload.dataJson);
@@ -593,7 +593,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { synced: [...synced] };
   }
 
-  @rpc({ principals: ["code"], sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   registerPushTarget(input: {
     emailAddress: string;
     source: string;
@@ -620,7 +620,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { registered: true };
   }
 
-  @rpc({ principals: ["code"], sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   unregisterPushTarget(input: {
     emailAddress: string;
     source: string;
@@ -658,7 +658,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * Sync every channel bound to that address now; the follow-up alarm runs
    * the triage/wake pipeline.
    */
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async onGmailPushNotification(payload: { emailAddress: string; historyId: string }): Promise<{
     synced: string[];
   }> {
@@ -802,17 +802,21 @@ export class GmailAgentWorker extends AgentWorkerBase {
     }
   }
 
-  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
   async getAttentionPrefs(channelId: string): Promise<GmailAttentionPrefs> {
     this.assertSubscribedChannel(channelId);
     return this.handlers.getAttentionPrefs(channelId);
   }
 
-  @rpc({ principals: ["host", "user", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async setAttentionPrefs(
     channelId: string,
     args: unknown
   ): Promise<{ saved: true; preferences: GmailAttentionPrefs }> {
+    const caller = this.caller;
+    if (caller && caller.callerKind !== "panel") {
+      throw new Error("Attention preferences may only be changed by a user-facing panel");
+    }
     this.assertSubscribedChannel(channelId);
     const input = record(args);
     const result = await this.handlers.setAttention(channelId, {

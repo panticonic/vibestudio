@@ -107,6 +107,8 @@ function envelope(payload: AgenticEvent, seq = 1): ChannelEnvelope<AgenticEvent>
     from: payload.actor.kind === "user" ? userParticipant : agentParticipant,
     payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
     payload,
+    contentClass: "internal",
+    externalKeys: [],
     publishedAt: payload.createdAt,
   };
 }

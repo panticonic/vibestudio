@@ -281,7 +281,40 @@ describe("connectViaRpc", () => {
         { signal: expect.any(AbortSignal) }
       );
 
-      client.close();
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+      await client.close();
+    });
+
+    it("does not settle cooperative close before self-leave is acknowledged", async () => {
+      let acknowledgeLeave: (() => void) | undefined;
+      mockRpc.call.mockImplementation(async (target: string, method: string) => {
+        if (target === "main" && method === "workers.resolveService") {
+          return { kind: "durable-object", targetId: DO_TARGET };
+        }
+        if (target === DO_TARGET && method === "unsubscribe") {
+          await new Promise<void>((resolve) => {
+            acknowledgeLeave = resolve;
+          });
+        }
+        return undefined;
+      });
+      const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+
+      let settled = false;
+      const closing = client.close().then(() => {
+        settled = true;
+      });
+      await vi.waitFor(() => {
+        expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "unsubscribe", [SELF_ID]);
+      });
+      expect(settled).toBe(false);
+
+      acknowledgeLeave?.();
+      await closing;
+      expect(settled).toBe(true);
     });
 
     it("does not create a parallel PubSub heartbeat loop", async () => {
@@ -293,7 +326,7 @@ describe("connectViaRpc", () => {
         expect(setIntervalSpy).not.toHaveBeenCalled();
         expect(mockRpc.call.mock.calls.some(([, method]) => method === "touch")).toBe(false);
       } finally {
-        client.close();
+        await client.close();
         setIntervalSpy.mockRestore();
       }
     });
@@ -320,7 +353,7 @@ describe("connectViaRpc", () => {
       expect(client.contextId).toBe("ctx-123");
       expect(client.hasMoreBefore).toBe(false);
 
-      client.close();
+      await client.close();
     });
 
     it("adopts the authoritative human participant id for every post-subscribe operation", async () => {
@@ -374,9 +407,8 @@ describe("connectViaRpc", () => {
         expect.any(Object),
       ]);
 
-      client.close();
-      await Promise.resolve();
-      expect(mockRpc.call.mock.calls.some(([, method]) => method === "unsubscribe")).toBe(false);
+      await client.close();
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "unsubscribe", ["user:usr_alice"]);
     });
 
     it("resolves ready() from the subscribe acknowledgment after applying fallback replay", async () => {
@@ -471,7 +503,7 @@ describe("connectViaRpc", () => {
       await Promise.resolve();
       expect(readyHandler).toHaveBeenCalledTimes(1);
 
-      client.close();
+      await client.close();
     });
 
     it("does not surface replay events when replayMode is skip", async () => {
@@ -523,7 +555,7 @@ describe("connectViaRpc", () => {
       expect(client.contextId).toBe("ctx-skip");
       expect(client.roster).toEqual({});
 
-      client.close();
+      await client.close();
     });
 
     it("seeds late event subscribers with streamed replay after ready", async () => {
@@ -558,7 +590,7 @@ describe("connectViaRpc", () => {
         },
       });
 
-      client.close();
+      await client.close();
     });
 
     it("delivers buffered streamed replay to subscribers that are already listening before ready", async () => {
@@ -595,7 +627,7 @@ describe("connectViaRpc", () => {
         },
       });
 
-      client.close();
+      await client.close();
     });
 
     it("does not deliver buffered streamed replay to subscribers that opt out of replay", async () => {
@@ -642,7 +674,7 @@ describe("connectViaRpc", () => {
         },
       });
 
-      client.close();
+      await client.close();
     });
 
     it("fires onRoster handlers during replay", async () => {
@@ -663,7 +695,7 @@ describe("connectViaRpc", () => {
 
       expect(rosterUpdates).toContainEqual({ participantId: "agent-1", action: "join" });
 
-      client.close();
+      await client.close();
     });
   });
 
@@ -754,7 +786,7 @@ describe("connectViaRpc", () => {
         senderId: "agent-1",
       });
 
-      client.close();
+      await client.close();
     });
   });
 
@@ -836,7 +868,7 @@ describe("connectViaRpc", () => {
         turnId: "turn-1",
       });
 
-      client.close();
+      await client.close();
     });
 
     it("waits for fire-and-forget method progress before publishing the terminal result", async () => {
@@ -916,7 +948,7 @@ describe("connectViaRpc", () => {
       expect(progressIndex).toBeGreaterThanOrEqual(0);
       expect(resultIndex).toBeGreaterThan(progressIndex);
 
-      client.close();
+      await client.close();
     });
 
     it("dedupes redelivered invocation starts for the same transport call", async () => {
@@ -999,7 +1031,7 @@ describe("connectViaRpc", () => {
         mockRpc.call.mock.calls.filter((c: unknown[]) => c[1] === "submitMethodResult")
       ).toHaveLength(1);
 
-      client.close();
+      await client.close();
     });
 
     it("only warns about a redelivery skip once the handler is wedged (proportionate logging)", async () => {
@@ -1067,7 +1099,7 @@ describe("connectViaRpc", () => {
         expect(String(wedgeWarns()[0]![0])).toMatch(/still executing after \d+s/);
       } finally {
         warnSpy.mockRestore();
-        client.close();
+        await client.close();
         vi.useRealTimers();
       }
     });
@@ -1133,7 +1165,7 @@ describe("connectViaRpc", () => {
         ).toHaveLength(2);
       });
 
-      client.close();
+      await client.close();
     });
 
     it("hydrates stored-value method arguments before validation", async () => {
@@ -1198,7 +1230,7 @@ describe("connectViaRpc", () => {
         );
       });
 
-      client.close();
+      await client.close();
     });
 
     it("does not time out method execution without a journaled deadline", async () => {
@@ -1256,7 +1288,7 @@ describe("connectViaRpc", () => {
           mockRpc.call.mock.calls.filter((c: unknown[]) => c[1] === "submitMethodResult")
         ).toHaveLength(0);
       } finally {
-        client.close();
+        await client.close();
         vi.useRealTimers();
       }
     });
@@ -1326,7 +1358,7 @@ describe("connectViaRpc", () => {
           expect.objectContaining({ terminalReasonCode: "method_execution_timeout" }),
         ]);
       } finally {
-        client.close();
+        await client.close();
         vi.useRealTimers();
       }
     });
@@ -1376,7 +1408,7 @@ describe("connectViaRpc", () => {
 
       await expect(handle.result).resolves.toEqual({ content: result });
 
-      client.close();
+      await client.close();
     });
 
     it("applies method progress and terminal chunks in receive order", async () => {
@@ -1460,7 +1492,7 @@ describe("connectViaRpc", () => {
       await streamDone;
       expect(chunks).toEqual([progress, { done: true }]);
 
-      client.close();
+      await client.close();
     });
 
     it("recovers a pending method result from a replayed invocation.completed on resubscribe", async () => {
@@ -1528,7 +1560,7 @@ describe("connectViaRpc", () => {
       expect(mockRpc.call.mock.calls.some((call) => call[1] === "unsubscribe")).toBe(false);
       expect(mockRpc.call.mock.calls.some((call) => call[1] === "getSettledResult")).toBe(false);
 
-      client.close();
+      await client.close();
     });
   });
 
@@ -1588,14 +1620,14 @@ describe("connectViaRpc", () => {
       expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "removeMember", [{ userId: "usr_bob" }]);
       expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "listInvitesForMe", []);
       expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "acknowledgeInvite", []);
-      client.close();
+      await client.close();
     });
   });
 
   // ── 4. Close ──────────────────────────────────────────────────────────
 
   describe("close", () => {
-    it("cancels the subscription resource and fires disconnect handlers", async () => {
+    it("leaves the subscription resource and fires disconnect handlers", async () => {
       const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
       await emitReplayAndReady(emit, []);
       await client.ready();
@@ -1605,11 +1637,9 @@ describe("connectViaRpc", () => {
       const disconnectFn = vi.fn();
       client.onDisconnect(disconnectFn);
 
-      client.close();
-      await Promise.resolve();
-      await Promise.resolve();
+      await client.close();
 
-      expect(mockRpc.call.mock.calls.some(([, method]) => method === "unsubscribe")).toBe(false);
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "unsubscribe", [SELF_ID]);
 
       // Verify disconnect handler fired
       expect(disconnectFn).toHaveBeenCalledTimes(1);
@@ -1639,7 +1669,7 @@ describe("connectViaRpc", () => {
       await expect(handle.result).rejects.toMatchObject({ code: "cancelled" });
       expect(mockRpc.call).not.toHaveBeenCalled();
 
-      client.close();
+      await client.close();
     });
 
     it("cancels an in-flight method call when the caller signal aborts", async () => {
@@ -1674,7 +1704,7 @@ describe("connectViaRpc", () => {
         handle.callId,
       ]);
 
-      client.close();
+      await client.close();
     });
 
     it("awaits cancelMethodCall for explicit cancellation", async () => {
@@ -1713,7 +1743,7 @@ describe("connectViaRpc", () => {
       await cancelPromise;
       expect(settled).toBe(true);
 
-      client.close();
+      await client.close();
     });
 
     it("keeps pause calls on normal method transport until the provider result arrives", async () => {
@@ -1759,7 +1789,7 @@ describe("connectViaRpc", () => {
       await expect(handle.result).resolves.toEqual({ content: { paused: true } });
       expect(handle.complete).toBe(true);
 
-      client.close();
+      await client.close();
     });
 
     it("re-drives ambiguous method-start acknowledgements with the exact same identity", async () => {
@@ -1812,7 +1842,7 @@ describe("connectViaRpc", () => {
 
         await expect(handle.result).resolves.toEqual({ content: { paused: true } });
       } finally {
-        client.close();
+        await client.close();
         vi.useRealTimers();
       }
     });
@@ -1858,7 +1888,7 @@ describe("connectViaRpc", () => {
         await vi.advanceTimersByTimeAsync(10_000);
         expect(attempts).toBe(1);
       } finally {
-        client.close();
+        await client.close();
         vi.useRealTimers();
       }
     });
@@ -1881,7 +1911,8 @@ describe("connectViaRpc", () => {
       });
       expect(mockRpc.call.mock.calls.filter((call) => call[1] === "callMethod")).toHaveLength(1);
 
-      client.close();
+      mockRpc.call.mockResolvedValue(undefined);
+      await client.close();
     });
 
     it("aborts the executing method when invocation.cancelled arrives", async () => {
@@ -1954,7 +1985,7 @@ describe("connectViaRpc", () => {
 
       await vi.waitFor(() => expect(capturedSignal!.aborted).toBe(true));
 
-      client.close();
+      await client.close();
     });
 
     it("abortExecutingMethod fires the local signal synchronously without a channel round-trip", async () => {
@@ -2035,7 +2066,7 @@ describe("connectViaRpc", () => {
         });
       });
 
-      client.close();
+      await client.close();
     });
 
     it("abortExecutingMethod returns false when no execution matches the call id", async () => {
@@ -2043,7 +2074,7 @@ describe("connectViaRpc", () => {
       await emitReplayAndReady(emit, []);
       await client.ready();
       expect(client.abortExecutingMethod(TRANSPORT_ID_1)).toBe(false);
-      client.close();
+      await client.close();
     });
   });
 });

@@ -40,6 +40,8 @@ describe("ChannelLog paging", () => {
               from: { kind: "agent", id: "agent-1", participantId: "agent-1" },
               payload: { seq },
               payloadKind: "message",
+              contentClass: "internal",
+              externalKeys: [],
               publishedAt: new Date(seq).toISOString(),
             })),
             pageInfo: channelEnvelopePageInfo(

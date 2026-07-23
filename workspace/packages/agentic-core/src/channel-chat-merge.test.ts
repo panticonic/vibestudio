@@ -34,6 +34,8 @@ function envelope(payload: AgenticEvent, seq: number): ChannelEnvelope<AgenticEv
     from: participant,
     payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
     payload,
+    contentClass: "internal",
+    externalKeys: [],
     publishedAt: payload.createdAt,
   };
 }
@@ -411,6 +413,8 @@ describe("chatMessagesFromChannelView", () => {
         failureCode: "auth_or_credentials",
         expiresAt: "2026-06-18T13:21:18.000Z",
       },
+      contentClass: "internal",
+      externalKeys: [],
       publishedAt: "2026-06-18T13:11:18.000Z",
     } satisfies ChannelEnvelope);
 

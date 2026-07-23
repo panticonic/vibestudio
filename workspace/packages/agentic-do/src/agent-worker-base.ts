@@ -23,6 +23,7 @@ import {
   createEvalTool,
   createDocsSearchTool,
   createDocsOpenTool,
+  createWorkspaceServiceTool,
   createWebTools,
   createToolVcs,
   loadVibestudioResources,
@@ -324,12 +325,18 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createDocsOpenTool(<T>(method: string, methodArgs: unknown[]) =>
         toolRpc.call<T>("main", method, methodArgs)
       ),
+      createWorkspaceServiceTool(vcs, mutationContext, {
+        validateConfig: (content) =>
+          toolRpc.call("main", "workspace.validateConfig", [content]).then(() => undefined),
+      }),
       createSuspendTurnTool(),
       this.createAskUserTool(),
       ...createWebTools({
         rpc: {
           call: (target, method, args) => toolRpc.call(target, method, args),
         },
+        recordIngestion: (entry) =>
+          toolRpc.call("main", "contextIntegrity.ingest", [entry]).then(() => undefined),
         hasCredentialForOrigin: async (origin) => {
           try {
             const credential = await this.rpc.call<unknown>(

@@ -235,7 +235,11 @@ export interface ChatSandboxValue {
 /** Sandbox config injected by the panel (keeps agentic-chat runtime-agnostic) */
 export interface SandboxConfig {
   rpc: { call: (target: string, method: string, args: unknown[]) => Promise<unknown> };
-  loadImport: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>;
+  loadImport: (
+    specifier: string,
+    ref: string | undefined,
+    externals: string[]
+  ) => Promise<{ bundle: string; format: "cjs" | "async-cjs" }>;
 }
 
 /** Dependencies provided to the tool provider factory */

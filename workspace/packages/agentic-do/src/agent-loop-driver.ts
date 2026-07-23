@@ -38,6 +38,7 @@ import {
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
 import { channelTrajectoryFor, logIdForChannel } from "@vibestudio/trajectory-identity";
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import type { SqlStorage } from "@workspace/runtime/worker";
 import {
   EffectOutbox,
@@ -71,6 +72,7 @@ interface ActiveEffectDispatch {
   channelId: string;
   settled: Promise<void>;
   resolveSettled: () => void;
+  progress: { phase: string; startedAt: number };
 }
 
 function compareLocalToolOrder(left: OutboxRow, right: OutboxRow): number {
@@ -176,6 +178,11 @@ export interface ModelExecutionCallEvidence {
   outcome?: string;
   usage?: Record<string, unknown>;
   error?: string;
+  transportRuntime?: {
+    workersFetchUpgradeAvailable: boolean;
+    ambientWebSocketAvailable: boolean;
+    vibestudioWebSocketRouteInstalled: boolean;
+  };
 }
 
 export interface ModelExecutionEvidence {
@@ -335,6 +342,12 @@ function ensureModelExecutionAttemptSchema(sql: SqlStorage): void {
     CREATE INDEX IF NOT EXISTS idx_model_execution_attempts_channel_sequence
       ON model_execution_attempts(channel_id, sequence)
   `);
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS model_execution_attempt_diagnostics (
+      attempt_id TEXT PRIMARY KEY,
+      transport_runtime_json TEXT NOT NULL
+    )
+  `);
 }
 
 function mapScheduledModelResumeRow(row: Record<string, unknown>): ScheduledModelResumeRow {
@@ -374,6 +387,13 @@ export class AgentLoopDriver {
   private readonly currentDispatchByRow = new Map<string, ActiveEffectDispatch>();
   private readonly activeDispatches = new Set<ActiveEffectDispatch>();
   private readonly closedEffectAdmission = new Map<string, number>();
+  /**
+   * Effect I/O may run in parallel, but one channel has one ordered semantic
+   * log. Commit complete outcomes through a single per-channel writer so a
+   * provider failure cannot race sibling tool terminals until every optimistic
+   * append exhausts its head-conflict retries and leaves the turn open.
+   */
+  private readonly outcomeCommitChains = new Map<string, Promise<unknown>>();
   private activationReleased = false;
 
   constructor(private readonly deps: DriverDeps) {
@@ -464,6 +484,23 @@ export class AgentLoopDriver {
     return this.loops.get(channelId) ?? null;
   }
 
+  activeDispatchDiagnostics(channelId?: string): Array<{
+    channelId: string;
+    effectId: string;
+    phase: string;
+    elapsedMs: number;
+  }> {
+    const now = this.deps.now();
+    return [...this.activeDispatches]
+      .filter((entry) => channelId === undefined || entry.channelId === channelId)
+      .map((entry) => ({
+        channelId: entry.channelId,
+        effectId: entry.effectId,
+        phase: entry.progress.phase,
+        elapsedMs: Math.max(0, now - entry.progress.startedAt),
+      }));
+  }
+
   /**
    * Durable proof of the model calls made by this agent on a channel. The
    * result is safe to persist in diagnostics: it contains model routing and
@@ -496,25 +533,41 @@ export class AgentLoopDriver {
       return {
         totalCalls,
         truncated: totalCalls > normalizedLimit,
-        calls: rows.map((row) => ({
-          attemptId: String(row["attempt_id"]),
-          messageId: String(row["message_id"]),
-          startedAt: String(row["started_at"]),
-          ...(typeof row["completed_at"] === "string"
-            ? { completedAt: row["completed_at"] as string }
-            : {}),
-          provider: String(row["provider"]),
-          model: String(row["model"]),
-          ref: String(row["ref"]),
-          api: String(row["api"]),
-          baseUrl: String(row["base_url"]),
-          auth: String(row["auth"]),
-          ...(typeof row["outcome"] === "string" ? { outcome: row["outcome"] as string } : {}),
-          ...(typeof row["usage_json"] === "string"
-            ? { usage: JSON.parse(row["usage_json"] as string) as Record<string, unknown> }
-            : {}),
-          ...(typeof row["error"] === "string" ? { error: row["error"] as string } : {}),
-        })),
+        calls: rows.map((row) => {
+          const diagnostic = this.deps.sql
+            .exec(
+              `SELECT transport_runtime_json FROM model_execution_attempt_diagnostics
+               WHERE attempt_id = ?`,
+              String(row["attempt_id"])
+            )
+            .toArray()[0];
+          return {
+            attemptId: String(row["attempt_id"]),
+            messageId: String(row["message_id"]),
+            startedAt: String(row["started_at"]),
+            ...(typeof row["completed_at"] === "string"
+              ? { completedAt: row["completed_at"] as string }
+              : {}),
+            provider: String(row["provider"]),
+            model: String(row["model"]),
+            ref: String(row["ref"]),
+            api: String(row["api"]),
+            baseUrl: String(row["base_url"]),
+            auth: String(row["auth"]),
+            ...(typeof row["outcome"] === "string" ? { outcome: row["outcome"] as string } : {}),
+            ...(typeof row["usage_json"] === "string"
+              ? { usage: JSON.parse(row["usage_json"] as string) as Record<string, unknown> }
+              : {}),
+            ...(typeof row["error"] === "string" ? { error: row["error"] as string } : {}),
+            ...(typeof diagnostic?.["transport_runtime_json"] === "string"
+              ? {
+                  transportRuntime: JSON.parse(
+                    diagnostic["transport_runtime_json"] as string
+                  ) as ModelExecutionCallEvidence["transportRuntime"],
+                }
+              : {}),
+          };
+        }),
       };
     }
 
@@ -555,6 +608,13 @@ export class AgentLoopDriver {
         event.baseUrl,
         event.auth,
         event.startedAt
+      );
+      this.deps.sql.exec(
+        `INSERT INTO model_execution_attempt_diagnostics
+           (attempt_id, transport_runtime_json)
+         VALUES (?, ?)`,
+        event.attemptId,
+        JSON.stringify(event.transportRuntime)
       );
       return;
     }
@@ -1149,6 +1209,7 @@ export class AgentLoopDriver {
       channelId: row.channelId,
       settled,
       resolveSettled,
+      progress: dispatchProgress,
     };
     this.currentDispatchByRow.set(rowKey, active);
     this.activeDispatches.add(active);
@@ -1211,6 +1272,9 @@ export class AgentLoopDriver {
         signal: controller.signal,
         deps: this.executorDeps(loop.channelId),
         onEphemeral: (emit) => this.emitEphemeral(loop, emit),
+        onExecutionProgress: (stage) => {
+          dispatchProgress.phase = `${row.kind}:${stage}`;
+        },
         onModelExecutionAttempt: (event) => this.recordModelExecutionAttempt(event),
       });
     } catch (err) {
@@ -1374,6 +1438,17 @@ export class AgentLoopDriver {
 
   /** Outcome protocol: append outcome events FIRST, then delete the row. */
   async applyOutcome(row: OutboxRow, outcome: EffectOutcome): Promise<void> {
+    return serializeByKey(this.outcomeCommitChains, row.channelId, async () => {
+      // A deferred push and its poll backstop can both queue before the first
+      // commit deletes the row. The durable terminal already won; the queued
+      // duplicate must not manufacture a second semantic outcome.
+      const current = this.outbox.get(row.branchId, row.effectId);
+      if (!current) return;
+      await this.applyOutcomeSerial(current, outcome);
+    });
+  }
+
+  private async applyOutcomeSerial(row: OutboxRow, outcome: EffectOutcome): Promise<void> {
     let loop = await this.loopForBranch(row.branchId, row.channelId);
     if (!loop) return;
     if (outcome.kind === "retry") {

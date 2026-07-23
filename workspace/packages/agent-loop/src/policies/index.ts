@@ -40,14 +40,20 @@ export function channelToolsPolicy(): StepPolicy {
   return {
     name: "channel-tools",
     intercept({ state, output }) {
-      const roster = state.config.roster?.participants ?? [];
-      if (roster.length === 0) return output;
       const methodOwners = new Map<string, ParticipantRef>();
-      for (const participant of roster) {
-        for (const method of participant.methods ?? []) {
-          if (!methodOwners.has(method.name)) methodOwners.set(method.name, participant.ref);
+      const capturedOwners = state.openTurn?.activeModelRequest?.channelToolOwners;
+      if (capturedOwners) {
+        for (const [name, owner] of Object.entries(capturedOwners)) {
+          methodOwners.set(name, owner);
+        }
+      } else {
+        for (const participant of state.config.roster?.participants ?? []) {
+          for (const method of participant.methods ?? []) {
+            if (!methodOwners.has(method.name)) methodOwners.set(method.name, participant.ref);
+          }
         }
       }
+      if (methodOwners.size === 0) return output;
       let changed = false;
       const append = output.append.map((item) => {
         if (item.payloadKind !== "invocation.started") return item;
