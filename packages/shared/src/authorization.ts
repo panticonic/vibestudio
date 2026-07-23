@@ -416,8 +416,16 @@ export function scopeCovers(scope: ResourceScope, key: string): boolean {
   switch (scope.kind) {
     case "exact":
       return scope.key === key;
-    case "prefix":
-      return scope.prefix === "" || key === scope.prefix || key.startsWith(`${scope.prefix}/`);
+    case "prefix": {
+      if (scope.prefix === "" || key === scope.prefix) return true;
+      if (!key.startsWith(scope.prefix)) return false;
+      // A bare name is a hierarchical namespace and must end at a slash
+      // boundary (`context` must not cover `contextual`). A prefix ending in a
+      // separator is already an explicit lexical namespace, which lets
+      // manifests truthfully describe bounded dynamic names such as
+      // `workspace-repo-delete:projects/system-test-*`.
+      return /[/:._-]$/u.test(scope.prefix) || key[scope.prefix.length] === "/";
+    }
     case "origin":
       return key === scope.origin;
     case "domain": {

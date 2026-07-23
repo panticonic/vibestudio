@@ -5,6 +5,7 @@ import {
   evaluateAuthority,
   relationship,
   requirementForPrincipals,
+  scopeCovers,
   type AuthorizationContext,
   type AuthorityGrant,
   type Principal,
@@ -15,6 +16,25 @@ const user = "user:alice" as const;
 const code = `code:workers/example@${"a".repeat(64)}` as `code:${string}`;
 const session = "session:s1" as const;
 const mission = `mission:nightly@${"b".repeat(64)}` as `mission:${string}`;
+
+describe("resource prefix scopes", () => {
+  it("covers hierarchical descendants without crossing a name boundary", () => {
+    expect(scopeCovers({ kind: "prefix", prefix: "context" }, "context/panel")).toBe(true);
+    expect(scopeCovers({ kind: "prefix", prefix: "context" }, "contextual")).toBe(false);
+  });
+
+  it("supports explicitly separator-terminated dynamic namespaces", () => {
+    const scope = {
+      kind: "prefix" as const,
+      prefix: "workspace-repo-delete:projects/system-test-",
+    };
+    expect(
+      scopeCovers(scope, "workspace-repo-delete:projects/system-test-vcs-push-a1b2c3d4")
+    ).toBe(true);
+    expect(scopeCovers(scope, "workspace-repo-delete:projects/customer-data")).toBe(false);
+    expect(scopeCovers(scope, "workspace-repo-delete:packages/system-test-helper")).toBe(false);
+  });
+});
 
 function codeContext(): AuthorizationContext {
   return {

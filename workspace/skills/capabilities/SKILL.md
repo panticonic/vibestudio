@@ -290,7 +290,11 @@ For a panel, worker, app, extension, or package that performs gated or critical 
    runtime lifecycle plumbing are deliberately absent; putting either in a manifest
    is an error because neither is discretionary unit authority.
 3. Use the narrowest resource supported by the operation: exact identity, origin,
-   domain, or a deliberate prefix. Do not use a wildcard to silence a build error.
+   domain, or a deliberate prefix. A bare prefix is slash-hierarchical
+   (`context` covers `context/panel`, not `contextual`). End a lexical dynamic
+   namespace with its separator when names share a reviewed stem
+   (`projects/system-test-` covers generated system-test names only). Do not use
+   a wildcard to silence a build error.
 4. Run an explicit build/typecheck against `ctx:<contextId>`. The build compares and
    seals the reviewed manifest; it must never rewrite it.
 5. Exercise the path. If authority is absent, let the typed acquisition flow explain
