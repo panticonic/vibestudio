@@ -36,19 +36,19 @@
   --intent-consent-surface: var(--iris-a3);
   --intent-consent-border: var(--iris-a6);
 
-  /* Vibestudio brand language: monochrome mark, cool neutral surfaces, warm spark. */
+  /* Vibestudio brand language: violet-to-pink energy over mauve-neutral surfaces. */
   --brand-ink: var(--gray-12);
   --brand-ink-contrast: var(--gray-1);
-  --brand-surface: var(--gray-12);
-  --brand-surface-raised: var(--gray-10);
-  --brand-spark: var(--amber-9);
-  --brand-spark-soft: var(--amber-a4);
-  --brand-glow: var(--gray-a4);
+  --brand-violet: var(--violet-9);
+  --brand-magenta: var(--pink-9);
+  --brand-spark: var(--pink-9);
+  --brand-spark-soft: var(--pink-a4);
+  --brand-glow: var(--violet-a5);
   --brand-gradient: linear-gradient(
     135deg,
-    var(--brand-surface) 0%,
-    var(--brand-surface-raised) 68%,
-    var(--brand-spark) 100%
+    var(--brand-violet) 0%,
+    var(--purple-9) 52%,
+    var(--brand-magenta) 100%
   );
 
   /* Approval tones (sky / amber / red) share the semantic vocabulary. */
@@ -59,13 +59,12 @@
   --approval-danger: var(--red-9);
   --approval-danger-surface: var(--red-a3);
 
-  /* "You" / client accent - one accent through composer -> ghost -> outbox
-       -> transcript. Iris via tokens, never a literal blue. */
-  --you-accent: var(--iris-9);
-  --you-accent-strong: var(--iris-10);
-  --you-rail: var(--iris-a7);
-  --you-surface: var(--iris-a2);
-  --you-surface-strong: var(--iris-a3);
+  /* "You" / client accent follows the primary violet identity. */
+  --you-accent: var(--violet-9);
+  --you-accent-strong: var(--violet-10);
+  --you-rail: var(--violet-a7);
+  --you-surface: var(--violet-a2);
+  --you-surface-strong: var(--violet-a3);
 
   /* Surface & elevation - a small named set replacing ad-hoc card vars */
   --surface-chrome: var(--gray-2);
@@ -89,13 +88,13 @@
 
 .radix-themes:where(.dark, .dark-theme),
 :root {
-  --brand-tile-border: var(--gray-a6);
-  --brand-tile-shadow: 0 8px 24px var(--black-a6), 0 2px 8px var(--black-a4);
+  --brand-tile-border: var(--violet-a6);
+  --brand-tile-shadow: 0 8px 24px var(--violet-a4), 0 2px 8px var(--black-a4);
 }
 
 .radix-themes:where(.light, .light-theme) {
-  --brand-tile-border: var(--gray-a7);
-  --brand-tile-shadow: 0 8px 24px var(--gray-a4), 0 2px 8px var(--gray-a3);
+  --brand-tile-border: var(--violet-a6);
+  --brand-tile-shadow: 0 8px 24px var(--violet-a4), 0 2px 8px var(--pink-a3);
 }
 
 .vibestudio-logo {
@@ -113,7 +112,8 @@
   box-shadow: var(--brand-tile-shadow);
 }
 
-.vibestudio-logo-mark {
+.vibestudio-logo-symbol,
+.vibestudio-logo-logo {
   background: transparent;
 }
 

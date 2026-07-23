@@ -94,6 +94,6 @@ export class WebViewErrorBoundary extends React.Component<
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0a0b0c",
+    backgroundColor: "#100b18",
   },
 });

@@ -9,7 +9,17 @@ import { useShellEvent } from "../shell/useShellEvent";
 import { useShellOverlay } from "../shell/useShellOverlay";
 
 /** Accent swatches offered as quick theme commands (mirrors ThemeSettings). */
-const ACCENTS = ["amber", "gray", "iris", "blue", "cyan", "grass", "tomato", "violet"] as const;
+const ACCENTS = [
+  "violet",
+  "pink",
+  "iris",
+  "blue",
+  "cyan",
+  "grass",
+  "tomato",
+  "amber",
+  "gray",
+] as const;
 
 type PaletteAction =
   | { kind: "global"; run: () => void | Promise<void> }

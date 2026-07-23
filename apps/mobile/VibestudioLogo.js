@@ -1,10 +1,14 @@
 import React from "react";
 import { Image, StyleSheet, View } from "react-native";
 
-const BRAND_LOGO_DARK = require("./assets/vibestudio-dark.png");
-const BRAND_MARK_DARK = require("./assets/vibestudio-mark-on-dark.png");
+const BRAND_LOGO = require("./assets/vibestudio-logo.png");
+const BRAND_SYMBOL = require("./assets/vibestudio-symbol.png");
+const BRAND_SYMBOL_ON_DARK = require("./assets/vibestudio-symbol-on-dark.png");
 
-export function VibestudioLogo({ size = 44, variant = "tile", style }) {
+export function VibestudioLogo({ size = 44, variant = "symbol", style }) {
+  const width = variant === "logo" ? Math.round((size * 2) / 3) : size;
+  const source =
+    variant === "logo" ? BRAND_LOGO : variant === "tile" ? BRAND_SYMBOL_ON_DARK : BRAND_SYMBOL;
   return (
     <View
       style={[
@@ -12,7 +16,7 @@ export function VibestudioLogo({ size = 44, variant = "tile", style }) {
         variant === "tile" && styles.tile,
         {
           height: size,
-          width: size,
+          width,
           borderRadius: variant === "tile" ? Math.round(size * 0.22) : 0,
         },
         style,
@@ -21,7 +25,7 @@ export function VibestudioLogo({ size = 44, variant = "tile", style }) {
       importantForAccessibility="no-hide-descendants"
     >
       <Image
-        source={variant === "mark" ? BRAND_MARK_DARK : BRAND_LOGO_DARK}
+        source={source}
         style={styles.image}
         resizeMode={variant === "tile" ? "cover" : "contain"}
       />
@@ -34,8 +38,8 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   tile: {
-    backgroundColor: "#0a0b0c",
-    borderColor: "#303a4f",
+    backgroundColor: "#100b18",
+    borderColor: "#4b2f67",
     borderWidth: 1,
     overflow: "hidden",
   },

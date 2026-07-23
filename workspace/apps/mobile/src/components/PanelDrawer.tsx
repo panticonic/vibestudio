@@ -382,7 +382,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       style={[styles.container, { backgroundColor: colors.background, paddingTop: insets.top }]}
     >
       <View style={styles.header}>
-        <VibestudioLogo size={26} variant="mark" />
+        <VibestudioLogo size={26} variant="symbol" />
         <View style={styles.headerCopy}>
           <Text style={[type.heading, { color: colors.text }]} numberOfLines={1}>
             {shellClient?.workspaceId ?? "Vibestudio"}
@@ -425,7 +425,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
 
       {flatItems.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <VibestudioLogo size={64} variant="mark" style={styles.emptyLogo} />
+          <VibestudioLogo size={64} variant="symbol" style={styles.emptyLogo} />
           <Text style={[type.bodyStrong, styles.emptyTitle, { color: colors.text }]}>
             {trimmedQuery ? "No matching panels" : "No panels open yet"}
           </Text>

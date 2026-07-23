@@ -888,7 +888,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
             colors?.background != null && { backgroundColor: colors.background },
           ]}
         >
-          <VibestudioLogo size={72} variant="mark" style={styles.logo} />
+          <VibestudioLogo size={72} variant="symbol" style={styles.logo} />
           <Text style={[styles.errorTitle, colors?.text != null && { color: colors.text }]}>
             Failed to load panel
           </Text>
@@ -925,8 +925,8 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
             colors?.background != null && { backgroundColor: colors.background + "E6" },
           ]}
         >
-          <VibestudioLogo size={64} variant="mark" style={styles.logo} />
-          <ActivityIndicator size="large" color={colors?.primary ?? "#1a73e8"} />
+          <VibestudioLogo size={64} variant="symbol" style={styles.logo} />
+          <ActivityIndicator size="large" color={colors?.primary ?? "#a874ff"} />
           <Text
             style={[
               styles.loadingText,
@@ -1019,7 +1019,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     padding: 32,
-    backgroundColor: "#0a0b0c",
+    backgroundColor: "#100b18",
   },
   errorTitle: {
     fontSize: 18,
@@ -1037,7 +1037,7 @@ const styles = StyleSheet.create({
   retryButton: {
     paddingHorizontal: 24,
     paddingVertical: 12,
-    backgroundColor: "#f59e0b",
+    backgroundColor: "#7c3aed",
     borderRadius: 8,
   },
   retryText: {

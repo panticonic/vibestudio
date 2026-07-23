@@ -153,7 +153,7 @@ export function TitleBar({
               <HamburgerMenuIcon />
             </IconButton>
 
-            <VibestudioLogo size={26} variant="mark" className="app-titlebar-brand" />
+            <VibestudioLogo size={26} variant="symbol" className="app-titlebar-brand" />
 
             <Tooltip content={navigationMode === "tree" ? "Close panel tree" : "Open panel tree"}>
               <IconButton
@@ -289,7 +289,7 @@ export function TitleBar({
           {/* macOS: reserve the native traffic-light cluster and hover target. */}
           {isMac && <Box style={{ width: MACOS_TITLEBAR_CONTROL_RESERVE_PX, flexShrink: 0 }} />}
 
-          <VibestudioLogo size={20} variant="mark" className="app-titlebar-brand" />
+          <VibestudioLogo size={20} variant="symbol" className="app-titlebar-brand" />
 
           <IconButton variant="ghost" size="1" onClick={handleHamburgerClick}>
             <HamburgerMenuIcon />

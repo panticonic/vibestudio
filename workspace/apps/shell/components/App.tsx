@@ -25,7 +25,7 @@ let LazyMainMode = lazy(() => import("./MainMode"));
 function LoadingSpinner() {
   return (
     <Flex direction="column" align="center" justify="center" gap="3" style={{ height: "100dvh" }}>
-      <VibestudioLogo size={72} variant="tile" />
+      <VibestudioLogo size={144} variant="logo" />
       <Spinner size="3" />
       <Text size="2" color="gray">
         Loading Vibestudio

@@ -7,7 +7,6 @@ import {
   Callout,
   Card,
   Flex,
-  Heading,
   IconButton,
   Spinner,
   Text,
@@ -115,10 +114,7 @@ export function WorkspaceChooser() {
     >
       {/* Header */}
       <Flex direction="column" align="center" gap="2" mb="5">
-        <VibestudioLogo size={72} variant="tile" />
-        <Heading size="7" weight="bold">
-          Vibestudio
-        </Heading>
+        <VibestudioLogo size={156} variant="logo" />
         <Text size="2" color="gray">
           Select a workspace to get started
         </Text>
@@ -177,7 +173,7 @@ export function WorkspaceChooser() {
               >
                 {isLoading ? (
                   <>
-                    <VibestudioLogo size={44} variant="mark" />
+                    <VibestudioLogo size={44} variant="symbol" />
                     <Spinner size="2" />
                     <Text size="2" color="gray">
                       Loading workspaces...
@@ -185,7 +181,7 @@ export function WorkspaceChooser() {
                   </>
                 ) : (
                   <>
-                    <VibestudioLogo size={44} variant="mark" />
+                    <VibestudioLogo size={44} variant="symbol" />
                     <Text size="2" color="gray">
                       {workspaceError ? "Could not load workspaces" : "No workspaces available"}
                     </Text>

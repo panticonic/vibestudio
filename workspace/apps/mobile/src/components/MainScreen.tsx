@@ -1667,7 +1667,7 @@ export function MainScreen() {
       <View style={styles.contentArea}>
         {!activePanelId && (
           <EmptyState
-            art={<VibestudioLogo size={76} variant="mark" />}
+            art={<VibestudioLogo size={76} variant="symbol" />}
             title="No panel selected"
             message="Swipe from the left edge or tap the menu button to pick a panel."
           />
@@ -1678,7 +1678,7 @@ export function MainScreen() {
           !activePanelLoadError &&
           !webViewStack.some((entry) => entry.panelId === loadingPanelId) && (
             <View style={styles.loadingContainer}>
-              <VibestudioLogo size={64} variant="mark" style={styles.placeholderLogo} />
+              <VibestudioLogo size={64} variant="symbol" style={styles.placeholderLogo} />
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
                 Loading panel…
@@ -1691,7 +1691,7 @@ export function MainScreen() {
           !activePanelLeasedElsewhere &&
           !webViewStack.some((entry) => entry.panelId === activePanelId) && (
             <EmptyState
-              art={<VibestudioLogo size={72} variant="mark" />}
+              art={<VibestudioLogo size={72} variant="symbol" />}
               title="Panel failed to load"
               message={activePanelLoadError}
               action={
@@ -1707,7 +1707,7 @@ export function MainScreen() {
 
         {activePanelId && activePanelLeasedElsewhere && (
           <EmptyState
-            art={<VibestudioLogo size={72} variant="mark" />}
+            art={<VibestudioLogo size={72} variant="symbol" />}
             title={`Running on ${activeRuntimeLease?.holderLabel ?? "another client"}`}
             message="This panel is live on another device. Taking over moves it here."
             action={<Button label="Take over" variant="filled" onPress={takeOverActivePanel} />}
