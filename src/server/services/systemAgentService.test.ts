@@ -38,6 +38,7 @@ function fixture() {
     }
   );
   const callTarget = vi.fn(async () => ({ ok: true }));
+  const startMissionSession = vi.fn();
   const definition = createSystemAgentService({
     workspaceId: "workspace-1",
     productSnapshotState: SNAPSHOT,
@@ -52,15 +53,16 @@ function fixture() {
           identity.repoPath === "workers/system-agent" && identity.effectiveVersion === AGENT_EV
       ),
     } as never,
+    startMissionSession,
     callTarget,
     hasAppCapability: (_callerId, capability) => capability === "panel-hosting",
   });
-  return { definition, createContext, createEntity, callTarget };
+  return { definition, createContext, createEntity, callTarget, startMissionSession };
 }
 
 describe("systemAgent service", () => {
   it("derives one pinned, locked conversation from host-attested caller facts", async () => {
-    const { definition, createContext, createEntity, callTarget } = fixture();
+    const { definition, createContext, createEntity, callTarget, startMissionSession } = fixture();
     const result = (await definition.handler(
       { caller: chromeCaller("alice") },
       "resolveConversation",
@@ -83,6 +85,12 @@ describe("systemAgent service", () => {
         key: result.channelId,
       })
     );
+    expect(startMissionSession).toHaveBeenCalledWith({
+      missionId: "msn_system_agent",
+      sessionId: result.channelId,
+      taskRef: "system-agent-conversation:alice",
+      runId: expect.stringMatching(/^system-agent-[0-9a-f]{64}$/),
+    });
     expect(createEntity).toHaveBeenNthCalledWith(
       2,
       chromeCaller("alice"),

@@ -2312,6 +2312,7 @@ async function main() {
           productSnapshotState: productSeedStateHash,
           runtime: runtime.internal,
           conduitBlessings: conduitBlessingStore,
+          startMissionSession: (input) => missionRegistry.startSession(input),
           callTarget: (targetId, method, args) =>
             rpcServer.server.callTarget(targetId, method, args),
           hasAppCapability: (callerId, capability) =>

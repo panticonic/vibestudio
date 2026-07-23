@@ -19,6 +19,12 @@ export interface SystemAgentServiceDeps {
   productSnapshotState: string | null;
   runtime: RuntimeServiceInternal;
   conduitBlessings: ConduitBlessingStore;
+  startMissionSession(input: {
+    missionId: string;
+    sessionId: string;
+    taskRef: string;
+    runId: string;
+  }): unknown;
   callTarget(targetId: string, method: string, args: unknown[]): Promise<unknown>;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
 }
@@ -86,6 +92,12 @@ export function createSystemAgentService(deps: SystemAgentServiceDeps): ServiceD
       ) {
         throw new Error("Resolved System Agent execution is not product-blessed");
       }
+      deps.startMissionSession({
+        missionId: "msn_system_agent",
+        sessionId: channelId,
+        taskRef: `system-agent-conversation:${userId}`,
+        runId: `system-agent-${ownerKey}`,
+      });
       await deps.callTarget(channel.targetId, "initializeLockedChannel", [
         contextId,
         {
