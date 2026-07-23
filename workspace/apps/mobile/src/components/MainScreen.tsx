@@ -617,6 +617,55 @@ export function MainScreen() {
     },
     [hostConfig, pushToast, shellClient, setActivePanelId]
   );
+  // A reserved panel gets a WebView immediately at about:blank. When the
+  // shared server snapshot publishes its immutable build identity, complete
+  // materialization in that same stack entry instead of requiring another tap.
+  useEffect(() => {
+    if (
+      !activePanelId ||
+      !activePanel ||
+      !hostConfig ||
+      !shellClient ||
+      !/^[0-9a-f]{64}$/.test(activePanel.buildKey ?? "")
+    ) {
+      return;
+    }
+    const preparing = webViewStackRef.current.some(
+      (entry) => entry.panelId === activePanelId && entry.url === "about:blank"
+    );
+    if (!preparing || pendingPanelLoads.current.has(activePanelId)) return;
+    pendingPanelLoads.current.add(activePanelId);
+    void materializeMobilePanel({
+      panelId: activePanelId,
+      panel: activePanel,
+      hostConfig,
+      getPanelInit: (id) => shellClient.panels.getPanelInit(id),
+      acquireLease: (id, entityId, opts) => shellClient.panels.acquireLease(id, entityId, opts),
+      takeOverLease: (id, entityId, opts) => shellClient.panels.takeOverLease(id, entityId, opts),
+      leaseMode: "acquire",
+    })
+      .then((materialized) => {
+        setWebViewStack((current) =>
+          current.map((entry) =>
+            entry.panelId === activePanelId
+              ? {
+                  ...entry,
+                  url: materialized.url,
+                  managed: materialized.managed,
+                  panelInit: materialized.panelInit,
+                }
+              : entry
+          )
+        );
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Could not finish loading panel.";
+        setPanelLoadErrors((current) => ({ ...current, [activePanelId]: message }));
+      })
+      .finally(() => {
+        pendingPanelLoads.current.delete(activePanelId);
+      });
+  }, [activePanel, activePanelId, hostConfig, shellClient]);
   const takeOverActivePanel = useCallback(() => {
     if (!activePanelId || !activePanel || !hostConfig || !shellClient) return;
     pendingPanelLoads.current.add(activePanelId);
