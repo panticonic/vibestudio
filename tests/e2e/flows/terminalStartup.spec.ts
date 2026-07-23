@@ -830,7 +830,17 @@ test.describe("Terminal Startup", () => {
       })
       .toContain('placeholder="Find"');
     expect(await clickPanelSelector(app, terminalPanelId, "input[placeholder='Find']")).toBe(true);
-    await typePanelText(app, terminalPanelId, "vibestudio-paste-input");
+    await executePanelScript(
+      app,
+      terminalPanelId,
+      `(() => {
+        const input = document.querySelector("input[placeholder='Find']");
+        if (!(input instanceof HTMLInputElement)) throw new Error("Find input not found");
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        setter?.call(input, "vibestudio-paste-input");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      })()`
+    );
     await expect
       .poll(async () => getPanelHtml(app, terminalPanelId), {
         timeout: 5_000,

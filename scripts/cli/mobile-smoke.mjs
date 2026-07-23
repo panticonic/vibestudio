@@ -714,8 +714,10 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
 }
 
 async function tapButtonByText(device, text, deadlineMs) {
+  let lastXml = "";
   while (Date.now() < deadlineMs) {
     const xml = await dumpWindowXml(device);
+    lastXml = xml;
     const bounds = findNodeBounds(xml, text);
     if (bounds) {
       await adb(device, "shell", "input", "tap", String(bounds.x), String(bounds.y));
@@ -723,7 +725,32 @@ async function tapButtonByText(device, text, deadlineMs) {
     }
     await sleep(500);
   }
-  throw new Error(`Timed out waiting for visible Android button "${text}"`);
+  throw new Error(
+    `Timed out waiting for visible Android button "${text}". ` +
+      `Last visible labels: ${summarizeLabels(collectWindowLabels(lastXml))}`
+  );
+}
+
+async function tapButtonAndChoose(device, buttonText, choiceText, deadlineMs) {
+  let lastXml = "";
+  while (Date.now() < deadlineMs) {
+    const xml = await dumpWindowXml(device);
+    lastXml = xml;
+    const choice = findNodeBounds(xml, choiceText);
+    if (choice) {
+      await adb(device, "shell", "input", "tap", String(choice.x), String(choice.y));
+      return;
+    }
+    const button = findNodeBounds(xml, buttonText);
+    if (button) {
+      await adb(device, "shell", "input", "tap", String(button.x), String(button.y));
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `Timed out opening "${buttonText}" and choosing "${choiceText}". ` +
+      `Last visible labels: ${summarizeLabels(collectWindowLabels(lastXml))}`
+  );
 }
 
 async function tapOptionalButtonByText(device, text, timeoutMs = 6_000) {
@@ -761,6 +788,42 @@ async function dumpWindowXml(device) {
   return result?.stdout ?? "";
 }
 
+async function tapFirstEditableControl(device, deadlineMs) {
+  let lastXml = "";
+  while (Date.now() < deadlineMs) {
+    const xml = await dumpWindowXml(device);
+    lastXml = xml;
+    const candidates = [];
+    for (const match of xml.matchAll(/<node\b[^>]*class="android\.widget\.EditText"[^>]*>/g)) {
+      const node = match[0];
+      if (readXmlAttribute(node, "enabled") !== "true") continue;
+      const boundsMatch = node.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+      if (!boundsMatch) continue;
+      const left = Number(boundsMatch[1]);
+      const top = Number(boundsMatch[2]);
+      const right = Number(boundsMatch[3]);
+      const bottom = Number(boundsMatch[4]);
+      if (right <= left || bottom <= top) continue;
+      candidates.push({
+        x: Math.round((left + right) / 2),
+        y: Math.round((top + bottom) / 2),
+        top,
+      });
+    }
+    candidates.sort((left, right) => left.top - right.top);
+    const target = candidates[0];
+    if (target) {
+      await adb(device, "shell", "input", "tap", String(target.x), String(target.y));
+      return;
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    "Timed out waiting for an enabled Android text input. " +
+      `Last visible labels: ${summarizeLabels(collectWindowLabels(lastXml))}`
+  );
+}
+
 function findNodeBounds(xml, text, options = {}) {
   const pattern = /<node\b[^>]*>/g;
   let match;
@@ -774,6 +837,7 @@ function findNodeBounds(xml, text, options = {}) {
       ? normalized === expected || normalized.startsWith(`${expected}.`)
       : normalized === expected;
     if (!matched) continue;
+    if (readXmlAttribute(node, "enabled") === "false") continue;
     const boundsMatch = node.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
     if (!boundsMatch) continue;
     const left = Number(boundsMatch[1]);
@@ -1706,10 +1770,14 @@ async function main() {
     // The product no longer creates an onboarding panel during workspace
     // startup. Exercise the default user path instead of relying on hidden
     // fixture state: open the panel action sheet and create the standard new
-    // panel, which then drives the same lazy materialization path users invoke.
+    // panel launcher.
     if (!options.noTap) {
-      await tapButtonByText(options.device, "Create new panel", managedLaunchDeadlineMs);
-      await tapButtonByText(options.device, "New Panel", managedLaunchDeadlineMs);
+      await tapButtonAndChoose(
+        options.device,
+        "Create new panel",
+        "New Panel",
+        managedLaunchDeadlineMs
+      );
       console.log("[mobile-smoke] Created a panel through the mobile app chrome");
     }
     for (const phase of [
@@ -1718,6 +1786,30 @@ async function main() {
       "workspace-panel-webview-loaded",
     ]) {
       await waitForPhaseTappingApprovals(options.device, logcat, phase, managedLaunchDeadlineMs);
+    }
+
+    // Start a real chat from the launcher with intentionally vague wording.
+    // This keeps the agent-turn assertion meaningful after removal of the
+    // automatic onboarding turn and also exercises mobile WebView navigation.
+    if (!options.noTap) {
+      const chatLoadedCount = logcat.phaseCount("workspace-panel-webview-loaded");
+      await tapFirstEditableControl(options.device, managedLaunchDeadlineMs);
+      await adb(
+        options.device,
+        "shell",
+        "input",
+        "text",
+        "Help%sme%sget%sstarted"
+      );
+      await tapButtonByText(options.device, "Chat", managedLaunchDeadlineMs);
+      // about/new navigates its existing managed panel to panels/chat, so this
+      // is a WebView route transition rather than a second panel activation.
+      await logcat.waitForPhaseAfter(
+        "workspace-panel-webview-loaded",
+        chatLoadedCount,
+        options.pairingTimeoutMs
+      );
+      console.log("[mobile-smoke] Started a chat through the new-panel launcher");
     }
     const panelResult = await captureAndAssertPanelVisible(
       options.device,
