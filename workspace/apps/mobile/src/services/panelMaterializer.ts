@@ -38,6 +38,22 @@ export async function materializeMobilePanel(opts: {
   const managed = !snapshot.source.startsWith("browser:");
   const connectionId = `mobile-${opts.panelId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const leaseClient = opts.leaseMode === "takeOver" ? opts.takeOverLease : opts.acquireLease;
+  if (managed && !/^[0-9a-f]{64}$/.test(opts.panel.buildKey ?? "")) {
+    if (!opts.panel.runtimeEntityId) {
+      throw new Error(`Panel ${opts.panelId} did not provide a reserved runtime entity id`);
+    }
+    const runtimeEntityId = asPanelEntityId(opts.panel.runtimeEntityId);
+    const lease = await leaseClient(opts.panelId, runtimeEntityId, { connectionId });
+    if (!lease.acquired) {
+      throw new Error(formatPanelRuntimeLeaseDeniedMessage(opts.panelId, lease.lease));
+    }
+    return {
+      panelId: opts.panelId,
+      url: "about:blank",
+      managed: true,
+      panelInit: null,
+    };
+  }
   const panelInit = await opts.getPanelInit(opts.panelId);
   const rawEntityId =
     panelInit &&

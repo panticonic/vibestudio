@@ -2,7 +2,7 @@
  * New Panel Page - Shell panel for launching panels from workspace.
  * Opens with Cmd/Ctrl+T and displays available panels with a chat prompt input.
  */
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Card, Flex, Heading, Text, Box, Button, TextField, Spinner } from "@radix-ui/themes";
 import {
   PlusIcon,
@@ -12,16 +12,51 @@ import {
   ChevronRightIcon,
 } from "@radix-ui/react-icons";
 import { buildPanelLink, panel, workspace } from "@workspace/runtime";
-import { useIsMobile } from "@workspace/react";
+import { useIsMobile } from "@workspace/react/responsive";
 import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
 import type { WorkspaceTree, WorkspaceNode } from "@workspace/runtime";
 import { collectLaunchablePanels } from "./launchablePanels";
 
-function PanelCard({ node }: { node: WorkspaceNode }) {
+function PanelCard({
+  node,
+  pending,
+  disabled,
+  onActivate,
+}: {
+  node: WorkspaceNode;
+  pending: boolean;
+  disabled: boolean;
+  onActivate: (path: string, href: string) => void;
+}) {
   const isMobile = useIsMobile();
+  const href = buildPanelLink(node.path);
   return (
     <Card asChild>
-      <a href={buildPanelLink(node.path)} style={{ textDecoration: "none", color: "inherit" }}>
+      <a
+        href={href}
+        aria-busy={pending || undefined}
+        aria-disabled={disabled || undefined}
+        onClick={(event) => {
+          if (
+            event.defaultPrevented ||
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey
+          ) {
+            return;
+          }
+          event.preventDefault();
+          if (!disabled) onActivate(node.path, href);
+        }}
+        style={{
+          textDecoration: "none",
+          color: "inherit",
+          pointerEvents: disabled ? "none" : undefined,
+          opacity: disabled && !pending ? 0.55 : 1,
+        }}
+      >
         <Flex align="center" justify="between" gap="3">
           <Flex
             align={isMobile ? "start" : "center"}
@@ -36,7 +71,11 @@ function PanelCard({ node }: { node: WorkspaceNode }) {
               {node.launchable?.description ?? `Open ${node.launchable?.title ?? node.name}`}
             </Text>
           </Flex>
-          <ChevronRightIcon style={{ flexShrink: 0, color: "var(--gray-8)" }} />
+          {pending ? (
+            <Spinner style={{ flexShrink: 0 }} />
+          ) : (
+            <ChevronRightIcon style={{ flexShrink: 0, color: "var(--gray-8)" }} />
+          )}
         </Flex>
       </a>
     </Card>
@@ -50,31 +89,60 @@ function NewPanelPage() {
   const [error, setError] = useState<string | null>(null);
   const [promptInput, setPromptInput] = useState("");
   const [filter, setFilter] = useState("");
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const fetchInFlightRef = useRef<Promise<void> | null>(null);
+  const lastFetchStartedAtRef = useRef(0);
+  const navigationStartedRef = useRef(false);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback((force = false): Promise<void> => {
+    if (!force && fetchInFlightRef.current) return fetchInFlightRef.current;
+
+    lastFetchStartedAtRef.current = Date.now();
     setLoading(true);
-    try {
-      setTree(await workspace.sourceTree());
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
+    const request = (async () => {
+      try {
+        setTree(await workspace.sourceTree());
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLoading(false);
+      }
+    })();
+    fetchInFlightRef.current = request;
+    void request.finally(() => {
+      if (fetchInFlightRef.current === request) fetchInFlightRef.current = null;
+    });
+    return request;
   }, []);
 
   useEffect(() => {
     void fetchData();
-    return panel.onFocus(() => void fetchData());
+    return panel.onFocus(() => {
+      // Initial focus commonly arrives while the mount request is still in
+      // flight. Revalidate genuinely returning launchers, but do not issue the
+      // same source-tree RPC twice during startup.
+      if (Date.now() - lastFetchStartedAtRef.current > 2_000) void fetchData();
+    });
   }, [fetchData]);
+
+  const beginNavigation = useCallback((path: string, href: string) => {
+    if (navigationStartedRef.current) return;
+    navigationStartedRef.current = true;
+    setPendingPath(path);
+    // Give both compact/mobile and desktop renderers one paint to expose the
+    // pending state before the host starts its managed navigation.
+    requestAnimationFrame(() => window.location.assign(href));
+  }, []);
 
   const handleNewChat = useCallback(() => {
     const prompt = promptInput.trim();
-    if (!prompt) return;
-    window.location.href = buildPanelLink("panels/chat", {
-      stateArgs: { initialPrompt: prompt },
-    });
-  }, [promptInput]);
+    if (!prompt || pendingPath) return;
+    beginNavigation(
+      "panels/chat",
+      buildPanelLink("panels/chat", { stateArgs: { initialPrompt: prompt } })
+    );
+  }, [beginNavigation, pendingPath, promptInput]);
 
   const panels = useMemo(() => (tree ? collectLaunchablePanels(tree.children) : []), [tree]);
 
@@ -106,8 +174,8 @@ function NewPanelPage() {
             onChange={(e) => setPromptInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleNewChat()}
           />
-          <Button size="3" onClick={handleNewChat} disabled={!promptInput.trim()}>
-            <PaperPlaneIcon /> Chat
+          <Button size="3" onClick={handleNewChat} disabled={!promptInput.trim() || !!pendingPath}>
+            {pendingPath === "panels/chat" ? <Spinner /> : <PaperPlaneIcon />} Chat
           </Button>
         </Flex>
       </Section>
@@ -124,7 +192,7 @@ function NewPanelPage() {
             <Text color="red" size="2">
               Failed to load workspace panels: {error}
             </Text>
-            <Button variant="soft" onClick={() => void fetchData()}>
+            <Button variant="soft" onClick={() => void fetchData(true)}>
               Retry
             </Button>
           </Flex>
@@ -142,7 +210,8 @@ function NewPanelPage() {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && filteredPanels[0]) {
                   e.preventDefault();
-                  window.location.href = buildPanelLink(filteredPanels[0].path);
+                  const first = filteredPanels[0];
+                  beginNavigation(first.path, buildPanelLink(first.path));
                 }
               }}
               aria-label="Filter panels; press Enter to open the first result"
@@ -156,7 +225,13 @@ function NewPanelPage() {
           {filteredPanels.length > 0 ? (
             <Flex direction="column" gap="2">
               {filteredPanels.map((node) => (
-                <PanelCard key={node.path} node={node} />
+                <PanelCard
+                  key={node.path}
+                  node={node}
+                  pending={pendingPath === node.path}
+                  disabled={pendingPath !== null}
+                  onActivate={beginNavigation}
+                />
               ))}
             </Flex>
           ) : (

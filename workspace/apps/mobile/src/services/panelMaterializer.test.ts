@@ -35,6 +35,33 @@ function makeDeps(overrides?: {
 }
 
 describe("materializeMobilePanel", () => {
+  it("leases a reserved panel and returns an immediate blank WebView without requesting a grant", async () => {
+    const deps = makeDeps();
+    const panel = makePanel("panels/editor");
+    panel.runtimeEntityId = "panel:nav-1";
+    panel.buildKey = null;
+    panel.artifacts = { buildState: "pending" };
+
+    await expect(
+      materializeMobilePanel({
+        panelId: "panel-1",
+        panel,
+        hostConfig,
+        ...deps,
+        leaseMode: "acquire",
+      })
+    ).resolves.toEqual({
+      panelId: "panel-1",
+      url: "about:blank",
+      managed: true,
+      panelInit: null,
+    });
+    expect(deps.getPanelInit).not.toHaveBeenCalled();
+    expect(deps.acquireLease).toHaveBeenCalledWith("panel-1", "panel:nav-1", {
+      connectionId: expect.stringMatching(/^mobile-panel-1-/),
+    });
+  });
+
   it("acquires a mobile runtime lease for browser panels before returning the browser URL", async () => {
     const deps = makeDeps();
 
