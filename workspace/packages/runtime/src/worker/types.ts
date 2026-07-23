@@ -10,6 +10,8 @@ export interface WorkerEnv {
   RPC_AUTH_TOKEN: string;
   /** Worker instance name (e.g., "hello") */
   WORKER_ID: string;
+  /** Exact workspace source that, together with WORKER_ID, forms the sealed entity id. */
+  WORKER_SOURCE: string;
   /** Context ID for storage partition */
   CONTEXT_ID: string;
   /** HTTP base URL for gateway server (e.g., "http://127.0.0.1:8080") */

@@ -31,6 +31,7 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
   const rpc = createRpcClient({
     selfId: deps.selfId,
     transport: primaryTransport,
+    authorityAcquisition: "wait",
   });
   const fs = deps.fs;
   const callMain = createMainCaller(rpc);

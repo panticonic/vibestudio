@@ -63,10 +63,18 @@ export type WorkerCreateOptions = Omit<
 
 export type WorkerEntityHandle = RuntimeEntityHandle & { kind: "worker" };
 
+/** Any runtime entity reference accepted by the shared retirement path. */
+export type RuntimeEntityReference =
+  | string
+  | Pick<RuntimeEntityHandle, "id">
+  | Pick<ResolvedDurableObjectTarget, "targetId">;
+
 export interface WorkerEntityInfo {
   id: string;
   kind: "worker";
   source: string;
+  /** Caller-selected instance key; match this or `id` against create(). */
+  key: string;
   contextId: string;
   title?: string;
   createdAt: number;
@@ -79,6 +87,8 @@ export type WorkspaceServiceInfo = {
   description?: string;
   protocols: string[];
   source: string;
+  /** Live, caller-context documentation entry for workspace-owned services. */
+  docsId?: string;
 } & (
   | {
       kind: "durable-object";
@@ -95,6 +105,11 @@ export type ResolvedWorkspaceService = {
   name: string;
   title?: string;
   description?: string;
+  /**
+   * The protocol that matched resolveService(). Absent when resolution used
+   * the service name instead of a declared protocol.
+   */
+  protocol?: string;
   protocols: string[];
   source: string;
 } & (
@@ -117,12 +132,12 @@ export type ResolvedWorkspaceService = {
 export interface WorkerdClient {
   /** List every launchable worker source and its real manifest entry point. */
   listSources(): Promise<WorkerSourceInfo[]>;
-  /** Launch a regular worker through the canonical runtime entity lifecycle. */
+  /** Launch a regular worker in the caller's context through the canonical lifecycle. */
   create(source: string, options?: WorkerCreateOptions): Promise<WorkerEntityHandle>;
   /** List live regular-worker instances. */
   list(): Promise<WorkerEntityInfo[]>;
-  /** Retire a regular worker by handle or canonical entity id. */
-  destroy(worker: string | Pick<WorkerEntityHandle, "id">): Promise<void>;
+  /** Retire a regular worker or disposable resolved Durable Object. */
+  destroy(entity: RuntimeEntityReference): Promise<void>;
   /** List product-owned and workspace-authored services available here. */
   listServices(): Promise<WorkspaceServiceInfo[]>;
   /** Resolve a workspace service by name or protocol. */
@@ -147,9 +162,16 @@ export function createWorkerdClient(rpc: RpcCaller): WorkerdClient {
         { kind: "worker", source, ...options },
       ]),
     list: () => rpc.call<WorkerEntityInfo[]>("main", "runtime.listEntities", [{ kind: "worker" }]),
-    destroy: (worker) =>
+    destroy: (entity) =>
       rpc.call<void>("main", "runtime.retireEntity", [
-        { id: typeof worker === "string" ? worker : worker.id },
+        {
+          id:
+            typeof entity === "string"
+              ? entity
+              : "id" in entity
+                ? entity.id
+                : entity.targetId,
+        },
       ]),
     listServices: () => callWorkers<WorkspaceServiceInfo[]>("listServices"),
     resolveService: (query, objectKey) =>

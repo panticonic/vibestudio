@@ -107,6 +107,7 @@ describe("runtimeSurface manifests", () => {
   it("the worker runtime's real exports match its manifest", () => {
     const runtime = createWorkerRuntime({
       WORKER_ID: "surface-test",
+      WORKER_SOURCE: "workers/surface-test",
       RPC_AUTH_TOKEN: "token",
       CONTEXT_ID: "ctx",
       GATEWAY_URL: "http://server.test",

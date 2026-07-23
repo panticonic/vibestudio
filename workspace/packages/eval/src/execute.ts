@@ -1,3 +1,5 @@
+import { createPrivateGuestGlobal, getRealmCompiler } from "@vibestudio/shared/evalConfinement";
+
 /**
  * Compiles a function body + named args into a callable. Default uses `new Function`;
  * realms where dynamic codegen is blocked (e.g. workerd) inject one backed by an
@@ -6,8 +8,10 @@
 export type CompileFunction = (argNames: string[], body: string) => (...args: unknown[]) => unknown;
 
 const nativeCompileFunction: CompileFunction = (argNames, body) =>
-  // eslint-disable-next-line no-new-func
-  new Function(...argNames, body) as (...args: unknown[]) => unknown;
+  // Not `new Function` directly: a realm bootstrapped with `tameRealmCodegen()`
+  // has an inert global `Function`, and the kernel's compile capability is the
+  // constructor captured before taming.
+  new (getRealmCompiler())(...argNames, body) as (...args: unknown[]) => unknown;
 
 /**
  * Resolves the realm's compile function: a global `__vibestudioCompileFunction__` override
@@ -22,6 +26,24 @@ export const defaultCompileFunction: CompileFunction = (argNames, body) => {
   return (override ?? nativeCompileFunction)(argNames, body);
 };
 
+const GUEST_REALMS = new WeakMap<CompileFunction, Record<string, unknown>>();
+
+/**
+ * The realm guest code will actually run in — whatever realm `compileFunction`
+ * compiles into, which is not necessarily this module's realm (workerd's
+ * UnsafeEval binding, a node:vm context in tests). Confinement is a property of
+ * that realm, so both the guest global's intrinsics and the codegen check must
+ * come from it.
+ */
+function guestRealmOf(compileFunction: CompileFunction): Record<string, unknown> {
+  let realm = GUEST_REALMS.get(compileFunction);
+  if (!realm) {
+    realm = (compileFunction([], "return globalThis") as () => Record<string, unknown>)();
+    GUEST_REALMS.set(compileFunction, realm);
+  }
+  return realm;
+}
+
 /**
  * Execute CJS code with scope injection.
  */
@@ -34,6 +56,8 @@ export interface ExecuteOptions {
   require?: (id: string) => unknown;
   /** Function constructor. If not provided, uses `new Function` (`defaultCompileFunction`). */
   compileFunction?: CompileFunction;
+  /** Resolve every free identifier against a private allowlisted guest global. */
+  confinement?: "private-global";
 }
 
 export interface ExecuteResult {
@@ -218,15 +242,37 @@ export function execute(code: string, options: ExecuteOptions = {}): ExecuteResu
   const scopeValues = Object.values(bindings);
 
   const compileFunction = options.compileFunction ?? defaultCompileFunction;
-  const fn = compileFunction(
-    ["require", "exports", "module", "console", ...scopeNames],
-    `"use strict";\n${code}`
-  );
-
-  const returnValue = fn(require, exports, module, consoleProxy, ...scopeValues);
+  const receiver = [require, exports, module, consoleProxy, ...scopeValues];
+  let returnValue: unknown;
+  if (options.confinement === "private-global") {
+    const runConfined = compileFunction(
+      ["scope"],
+      `with (scope) {\n` +
+        `  return (function(require, exports, module, console, ${scopeNames.join(", ")}) {\n` +
+        `    "use strict";\n${code}\n` +
+        `  }).apply(undefined, this.receiver);\n` +
+        `}`
+    );
+    // `scope` claims every identifier, including names used by this kernel.
+    // Carry invocation values through the sloppy outer function's receiver;
+    // the strict guest function has `this === undefined` and cannot observe it.
+    returnValue = runConfined.call(
+      { receiver },
+      createPrivateGuestGlobal(guestRealmOf(compileFunction))
+    );
+  } else {
+    returnValue = compileFunction(
+      ["require", "exports", "module", "console", ...scopeNames],
+      `"use strict";\n${code}`
+    )(...receiver);
+  }
 
   return {
-    exports: module.exports as Record<string, unknown>,
+    // Async-CJS modules can replace module.exports after their first await.
+    // Keep the public result live until the linker has observed completion.
+    get exports() {
+      return module.exports as Record<string, unknown>;
+    },
     returnValue,
   };
 }

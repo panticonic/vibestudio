@@ -88,7 +88,7 @@ describe("source file bundles", () => {
       },
       loadImport: async (specifier, ref) => {
         loadCalls.push({ specifier, ref });
-        return `module.exports = { double: (n) => n * 2 };`;
+        return { bundle: `module.exports = { double: (n) => n * 2 };`, format: "cjs" as const };
       },
       bindings: { input: 21 },
     });
@@ -114,7 +114,7 @@ describe("source file bundles", () => {
       },
       loadImport: async (specifier, ref) => {
         loadCalls.push({ specifier, ref });
-        return `module.exports = { double: (n) => n * 2 };`;
+        return { bundle: `module.exports = { double: (n) => n * 2 };`, format: "cjs" as const };
       },
       bindings: { input: 21 },
     });
@@ -182,7 +182,7 @@ describe("source file bundles", () => {
       },
       loadImport: async (specifier, ref) => {
         loadCalls.push({ specifier, ref });
-        return `module.exports = {};`;
+        return { bundle: `module.exports = {};`, format: "cjs" as const };
       },
     });
 
@@ -287,7 +287,7 @@ export default function App() { return label; }`;
       },
       loadImport: async (specifier, ref) => {
         loadCalls.push({ specifier, ref });
-        return `module.exports = { label: "ready" };`;
+        return { bundle: `module.exports = { label: "ready" };`, format: "cjs" as const };
       },
     });
 

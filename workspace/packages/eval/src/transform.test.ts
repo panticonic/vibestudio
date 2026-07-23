@@ -65,11 +65,8 @@ describe("transformCode", () => {
         { syntax: "tsx" }
       );
 
-      // Sucrase uses jsx-dev-runtime or jsx-runtime depending on mode
-      const hasJsxRuntime = result.requires.some(
-        (r) => r === "react/jsx-runtime" || r === "react/jsx-dev-runtime"
-      );
-      expect(hasJsxRuntime).toBe(true);
+      expect(result.requires).toContain("react/jsx-runtime");
+      expect(result.requires).not.toContain("react/jsx-dev-runtime");
     });
 
     it("deduplicates requires", async () => {

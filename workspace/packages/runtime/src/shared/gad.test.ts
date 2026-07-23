@@ -91,6 +91,8 @@ describe("createGadClient", () => {
                 seq: 1,
                 from: { kind: "panel", id: "panel:user" },
                 payloadKind: "custom.kind",
+                contentClass: "internal",
+                externalKeys: [],
                 payload: ref,
                 publishedAt: "2026-05-20T12:00:00.000Z",
               },

@@ -75,6 +75,8 @@ export interface CreatePanelRuntimeOptions {
   requesterPanelId?: string | null | (() => string | null);
   selfHandle?: () => PanelHandle;
   createCdp?: (metadata: PanelHandleMetadata) => CdpAutomation;
+  /** Closure-held resolver for hosted runtimes that do not publish module globals. */
+  loadModule?: (id: string) => unknown | Promise<unknown>;
   initialMetadata?: PanelHandleMetadata[];
   onOpen?: (entry: { source: string; id: string; kind: "workspace" | "browser" }) => void;
   onReload?: (id: string) => void;
@@ -153,6 +155,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     createCdpAutomation(options.rpc, metadata.id, {
       kind: metadata.kind,
       requesterPanelId: requesterPanelId(),
+      loadModule: options.loadModule,
     });
 
   for (const metadata of options.initialMetadata ?? []) {

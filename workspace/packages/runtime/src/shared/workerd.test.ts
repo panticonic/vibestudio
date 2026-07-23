@@ -56,6 +56,7 @@ describe("createWorkerdClient", () => {
     await client.list();
     await client.destroy({ id: "worker:workers/example:probe" });
     await client.destroy("worker:workers/example:probe-2");
+    await client.destroy({ targetId: "do:workers/example:ExampleDO:probe" });
 
     expect(mock.rpc.call).toHaveBeenCalledWith("main", "runtime.createEntity", [
       {
@@ -74,6 +75,9 @@ describe("createWorkerdClient", () => {
     ]);
     expect(mock.rpc.call).toHaveBeenCalledWith("main", "runtime.retireEntity", [
       { id: "worker:workers/example:probe-2" },
+    ]);
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "runtime.retireEntity", [
+      { id: "do:workers/example:ExampleDO:probe" },
     ]);
   });
 

@@ -38,14 +38,17 @@ import {
   type ConnectionlessRpcClient,
   type DeferrableRpcClient,
   type RpcEnvelope,
+  type RpcEvent,
   type RpcRequest,
 } from "@vibestudio/rpc";
 import type { AuthorizationContext } from "@vibestudio/rpc";
 import {
-  bindMethodCapability,
-  evaluateAuthority,
-  requirementForPrincipals,
-} from "@vibestudio/shared/authorization";
+  DurableDirectRpcNonceLedger,
+  directRpcDenial,
+  eventIntakeAuthority,
+  hostControlDenial,
+  type EventIntakeRule,
+} from "@vibestudio/shared/directRpcEnforcement";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
 import { _initFsWithRpc } from "./fs.js";
@@ -146,10 +149,21 @@ function installConsoleBridge(rpc: Pick<RpcClient, "call">): void {
       forwarding = false;
     }
   };
-  console.log = (...args: unknown[]) => forward("log", args);
-  console.info = (...args: unknown[]) => forward("info", args);
-  console.warn = (...args: unknown[]) => forward("warn", args);
-  console.error = (...args: unknown[]) => forward("error", args);
+  const installSink = (
+    globalThis as typeof globalThis & {
+      __vibestudioInstallConsoleSink?: (
+        sink: (level: "log" | "info" | "warn" | "error", args: unknown[]) => void
+      ) => void;
+    }
+  ).__vibestudioInstallConsoleSink;
+  if (installSink) {
+    installSink(forward);
+  } else {
+    console.log = (...args: unknown[]) => forward("log", args);
+    console.info = (...args: unknown[]) => forward("info", args);
+    console.warn = (...args: unknown[]) => forward("warn", args);
+    console.error = (...args: unknown[]) => forward("error", args);
+  }
 }
 
 // Minimal types for workerd DurableObject context (cannot import cloudflare:workers in Node)
@@ -204,6 +218,7 @@ export abstract class DurableObjectBase {
 
   private _schemaReady = false;
   private _connectionless: ConnectionlessRpcClient | null = null;
+  private readonly _directRpcNonces: DurableDirectRpcNonceLedger;
   protected _currentRpcCallerId: string | null = null;
   protected _currentRpcCallerKind: string | null = null;
   protected _currentRpcCallerPanelId: string | null = null;
@@ -218,6 +233,10 @@ export abstract class DurableObjectBase {
   constructor(ctx: DurableObjectContext, env: unknown) {
     this.ctx = ctx;
     this.sql = ctx.storage.sql;
+    this._directRpcNonces = new DurableDirectRpcNonceLedger({
+      exec: (query, ...bindings) => this.sql.exec(query, ...bindings),
+      transactionSync: (callback) => this.ctx.storage.transactionSync(callback),
+    });
     this.env = env as Record<string, unknown>;
     // Schema is NOT initialized here — deferred to first fetch()/alarm().
     // This avoids the init-order bug where createTables() would be called
@@ -227,6 +246,7 @@ export abstract class DurableObjectBase {
   // --- Schema (lazy init, enforced automatically) ---
 
   static schemaVersion = 1;
+  static eventIntake: readonly EventIntakeRule[] = [];
 
   /** Subclasses define their SQL tables here. Called during schema init. */
   protected abstract createTables(): void;
@@ -779,6 +799,7 @@ export abstract class DurableObjectBase {
     }
 
     const method = segments.slice(1).join("/") || "getState";
+    const authorityAcceptedAt = directAuthorityAcceptedAt(request);
 
     // Converged inbound dispatch: an `RpcEnvelope` POSTed to `__rpc` (relay
     // traffic, server→DO event push, deferred replies) flows through the shared
@@ -809,14 +830,12 @@ export abstract class DurableObjectBase {
         const previousVerifiedCaller = this._currentVerifiedCaller;
         this._currentVerifiedCaller = verifiedCallerFromBody;
         try {
-          if (this.inboundHostControlDenial(method)) {
-            return new Response(
-              JSON.stringify({ error: "Lifecycle calls require server caller" }),
-              {
-                status: 403,
-                headers: { "Content-Type": "application/json" },
-              }
-            );
+          const denial = this.inboundHostControlDenial(method, authorityAcceptedAt);
+          if (denial) {
+            return new Response(JSON.stringify({ error: denial.reason, errorCode: denial.code }), {
+              status: 403,
+              headers: { "Content-Type": "application/json" },
+            });
           }
           const result =
             method === "__lifecycle/prepare"
@@ -839,8 +858,9 @@ export abstract class DurableObjectBase {
         const previousVerifiedCaller = this._currentVerifiedCaller;
         this._currentVerifiedCaller = verifiedCallerFromBody;
         try {
-          if (this.inboundHostControlDenial(method)) {
-            return new Response(JSON.stringify({ error: "Alarm calls require server caller" }), {
+          const denial = this.inboundHostControlDenial(method, authorityAcceptedAt);
+          if (denial) {
+            return new Response(JSON.stringify({ error: denial.reason, errorCode: denial.code }), {
               status: 403,
               headers: { "Content-Type": "application/json" },
             });
@@ -938,6 +958,51 @@ export abstract class DurableObjectBase {
     const envelope = (await request.json()) as RpcEnvelope;
     const message = envelope.message;
     const authorityAcceptedAt = directAuthorityAcceptedAt(request);
+    if (message?.type === "event") {
+      const caller = envelope.delivery.caller ?? null;
+      const event = message as RpcEvent;
+      const method = `__event:${event.event}`;
+      const audience = this.directAuthorityAudience();
+      const denial = directRpcDenial({
+        kind: "event",
+        method,
+        eventTopic: event.event,
+        caller,
+        attestation: caller?.authorization ?? null,
+        declaration: eventIntakeAuthority(this, event.event),
+        audience,
+        resourceKey: audience,
+        capability: `event:${event.event}`,
+        now: authorityAcceptedAt,
+      });
+      if (denial) {
+        return new Response(JSON.stringify({ error: denial.reason, errorCode: denial.code }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      const attestation = caller?.authorization;
+      if (
+        !attestation ||
+        !this._directRpcNonces.consume(
+          attestation.nonce,
+          attestation.expiresAt,
+          authorityAcceptedAt
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            error: `${method}: host authority attestation was replayed`,
+            errorCode: "EACCES",
+          }),
+          { status: 403, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      this.connectionlessClient().deliver(envelope);
+      return new Response(JSON.stringify({}), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     if (message?.type !== "request" && message?.type !== "stream-request") {
       this.connectionlessClient().deliver(envelope);
       return new Response(JSON.stringify({}), {
@@ -987,45 +1052,20 @@ export abstract class DurableObjectBase {
     if (!declaration) {
       return `${method}: refused — no direct authority declaration (workspace RPC is default-deny)`;
     }
-    const attestation = caller?.authorization;
-    if (!attestation) return `${method}: fresh host authority attestation is required`;
-    const now = authorityAcceptedAt;
     const audience = this.directAuthorityAudience();
     const resourceKey = this.directAuthorityResource();
-    if (
-      attestation.audience !== audience ||
-      attestation.method !== method ||
-      attestation.resourceKey !== resourceKey
-    ) {
-      return (
-        `${method}: host authority attestation is bound to another invocation ` +
-        `(expected audience=${audience} method=${method} resource=${resourceKey}; ` +
-        `received audience=${attestation.audience} method=${attestation.method} resource=${attestation.resourceKey})`
-      );
-    }
-    if (attestation.issuedAt > now || attestation.expiresAt <= now) {
-      return (
-        `${method}: host authority attestation was stale at trusted dispatch ingress ` +
-        `(issuedAt=${attestation.issuedAt} expiresAt=${attestation.expiresAt} acceptedAt=${now})`
-      );
-    }
-    if (attestation.readOnly === true && declaration.sensitivity !== "read") {
-      return `${method}: EVAL_READ_ONLY — direct method is ${declaration.sensitivity ?? "unclassified"}`;
-    }
-    const decision = evaluateAuthority({
-      context: attestation.context,
-      requirement:
-        declaration.requires !== undefined
-          ? bindMethodCapability(declaration.requires, this.directAuthorityCapability(method))
-          : requirementForPrincipals(
-              declaration.principals,
-              this.directAuthorityCapability(method)
-            ),
+    const denial = directRpcDenial({
+      kind: "call",
+      method,
+      caller,
+      attestation: caller?.authorization ?? null,
+      declaration,
+      audience,
       resourceKey,
-      grants: attestation.grants,
-      now,
+      capability: caller?.authorization?.capability ?? "",
+      now: authorityAcceptedAt,
     });
-    return decision.allowed ? null : `${method}: ${decision.reason} (${decision.code})`;
+    return denial?.reason ?? null;
   }
 
   private directAuthorityAudience(): string {
@@ -1036,22 +1076,25 @@ export abstract class DurableObjectBase {
     return this.directAuthorityAudience();
   }
 
-  private directAuthorityCapability(method: string): string {
-    return `rpc:${method}`;
-  }
-
-  private inboundHostControlDenial(method: string): string | null {
-    const attestation = this.caller?.authorization;
-    const now = Date.now();
-    return attestation &&
-      attestation.audience === this.directAuthorityAudience() &&
-      attestation.method === method &&
-      attestation.resourceKey === this.directAuthorityResource() &&
-      attestation.context.host !== null &&
-      attestation.issuedAt <= now &&
-      attestation.expiresAt > now
-      ? null
-      : `${method}: live host principal is required`;
+  private inboundHostControlDenial(
+    method: string,
+    authorityAcceptedAt: number
+  ): { code: "EACCES"; reason: string } | null {
+    const attestation = this.caller?.authorization ?? null;
+    const denial = hostControlDenial({
+      method,
+      attestation,
+      audience: this.directAuthorityAudience(),
+      now: authorityAcceptedAt,
+    });
+    if (denial) return denial;
+    if (
+      !attestation ||
+      !this._directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
+    ) {
+      return { code: "EACCES", reason: `${method}: host authority attestation was replayed` };
+    }
+    return null;
   }
 
   /**
@@ -1097,6 +1140,28 @@ export abstract class DurableObjectBase {
             requestId: message?.requestId ?? "",
             error: denial,
             errorCode: denial.includes("EVAL_READ_ONLY") ? "EVAL_READ_ONLY" : "EACCES",
+          },
+        } as RpcEnvelope;
+      }
+      const attestation = caller?.authorization;
+      if (
+        attestation &&
+        !this._directRpcNonces.consume(
+          attestation.nonce,
+          attestation.expiresAt,
+          authorityAcceptedAt
+        )
+      ) {
+        return {
+          from: envelope.target,
+          target: envelope.from,
+          delivery: { caller: caller ?? { callerId: "", callerKind: "unknown" } },
+          provenance: envelope.provenance ?? [],
+          message: {
+            type: "response",
+            requestId: message?.requestId ?? "",
+            error: `${message?.method ?? "<unknown>"}: host authority attestation was replayed`,
+            errorCode: "EACCES",
           },
         } as RpcEnvelope;
       }
