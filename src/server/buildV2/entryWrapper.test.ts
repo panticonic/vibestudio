@@ -124,6 +124,7 @@ describe("generateExposeModuleCode", () => {
   it("panel target produces the panel-flavored bootstrap", () => {
     const code = generateExposeModuleCode(["react"], "panel");
     expect(code).toContain("__vibestudioRequireAsync__");
+    expect(code).toContain("__vibestudioPreloadModules__");
     expect(code).toContain('import("./_expose_module_0.js")');
   });
 

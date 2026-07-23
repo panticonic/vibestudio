@@ -7,14 +7,22 @@ import { createFallbackAsyncTracking } from "./asyncTracking";
 describe("executeSandbox", () => {
   let originalModuleMap: unknown;
   let originalRequire: unknown;
+  let originalAsyncRequire: unknown;
   let originalPreload: unknown;
+  let originalModuleLoaders: unknown;
+  let originalNativeImportSpecifiers: unknown;
   let originalLoadImport: unknown;
   let originalAsyncTracking: unknown;
 
   beforeEach(() => {
     originalModuleMap = (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"];
     originalRequire = (globalThis as Record<string, unknown>)["__vibestudioRequire__"];
+    originalAsyncRequire = (globalThis as Record<string, unknown>)["__vibestudioRequireAsync__"];
     originalPreload = (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"];
+    originalModuleLoaders = (globalThis as Record<string, unknown>)["__vibestudioModuleLoaders__"];
+    originalNativeImportSpecifiers = (globalThis as Record<string, unknown>)[
+      "__vibestudioNativeImportSpecifiers__"
+    ];
     originalLoadImport = (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"];
     originalAsyncTracking = (globalThis as Record<string, unknown>)["__vibestudioAsyncTracking__"];
 
@@ -24,6 +32,9 @@ describe("executeSandbox", () => {
       if (id in moduleMap) return moduleMap[id];
       throw new Error(`Module not found: ${id}`);
     };
+    delete (globalThis as Record<string, unknown>)["__vibestudioRequireAsync__"];
+    (globalThis as Record<string, unknown>)["__vibestudioModuleLoaders__"] = {};
+    (globalThis as Record<string, unknown>)["__vibestudioNativeImportSpecifiers__"] = new Set();
     (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"] = async (
       ids: string[]
     ) =>
@@ -40,9 +51,23 @@ describe("executeSandbox", () => {
     if (originalRequire === undefined)
       delete (globalThis as Record<string, unknown>)["__vibestudioRequire__"];
     else (globalThis as Record<string, unknown>)["__vibestudioRequire__"] = originalRequire;
+    if (originalAsyncRequire === undefined)
+      delete (globalThis as Record<string, unknown>)["__vibestudioRequireAsync__"];
+    else
+      (globalThis as Record<string, unknown>)["__vibestudioRequireAsync__"] = originalAsyncRequire;
     if (originalPreload === undefined)
       delete (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"];
     else (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"] = originalPreload;
+    if (originalModuleLoaders === undefined)
+      delete (globalThis as Record<string, unknown>)["__vibestudioModuleLoaders__"];
+    else
+      (globalThis as Record<string, unknown>)["__vibestudioModuleLoaders__"] =
+        originalModuleLoaders;
+    if (originalNativeImportSpecifiers === undefined)
+      delete (globalThis as Record<string, unknown>)["__vibestudioNativeImportSpecifiers__"];
+    else
+      (globalThis as Record<string, unknown>)["__vibestudioNativeImportSpecifiers__"] =
+        originalNativeImportSpecifiers;
     if (originalLoadImport === undefined)
       delete (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"];
     else (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"] = originalLoadImport;
@@ -449,6 +474,66 @@ return fs.readFileSync("/tmp/a");`,
       failureKind: "infrastructure",
       failureCode: "package_load_failed",
     });
+  });
+
+  it("loads a lazy panel-exposed module before workspace build fallback", async () => {
+    const globals = globalThis as Record<string, unknown>;
+    const moduleMap = globals["__vibestudioModuleMap__"] as Record<string, unknown>;
+    const loaders = globals["__vibestudioModuleLoaders__"] as Record<
+      string,
+      () => Promise<unknown>
+    >;
+    const jsxRuntime = { marker: "host jsx runtime" };
+    loaders["react/jsx-runtime"] = async () => {
+      moduleMap["react/jsx-runtime"] = jsxRuntime;
+      return jsxRuntime;
+    };
+    globals["__vibestudioRequireAsync__"] = async (id: string) => {
+      const loaded = moduleMap[id] ?? (await loaders[id]?.());
+      if (loaded === undefined) throw new Error(`Module "${id}" has no generated loader`);
+      moduleMap[id] = loaded;
+      return loaded;
+    };
+    const loadImport = vi.fn();
+
+    const result = await executeSandbox(
+      'import * as runtime from "react/jsx-runtime"; return runtime.marker;',
+      {
+        syntax: "typescript",
+        imports: { "react/jsx-runtime": "latest" },
+        loadImport,
+      }
+    );
+
+    expect(result).toMatchObject({ success: true, returnValue: "host jsx runtime" });
+    expect(loadImport).not.toHaveBeenCalled();
+  });
+
+  it("does not mask a lazy exposed-chunk failure with build fallback", async () => {
+    const globals = globalThis as Record<string, unknown>;
+    const loaders = globals["__vibestudioModuleLoaders__"] as Record<
+      string,
+      () => Promise<unknown>
+    >;
+    loaders["react/jsx-runtime"] = async () => {
+      throw new Error("exposed module chunk failed");
+    };
+    globals["__vibestudioRequireAsync__"] = (id: string) => loaders[id]!();
+    const loadImport = vi.fn();
+
+    const result = await executeSandbox('import "react/jsx-runtime"; return "unreachable";', {
+      syntax: "typescript",
+      imports: { "react/jsx-runtime": "latest" },
+      loadImport,
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "exposed module chunk failed",
+      failureKind: "infrastructure",
+      failureCode: "package_load_failed",
+    });
+    expect(loadImport).not.toHaveBeenCalled();
   });
 
   it("classifies an acquired package's initialization error as correctable user code", async () => {

@@ -17,6 +17,7 @@ import { transformCode } from "./transform.js";
 import {
   execute,
   executeDefault,
+  getAsyncRequire,
   getDefaultRequire,
   unavailableModuleMessage,
   validateRequires,
@@ -262,9 +263,8 @@ async function loadLibraryBundle(
       ) {
         throw originalError;
       }
-      const dependencyArtifact = await runInfrastructurePhase(
-        "package_load_failed",
-        () => loadImport(dependency, undefined, Object.keys(moduleMap))
+      const dependencyArtifact = await runInfrastructurePhase("package_load_failed", () =>
+        loadImport(dependency, undefined, Object.keys(moduleMap))
       );
       await loadLibraryBundle(
         dependency,
@@ -309,6 +309,10 @@ async function loadImports(
     // "react" can even resolve to an unrelated workspace unit via basename
     // matching (workspace/packages/react) and build that instead.
     if (moduleMap[specifier] || installPreloadedModuleAlias(specifier, moduleMap)) continue;
+    const loadedFromHost = await runInfrastructurePhase("package_load_failed", () =>
+      loadLazyHostModule(specifier, moduleMap, moduleMapOverride)
+    );
+    if (loadedFromHost) continue;
     const ref = refValue === "latest" ? undefined : refValue;
     // Recompute externals each iteration so earlier imports are externalized
     const externals = Object.keys(moduleMap);
@@ -317,9 +321,8 @@ async function loadImports(
     // outside this wrapper, so an environment-specific or throwing package can
     // be corrected by the agent instead of terminating the whole turn as an
     // infrastructure outage.
-    const artifact = await runInfrastructurePhase(
-      "package_load_failed",
-      () => loadImport(specifier, ref, externals)
+    const artifact = await runInfrastructurePhase("package_load_failed", () =>
+      loadImport(specifier, ref, externals)
     );
     await loadLibraryBundle(
       specifier,
@@ -332,6 +335,48 @@ async function loadImports(
       confinement
     );
   }
+}
+
+/**
+ * Resolve a module deliberately exposed by the panel host but not fetched yet.
+ *
+ * Panel bundles register exposed modules as lazy chunk loaders so first paint
+ * does not pay for every sandbox dependency. Presence in that loader registry
+ * is the authoritative distinction between a host module and a workspace/npm
+ * import. Do not probe by calling the async require for arbitrary specifiers:
+ * a real exposed-chunk failure must remain an infrastructure error, while an
+ * absent loader must fall through to the build service.
+ *
+ * Explicit per-execution module maps (EvalDO confinement) never consult panel
+ * globals; their host modules are injected directly into that private map.
+ */
+async function loadLazyHostModule(
+  specifier: string,
+  moduleMap: Record<string, unknown>,
+  moduleMapOverride?: Record<string, unknown>
+): Promise<boolean> {
+  // executeSandbox resolves the ambient map up front and passes that same
+  // object through its helpers. Treat only a genuinely private map as a
+  // confinement boundary; object identity with the ambient registry is the
+  // unambiguous distinction.
+  if (moduleMapOverride && moduleMapOverride !== getModuleMap()) return false;
+  const globals = globalThis as Record<string, unknown>;
+  const loaders = globals["__vibestudioModuleLoaders__"];
+  const nativeSpecifiers = globals["__vibestudioNativeImportSpecifiers__"];
+  const hasGeneratedLoader =
+    !!loaders &&
+    typeof loaders === "object" &&
+    typeof (loaders as Record<string, unknown>)[specifier] === "function";
+  const hasNativeImport = nativeSpecifiers instanceof Set && nativeSpecifiers.has(specifier);
+  if (!hasGeneratedLoader && !hasNativeImport) return false;
+
+  const asyncRequire = getAsyncRequire();
+  if (!asyncRequire) {
+    throw new Error(`Lazy host module ${specifier} has no async module runtime`);
+  }
+  const loaded = await asyncRequire(specifier);
+  if (moduleMap[specifier] === undefined) moduleMap[specifier] = loaded;
+  return true;
 }
 
 function installPreloadedModuleAlias(
@@ -372,9 +417,8 @@ function installLazyImportLoader(
     const moduleMap = getModuleMap(moduleMapOverride);
     if (moduleMap[specifier]) return moduleMap[specifier];
     const ref = refValue === "latest" ? undefined : refValue;
-    const artifact = await runInfrastructurePhase(
-      "package_load_failed",
-      () => loadImport(specifier, ref, Object.keys(moduleMap))
+    const artifact = await runInfrastructurePhase("package_load_failed", () =>
+      loadImport(specifier, ref, Object.keys(moduleMap))
     );
     await loadLibraryBundle(
       specifier,

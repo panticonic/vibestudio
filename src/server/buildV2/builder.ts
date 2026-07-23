@@ -1321,6 +1321,11 @@ globalThis.__vibestudioRequireAsync__ = async function(id) {
   });
   globalThis.__vibestudioModuleLoadingPromises__[id] = loadPromise;
   return loadPromise;
+};
+globalThis.__vibestudioPreloadModules__ = function(ids) {
+  return Promise.all(ids.map(function(id) {
+    return globalThis.__vibestudioRequireAsync__(id);
+  }));
 };`;
 }
 
