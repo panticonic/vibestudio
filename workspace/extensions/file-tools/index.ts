@@ -367,8 +367,17 @@ export async function activate(ctx: ExtensionContextLike) {
       const args = ["--json", "--line-number", "--color=never", "--hidden"];
       if (raw.ignoreCase) args.push("--ignore-case");
       if (raw.literal !== false) args.push("--fixed-strings");
+      // A string pattern may naturally contain newlines (for example a small
+      // YAML or source fragment). ripgrep otherwise rejects that input before
+      // searching. The tool contract already accepts an arbitrary string, so
+      // select ripgrep's multiline engine from the value instead of requiring
+      // callers to know or emulate a subprocess flag that is not part of the
+      // public API.
+      if (/\r|\n/u.test(raw.pattern)) args.push("--multiline");
       if (raw.glob) args.push("--glob", raw.glob);
-      args.push(raw.pattern, searchPath);
+      // End option parsing before the caller's literal pattern. Leading-dash
+      // YAML/source fragments are data, not ripgrep CLI flags.
+      args.push("--", raw.pattern, searchPath);
 
       return await new Promise<GrepResult>((resolve, reject) => {
         const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
