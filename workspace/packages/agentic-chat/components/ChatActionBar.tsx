@@ -27,7 +27,16 @@ function ChatActionBarContent({ actionBar }: { actionBar: ActionBarState }) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startY: number; startHeight: number; nextHeight: number } | null>(null);
 
-  const onAsyncError = useCallback((err: Error) => setAsyncError(err), []);
+  const onAsyncError = useCallback(
+    (err: Error) => {
+      console.error(
+        `[ChatActionBar] Component "${data.id}" failed (${data.source.type === "file" ? data.source.path : "inline code"}):`,
+        err
+      );
+      setAsyncError(err);
+    },
+    [data.id, data.source]
+  );
   const wrappedChat = useMemo(
     () => wrapChatForErrorReporting(chat, onAsyncError),
     [chat, onAsyncError],
@@ -114,16 +123,32 @@ function ChatActionBarContent({ actionBar }: { actionBar: ActionBarState }) {
         onChangeCapture={onInteraction}
       >
         {asyncError ? (
-          <InlineUiErrorCallout error={asyncError} componentId={data.id} chat={chat} />
+          <InlineUiErrorCallout
+            error={asyncError}
+            componentId={data.id}
+            source={data.source.type === "file" ? data.source.path : "inline code"}
+            chat={chat}
+          />
         ) : component?.error ? (
-          <InlineUiErrorCallout error={new Error(component.error)} componentId={data.id} chat={chat} />
+          <InlineUiErrorCallout
+            error={new Error(component.error)}
+            componentId={data.id}
+            source={data.source.type === "file" ? data.source.path : "inline code"}
+            chat={chat}
+          />
         ) : !CompiledComponent ? (
           <Spinner size="1" />
         ) : (
           <EventErrorBoundary
             resetKey={resetKey}
+            onError={onAsyncError}
             renderFallback={(error) => (
-              <InlineUiErrorCallout error={error} componentId={data.id} chat={chat} />
+              <InlineUiErrorCallout
+                error={error}
+                componentId={data.id}
+                source={data.source.type === "file" ? data.source.path : "inline code"}
+                chat={chat}
+              />
             )}
           >
             <Suspense fallback={<Spinner size="1" />}>

@@ -98,6 +98,12 @@
       "@workspace-workers/test-agent": ["workspace/workers/test-agent/index.ts"],
       "@workspace/about-shared/types": ["workspace/packages/about-shared/types.ts"],
       "@workspace/agentic-chat": ["workspace/packages/agentic-chat/index.ts"],
+      "@workspace/agentic-chat/chat": [
+        "workspace/packages/agentic-chat/components/AgenticChat.tsx"
+      ],
+      "@workspace/agentic-chat/error-boundary": [
+        "workspace/packages/agentic-chat/components/ErrorBoundary.tsx"
+      ],
       "@workspace/agentic-core": ["workspace/packages/agentic-core/src/index.ts"],
       "@workspace/agentic-session": ["workspace/packages/agentic-session/src/index.ts"],
       "@workspace/agentic-chat/styles.css": ["workspace/packages/agentic-chat/styles.css"],
@@ -108,6 +114,8 @@
       "@workspace/agentic-do": ["workspace/packages/agentic-do/src/index.ts"],
       "@workspace/agentic-protocol": ["workspace/packages/agentic-protocol/src/index.ts"],
       "@workspace/eval": ["workspace/packages/eval/src/index.ts"],
+      "@workspace/eval/sandbox": ["workspace/packages/eval/src/sandbox.ts"],
+      "@workspace/eval/scope": ["workspace/packages/eval/src/scope.ts"],
       "@workspace/integrations": ["workspace/packages/integrations/src/index.ts"],
       "@workspace/integrations/calendar": ["workspace/packages/integrations/src/calendar.ts"],
       "@workspace/integrations/providers": ["workspace/packages/integrations/src/providers.ts"],
@@ -127,6 +135,9 @@
       "@workspace/react": ["workspace/packages/react/src/index.ts"],
       "@workspace/react/responsive": ["workspace/packages/react/src/responsive.ts"],
       "@workspace/runtime": ["workspace/packages/runtime/src/panel/index.ts"],
+      "@workspace/runtime/internal/diagnostics": [
+        "workspace/packages/runtime/src/internal/diagnostics.ts"
+      ],
       "@workspace/testkit/suites": ["workspace/packages/testkit/src/suites/index.ts"],
       "@workspace/testkit/profiling": ["workspace/packages/testkit/src/profile-core.ts"],
       "@workspace/runtime/hosted": ["workspace/packages/runtime/src/shared/hostedRuntime.ts"],

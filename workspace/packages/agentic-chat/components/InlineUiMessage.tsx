@@ -21,10 +21,12 @@ import { useChatContext } from "../context/ChatContext";
 export function InlineUiErrorCallout({
   error,
   componentId,
+  source,
   chat,
 }: {
   error: Error;
   componentId: string;
+  source?: string;
   chat: ChatSandboxValue;
 }) {
   const [reported, setReported] = useState(false);
@@ -33,6 +35,7 @@ export function InlineUiErrorCallout({
     const message =
       `[Inline UI Error] Component "${componentId}" encountered an error ` +
       `during user interaction:\n\n\`\`\`\n${error.message}\n\`\`\`\n\n` +
+      `${source ? `Source: \`${source}\`\n\n` : ""}` +
       `${error.stack ? `Stack trace:\n\`\`\`\n${error.stack}\n\`\`\`` : ""}`;
     chat.send(message).catch((err) => {
       console.error("[InlineUiMessage] Failed to report error to agent:", err);
@@ -46,6 +49,23 @@ export function InlineUiErrorCallout({
       <Text as="div" size="2" className="rt-CalloutText">
         <Flex direction="column" gap="2">
           <Text size="1">Component error: {error.message || "Unknown error"}</Text>
+          <details>
+            <summary style={{ cursor: "pointer", fontSize: "var(--font-size-1)" }}>
+              Technical details
+            </summary>
+            <pre
+              style={{
+                fontSize: "var(--font-size-1)",
+                margin: "var(--space-2) 0 0",
+                overflowWrap: "anywhere",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {[`Component: ${componentId}`, source ? `Source: ${source}` : null, error.stack]
+                .filter(Boolean)
+                .join("\n")}
+            </pre>
+          </details>
           <Box>
             <Button
               size="1"
@@ -109,14 +129,20 @@ export function InlineUiMessage({ data, compiledComponent: CompiledComponent, co
   const [asyncError, setAsyncError] = useState<Error | null>(null);
 
   // Wrap chat so unhandled async rejections surface visually
-  const onAsyncError = useCallback((err: Error) => setAsyncError(err), []);
+  const reportComponentError = useCallback(
+    (err: Error) => {
+      console.error(`[InlineUiMessage] Component "${data.id}" failed:`, err);
+      setAsyncError(err);
+    },
+    [data.id],
+  );
   const wrappedChat = useMemo(
-    () => wrapChatForErrorReporting(chat, onAsyncError),
-    [chat, onAsyncError],
+    () => wrapChatForErrorReporting(chat, reportComponentError),
+    [chat, reportComponentError],
   );
   const wrappedScopes = useMemo(
-    () => wrapScopesForErrorReporting(scopes, onAsyncError),
-    [scopes, onAsyncError],
+    () => wrapScopesForErrorReporting(scopes, reportComponentError),
+    [scopes, reportComponentError],
   );
 
   const onInteraction = useCallback(() => {
@@ -132,7 +158,14 @@ export function InlineUiMessage({ data, compiledComponent: CompiledComponent, co
   useEffect(() => { setAsyncError(null); }, [resetKey]);
 
   if (asyncError) {
-    return <InlineUiErrorCallout error={asyncError} componentId={data.id} chat={chat} />;
+    return (
+      <InlineUiErrorCallout
+        error={asyncError}
+        componentId={data.id}
+        source={data.source.type === "file" ? data.source.path : "inline code"}
+        chat={chat}
+      />
+    );
   }
 
   if (compilationError) {
@@ -140,6 +173,7 @@ export function InlineUiMessage({ data, compiledComponent: CompiledComponent, co
       <InlineUiErrorCallout
         error={new Error(compilationError)}
         componentId={data.id}
+        source={data.source.type === "file" ? data.source.path : "inline code"}
         chat={chat}
       />
     );
@@ -164,8 +198,14 @@ export function InlineUiMessage({ data, compiledComponent: CompiledComponent, co
       >
         <EventErrorBoundary
           resetKey={resetKey}
+          onError={reportComponentError}
           renderFallback={(error) => (
-            <InlineUiErrorCallout error={error} componentId={data.id} chat={chat} />
+            <InlineUiErrorCallout
+              error={error}
+              componentId={data.id}
+              source={data.source.type === "file" ? data.source.path : "inline code"}
+              chat={chat}
+            />
           )}
         >
           <Suspense fallback={<Spinner size="1" />}>

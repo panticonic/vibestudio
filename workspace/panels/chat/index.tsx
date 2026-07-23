@@ -20,14 +20,15 @@ import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
-import { AgenticChat, ErrorBoundary } from "@workspace/agentic-chat";
+import { AgenticChat } from "@workspace/agentic-chat/chat";
+import { ErrorBoundary } from "@workspace/agentic-chat/error-boundary";
 import type {
   ConnectionConfig,
   AgenticChatActions,
   ToolProvider,
   ForkNavHandlers,
   NewConversationOptions,
-} from "@workspace/agentic-chat";
+} from "@workspace/agentic-chat/types";
 import { useAppTheme } from "@workspace/ui/panel";
 import "@workspace/ui/tokens.css";
 import { createPanelSandboxConfig, unsubscribeAgentFromChannel } from "@workspace/agentic-core";
@@ -204,6 +205,8 @@ export default function ChatPanel() {
   const resolvedContextId = requireChatContextId(contextId);
   const initialPromptCaptured = useRef(stateArgs.initialPrompt);
   const modelSettingsServiceRef = useRef<DurableObjectServiceClient | null>(null);
+  const modelSettingsSnapshotRef = useRef<ModelSettingsSnapshot | null>(null);
+  const modelSettingsRequestRef = useRef<Promise<ModelSettingsSnapshot> | null>(null);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
   const [workspaceDefaultModelRef, setWorkspaceDefaultModelRef] = useState<string | null>(null);
   const [workspaceDefaultAgentConfig, setWorkspaceDefaultAgentConfig] =
@@ -221,8 +224,8 @@ export default function ChatPanel() {
     return modelSettingsServiceRef.current;
   }, []);
 
-  const loadModelSettings = useCallback(async (): Promise<ModelSettingsSnapshot> => {
-    const settings = await getModelSettingsService().call<ModelSettingsSnapshot>("getSettings");
+  const applyModelSettings = useCallback((settings: ModelSettingsSnapshot) => {
+    modelSettingsSnapshotRef.current = settings;
     catalogRef.current = settings.catalog;
     setModelCatalog(settings.catalog);
     setWorkspaceDefaultModelRef(settings.defaultModel);
@@ -234,8 +237,34 @@ export default function ChatPanel() {
         ? settings.defaultModel
         : null
     );
-    return settings;
-  }, [getModelSettingsService]);
+  }, []);
+
+  const loadModelSettings = useCallback(
+    async (refresh = false): Promise<ModelSettingsSnapshot> => {
+      if (!refresh && modelSettingsSnapshotRef.current) {
+        return modelSettingsSnapshotRef.current;
+      }
+      if (modelSettingsRequestRef.current) {
+        return modelSettingsRequestRef.current;
+      }
+
+      let request: Promise<ModelSettingsSnapshot>;
+      request = getModelSettingsService()
+        .call<ModelSettingsSnapshot>("getSettings")
+        .then((settings) => {
+          applyModelSettings(settings);
+          return settings;
+        })
+        .finally(() => {
+          if (modelSettingsRequestRef.current === request) {
+            modelSettingsRequestRef.current = null;
+          }
+        });
+      modelSettingsRequestRef.current = request;
+      return request;
+    },
+    [applyModelSettings, getModelSettingsService]
+  );
 
   const resolveWorkspaceDefaultAgentConfig = useCallback(async (): Promise<DefaultAgentConfig> => {
     try {
@@ -398,11 +427,14 @@ export default function ChatPanel() {
   ]);
 
   // Build ConnectionConfig from runtime
-  const config: ConnectionConfig = {
-    clientId: panel.slotId,
-    rpc,
-    recoveryCoordinator,
-  };
+  const config = useMemo<ConnectionConfig>(
+    () => ({
+      clientId: panel.slotId,
+      rpc,
+      recoveryCoordinator,
+    }),
+    []
+  );
 
   const effectiveDefaultAgentConfig = useMemo<DefaultAgentConfig | null>(() => {
     const globalConfig = stateArgs.agentConfig ?? {};
@@ -551,7 +583,7 @@ export default function ChatPanel() {
       refreshTimer = window.setTimeout(() => {
         refreshTimer = null;
         if (disposed) return;
-        void loadModelSettings().catch((err) => {
+        void loadModelSettings(true).catch((err) => {
           console.warn(
             "[ChatPanel] Failed to refresh model settings after local model event:",
             err
@@ -601,12 +633,9 @@ export default function ChatPanel() {
         "setDefaultAgentConfig",
         config
       );
-      catalogRef.current = settings.catalog;
-      setModelCatalog(settings.catalog);
-      setWorkspaceDefaultModelRef(settings.defaultModel);
-      setWorkspaceDefaultAgentConfig(settings.defaultAgentConfig);
+      applyModelSettings(settings);
     },
-    [getModelSettingsService]
+    [applyModelSettings, getModelSettingsService]
   );
 
   const handleAddAgent = useCallback(
@@ -766,7 +795,7 @@ export default function ChatPanel() {
         await rpc.call("main", "credentials.connect", [request]);
         // Refetch the snapshot — availability is worker-computed, so the new
         // credential shows up as `ready` entries in the next catalog.
-        await loadModelSettings();
+        await loadModelSettings(true);
         return { ok: true };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };

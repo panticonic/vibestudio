@@ -6,9 +6,9 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { compileComponent } from "@workspace/eval";
 import type { LoadSourceFile, SandboxOptions } from "@workspace/eval";
 import type { ActionBarData, ActionBarState, InlineUiComponentEntry } from "../../types";
+import { scheduleBackgroundWork } from "../../utils/scheduleBackgroundWork";
 
 interface UseActionBarOptions {
   data: ActionBarData | null;
@@ -44,57 +44,81 @@ export function parseActionBarData(value: unknown): ActionBarData | null {
     id: value["id"],
     source: parsedSource,
     imports: isRecord(value["imports"])
-      ? Object.fromEntries(Object.entries(value["imports"]).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+      ? Object.fromEntries(
+          Object.entries(value["imports"]).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string"
+          )
+        )
       : undefined,
     props: isRecord(value["props"]) ? value["props"] : undefined,
-    maxHeight: typeof value["maxHeight"] === "number" && Number.isFinite(value["maxHeight"])
-      ? value["maxHeight"]
-      : undefined,
+    maxHeight:
+      typeof value["maxHeight"] === "number" && Number.isFinite(value["maxHeight"])
+        ? value["maxHeight"]
+        : undefined,
   };
 }
 
-export function useActionBar({ data, loadSourceFile, loadImport }: UseActionBarOptions): ActionBarHookState {
+export function useActionBar({
+  data,
+  loadSourceFile,
+  loadImport,
+}: UseActionBarOptions): ActionBarHookState {
   const [component, setComponent] = useState<InlineUiComponentEntry | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
     if (!data) {
       setComponent(undefined);
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+      };
     }
 
     setComponent(undefined);
-    void (async () => {
-      try {
-        const sourceCode = data.source.type === "file"
-          ? await loadSourceFile?.(data.source.path)
-          : data.source.code;
-        if (!sourceCode) throw new Error(`Unable to load action bar source for ${data.id}`);
-        const sourcePath = data.source.type === "file" ? data.source.path : undefined;
-        const result = await compileComponent<NonNullable<InlineUiComponentEntry["Component"]>>(sourceCode, {
-          imports: data.imports,
-          sourcePath,
-          loadSourceFile,
-          loadImport,
-        });
-        if (cancelled) return;
-        if (result.success) {
-          setComponent({ Component: result.Component!, cacheKey: result.cacheKey! });
-        } else {
-          setComponent({ cacheKey: sourceCode, error: result.error });
+    // A cold TSX compiler chunk is substantial; keep it behind the panel's
+    // connection, replay, and agent-launch effects.
+    const cancelBackgroundWork = scheduleBackgroundWork(() => {
+      void (async () => {
+        try {
+          const sourceCode =
+            data.source.type === "file"
+              ? await loadSourceFile?.(data.source.path)
+              : data.source.code;
+          if (!sourceCode) throw new Error(`Unable to load action bar source for ${data.id}`);
+          const sourcePath = data.source.type === "file" ? data.source.path : undefined;
+          const { compileComponent } = await import("@workspace/eval/sandbox");
+          const result = await compileComponent<NonNullable<InlineUiComponentEntry["Component"]>>(
+            sourceCode,
+            {
+              imports: data.imports,
+              sourcePath,
+              loadSourceFile,
+              loadImport,
+            }
+          );
+          if (cancelled) return;
+          if (result.success) {
+            setComponent({ Component: result.Component!, cacheKey: result.cacheKey! });
+          } else {
+            setComponent({ cacheKey: sourceCode, error: result.error });
+          }
+        } catch (err) {
+          if (cancelled) return;
+          setComponent({
+            cacheKey: data.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
-      } catch (err) {
-        if (cancelled) return;
-        setComponent({ cacheKey: data.id, error: err instanceof Error ? err.message : String(err) });
-      }
-    })();
+      })();
+    });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      cancelBackgroundWork();
+    };
   }, [data?.id, data?.source, loadSourceFile, loadImport]);
 
-  const actionBar = useMemo(() => (
-    data ? { data, component } : null
-  ), [data, component]);
+  const actionBar = useMemo(() => (data ? { data, component } : null), [data, component]);
 
   return { actionBar };
 }

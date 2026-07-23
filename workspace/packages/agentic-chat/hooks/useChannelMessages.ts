@@ -637,6 +637,8 @@ function credentialConnectWireToEnvelope(
     },
     payload: wire.payload as never,
     payloadKind: CREDENTIAL_CONNECT_PAYLOAD_KIND,
+    contentClass: "external",
+    externalKeys: [`msg:${channelId}/${wire.pubsubId ?? "unattributed"}`],
     publishedAt: new Date(wire.ts ?? Date.now()).toISOString(),
   } as ChannelEnvelope;
 }
@@ -666,6 +668,8 @@ function pubsubAgenticEventToEnvelope(
     },
     payload: wire.payload,
     payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+    contentClass: "external",
+    externalKeys: [`msg:${channelId}/${wire.pubsubId ?? "unattributed"}`],
     publishedAt: new Date(wire.ts ?? Date.now()).toISOString(),
   };
 }

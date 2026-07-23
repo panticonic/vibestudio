@@ -8,9 +8,10 @@ import type { ReactNode } from "react";
 import "@radix-ui/themes/styles.css";
 import "@workspace/ui/tokens.css";
 import { Theme, Flex, Box, Heading, Text, Card } from "@radix-ui/themes";
-import { VibestudioLogo } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui/brand";
 import { useAppTheme } from "@workspace/ui/panel";
-import { useIsMobile, usePanelTheme } from "@workspace/react";
+import { useIsMobile } from "@workspace/react/responsive";
+import { usePanelTheme } from "@workspace/react/theme";
 
 /** Brand gradient used for the app mark and page icons. Theme-aware via Radix color scales. */
 export const BRAND_GRADIENT = "var(--brand-gradient)";
@@ -28,7 +29,7 @@ export function AboutThemeRoot({ children }: { children: ReactNode }) {
 
 /** Theme-aware Vibestudio logo mark. */
 export function BrandMark({ size = 48 }: { size?: number }) {
-  return <VibestudioLogo size={size} variant="tile" />;
+  return <VibestudioLogo size={size} variant="symbol" />;
 }
 
 /** Small gradient bubble wrapping a page icon. */

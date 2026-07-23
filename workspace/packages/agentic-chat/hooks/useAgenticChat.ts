@@ -22,7 +22,7 @@ import type {
   MethodExecutionContext,
   PubSubClient,
 } from "@workspace/pubsub";
-import { executeSandbox, ScopeManager } from "@workspace/eval";
+import { ScopeManager } from "@workspace/eval/scope";
 import type { SandboxOptions, SandboxResult, ScopeBlobBackend } from "@workspace/eval";
 import type { ActiveFeedbackSchema, FeedbackResult } from "@workspace/tool-ui";
 import {
@@ -65,6 +65,7 @@ import {
   LocalStorageScopePersistence,
   panelLocalScopeChannelId,
 } from "../utils/localStorageScopePersistence";
+import { scheduleBackgroundWork } from "../utils/scheduleBackgroundWork";
 /** Installed agent info passed from the host panel. */
 interface InstalledAgentInfo {
   agentId: string;
@@ -562,6 +563,7 @@ export function useAgenticChat({
   // --- Bound executeSandbox with loadImport wired ---
   const boundExecuteSandbox = useCallback(
     async (code: string, opts: SandboxOptions = {}): Promise<SandboxResult> => {
+      const { executeSandbox } = await import("@workspace/eval/sandbox");
       return executeSandbox(code, {
         ...opts,
         loadImport: opts.loadImport ?? sandboxRef.current.loadImport,
@@ -778,12 +780,16 @@ export function useAgenticChat({
       initialActionBarMaxHeight
     );
     if (lastLoadedActionBarKeyRef.current === loadKey) return;
-    void loadActionBarFromFile({
-      path: initialActionBarFile,
-      props: initialActionBarProps,
-      maxHeight: initialActionBarMaxHeight,
-      persistStateArgs: false,
-      idempotencyKey: `ui:initial-action-bar:${channelName}:${loadKey}`,
+    // State-arg action bars decorate the chat; their file validation and
+    // publication must not enter the panel RPC path ahead of agent startup.
+    return scheduleBackgroundWork(() => {
+      void loadActionBarFromFile({
+        path: initialActionBarFile,
+        props: initialActionBarProps,
+        maxHeight: initialActionBarMaxHeight,
+        persistStateArgs: false,
+        idempotencyKey: `ui:initial-action-bar:${channelName}:${loadKey}`,
+      });
     });
   }, [
     channelName,
@@ -1093,6 +1099,7 @@ export default function App({ props, chat, scope }) {
                 return { ok: false, error: "Missing code or path" };
               }
               if (imports && Object.keys(imports).length > 0) {
+                const { executeSandbox } = await import("@workspace/eval/sandbox");
                 await executeSandbox("", { imports, loadImport });
               }
               const client = core.clientRef.current;
