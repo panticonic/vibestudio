@@ -685,6 +685,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return subagent ? subagentRuntimePrompt(subagent) : undefined;
   }
 
+  /**
+   * Impure per-model-call context. Unlike the stable system prompt, this is
+   * prepared by the durable prompt-artifact effect immediately before the
+   * model request and may read fresh runtime projections.
+   */
+  protected prepareImmediatePrompt(
+    channelId: string,
+    _signal?: AbortSignal
+  ): string | undefined | Promise<string | undefined> {
+    return this.immediatePrompt(channelId);
+  }
+
   /** Local tools registered with the local-tool executor. */
   protected getLoopTools(_channelId: string, _execution?: AgentToolExecutionContext): AgentTool[] {
     return [];
@@ -1498,6 +1510,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     throwIfAborted();
     await this.refreshLocalModelEntry(channelId);
     throwIfAborted();
+    const immediatePrompt = await this.prepareImmediatePrompt(channelId, signal);
+    throwIfAborted();
     const systemPrompt = await this.composePrompt(channelId);
     throwIfAborted();
     const registry = await this.toolRegistry(channelId);
@@ -1577,8 +1591,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.setStateValue(artifactSigKey, signature);
     }
     throwIfAborted();
-    const { roster: _foldOwnedRoster, ...patch } = this.loopConfig(channelId);
-    return patch;
+    const {
+      roster: _foldOwnedRoster,
+      immediatePrompt: _synchronousImmediatePrompt,
+      ...patch
+    } = this.loopConfig(channelId);
+    return { ...patch, immediatePrompt: immediatePrompt ?? "" };
   }
 
   /** Explicit refresh API: materialize, then journal the same config patch the
@@ -1707,7 +1725,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel membership ───────────────────────────────────────────────────
 
-  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async subscribeChannel(opts: {
     channelId: string;
     contextId: string;
@@ -1753,7 +1776,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * orchestration may attach an already-created vessel without impersonating a
    * code caller; channel.subscribe still authenticates this exact DO identity.
    */
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async attachChannel(opts: {
     channelId: string;
     contextId: string;
@@ -1808,7 +1836,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async unsubscribeChannel(channelId: string): Promise<{ ok: boolean }> {
     try {
       await this.driver.handleIncoming(channelId, {
@@ -1826,7 +1859,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel intake ───────────────────────────────────────────────────────
 
-  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async onChannelEnvelope(channelId: string, envelope: RpcChannelMessage): Promise<void> {
     this.assertChannelDeliveryCaller("onChannelEnvelope");
     if (envelope.kind === "control") {
@@ -2420,7 +2458,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Method calls (agent as PROVIDER) ─────────────────────────────────────
 
-  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async onMethodCall(
     channelId: string,
     _transportCallId: string,
@@ -2444,7 +2487,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * below is in-memory or local SQLite; missing folded state remains explicitly
    * missing instead of being hydrated through GAD.
    */
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async readAgentInspection(
     channelId: string,
     methodName: string
@@ -2479,7 +2527,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * stale, which is precisely when timeout/cancellation diagnostics need it.
    * The response contains no prompt, tool argument, credential, or secret.
    */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getModelExecutionEvidence(channelId: string): Promise<unknown> {
     const evidence = await this.driver.modelExecutionEvidence(channelId);
     return { ...evidence, transportRuntime: modelTransportRuntimeEvidence() };
@@ -2488,7 +2541,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** Direct lifecycle barrier for non-interactive owners. Unlike the chat
    * `pause` method this does not require the controller to remain a channel
    * member while cancellation is already unwinding that membership. */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async interruptChannel(channelId: string): Promise<{ interrupted: true }> {
     await this.driver.interruptChannel(channelId, false);
     return { interrupted: true };
@@ -2692,7 +2750,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * `do:vibestudio/internal:EvalDO:<key>`. Any other caller is rejected; the
    * generic DO relay is open, so a sensitive receiver gates on receipt.
    */
-  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async chatOp(channelId: string, op: string, args: unknown[]): Promise<unknown> {
     await this.assertOwnEvalCaller(channelId);
     const channel = this.createChannelClient(channelId);
@@ -3099,7 +3162,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   /** Channel DO settle path: terminals for our channel_call effects POST back
    *  here. Duplicate delivery is a no-op (deterministic terminal ids). */
-  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async deliverEffectOutcome(
     effectId: string,
     outcome: EffectOutcome,
@@ -3114,7 +3182,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  delivery no-ops once the row is gone. Eviction between defer and delivery
    *  is healed by lease-expiry redrive: the retried call re-attaches via its
    *  idempotencyKey / already-granted capability. */
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async onDeferredResult(payload: {
     requestId: string;
     result?: unknown;
@@ -3227,7 +3300,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * before completing, so every output precedes the `invocation.completed` terminal (the reducer drops
    * output after terminal).
    */
-  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async onEvalProgress(payload: {
     runId: string;
     agentInvocationId: string;
@@ -3256,7 +3334,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * identity is carried separately for causality and never reconstructed from
    * the effect id. Duplicate settlement is an idempotent driver no-op.
    */
-  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async onEvalComplete(payload: {
     runId: string;
     agentInvocationId?: string;
@@ -3517,7 +3600,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** Per-channel fork preflight. Vets ONLY the named subscription (it must
    *  exist); a multi-channel agent forks the one channel and drops the rest in
    *  the clone (see {@link postClone}), so the old ≤1-subscription gate is gone. */
-  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async canFork(channelId: string): Promise<{ ok: boolean; reason?: string }> {
     if (!this.subscriptions.getParticipantId(channelId)) {
       return { ok: false, reason: `no subscription for channel ${channelId}` };
@@ -3525,7 +3613,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return { ok: true };
   }
 
-  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async postClone(
     _parentObjectKey: string,
     newChannelId: string,
@@ -3622,7 +3715,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * just created), so there is nothing to wipe: outbox/fold caches start empty.
    * The child boots knowing everything the parent knew at the fork point.
    */
-  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async initFromTrajectoryFork(opts: {
     parentLogId: string;
     seq: number;
@@ -4773,7 +4871,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * relay otherwise lets any DO forge a completion and drive the parent loop.
    * Idempotent: a duplicate / post-terminal call no-ops.
    */
-  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async onSubagentComplete(payload: {
     runId: string;
     channelId?: string;
@@ -5287,7 +5390,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getDebugState(channelId?: string): Promise<Record<string, unknown>> {
     return this.activationDebugState(channelId);
   }

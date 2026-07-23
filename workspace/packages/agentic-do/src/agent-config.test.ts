@@ -27,6 +27,12 @@ class TestAgentVessel extends AgentVesselBase {
   immediatePromptForTest(channelId = "ch-1"): string | undefined {
     return this.immediatePrompt(channelId);
   }
+  prepareImmediatePromptForTest(
+    channelId = "ch-1",
+    signal?: AbortSignal
+  ): Promise<string | undefined> {
+    return Promise.resolve(this.prepareImmediatePrompt(channelId, signal));
+  }
   driverForTest(): { dropLoop: (channelId: string) => void } {
     return this.driver as unknown as { dropLoop: (channelId: string) => void };
   }
@@ -136,6 +142,24 @@ describe("subagent prompt contract", () => {
 
     await expect(vessel.promptForTest()).resolves.not.toContain("## Subagent Operating Contract");
     expect(vessel.immediatePromptForTest()).toBeUndefined();
+    await expect(vessel.prepareImmediatePromptForTest()).resolves.toBeUndefined();
+  });
+
+  it("prepares the immediate prompt at the per-model-call boundary", async () => {
+    const vessel = await makeVessel({
+      STATE_ARGS: {
+        subagent: {
+          runId: "run-fresh",
+          parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+          parentChannelId: "ch-parent",
+          depth: 1,
+        },
+      },
+    });
+
+    await expect(vessel.prepareImmediatePromptForTest()).resolves.toBe(
+      vessel.immediatePromptForTest()
+    );
   });
 
   it("keeps the standalone subagent runtime prompt focused on terminal semantics", () => {
