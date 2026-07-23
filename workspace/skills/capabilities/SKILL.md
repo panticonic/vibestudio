@@ -8,6 +8,11 @@ description: Design, declare, discover, and debug Vibestudio capabilities and dy
 Read this skill before adding a host-service effect, a worker or Durable Object API,
 an authority request, or a workspace-owned approval flow.
 
+When changing host enforcement, mission closure, seeded product authority, or the
+System Agent boundary, also read
+[`references/authority-implementation-checklist.md`](references/authority-implementation-checklist.md).
+It names the review inputs and tests that must move together.
+
 ## The four things that must stay separate
 
 1. A **method contract** says which authenticated principals may call a method, its
@@ -384,6 +389,55 @@ file or message to make it appear internal.
 If an otherwise valid standing grant is refused after outside content entered the
 session, use the authority preflight/approval explanation. The outside lineage is a
 fact to preserve, not an error to erase.
+
+## Mission closure
+
+A mission is an immutable, content-addressed authority closure, not a label attached
+to an agent. Its charter binds the exact harness EV, hashed skills, exposed host and
+workspace services, model settings, trigger, and network policy. Starting a mission
+session is allowed only while that exact closure is active.
+
+- Change any closure input by creating a revised mission and obtaining approval for
+  that exact revision. Do not mutate a running session or repair a digest in place.
+- Preserve the original mission, session, caller, owner, and context lineage through
+  every service and RPC leg. A host caller substituted for a failing internal leg is
+  an authority escalation.
+- Treat standing restrictions as durable deny grants. A later allow, broader manifest,
+  or acquisition decision cannot override them.
+- Resolve pinned userland providers to exact EVs before approval. A `follow-head`
+  provider is an explicit closure policy, not permission to silently widen its methods
+  or capabilities.
+- Keep event triggers inside the closed filter grammar. Do not evaluate workspace
+  expressions as trigger policy.
+
+Host-shipped seeded missions are reconciled from immutable product snapshot outputs.
+Their checked-in JSON is explicit reviewed input; `@seed` is resolved only from the
+shipped snapshot. Product reseeding makes an old closure inert before replacing its
+grants. Never derive a seed from the mutable workspace tree, and never turn ordinary
+workspace code into a product seed.
+
+## Product-owned System Agent
+
+The System Agent is a pinned, product-owned mission and worker, not a privileged copy
+of an ordinary workspace agent.
+
+- Its model-facing tool surface remains exactly `eval` and `say`. Shell operations
+  happen through typed services inside the ordinary eval runtime.
+- Its prompt, handbook, manifest, mission seed, and execution version come from the
+  immutable product snapshot. Workspace prompt overrides, skills, memory recall, or
+  edited worker code must not widen it.
+- Its conversation is host-derived per `(workspace, authenticated user, product
+snapshot)`. Callers do not supply user, channel, worker, context, or membership
+  identities.
+- Its channel has an exact locked roster containing that user and that exact worker
+  target. Generic subscription or channel configuration cannot add participants.
+- Conversation eval cannot settle approvals, read protected approval payloads,
+  activate/renew/widen delegation, alter its own trust root, or extract stored
+  credential material. Those require separate human or delegated-policy boundaries.
+
+Do not add a System-Agent-only transport, eval dialect, receiver bypass, or lifecycle
+branch. If a shell operation is missing, add the typed semantic service with ordinary
+receiver enforcement and review its inclusion in the mission closure.
 
 ## Diagnosing a denial
 

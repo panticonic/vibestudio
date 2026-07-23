@@ -67,4 +67,37 @@ describe("capabilities skill", () => {
     expect(markdown).toContain("not an installed-code update or version decision at all");
     expect(markdown).toMatch(/Every eval still receives its\s+own code review/u);
   });
+
+  it("teaches exact mission closure and immutable product seeding", () => {
+    const markdown = readFileSync(new URL("./SKILL.md", import.meta.url), "utf8");
+    expect(markdown).toContain("immutable, content-addressed authority closure");
+    expect(markdown).toContain("standing restrictions as durable deny grants");
+    expect(markdown).toContain("event triggers inside the closed filter grammar");
+    expect(markdown).toContain("reconciled from immutable product snapshot outputs");
+    expect(markdown).toContain("makes an old closure inert before replacing its");
+  });
+
+  it("keeps the System Agent boundary explicit", () => {
+    const markdown = readFileSync(new URL("./SKILL.md", import.meta.url), "utf8");
+    expect(markdown).toContain("exactly `eval` and `say`");
+    expect(markdown).toMatch(
+      /host-derived per `\(workspace, authenticated user, product\s+snapshot\)`/u
+    );
+    expect(markdown).toContain("exact locked roster");
+    expect(markdown).toContain("cannot settle approvals");
+    expect(markdown).toContain("Do not add a System-Agent-only transport");
+  });
+
+  it("links the host authority implementation checklist", () => {
+    const markdown = readFileSync(new URL("./SKILL.md", import.meta.url), "utf8");
+    const checklist = readFileSync(
+      new URL("./references/authority-implementation-checklist.md", import.meta.url),
+      "utf8"
+    );
+    expect(markdown).toContain("references/authority-implementation-checklist.md");
+    expect(checklist).toContain("hostCapabilityPresentations.ts");
+    expect(checklist).toContain("runtime-authority-review.json");
+    expect(checklist).toContain("Regenerating derived ledgers is not");
+    expect(checklist).toContain("desktop and mobile clients call the same typed lifecycle service");
+  });
 });
