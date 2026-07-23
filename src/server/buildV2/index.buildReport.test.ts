@@ -147,7 +147,7 @@ async function loadWithMocks(): Promise<{
               ev,
               sourceStateHash: stateRef,
               sourcemap: false,
-              authority: { requests: [], delegations: [] },
+              authority: { requests: [], evalCeilings: [] },
               details: { kind: "generic" as const },
               builtAt: new Date().toISOString(),
             }
@@ -208,6 +208,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
       unitName: "@workspace/lib",
       kind: "package",
       status: "ok",
+      diagnostics: [],
       builds: [{ target: "library:panel", exportPath: ".", diagnostics: [] }],
     });
 
@@ -227,6 +228,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(report).toMatchObject({
       unitName: "@workspace-panels/app",
       status: "ok",
+      diagnostics: [],
       builds: [{ target: "runtime", diagnostics: [] }],
     });
     expect(buildCalls).toEqual([
@@ -244,6 +246,12 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(report).toMatchObject({
       unitName: "@workspace-panels/app",
       status: "failed",
+      diagnostics: [
+        expect.objectContaining({
+          severity: "error",
+          message: expect.stringContaining("mock build failed: @workspace-panels/app"),
+        }),
+      ],
       builds: [
         {
           target: "runtime",

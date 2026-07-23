@@ -77,7 +77,7 @@ export function createAuditService(auditLog: AuditLog): ServiceDefinition {
   return {
     name: "audit",
     description: "Audit log query access",
-    authority: { principals: ["user", "host", "code", "entity"] },
+    authority: { principals: ["user", "host", "code"] },
     methods,
     handler: defineServiceHandler("audit", methods, {
       query: async (_ctx, [query]) => {

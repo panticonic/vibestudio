@@ -14,6 +14,19 @@
 
 import type * as esbuild from "esbuild";
 import * as path from "path";
+import { RpcBoundaryError } from "@vibestudio/rpc";
+
+/**
+ * A caller-correctable build request failure. The structured payload survives
+ * every RPC relay so eval and other callers never parse display text to decide
+ * whether a package name/subpath was invalid.
+ */
+export class BuildRequestError extends RpcBoundaryError {
+  constructor(code: string, message: string, details: Record<string, unknown>) {
+    super(message, "application", code, undefined, { code, ...details });
+    this.name = "BuildRequestError";
+  }
+}
 
 export interface BuildDiagnostic {
   source: "esbuild" | "tsc";

@@ -27,6 +27,13 @@ interface CrashState {
   nextAttemptAt: number | null;
 }
 
+interface ReadyWaiter {
+  resolve(): void;
+  reject(error: Error): void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
 const CRASH_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
 const CRASH_WINDOW_MS = 60_000;
 
@@ -48,6 +55,7 @@ export interface ExtensionProcessManagerDeps {
 export class ExtensionProcessManager {
   private running = new Map<string, RunningExtension>();
   private crashes = new Map<string, CrashState>();
+  private readyWaiters = new Map<string, Set<ReadyWaiter>>();
 
   constructor(private readonly deps: ExtensionProcessManagerDeps) {}
 
@@ -75,8 +83,9 @@ export class ExtensionProcessManager {
         preferNode: true,
       },
     );
-    const exitHandler = (code: number | null) => this.handleExit(state, code);
-    const running: RunningExtension = {
+    let running!: RunningExtension;
+    const exitHandler = (code: number | null) => this.handleExit(running, code);
+    running = {
       state,
       proc,
       ready: false,
@@ -143,7 +152,10 @@ export class ExtensionProcessManager {
       running.proc.on("exit", waitHandler);
     });
     this.running.delete(name);
-    if (reason !== "restart") this.deps.onStatus(name, "stopped", null);
+    if (reason !== "restart") {
+      this.rejectReadyWaiters(name, extensionNotReadyError(name, `Extension stopped (${reason})`));
+      this.deps.onStatus(name, "stopped", null);
+    }
   }
 
   async shutdown(): Promise<void> {
@@ -170,6 +182,36 @@ export class ExtensionProcessManager {
     return this.running.get(name)?.ready ?? false;
   }
 
+  /** Wait for an already-starting or crash-restarting extension. Never starts one. */
+  whenRunning(name: string, signal?: AbortSignal): Promise<void> {
+    if (this.isRunning(name)) return Promise.resolve();
+    if (!this.running.has(name) && !this.crashes.has(name)) {
+      return Promise.reject(extensionNotReadyError(name, "Extension is not starting"));
+    }
+    if (signal?.aborted) {
+      return Promise.reject(abortError(signal));
+    }
+    return new Promise<void>((resolve, reject) => {
+      const waiter: ReadyWaiter = {
+        resolve,
+        reject: (error) => reject(error),
+        ...(signal ? { signal } : {}),
+      };
+      if (signal) {
+        waiter.onAbort = () => {
+          this.removeReadyWaiter(name, waiter);
+          reject(abortError(signal));
+        };
+        signal.addEventListener("abort", waiter.onAbort, { once: true });
+      }
+      const waiters = this.readyWaiters.get(name) ?? new Set<ReadyWaiter>();
+      waiters.add(waiter);
+      this.readyWaiters.set(name, waiters);
+      // Close the race between the initial state check and waiter insertion.
+      if (this.isRunning(name)) this.resolveReadyWaiters(name);
+    });
+  }
+
   markReady(name: string, readyState: { methods: string[]; hasFetch: boolean }): void {
     const running = this.running.get(name);
     if (!running) return;
@@ -191,11 +233,15 @@ export class ExtensionProcessManager {
       running.pending.delete("__ready__");
       ready.resolve(undefined);
     }
+    this.resolveReadyWaiters(name);
   }
 
-  private handleExit(state: ExtensionProcessState, code: number | null): void {
-    const running = this.running.get(state.name);
-    if (!running) return;
+  private handleExit(running: RunningExtension, code: number | null): void {
+    const state = running.state;
+    // Exit is a generation-scoped event. A child killed during restart can
+    // report its exit after the replacement has occupied the same name; that
+    // stale event must never delete or crash-restart the replacement.
+    if (this.running.get(state.name) !== running) return;
     this.running.delete(state.name);
     const ready = running.pending.get("__ready__");
     if (ready) {
@@ -208,6 +254,7 @@ export class ExtensionProcessManager {
     }
     if (running.stopping) return;
     if (code === 0 && running.ready) {
+      this.rejectReadyWaiters(state.name, extensionNotReadyError(state.name, "Extension exited"));
       this.deps.onStatus(state.name, "stopped", null);
       return;
     }
@@ -273,6 +320,7 @@ export class ExtensionProcessManager {
     if (crashState.attempts >= CRASH_BACKOFF_MS.length) {
       crashState.nextAttemptAt = null;
       this.deps.onStatus(state.name, "error", error);
+      this.rejectReadyWaiters(state.name, extensionNotReadyError(state.name, error));
       this.deps.onError?.(state.name, error, crashState.attempts);
       this.deps.onCrashLimit?.(state.name, error, crashState.attempts);
       return;
@@ -299,6 +347,51 @@ export class ExtensionProcessManager {
     if (crashState?.timer) clearTimeout(crashState.timer);
     this.crashes.delete(name);
   }
+
+  private resolveReadyWaiters(name: string): void {
+    const waiters = this.readyWaiters.get(name);
+    if (!waiters) return;
+    this.readyWaiters.delete(name);
+    for (const waiter of waiters) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve();
+    }
+  }
+
+  private rejectReadyWaiters(name: string, error: Error): void {
+    const waiters = this.readyWaiters.get(name);
+    if (!waiters) return;
+    this.readyWaiters.delete(name);
+    for (const waiter of waiters) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.reject(error);
+    }
+  }
+
+  private removeReadyWaiter(name: string, waiter: ReadyWaiter): void {
+    const waiters = this.readyWaiters.get(name);
+    if (!waiters) return;
+    waiters.delete(waiter);
+    if (waiters.size === 0) this.readyWaiters.delete(name);
+  }
+}
+
+function extensionNotReadyError(name: string, detail: string): Error {
+  const error = new Error(`${detail}: ${name}`) as NodeJS.ErrnoException;
+  error.code = "ENOTREADY";
+  return error;
+}
+
+function abortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error("Aborted") as NodeJS.ErrnoException;
+  error.name = "AbortError";
+  error.code = "ABORT_ERR";
+  return error;
 }
 
 export function resolveChildRuntimePath(): string {

@@ -5,11 +5,22 @@ import { describe, expect, it, vi } from "vitest";
 import { createWorkspaceStateService } from "./workspaceStateService.js";
 
 interface MockHandlerCtx {
-  caller: { runtime: { kind: string; id: string } };
+  caller: { runtime: { kind: string; id: string }; hostOriginated?: true };
 }
 
 function makeCtx(): MockHandlerCtx {
   return { caller: { runtime: { kind: "shell", id: "shell" } } };
+}
+
+function makeDoCtx(key: { source: string; className: string; objectKey: string }): MockHandlerCtx {
+  return {
+    caller: {
+      runtime: {
+        kind: "do",
+        id: `do:${key.source}:${key.className}:${key.objectKey}`,
+      },
+    },
+  };
 }
 
 function makeService(opts: {
@@ -60,13 +71,40 @@ describe("workspaceStateService — title mirror hooks", () => {
     });
     expect(svc.methods["lifecycleLeaseClear"]?.authority).toEqual({ principals: ["host", "code"] });
 
-    await svc.handler(makeCtx() as never, "lifecycleLeaseUpsert", [{ ...key, detail: "turn" }]);
-    await svc.handler(makeCtx() as never, "lifecycleLeaseClear", [key]);
+    await svc.handler(makeDoCtx(key) as never, "lifecycleLeaseUpsert", [
+      { ...key, detail: "turn" },
+    ]);
+    await svc.handler(makeDoCtx(key) as never, "lifecycleLeaseClear", [key]);
 
     expect(calls).toEqual([
       { method: "lifecycleLeaseUpsert", args: [{ ...key, detail: "turn" }] },
       { method: "lifecycleLeaseClear", args: [key] },
     ]);
+  });
+
+  it("allows a Durable Object to manage only its own alarm key", async () => {
+    const { svc, calls } = makeService({});
+    const own = { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" };
+    const foreign = { ...own, objectKey: "ch-2" };
+
+    await svc.handler(makeDoCtx(own) as never, "alarmSet", [{ ...own, wakeAt: 123 }]);
+    await expect(svc.handler(makeDoCtx(own) as never, "alarmClear", [foreign])).rejects.toThrow(
+      /cannot clear an alarm/
+    );
+
+    expect(calls).toEqual([{ method: "alarmSet", args: [{ ...own, wakeAt: 123 }] }]);
+  });
+
+  it("allows verified host infrastructure to manage any alarm key", async () => {
+    const { svc, calls } = makeService({});
+    const key = { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" };
+    const host = {
+      caller: { runtime: { kind: "server", id: "server" }, hostOriginated: true as const },
+    };
+
+    await svc.handler(host as never, "alarmClear", [key]);
+
+    expect(calls).toEqual([{ method: "alarmClear", args: [key] }]);
   });
 
   it("fires onPanelTitleChanged with the DO-resolved entity id on panel.index", async () => {
@@ -206,6 +244,7 @@ describe("workspaceStateService — slot-state change hook", () => {
     ["slot.get", ["s1"]],
     ["slot.history", ["s1"]],
     ["entity.resolveActive", ["e1"]],
+    ["entity.resolve", ["e1"]],
     ["panel.search", ["q", 10]],
     ["panel.incrementAccess", ["e1"]],
   ];

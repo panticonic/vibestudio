@@ -30,7 +30,12 @@ import {
   updatePanelNavigationState,
 } from "@vibestudio/shared/panel/accessors";
 import { between as rankBetween, first as firstRank } from "@vibestudio/shared/lexorank";
-import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import {
+  canonicalEntityId,
+  type EntityRecord,
+  type RuntimeEntityHandle,
+  type RuntimePanelEntityCreateSpec,
+} from "@vibestudio/shared/runtime/entitySpec";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
@@ -96,6 +101,11 @@ export interface CreatePanelResult {
   options: Record<string, unknown>;
   autoArchiveWhenEmpty?: boolean;
   privileged?: boolean;
+  /**
+   * Resolves when the reserved panel's immutable runtime image is active.
+   * This is intentionally not part of the panel-tree wire result.
+   */
+  preparation?: Promise<RuntimeEntityHandle>;
 }
 
 export interface NavigatePanelOptions {
@@ -192,6 +202,7 @@ export class PanelManager {
     PanelSlotId,
     { repoPath: string; effectiveVersion: string }
   >();
+  private readonly panelPreparationBySlot = new Map<PanelSlotId, Promise<RuntimeEntityHandle>>();
   /**
    * Per-slot navigation history of {entryKey -> options} so back/forward
    * navigation can reconstruct snapshots with their original options. The
@@ -281,14 +292,15 @@ export class PanelManager {
       snapshot.privileged = true;
     }
 
-    const handle = await this.runtime.createEntity({
+    const entitySpec: RuntimePanelEntityCreateSpec = {
       kind: "panel",
       source: relativePath,
       key: historyEntryKey,
       contextId,
       stateArgs: stateArgsPayload,
       ref: opts?.ref,
-    });
+    };
+    const handle = await this.runtime.reservePanelEntity(entitySpec);
     const entityId = asPanelEntityId(handle.id);
 
     try {
@@ -323,17 +335,19 @@ export class PanelManager {
       buildKey: handle.buildKey ?? null,
       executionDigest: handle.executionDigest ?? null,
       authorityRequests: handle.authorityRequests,
-      authorityDelegations: handle.authorityDelegations,
+      authorityEvalCeilings: handle.authorityEvalCeilings,
       ...(opts?.ownerUserId ? { owner: opts.ownerUserId } : {}),
       children: [],
       positionId,
       snapshot,
       history: { entries: [snapshot], index: 0 },
-      artifacts: { buildState: "building", buildProgress: "Starting build..." },
+      artifacts: { buildState: "pending", buildProgress: "Preparing panel runtime..." },
     };
     this.registry.addPanel(panel, opts?.parentId ?? null, { addAsRoot: opts?.addAsRoot });
 
     this.indexPanel(slotId, manifest.title, relativePath);
+
+    const preparation = this.activateReservedPanel(slotId, entityId, entitySpec);
 
     return {
       panelId: slotId,
@@ -344,7 +358,69 @@ export class PanelManager {
       options: { env: opts?.env ?? {}, ...(opts?.ref ? { ref: opts.ref } : {}) },
       autoArchiveWhenEmpty: snapshot.autoArchiveWhenEmpty,
       privileged: snapshot.privileged,
+      preparation,
     };
+  }
+
+  /** Resume a durable preparing reservation after a server restart or mirror reload. */
+  async resumePanelPreparation(slotId: PanelSlotId): Promise<RuntimeEntityHandle> {
+    const existing = this.panelPreparationBySlot.get(slotId);
+    if (existing) return existing;
+    const panel = this.registry.getPanel(slotId);
+    if (!panel?.runtimeEntityId) {
+      throw new Error(`Cannot resume panel preparation without an entity: ${slotId}`);
+    }
+    const slot = await this.workspaceState.getSlot(slotId);
+    if (!slot?.current_entry_key) {
+      throw new Error(`Cannot resume panel preparation without a history entry: ${slotId}`);
+    }
+    const snapshot = getCurrentSnapshot(panel);
+    return this.activateReservedPanel(slotId, asPanelEntityId(panel.runtimeEntityId), {
+      kind: "panel",
+      source: snapshot.source,
+      key: slot.current_entry_key,
+      contextId: snapshot.contextId,
+      stateArgs: getPanelStateArgs(panel) ?? {},
+      ref: snapshot.options.ref,
+    });
+  }
+
+  private activateReservedPanel(
+    slotId: PanelSlotId,
+    entityId: PanelEntityId,
+    spec: RuntimePanelEntityCreateSpec
+  ): Promise<RuntimeEntityHandle> {
+    const existing = this.panelPreparationBySlot.get(slotId);
+    if (existing) return existing;
+    let preparation!: Promise<RuntimeEntityHandle>;
+    preparation = this.runtime
+      .activatePanelEntity(spec)
+      .then((activeHandle) => {
+        this.currentEntitySourceBySlot.set(slotId, activeHandle.source);
+        const livePanel = this.registry.getPanel(slotId);
+        if (livePanel?.runtimeEntityId === entityId) {
+          livePanel.effectiveVersion = activeHandle.source.effectiveVersion;
+          livePanel.buildKey = activeHandle.buildKey ?? null;
+          livePanel.executionDigest = activeHandle.executionDigest ?? null;
+          livePanel.authorityRequests = activeHandle.authorityRequests;
+          livePanel.authorityEvalCeilings = activeHandle.authorityEvalCeilings;
+          this.registry.updateArtifacts(slotId, {
+            ...livePanel.artifacts,
+            buildState: "building",
+            buildProgress: "Runtime image ready; loading panel...",
+            error: undefined,
+          });
+          this.registry.notifyPanelTreeUpdate();
+        }
+        return activeHandle;
+      })
+      .finally(() => {
+        if (this.panelPreparationBySlot.get(slotId) === preparation) {
+          this.panelPreparationBySlot.delete(slotId);
+        }
+      });
+    this.panelPreparationBySlot.set(slotId, preparation);
+    return preparation;
   }
 
   async createBrowser(
@@ -686,7 +762,7 @@ export class PanelManager {
       livePanel.buildKey = handle.buildKey ?? null;
       livePanel.executionDigest = handle.executionDigest ?? null;
       livePanel.authorityRequests = handle.authorityRequests;
-      livePanel.authorityDelegations = handle.authorityDelegations;
+      livePanel.authorityEvalCeilings = handle.authorityEvalCeilings;
       this.registry.replaceCurrentSnapshot(slotId, nextSnapshot, nextHistory);
     }
 
@@ -788,7 +864,7 @@ export class PanelManager {
       livePanel.buildKey = handle.buildKey ?? null;
       livePanel.executionDigest = handle.executionDigest ?? null;
       livePanel.authorityRequests = handle.authorityRequests;
-      livePanel.authorityDelegations = handle.authorityDelegations;
+      livePanel.authorityEvalCeilings = handle.authorityEvalCeilings;
       this.registry.replaceCurrentSnapshot(slotId, targetSnapshot, nextHistoryState);
     }
     if (transition.previousEntityId !== entityId) {
@@ -1035,7 +1111,7 @@ export class PanelManager {
     const cached = this.currentEntitySourceBySlot.get(slotId);
     if (cached) return cached;
     const entityId = await this.resolveCurrentEntityIdForSlot(slotId);
-    const record = await this.workspaceState.resolveActiveEntity(entityId);
+    const record = await this.workspaceState.resolveEntity(entityId);
     const source = record?.source ?? null;
     if (source) this.currentEntitySourceBySlot.set(slotId, source);
     return source;
@@ -1063,7 +1139,7 @@ export class PanelManager {
     await Promise.all(
       openSlots.map(async (slot) => {
         if (!slot.current_entity_id) return;
-        const record = await this.workspaceState.resolveActiveEntity(slot.current_entity_id);
+        const record = await this.workspaceState.resolveEntity(slot.current_entity_id);
         if (record) entityById.set(slot.current_entity_id, record);
       })
     );
@@ -1313,7 +1389,7 @@ export class PanelManager {
       livePanel.buildKey = handle.buildKey ?? null;
       livePanel.executionDigest = handle.executionDigest ?? null;
       livePanel.authorityRequests = handle.authorityRequests;
-      livePanel.authorityDelegations = handle.authorityDelegations;
+      livePanel.authorityEvalCeilings = handle.authorityEvalCeilings;
       const history = panel.history ?? { entries: [getCurrentSnapshot(panel)], index: 0 };
       const entries = history.entries.slice();
       entries[history.index] = nextSnapshot;

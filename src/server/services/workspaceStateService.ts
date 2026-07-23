@@ -66,6 +66,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       "slot.history": (_ctx, [slotId]) => dispatch<unknown>("slotHistory", [slotId]),
       "entity.resolveActive": (_ctx, [id]) =>
         dispatch<EntityRecord | null>("entityResolveActive", [id]),
+      "entity.resolve": (_ctx, [id]) => dispatch<EntityRecord | null>("entityResolve", [id]),
       "slot.resolveByEntity": (_ctx, [entityId]) =>
         dispatch<string | null>("slotResolveByEntity", [entityId]),
       "slot.create": async (ctx, [input]) => {
@@ -126,16 +127,20 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         await dispatch<undefined>("panelRebuildIndex", []);
       },
       lifecycleLeaseUpsert: async (_ctx, [input]) => {
+        assertOwnLifecycleKey(_ctx.caller, input, "upsert a lifecycle lease for");
         await dispatch<undefined>("lifecycleLeaseUpsert", [input]);
       },
       lifecycleLeaseClear: async (_ctx, [input]) => {
+        assertOwnLifecycleKey(_ctx.caller, input, "clear a lifecycle lease for");
         await dispatch<undefined>("lifecycleLeaseClear", [input]);
       },
       alarmSet: async (_ctx, [input]) => {
+        assertOwnLifecycleKey(_ctx.caller, input, "set an alarm for");
         await dispatch<undefined>("alarmSet", [input]);
         deps.onAlarmChanged?.();
       },
       alarmClear: async (_ctx, [input]) => {
+        assertOwnLifecycleKey(_ctx.caller, input, "clear an alarm for");
         await dispatch<undefined>("alarmClear", [input]);
         deps.onAlarmChanged?.();
       },
@@ -150,6 +155,18 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       },
     }),
   };
+}
+
+function assertOwnLifecycleKey(
+  caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller,
+  key: { source: string; className: string; objectKey: string },
+  verb: string
+): void {
+  if (caller.hostOriginated) return;
+  const ownerId = `do:${key.source}:${key.className}:${key.objectKey}`;
+  if (caller.runtime.kind !== "do" || caller.runtime.id !== ownerId) {
+    throw new Error(`${caller.runtime.id} cannot ${verb} ${ownerId}`);
+  }
 }
 
 function isHeartbeatCodeOwnedRegistration(input: unknown): boolean {

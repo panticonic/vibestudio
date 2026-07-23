@@ -1,4 +1,7 @@
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type {
+  PreparedAuthoritySelection,
+  ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { UserSubject } from "@vibestudio/identity/types";
@@ -8,7 +11,7 @@ import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,
 } from "./panelAccessPermission.js";
-import { requirePanelAccessPermission } from "./panelAccessPermission.js";
+import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
 
 export interface PanelTreeBridgeRequest {
   callerId: string;
@@ -168,6 +171,17 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     }
   }
 
+  // Authority preparation and the handler receive the same parsed argument
+  // tuple. Remember successful preparation so the mutation path validates
+  // exactly once, while direct/in-process handler calls still retain the same
+  // fail-closed validation boundary.
+  const sourceValidatedArgs = new WeakSet<unknown[]>();
+  async function validatePanelSourceOnce(method: string, args: unknown[]): Promise<void> {
+    if (sourceValidatedArgs.has(args)) return;
+    await validatePanelSourceBeforeMutation(method, args);
+    sourceValidatedArgs.add(args);
+  }
+
   async function dispatch(
     ctx: ServiceContext,
     method: keyof typeof panelTreeMethods & string,
@@ -175,7 +189,22 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
   ): Promise<unknown> {
     assertAllowedAgentMethod(method, args);
     assertContextIsNotPanelState(method, args);
-    await validatePanelSourceBeforeMutation(method, args);
+    await validatePanelSourceOnce(method, args);
+    try {
+      return await bridge(ctx, method, args);
+    } finally {
+      sourceValidatedArgs.delete(args);
+    }
+  }
+
+  async function prepareAccess(
+    ctx: ServiceContext,
+    method: keyof typeof panelTreeMethods & string,
+    args: unknown[]
+  ) {
+    assertAllowedAgentMethod(method, args);
+    assertContextIsNotPanelState(method, args);
+    await validatePanelSourceOnce(method, args);
     const op = operationFor(method, args);
     if (op) {
       const target =
@@ -202,38 +231,60 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
           target.requestedContextId = destContextId;
         }
       }
-      const permission = await requirePanelAccessPermission(deps, ctx, op, target);
-      if (!permission.allowed) {
-        throw new Error(permission.reason ?? `${method} denied for panel ${target.id}`);
-      }
+      return preparePanelAccessAuthority(deps, ctx, op, target);
     }
     if (method === "expandIds") {
       const panelIds = Array.isArray(args[0]) ? (args[0] as string[]) : [];
+      const selections: PreparedAuthoritySelection[] = [];
+      const seen = new Set<string>();
       for (const panelId of panelIds) {
         const target = await targetFor(ctx, panelId);
-        const permission = await requirePanelAccessPermission(
-          deps,
-          ctx,
-          "updatePanelState",
-          target
-        );
-        if (!permission.allowed) {
-          throw new Error(permission.reason ?? `${method} denied for panel ${target.id}`);
+        const prepared = await preparePanelAccessAuthority(deps, ctx, "updatePanelState", target);
+        for (const selection of prepared) {
+          const key = `${selection.capability}\0${selection.resourceKey}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          selections.push(selection);
         }
       }
+      return selections;
     }
-
-    return bridge(ctx, method, args);
+    return [];
   }
 
   return {
     name: "panelTree",
     description: "Server-mediated panel tree handles and control operations",
-    // Authorized chrome gets full access through requirePanelAccessPermission.
+    // Authorized chrome is excluded by the prepared context-boundary resolver.
     // Runtime callers (panel/worker/do/app) may also reach this service but are
     // scoped by resource grants unless they hold the chrome capability.
     authority: { principals: ["code", "user", "host"] },
     methods: panelTreeMethods,
+    authorityPreparation: Object.fromEntries(
+      [
+        "create",
+        "setStateArgs",
+        "reload",
+        "close",
+        "archive",
+        "unload",
+        "movePanel",
+        "navigate",
+        "navigateHistory",
+        "takeOver",
+        "openDevTools",
+        "rebuildPanel",
+        "rebuildAndReload",
+        "updatePanelState",
+        "callAgent",
+        "setCollapsed",
+        "expandIds",
+      ].map((method) => [
+        `panelTree.${method}.contextBoundary`,
+        (ctx: ServiceContext, args: unknown[]) =>
+          prepareAccess(ctx, method as keyof typeof panelTreeMethods & string, args),
+      ])
+    ),
     handler: defineServiceHandler("panelTree", panelTreeMethods, {
       ensureLoaded: (ctx, args) => dispatch(ctx, "ensureLoaded", args),
       focus: (ctx, args) => dispatch(ctx, "focus", args),

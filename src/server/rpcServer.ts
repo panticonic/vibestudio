@@ -28,6 +28,7 @@ import {
   type RpcCausalParent,
   type RpcCallOptions,
   type DirectAuthorityAttestation,
+  type RpcAuthorityEffect,
 } from "@vibestudio/rpc";
 import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
 import {
@@ -82,7 +83,15 @@ import {
 } from "./rpcServer/httpRpcHandler.js";
 import { StreamingRelay } from "./rpcServer/streamingRelay.js";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
-import { attestDirectRpc } from "./services/authorityRuntime.js";
+import { attestDirectRpc, attestWorkspaceDoRpc } from "./services/authorityRuntime.js";
+import { evaluateAuthority, requirementForPrincipals } from "@vibestudio/shared/authorization";
+import {
+  createInvocationSnapshot,
+  invocationSnapshotDigest,
+  sha256Canonical,
+} from "@vibestudio/shared/authority/invocationSnapshot";
+import { describeCapability } from "@vibestudio/shared/authorityPresentation";
+import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
 
 const log = createDevLogger("RpcServer");
 const RPC_RUNTIME_ID_HEADER = "x-vibestudio-runtime-id";
@@ -271,6 +280,7 @@ type ReconnectOutcome =
   | { kind: "no-waiter" };
 
 type RelayErrorCode =
+  | "EACQUIRE"
   | "EACCES"
   | "RECONNECT_GRACE_EXPIRED"
   | "SERVER_SHUTTING_DOWN"
@@ -286,34 +296,6 @@ function getErrorCode(error: unknown): string | undefined {
 
 function createRelayError(message: string, code: RelayErrorCode): Error {
   return Object.assign(new Error(message), { code });
-}
-
-function isRuntimeIdForServiceToken(
-  authenticatedCallerId: string,
-  runtimeId: string | undefined
-): boolean {
-  if (!runtimeId || !authenticatedCallerId.startsWith("do-service:")) return false;
-  const serviceTargetPrefix = `do:${authenticatedCallerId.slice("do-service:".length)}:`;
-  return runtimeId.startsWith(serviceTargetPrefix);
-}
-
-function resolveHttpRuntimeCaller(
-  authenticatedCallerId: string,
-  callerKind: CallerKind,
-  runtimeIdHeader: string | string[] | undefined
-): string {
-  const runtimeId = Array.isArray(runtimeIdHeader) ? runtimeIdHeader[0] : runtimeIdHeader;
-  if (runtimeId == null || runtimeId === "") return authenticatedCallerId;
-  if (typeof runtimeId !== "string") {
-    throw new Error("Invalid RPC runtime identity");
-  }
-  if (runtimeId === authenticatedCallerId) return authenticatedCallerId;
-  if (isRuntimeIdForServiceToken(authenticatedCallerId, runtimeId)) {
-    return runtimeId;
-  }
-  throw new Error(
-    `RPC runtime identity denied: ${authenticatedCallerId} cannot act as ${runtimeId}`
-  );
 }
 
 export class RpcServer {
@@ -462,8 +444,62 @@ export class RpcServer {
       membershipGate?: (subject: UserSubject | undefined) => boolean;
       /** Live workspace role used by declarative `workspace-role` requirements. */
       workspaceRoleResolver?: (subject: UserSubject | undefined) => string | null;
+      /** Resolve human-facing copy for a capability string. When absent,
+       *  falls back to the static shared catalog (no live workspace services). */
+      describeCapability?: (
+        capability: string
+      ) => import("@vibestudio/shared/authorityPresentation").CapabilityPresentation;
       /** Live user decisions augment the reviewed direct-RPC product catalog. */
       capabilityGrantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
+      /** Shared user-acquisition rendezvous for protected direct receiver calls. */
+      directAuthorityAcquirer?: {
+        request(
+          input: import("./services/acquisitionCoordinator.js").AcquisitionRequestInput
+        ): import("@vibestudio/rpc").AcquisitionInfo;
+        acquire(
+          input: import("./services/acquisitionCoordinator.js").AcquisitionRequestInput,
+          signal?: AbortSignal
+        ): Promise<import("./services/acquisitionCoordinator.js").AcquisitionOutcome>;
+        consume(grantId: string): boolean;
+        invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
+      };
+      /** Stable mission fact for the same session identity used by service dispatch. */
+      missionFactForSession?: (
+        sessionId: string
+      ) => import("@vibestudio/rpc").SessionMissionFact | null;
+      /** Durable server-observed context latch for direct userland calls. */
+      contextIntegrityFactForSession?: (
+        sessionId: string,
+        caller: VerifiedCaller
+      ) => import("@vibestudio/rpc").ContextIntegrityFact;
+      /**
+       * Resolve an exact live workspace service declaration for a direct DO
+       * target. This is deliberately runtime data: context-scoped/user-created
+       * services must not depend on a checked-in product census.
+       */
+      resolveWorkspaceDirectAuthority?: (input: {
+        caller: VerifiedCaller;
+        source: string;
+        className: string;
+        objectKey: string;
+        method: string;
+      }) =>
+        | Promise<
+            readonly {
+              capability: string;
+              methodEffect: RpcAuthorityEffect;
+              methodCapability?: string;
+              methodTier: "open" | "gated" | "critical";
+              principals: readonly import("@vibestudio/rpc").PrincipalKind[];
+            }[]
+          >
+        | readonly {
+            capability: string;
+            methodEffect: RpcAuthorityEffect;
+            methodCapability?: string;
+            methodTier: "open" | "gated" | "critical";
+            principals: readonly import("@vibestudio/rpc").PrincipalKind[];
+          }[];
       /**
        * Live identity gate for persistent WS/WebRTC sessions. Authentication
        * stamps a caller once, but revocation and workspace membership are
@@ -490,6 +526,12 @@ export class RpcServer {
         requestId: string
       ) => ResolvedExtensionInvocation | null;
       resolveExtensionCodeIdentity?: (extensionName: string) => VerifiedCodeIdentity | null;
+      /**
+       * Exact-version admission established by the shared unit review. Code
+       * identity remains attributable when false, but its manifest grants no
+       * authority until the reviewed version has been admitted.
+       */
+      isCodeApproved?: (code: VerifiedCodeIdentity) => boolean;
       sessionInboxCapacity?: SessionRegistryOptions["inboxCapacity"];
       sessionTtlMs?: SessionRegistryOptions["ttlMs"];
       runtimeCoordinator?: PanelRuntimeCoordinator;
@@ -603,6 +645,11 @@ export class RpcServer {
     agentBinding?: import("@vibestudio/identity/types").AgentBinding,
     subject?: UserSubject
   ): VerifiedCaller {
+    const activeEntity =
+      callerKind === "worker" || callerKind === "do"
+        ? this.deps.entityCache?.resolveActive(callerId)
+        : undefined;
+    const resolvedAgentBinding = agentBinding ?? activeEntity?.agentBinding;
     const code =
       callerKind === "extension"
         ? (this.deps.resolveExtensionCodeIdentity?.(callerId) ?? null)
@@ -612,7 +659,22 @@ export class RpcServer {
     // An explicitly-passed subject (device/agent credential, §5.1/§5.3) wins;
     // otherwise resolve it from the caller id (§5.2/§5.4).
     const resolvedSubject = subject ?? this.resolveSubject(callerId, callerKind, agentBinding);
-    return createVerifiedCaller(callerId, callerKind, code, agentBinding, resolvedSubject);
+    const sessionOrigin = Boolean(
+      code &&
+      activeEntity?.source.repoPath === "vibestudio/internal" &&
+      activeEntity.className === "EvalDO"
+    );
+    const verified = createVerifiedCaller(
+      callerId,
+      callerKind,
+      code,
+      resolvedAgentBinding,
+      resolvedSubject,
+      sessionOrigin
+    );
+    return code && (this.deps.isCodeApproved?.(code) ?? true)
+      ? { ...verified, codeApproved: true }
+      : verified;
   }
 
   /**
@@ -2417,6 +2479,11 @@ export class RpcServer {
     const readOnly = envelope.delivery.readOnly === true;
     const verifiedCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
     const causalParent = await this.resolveCausalParent(verifiedCaller, message);
+    // A causal parent authenticates invocation lineage; it does not change the
+    // authorizing origin. Harness-owned tool and closure calls retain their
+    // sealed code identity. EvalDO is marked session-originated when its exact
+    // active runtime identity is resolved in verifiedCallerFor().
+    const invocationCaller = verifiedCaller;
 
     // Direct service dispatch
     if (targetId === "main") {
@@ -2440,20 +2507,17 @@ export class RpcServer {
             method: parsed.method,
           })
         : undefined;
-      const ctx = this.serviceContextFor(
-        callerId,
-        callerKind,
-        {
-          ...(causalParent ? { causalParent } : {}),
-          ...(requestId ? { requestId } : {}),
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-          ...(deferral ? { deferral } : {}),
-          ...(readOnly ? { readOnly: true } : {}),
-          signal,
-        },
-        agentBinding
-      );
-      return await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
+      const ctx: ServiceContext = {
+        caller: invocationCaller,
+        ...(causalParent ? { causalParent } : {}),
+        ...(requestId ? { requestId } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(deferral ? { deferral } : {}),
+        ...(readOnly ? { readOnly: true } : {}),
+        signal,
+      };
+      const dispatched = await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
+      return dispatched;
     }
 
     // Relay to another target
@@ -2475,7 +2539,7 @@ export class RpcServer {
       },
       {
         authenticatedCaller,
-        invocationCaller: authenticatedCaller,
+        invocationCaller,
       }
     );
   }
@@ -2669,35 +2733,216 @@ export class RpcServer {
    * Unary and streaming calls are the same semantic invocation boundary; only
    * their response ownership differs, so their authority derivation must not.
    */
-  private directDOAuthorization(input: {
+  private async directDOAuthorization(input: {
     caller: VerifiedCaller;
     ref: { source: string; className: string; objectKey: string };
     method: string;
-    sessionId: string;
+    args: readonly unknown[];
     readOnly?: boolean;
-  }): DirectAuthorityAttestation {
+    /** Response streams cannot be replayed after EACQUIRE; park before dispatch. */
+    waitForAuthority?: boolean;
+    signal?: AbortSignal;
+  }): Promise<DirectAuthorityAttestation> {
     const workspaceId = this.deps.workspaceId;
     if (!workspaceId) {
       throw new Error("Direct DO relay requires an authority workspace identity");
     }
-    return {
-      ...attestDirectRpc({
-        caller: input.caller,
-        source: input.ref.source,
-        className: input.ref.className,
-        objectKey: input.ref.objectKey,
-        method: input.method,
-        workspaceId,
-        workspaceMember:
-          input.caller.runtime.kind === "server" ||
-          !this.deps.membershipGate ||
-          this.deps.membershipGate(input.caller.subject),
-        workspaceRole: this.deps.workspaceRoleResolver?.(input.caller.subject) ?? null,
-        sessionId: input.sessionId,
-        grantStore: this.deps.capabilityGrantStore,
-      }),
+    const workspaceAuthorities = input.method.startsWith("__event:")
+      ? []
+      : await this.deps.resolveWorkspaceDirectAuthority?.({
+          caller: input.caller,
+          ...input.ref,
+          method: input.method,
+        });
+    if (workspaceAuthorities && workspaceAuthorities.length > 1) {
+      throw createRelayError(
+        `Direct DO target ${input.ref.source}:${input.ref.className}:${input.ref.objectKey} has ambiguous workspace service authority`,
+        "EACCES"
+      );
+    }
+    const workspaceAuthority = workspaceAuthorities?.[0];
+    const sessionId = input.caller.agentBinding?.channelId ?? input.caller.runtime.id;
+    const methodCapability = workspaceAuthority?.methodCapability ?? workspaceAuthority?.capability;
+    const methodTier = workspaceAuthority?.methodTier;
+    const authorityFacts = {
+      caller: input.caller,
+      source: input.ref.source,
+      className: input.ref.className,
+      objectKey: input.ref.objectKey,
+      method: input.method,
+      workspaceId,
+      workspaceMember:
+        input.caller.runtime.kind === "server" ||
+        !this.deps.membershipGate ||
+        this.deps.membershipGate(input.caller.subject),
+      workspaceRole: this.deps.workspaceRoleResolver?.(input.caller.subject) ?? null,
+      sessionId,
+      grantStore: this.deps.capabilityGrantStore,
+      mission: this.deps.missionFactForSession?.(sessionId) ?? null,
+      contextIntegrity:
+        this.deps.contextIntegrityFactForSession?.(sessionId, input.caller) ??
+        (input.caller.agentBinding
+          ? { class: "internal" as const, latchEpoch: 0, externalKeys: [] }
+          : { class: "not-applicable" as const, latchEpoch: 0, externalKeys: [] }),
+    } as const;
+    const attestation = workspaceAuthority
+      ? attestWorkspaceDoRpc({
+          ...authorityFacts,
+          service: {
+            name: workspaceAuthority.capability.slice("workspace-service:".length),
+            principals: workspaceAuthority.principals,
+          },
+          methodAuthority: {
+            effect: workspaceAuthority.methodEffect,
+            tier: workspaceAuthority.methodTier,
+          },
+        })
+      : attestDirectRpc(authorityFacts);
+    const result: DirectAuthorityAttestation = {
+      ...attestation,
+      ...(workspaceAuthority
+        ? {
+            targetRequirement: requirementForPrincipals(
+              workspaceAuthority.principals,
+              workspaceAuthority.capability
+            ),
+            targetCapability: workspaceAuthority.capability,
+            targetTier: "gated" as const,
+          }
+        : {}),
       ...(input.readOnly ? { readOnly: true as const } : {}),
     };
+    if (!workspaceAuthority || input.method.startsWith("__event:")) return result;
+
+    const requiredMethodCapability =
+      workspaceAuthority.methodCapability ?? workspaceAuthority.capability;
+    const requiredMethodTier = workspaceAuthority.methodTier;
+    const leaves = [
+      {
+        capability: requiredMethodCapability,
+        tier: requiredMethodTier,
+        requirement: requirementForPrincipals(
+          workspaceAuthority.principals,
+          requiredMethodCapability
+        ),
+      },
+      ...(requiredMethodCapability !== workspaceAuthority.capability ||
+      requiredMethodTier !== "gated"
+        ? [
+            {
+              capability: workspaceAuthority.capability,
+              tier: "gated" as const,
+              requirement: requirementForPrincipals(
+                workspaceAuthority.principals,
+                workspaceAuthority.capability
+              ),
+            },
+          ]
+        : []),
+    ];
+    const snapshotFor = (capability: string) =>
+      createInvocationSnapshot({
+        service: `direct:${input.ref.source}:${input.ref.className}`,
+        method: input.method,
+        capability,
+        targetRequirement: result.targetRequirement,
+        targetCapability: result.targetCapability,
+        resourceKey: result.resourceKey,
+        args: input.args,
+        preparedStateDigest: sha256Canonical({
+          source: input.ref.source,
+          className: input.ref.className,
+          objectKey: input.ref.objectKey,
+          methodCapability,
+          methodTier,
+          targetCapability: result.targetCapability ?? null,
+          targetTier: result.targetTier ?? null,
+          principals: workspaceAuthority.principals,
+        }),
+        callerPrincipal: result.context.authorizingOrigin.principal,
+        sessionId,
+        mission: result.context.session.mission
+          ? `mission:${result.context.session.mission.missionId}@${result.context.session.mission.closureDigest}`
+          : "-",
+        snippetDigest:
+          result.context.authorizingOrigin.kind === "session"
+            ? (result.context.executingCode?.principal.split("@").at(-1) ?? "-")
+            : "-",
+        codeLineage: result.context.executingCode
+          ? {
+              class: result.context.executingCode.sourceLineage.class,
+              chain: result.context.executingCode.sourceLineage.externalKeys,
+            }
+          : { class: "unknown", chain: [] },
+        contextLineage: result.context.contextIntegrity,
+        initiatorChain: result.context.initiatorChain,
+      });
+    const decisions = leaves.map((leaf) => {
+      const snapshot = snapshotFor(leaf.capability);
+      const snapshotDigest = invocationSnapshotDigest(snapshot);
+      return {
+        leaf,
+        snapshot,
+        snapshotDigest,
+        decision: evaluateAuthority({
+          context: result.context,
+          requirement: leaf.requirement,
+          resourceKey: result.resourceKey,
+          grants: result.grants,
+          tier: leaf.tier,
+          invocationDigest: snapshotDigest,
+        }),
+      };
+    });
+    result.invocationDigest = decisions[0]?.snapshotDigest;
+    const denied = decisions.find(({ decision }) => !decision.allowed);
+    if (denied) {
+      const acquirable =
+        denied.leaf.tier !== "open" &&
+        (denied.decision.code === "missing-grant" || denied.decision.code === "lineage");
+      if (!acquirable || !this.deps.directAuthorityAcquirer) {
+        throw createRelayError(
+          `${input.method}: ${denied.decision.reason} (${denied.decision.code})`,
+          "EACCES"
+        );
+      }
+      const acquisitionInput = {
+        snapshot: denied.snapshot,
+        snapshotDigest: denied.snapshotDigest,
+        tier: denied.leaf.tier as "gated" | "critical",
+        caller: input.caller,
+        renderedAction: (this.deps.describeCapability ?? describeCapability)(denied.leaf.capability)
+          .action,
+        resource: { kind: "exact", key: result.resourceKey },
+      } as const;
+      this.deps.directAuthorityAcquirer.invalidate(
+        denied.snapshotDigest,
+        input.caller.runtime.id,
+        denied.snapshot.callerPrincipal
+      );
+      if (input.waitForAuthority) {
+        const outcome = await this.deps.directAuthorityAcquirer.acquire(
+          acquisitionInput,
+          input.signal
+        );
+        if (outcome.state === "decided" && outcome.decision !== "deny") {
+          return this.directDOAuthorization(input);
+        }
+        throw createRelayError(`${input.method}: authority acquisition was not granted`, "EACCES");
+      }
+      const acquisition = this.deps.directAuthorityAcquirer.request(acquisitionInput);
+      const error = createRelayError(`${input.method}: authority acquisition required`, "EACQUIRE");
+      Object.assign(error, { errorKind: "access", errorData: { acquisition } });
+      throw error;
+    }
+    for (const { decision } of decisions) {
+      if (decision.consumable && decision.grantId) {
+        if (!this.deps.directAuthorityAcquirer?.consume(decision.grantId)) {
+          throw createRelayError(`${input.method}: one-time approval was already used`, "EACCES");
+        }
+      }
+    }
+    return result;
   }
 
   private async relayResponse(
@@ -2763,11 +3008,11 @@ export class RpcServer {
             ? relayCallerScope.invocationCaller
             : transportCaller;
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
-      const authorization = this.directDOAuthorization({
+      const authorization = await this.directDOAuthorization({
         caller: attributedCaller,
         ref,
         method,
-        sessionId: meta?.requestId ?? `${callerId}:${method}`,
+        args,
         readOnly: meta?.readOnly,
       });
       const result = await postToDurableObject(ref, method, args, {
@@ -2803,6 +3048,7 @@ export class RpcServer {
     causalParent: RpcCausalParent | undefined,
     signal: AbortSignal
   ): Promise<Response> {
+    const invocationCaller = caller;
     const targetId = envelope.target;
     if (!targetId.startsWith("do:")) {
       throw createRelayError(
@@ -2826,12 +3072,14 @@ export class RpcServer {
       caller.runtime.kind === "panel"
         ? (this.deps.runtimeCoordinator?.getLease(caller.runtime.id)?.slotId ?? undefined)
         : undefined;
-    const authorization = this.directDOAuthorization({
-      caller,
+    const authorization = await this.directDOAuthorization({
+      caller: invocationCaller,
       ref,
       method: request.method,
-      sessionId: request.requestId,
+      args: request.args,
       readOnly: envelope.delivery.readOnly,
+      waitForAuthority: true,
+      signal,
     });
     return streamFromDurableObject(
       ref,
@@ -2992,6 +3240,17 @@ export class RpcServer {
       }
 
       const { postEventToDurableObject } = await import("./workerdRpcRelay.js");
+      const attributedCaller =
+        fromKind === "server"
+          ? createHostCaller(fromId, "server", SYSTEM_SUBJECT)
+          : this.verifiedCallerFor(fromId, fromKind);
+      const authenticatedCaller = authenticatedCallerOf(attributedCaller);
+      const authorization = await this.directDOAuthorization({
+        caller: attributedCaller,
+        ref,
+        method: `__event:${event}`,
+        args: [payload],
+      });
       // `fromId`/`fromKind` become the event envelope's caller — the DO's
       // `handleEvent` surfaces it to listeners as `event.caller`.
       await postEventToDurableObject(ref, event, payload, {
@@ -3002,6 +3261,8 @@ export class RpcServer {
           : {}),
         callerId: fromId,
         callerKind: fromKind,
+        ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+        authorization,
       });
       return;
     }

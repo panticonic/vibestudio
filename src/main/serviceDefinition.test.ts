@@ -9,12 +9,59 @@ import {
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 
 const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 
 describe("ServiceDispatcher.registerService", () => {
+  it("requires a colocated semantic capability for promptable methods outside the static census", () => {
+    const sd = new ServiceDispatcher({ tierLookup: () => null, capabilityLookup: () => null });
+    const definition: ServiceDefinition = {
+      name: "dynamic",
+      authority: { principals: ["user"] },
+      methods: {
+        inspect: {
+          args: z.tuple([]),
+          tier: {
+            tier: "gated",
+            session: "family",
+            rationale: "Private metadata needs an explicit grant.",
+          },
+        },
+      },
+      handler: async () => "ok",
+    };
+
+    expect(() => sd.registerService(definition)).toThrow(
+      "Promptable service method dynamic.inspect has no reviewed semantic capability"
+    );
+
+    definition.methods["inspect"]!.capability = "private-metadata.read";
+    expect(() => sd.registerService(definition)).not.toThrow();
+  });
+
+  it("accepts a colocated reviewed tier without a global census entry", () => {
+    const sd = new ServiceDispatcher({ tierLookup: () => null });
+    sd.registerService({
+      name: "dynamic",
+      authority: { principals: ["user"] },
+      methods: {
+        inspect: {
+          args: z.tuple([]),
+          tier: {
+            tier: "open",
+            session: "family",
+            rationale: "Pure inspection of a dynamically registered service.",
+          },
+        },
+      },
+      handler: async () => "ok",
+    });
+    expect(sd.getMethodSchema("dynamic", "inspect")?.tier?.tier).toBe("open");
+  });
+
   it("registers and dispatches a service definition", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher({ openMethods: ["echo.greet"] });
 
     const def: ServiceDefinition = {
       name: "echo",
@@ -36,7 +83,7 @@ describe("ServiceDispatcher.registerService", () => {
   });
 
   it("validates args against Zod schema and rejects invalid args", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher({ openMethods: ["math.add"] });
 
     const def: ServiceDefinition = {
       name: "math",
@@ -58,8 +105,8 @@ describe("ServiceDispatcher.registerService", () => {
     await expect(sd.dispatch(ctx, "math", "add", ["a", "b"])).rejects.toThrow("Invalid args");
   });
 
-  it("allows unknown methods (no schema validation)", async () => {
-    const sd = new ServiceDispatcher();
+  it("denies unknown methods before handler entry", async () => {
+    const sd = createTestServiceDispatcher({ openMethods: ["flex.known"] });
 
     const def: ServiceDefinition = {
       name: "flex",
@@ -73,13 +120,11 @@ describe("ServiceDispatcher.registerService", () => {
     sd.registerService(def);
     sd.markInitialized();
 
-    // Unknown method — no schema to validate against, passes through
-    const result = await sd.dispatch(ctx, "flex", "unknown", [42]);
-    expect(result).toEqual({ method: "unknown", args: [42] });
+    await expect(sd.dispatch(ctx, "flex", "unknown", [42])).rejects.toThrow("Unknown method");
   });
 
   it("exposes registered service authority through the canonical definition", () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher({ openMethods: ["svc.foo"] });
 
     const def: ServiceDefinition = {
       name: "secret",
@@ -121,7 +166,7 @@ describe("ServiceDispatcher.registerService", () => {
   });
 
   it("getMethodSchema returns schema for known methods", () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher({ openMethods: ["svc.foo"] });
     const argsSchema = z.tuple([z.string()]);
 
     sd.registerService({

@@ -11,6 +11,7 @@ import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
+  RuntimePanelEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 
@@ -86,6 +87,7 @@ export interface WorkspaceStateClient {
   getSlot(slotId: PanelSlotId): Promise<SlotRow | null>;
   getSlotHistory(slotId: PanelSlotId): Promise<SlotHistoryRow[]>;
   resolveActiveEntity(id: string): Promise<EntityRecord | null>;
+  resolveEntity(id: string): Promise<EntityRecord | null>;
   /**
    * Durable nav→slot: the OPEN slot id whose current runtime entity is `entityId`, or null.
    * Returns a raw string; callers brand it via `asPanelSlotId` (validated) at the use site.
@@ -113,5 +115,7 @@ export interface WorkspaceStateClient {
  */
 export interface RuntimeClient {
   createEntity(spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  reservePanelEntity(spec: RuntimePanelEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  activatePanelEntity(spec: RuntimePanelEntityCreateSpec): Promise<RuntimeEntityHandle>;
   retireEntity(id: string): Promise<void>;
 }

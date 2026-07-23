@@ -9,8 +9,9 @@ import {
   type RpcCausalParent,
   type RpcResponse,
 } from "@vibestudio/rpc";
-import { Agent } from "undici";
+import { Agent, type Dispatcher } from "undici";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
+import { EntityNotCreatedError } from "@vibestudio/shared/runtime/entitySpec";
 
 export type DORef = DORefParam;
 
@@ -20,7 +21,100 @@ export type DORef = DORefParam;
  * into an undocumented method deadline. Callers retain cancellation through
  * AbortSignal, while the dispatch owners report slow-call liveness.
  */
-export const WORKERD_CONNECTION_DISPATCHER = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+let workerdConnectionDispatcher: Agent | null = null;
+
+/**
+ * Return the transport pool for the current workerd process generation.
+ *
+ * The pool is deliberately lazy: WorkerdManager destroys it before terminating
+ * a generation, which closes idle keep-alive sockets and rejects every request
+ * still physically attached to that process. The next generation receives a
+ * fresh pool rather than inheriting connections or terminal state.
+ */
+export function getWorkerdConnectionDispatcher(): Dispatcher {
+  workerdConnectionDispatcher ??= new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+  return workerdConnectionDispatcher;
+}
+
+/**
+ * Sever every Node→workerd connection owned by the current process generation.
+ *
+ * This is an abrupt transport terminal by design. A workerd restart or shutdown
+ * cannot preserve an in-flight invocation, and leaving the pool alive makes
+ * workerd wait indefinitely for a peer that the host has already abandoned.
+ */
+export async function destroyWorkerdConnections(reason: string): Promise<void> {
+  const dispatcher = workerdConnectionDispatcher;
+  workerdConnectionDispatcher = null;
+  if (!dispatcher) return;
+  await dispatcher.destroy(new Error(reason));
+}
+
+type RelayLane = {
+  sealed: boolean;
+  inFlight: number;
+  drained: Promise<void>;
+  resolveDrained: () => void;
+};
+
+/**
+ * Process-local relay admission for runtime DO entities. Retirement seals the
+ * target after its lifecycle prepare receipt, waits for every relay already
+ * admitted here, then retires the durable identity. This is the authoritative
+ * race boundary: individual services do not need bespoke "late message"
+ * cleanup ordering, and no new relay can enter between the drain and retire.
+ */
+const entityRelayLanes = new Map<string, RelayLane>();
+
+function createRelayLane(): RelayLane {
+  let resolveDrained: () => void = () => {};
+  const drained = new Promise<void>((resolve) => {
+    resolveDrained = resolve;
+  });
+  return { sealed: false, inFlight: 0, drained, resolveDrained };
+}
+
+function beginEntityRelay(targetId: string): () => void {
+  let lane = entityRelayLanes.get(targetId);
+  if (!lane) {
+    lane = createRelayLane();
+    entityRelayLanes.set(targetId, lane);
+  }
+  if (lane.sealed) throw new EntityNotCreatedError(targetId);
+  const activeLane = lane;
+  activeLane.inFlight += 1;
+  let finished = false;
+  return () => {
+    if (finished) return;
+    finished = true;
+    activeLane.inFlight -= 1;
+    if (activeLane.sealed && activeLane.inFlight === 0) activeLane.resolveDrained();
+    if (
+      !activeLane.sealed &&
+      activeLane.inFlight === 0 &&
+      entityRelayLanes.get(targetId) === activeLane
+    ) {
+      entityRelayLanes.delete(targetId);
+    }
+  };
+}
+
+/** Seal a runtime DO target against new relays and await all admitted calls. */
+export async function sealAndDrainDurableObjectRelays(targetId: string): Promise<void> {
+  let lane = entityRelayLanes.get(targetId);
+  if (!lane) {
+    lane = createRelayLane();
+    entityRelayLanes.set(targetId, lane);
+  }
+  lane.sealed = true;
+  if (lane.inFlight === 0) lane.resolveDrained();
+  await lane.drained;
+}
+
+/** Release a retirement seal after the entity row is retired or retirement aborts. */
+export function releaseDurableObjectRelaySeal(targetId: string): void {
+  entityRelayLanes.delete(targetId);
+}
 
 export function doRefKey(ref: DORef): string {
   return `${ref.source}:${ref.className}/${ref.objectKey}`;
@@ -136,7 +230,7 @@ async function fetchEnvelopeFromDO(
       },
       body: JSON.stringify(envelope),
       ...(signal ? { signal } : {}),
-      dispatcher: WORKERD_CONNECTION_DISPATCHER,
+      dispatcher: getWorkerdConnectionDispatcher(),
     } as RequestInit);
   } catch (error) {
     const wrapped = new Error(
@@ -189,24 +283,30 @@ export async function postToDurableObject(
   args: unknown[],
   deps: DurableObjectRelayDeps
 ): Promise<unknown> {
-  const caller = callerFromDeps(deps);
-  const envelope = envelopeFromMessage({
-    selfId: caller.callerId,
-    from: caller.callerId,
-    target: doTargetString(ref),
-    caller,
-    ...(deps.idempotencyKey ? { idempotencyKey: deps.idempotencyKey } : {}),
-    ...(deps.readOnly ? { readOnly: true } : {}),
-    message: {
-      type: "request",
-      requestId: deps.requestId ?? generateRequestId(),
-      fromId: caller.callerId,
-      method,
-      args,
-      ...(deps.causalParent ? { causalParent: deps.causalParent } : {}),
-    },
-  });
-  return unwrapResponseEnvelope(await postEnvelopeToDO(ref, envelope, deps));
+  const targetId = doTargetString(ref);
+  const finishRelay = beginEntityRelay(targetId);
+  try {
+    const caller = callerFromDeps(deps);
+    const envelope = envelopeFromMessage({
+      selfId: caller.callerId,
+      from: caller.callerId,
+      target: doTargetString(ref),
+      caller,
+      ...(deps.idempotencyKey ? { idempotencyKey: deps.idempotencyKey } : {}),
+      ...(deps.readOnly ? { readOnly: true } : {}),
+      message: {
+        type: "request",
+        requestId: deps.requestId ?? generateRequestId(),
+        fromId: caller.callerId,
+        method,
+        args,
+        ...(deps.causalParent ? { causalParent: deps.causalParent } : {}),
+      },
+    });
+    return unwrapResponseEnvelope(await postEnvelopeToDO(ref, envelope, deps));
+  } finally {
+    finishRelay();
+  }
 }
 
 /** Relay a streaming call to a DO. The returned body remains physically tied

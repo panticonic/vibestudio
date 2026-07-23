@@ -232,6 +232,13 @@ export class StreamingRelay {
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(readOnly ? { readOnly: true } : {}),
       ...(causalParent ? { causalParent } : {}),
+      // Streaming is an alternate transport for the same semantic service
+      // invocation. Unlike the unary RPC core it cannot return EACQUIRE and
+      // replay an arbitrary response/request stream safely, so the host keeps
+      // the invocation parked at the shared authority boundary until the
+      // decision settles. This flag is server-owned; no wire field can enable
+      // it for an unverified caller.
+      authorityAcquisition: "wait",
     });
     try {
       await this.deps.dispatcher.assertAuthority(context, "credentials", "proxyFetch", args);
@@ -239,6 +246,7 @@ export class StreamingRelay {
       writeJson(res, 403, {
         error: error instanceof Error ? error.message : String(error),
         errorCode: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
+        ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
       });
       return;
     }
@@ -354,6 +362,7 @@ export class StreamingRelay {
           ...(readOnly ? { readOnly: true } : {}),
           ...(inboundBody ? { body: inboundBody } : {}),
           ...(causalParent ? { causalParent } : {}),
+          authorityAcquisition: "wait",
         });
         const result = await this.deps.dispatcher.dispatch(
           context,
@@ -420,6 +429,7 @@ export class StreamingRelay {
       ...(readOnly ? { readOnly: true } : {}),
       ...(inboundBody ? { body: inboundBody } : {}),
       ...(causalParent ? { causalParent } : {}),
+      authorityAcquisition: "wait",
     });
     try {
       await this.deps.dispatcher.assertAuthority(
@@ -435,6 +445,7 @@ export class StreamingRelay {
         message: error instanceof Error ? error.message : String(error),
         code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         errorKind: "access",
+        ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
       });
       return;
     }
@@ -530,6 +541,7 @@ export class StreamingRelay {
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
         ...(causalParent ? { causalParent } : {}),
+        authorityAcquisition: "wait",
       });
       const result = await this.deps.dispatcher.dispatch(
         context,

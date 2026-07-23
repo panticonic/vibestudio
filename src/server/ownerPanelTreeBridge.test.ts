@@ -94,7 +94,7 @@ async function createSinglePanelBridge(options?: {
         capability: string;
         resource: { kind: "exact"; key: string };
       }>;
-      delegations: [];
+      evalCeilings: [];
     };
   };
 }) {
@@ -142,7 +142,11 @@ async function createSinglePanelBridge(options?: {
       return args[0] === slot.slot_id ? slot : null;
     }
     if (service === "workspace-state" && method === "slot.history") return [history];
-    if (service === "workspace-state" && method === "entity.resolveActive") return entity;
+    if (
+      service === "workspace-state" &&
+      (method === "entity.resolveActive" || method === "entity.resolve")
+    )
+      return entity;
     if (service === "workspace-state" && method === "panel.search") return [];
     if (service === "build" && method === "getPanelMetadata") return { title: "Target" };
     if (service === "presence" && method === "markPanelActive") return undefined;
@@ -199,7 +203,7 @@ describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
             resource: { kind: "exact" as const, key: "panel:getInfo" },
           },
         ],
-        delegations: [] as [],
+        evalCeilings: [] as [],
       },
     };
     const { bridge } = await createSinglePanelBridge({ activeExecution });
@@ -211,7 +215,7 @@ describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
         buildKey: activeExecution.buildKey,
         executionDigest: activeExecution.digest,
         authorityRequests: activeExecution.authority.requests,
-        authorityDelegations: [],
+        authorityEvalCeilings: [],
       }),
     ]);
   });
@@ -266,7 +270,7 @@ describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
       text: "Target",
       structure: { role: "heading", name: "Target" },
     });
-    expect(callTarget).toHaveBeenCalledWith(slot.current_entity_id, "_agent.snapshot");
+    expect(callTarget).toHaveBeenCalledWith(slot.current_entity_id, "_agent.snapshot", []);
     expect(cdpBridge.sendHostCommand).toHaveBeenCalledWith(slot.slot_id, "domSnapshot", []);
   });
 
@@ -326,7 +330,11 @@ describe("createServerPanelTreeBridge reload", () => {
       if (service === "workspace-state" && method === "slot.get")
         return args[0] === "panel:tree/slot-a" ? slot : null;
       if (service === "workspace-state" && method === "slot.history") return [history];
-      if (service === "workspace-state" && method === "entity.resolveActive") return entity;
+      if (
+        service === "workspace-state" &&
+        (method === "entity.resolveActive" || method === "entity.resolve")
+      )
+        return entity;
       if (service === "workspace-state" && method === "panel.search") return [];
       if (service === "build" && method === "getPanelMetadata") return { title: "Target" };
       if (service === "presence" && method === "markPanelActive") return undefined;
@@ -418,7 +426,11 @@ describe("createServerPanelTreeBridge reload", () => {
       if (service === "workspace-state" && method === "slot.get")
         return args[0] === "panel:tree/slot-a" ? slot : null;
       if (service === "workspace-state" && method === "slot.history") return [history];
-      if (service === "workspace-state" && method === "entity.resolveActive") return entity;
+      if (
+        service === "workspace-state" &&
+        (method === "entity.resolveActive" || method === "entity.resolve")
+      )
+        return entity;
       if (service === "workspace-state" && method === "panel.search") return [];
       if (service === "build" && method === "getPanelMetadata") return { title: "Target" };
       if (service === "presence" && method === "markPanelActive") return undefined;
@@ -508,7 +520,11 @@ describe("createServerPanelTreeBridge reload", () => {
       if (service === "workspace-state" && method === "slot.get")
         return args[0] === "panel:tree/slot-a" ? slot : null;
       if (service === "workspace-state" && method === "slot.history") return [history];
-      if (service === "workspace-state" && method === "entity.resolveActive") return entity;
+      if (
+        service === "workspace-state" &&
+        (method === "entity.resolveActive" || method === "entity.resolve")
+      )
+        return entity;
       if (service === "workspace-state" && method === "panel.search") return [];
       if (service === "build" && method === "getPanelMetadata") return { title: "Target" };
       if (service === "presence" && method === "markPanelActive") return undefined;
@@ -574,12 +590,16 @@ describe("createServerPanelTreeBridge reload", () => {
 });
 
 describe("createServerPanelTreeBridge create (root, no wipe)", () => {
-  it("appends a new root panel without wiping existing roots", async () => {
+  it("appends a root and returns before its focused renderer is ready", async () => {
     // Stateful WorkspaceDO mock: slots/history/entities.
     const slots = new Map<string, Record<string, unknown>>();
     const histories = new Map<string, unknown[]>();
     const entities = new Map<string, Record<string, unknown>>();
     let entityCounter = 0;
+    let releaseActivation!: () => void;
+    const activationGate = new Promise<void>((resolve) => {
+      releaseActivation = resolve;
+    });
 
     // Seed an existing root panel so we can prove a new root doesn't replace it.
     slots.set("slot-existing", {
@@ -625,6 +645,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           case "slot.history":
             return histories.get(args[0] as string) ?? [];
           case "entity.resolveActive":
+          case "entity.resolve":
             return entities.get(args[0] as string) ?? null;
           case "slot.resolveByEntity": {
             // Durable nav→slot: the open slot whose current entity matches, or null.
@@ -678,17 +699,17 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           }
         }
       }
-      if (service === "runtime" && method === "createEntity") {
+      if (service === "runtime" && method === "reservePanelEntity") {
         const spec = args[0] as { source: string; contextId: string; key: string };
         const id = `panel:nav-new-${++entityCounter}`;
         const record = {
           id,
           kind: "panel",
-          source: { repoPath: spec.source, effectiveVersion: "ev" },
+          source: { repoPath: spec.source, effectiveVersion: "" },
           contextId: spec.contextId,
           key: spec.key,
           createdAt: 2,
-          status: "active",
+          status: "preparing",
           cleanupComplete: false,
         };
         entities.set(id, record);
@@ -698,6 +719,28 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           source: record.source,
           contextId: spec.contextId,
           targetId: id,
+        };
+      }
+      if (service === "runtime" && method === "activatePanelEntity") {
+        const spec = args[0] as { source: string; contextId: string; key: string };
+        const record = [...entities.values()].find((candidate) => candidate["key"] === spec.key);
+        if (!record) throw new Error("missing reserved panel");
+        await activationGate;
+        record["status"] = "active";
+        record["source"] = { repoPath: spec.source, effectiveVersion: "ev" };
+        record["activeBuildKey"] = "b".repeat(64);
+        record["activeExecutionDigest"] = "e".repeat(64);
+        record["activeAuthority"] = { requests: [], evalCeilings: [] };
+        return {
+          id: record["id"],
+          kind: "panel",
+          source: record["source"],
+          buildKey: record["activeBuildKey"],
+          executionDigest: record["activeExecutionDigest"],
+          authorityRequests: [],
+          authorityEvalCeilings: [],
+          contextId: spec.contextId,
+          targetId: record["id"],
         };
       }
       if (service === "build" && method === "getPanelMetadata") return { title: "Created" };
@@ -711,8 +754,14 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       assigned: true,
       lease: { holderLabel: "Desktop" },
     }));
+    let targetReady = false;
+    const cdpBridge = {
+      isProviderConnected: vi.fn(() => true),
+      isTargetRegisteredForHost: vi.fn(() => targetReady),
+      isTargetRegistered: vi.fn(() => targetReady),
+    };
     const bridge = await createServerPanelTreeBridge({
-      container: { get: vi.fn(() => ({})) },
+      container: { get: vi.fn(() => cdpBridge) },
       dispatcher: { dispatch },
       workspace: {},
       workspacePath: "/tmp/workspace",
@@ -721,7 +770,10 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
-        resolveHostForSlot: vi.fn(() => null),
+        resolveHostForSlot: vi.fn(() => ({
+          hostConnectionId: "desktop-host",
+          supportsCdp: true,
+        })),
         getLease: vi.fn(() => null),
         ensureDefaultCdpHostForSlot,
       },
@@ -730,18 +782,34 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
     } as never);
 
     // Create a NEW root panel (server caller ⇒ no implicit parent ⇒ root).
-    const rootResult = await bridge({
-      callerId: "server",
-      callerKind: "server",
-      method: "create",
-      args: ["panels/new", { focus: true }],
-    });
+    let createTimeout: ReturnType<typeof setTimeout> | undefined;
+    const rootResult = await Promise.race([
+      bridge({
+        callerId: "server",
+        callerKind: "server",
+        method: "create",
+        args: ["panels/new", { focus: true }],
+      }),
+      new Promise<never>(
+        (_resolve, reject) =>
+          (createTimeout = setTimeout(
+            () => reject(new Error("panel create waited for runtime image activation")),
+            250
+          ))
+      ),
+    ]);
+    if (createTimeout) clearTimeout(createTimeout);
     expect(rootResult).toMatchObject({
       parentId: null,
       contextId: expect.any(String),
       source: "panels/new",
     });
-    expect(ensureDefaultCdpHostForSlot).toHaveBeenCalled();
+    await vi.waitFor(() => expect(ensureDefaultCdpHostForSlot).toHaveBeenCalled());
+    // Creation has already returned even though the assigned renderer is not
+    // registered yet. Release the background readiness wait before teardown.
+    expect(cdpBridge.isTargetRegisteredForHost).toHaveBeenCalled();
+    targetReady = true;
+    releaseActivation();
 
     // The broadcast tree must contain BOTH roots — the new root must not have
     // wiped the pre-existing one (the addAsRoot fix).
@@ -806,6 +874,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
             case "slot.history":
               return histories.get(args[0] as string) ?? [];
             case "entity.resolveActive":
+            case "entity.resolve":
               return entities.get(args[0] as string) ?? null;
             case "slot.resolveByEntity": {
               const entityId = args[0] as string;
@@ -858,19 +927,19 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
             }
           }
         }
-        if (service === "runtime" && method === "createEntity") {
+        if (service === "runtime" && method === "reservePanelEntity") {
           const spec = args[0] as { source: string; contextId: string; key: string };
           const id = `panel:nav-new-${++entityCounter}`;
           const record = {
             id,
             kind: "panel",
-            source: { repoPath: spec.source, effectiveVersion: "ev-child" },
+            source: { repoPath: spec.source, effectiveVersion: "" },
             contextId: spec.contextId,
             key: spec.key,
             parentId: ctx.caller.runtime.id,
             ownerUserId: ctx.caller.subject?.userId,
             createdAt: 2,
-            status: "active",
+            status: "preparing",
             cleanupComplete: false,
           };
           entities.set(id, record);
@@ -880,6 +949,27 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
             source: record.source,
             contextId: spec.contextId,
             targetId: id,
+          };
+        }
+        if (service === "runtime" && method === "activatePanelEntity") {
+          const spec = args[0] as { source: string; contextId: string; key: string };
+          const record = [...entities.values()].find((candidate) => candidate["key"] === spec.key);
+          if (!record) throw new Error("missing reserved panel");
+          record["status"] = "active";
+          record["source"] = { repoPath: spec.source, effectiveVersion: "ev-child" };
+          record["activeBuildKey"] = "b".repeat(64);
+          record["activeExecutionDigest"] = "e".repeat(64);
+          record["activeAuthority"] = { requests: [], evalCeilings: [] };
+          return {
+            id: record["id"],
+            kind: "panel",
+            source: record["source"],
+            buildKey: record["activeBuildKey"],
+            executionDigest: record["activeExecutionDigest"],
+            authorityRequests: [],
+            authorityEvalCeilings: [],
+            contextId: spec.contextId,
+            targetId: record["id"],
           };
         }
         if (service === "build" && method === "getPanelMetadata") return { title: "Child" };
@@ -926,7 +1016,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       ownerUserId: "usr_alice",
     });
     const runtimeCreate = dispatch.mock.calls.find(
-      ([, service, method]) => service === "runtime" && method === "createEntity"
+      ([, service, method]) => service === "runtime" && method === "reservePanelEntity"
     );
     expect(runtimeCreate?.[0].caller).toMatchObject({
       runtime: { id: parentEntityId, kind: "server" },
@@ -985,7 +1075,11 @@ describe("createServerPanelTreeBridge self-heal", () => {
       if (service === "workspace-state" && method === "slot.get")
         return args[0] === "panel:tree/slot-a" ? slot : null;
       if (service === "workspace-state" && method === "slot.history") return [history];
-      if (service === "workspace-state" && method === "entity.resolveActive") return entity;
+      if (
+        service === "workspace-state" &&
+        (method === "entity.resolveActive" || method === "entity.resolve")
+      )
+        return entity;
       if (service === "workspace-state" && method === "panel.search") return [];
       if (service === "build" && method === "getPanelMetadata") return { title: "Target" };
       if (service === "presence" && method === "markPanelActive") return undefined;
@@ -1057,7 +1151,11 @@ describe("createServerPanelTreeBridge self-heal", () => {
       if (service === "workspace-state" && method === "slot.get")
         return args[0] === "panel:tree/slot-a" ? slot : null;
       if (service === "workspace-state" && method === "slot.history") return [history];
-      if (service === "workspace-state" && method === "entity.resolveActive") return entity;
+      if (
+        service === "workspace-state" &&
+        (method === "entity.resolveActive" || method === "entity.resolve")
+      )
+        return entity;
       if (service === "workspace-state" && method === "panel.search") return [];
       if (service === "build" && method === "getPanelMetadata") return { title: "Target" };
       if (service === "presence" && method === "markPanelActive") return undefined;

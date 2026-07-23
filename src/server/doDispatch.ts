@@ -32,7 +32,7 @@ import type {
 } from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
-import { WORKERD_CONNECTION_DISPATCHER } from "./workerdRpcRelay.js";
+import { getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
 
 /** Canonical string key for a DORef, used for maps and logging. */
 export function doRefKey(ref: DORef): string {
@@ -149,7 +149,7 @@ export async function postToDOWithToken(
     // The method's owner defines its semantic lifetime. In particular,
     // `__alarm` may legitimately await an agent model effect, so Undici's
     // response-header/body defaults must never become a hidden deadline.
-    dispatcher: WORKERD_CONNECTION_DISPATCHER,
+    dispatcher: getWorkerdConnectionDispatcher(),
   } as RequestInit);
 
   if (!res.ok) {
@@ -275,8 +275,13 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   private getWorkerdUrl: (() => string) | null = null;
   private getDispatchSecret: (() => string) | null = null;
   private getWorkerdGatewayToken: (() => string) | null = null;
-  private authorityAttester: ((ref: DORef, method: string) => DirectAuthorityAttestation) | null =
-    null;
+  private authorityAttester:
+    | ((
+        ref: DORef,
+        method: string,
+        args: readonly unknown[]
+      ) => DirectAuthorityAttestation | Promise<DirectAuthorityAttestation>)
+    | null = null;
 
   /**
    * Set the TokenManager for per-instance identity tokens.
@@ -313,18 +318,28 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     this.getWorkerdGatewayToken = fn;
   }
 
-  setAuthorityAttester(fn: (ref: DORef, method: string) => DirectAuthorityAttestation): void {
+  setAuthorityAttester(
+    fn: (
+      ref: DORef,
+      method: string,
+      args: readonly unknown[]
+    ) => DirectAuthorityAttestation | Promise<DirectAuthorityAttestation>
+  ): void {
     this.authorityAttester = fn;
   }
 
-  private serverCaller(ref: DORef, method: string): DOCallerEnvelope {
+  private async serverCaller(
+    ref: DORef,
+    method: string,
+    args: readonly unknown[]
+  ): Promise<DOCallerEnvelope> {
     if (!this.authorityAttester) {
       throw new Error("DODispatch requires a host authority attester");
     }
     return {
       callerId: "main",
       callerKind: "server",
-      authorization: this.authorityAttester(ref, method),
+      authorization: await this.authorityAttester(ref, method, args),
     };
   }
 
@@ -400,7 +415,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
     });
-    const serverCaller = this.serverCaller(ref, method);
+    const serverCaller = await this.serverCaller(ref, method, args);
     return await postToDOWithToken(ref, method, args, buildDeps(), "main", serverCaller);
   }
 
@@ -435,7 +450,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
     });
-    const serverCaller = this.serverCaller(ref, lifecycleMethod);
+    const serverCaller = await this.serverCaller(ref, lifecycleMethod, [arg]);
     return await postToDOWithToken(ref, lifecycleMethod, [arg], buildDeps(), "main", serverCaller);
   }
 
@@ -462,7 +477,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
     });
-    const serverCaller = this.serverCaller(ref, "__alarm");
+    const serverCaller = await this.serverCaller(ref, "__alarm", []);
     return (await postToDOWithToken(
       ref,
       "__alarm",

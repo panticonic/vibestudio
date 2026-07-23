@@ -34,6 +34,7 @@ describe("resolveWorkspaceService — factory vs singleton DO services", () => {
     expect(resolved).toMatchObject({
       kind: "durable-object",
       name: "channel",
+      protocol: "example.store.v1",
       className: "ExampleStoreDO",
       objectKey: "default",
     });
@@ -90,8 +91,9 @@ describe("sealed semantic control-plane services", () => {
       kind: "durable-object",
       origin: "product",
       name: "gad.workspace",
-      title: "GAD workspace graph",
-      description: "Product-sealed semantic workspace authority",
+      title: "Workspace history",
+      description: "Read or update your workspace's collaboration and version history.",
+      action: "read or update your workspace's collaboration history",
       protocols: [GAD_WORKSPACE_SERVICE_PROTOCOL],
       source: "vibestudio/internal",
       authority: { principals: ["host", "user", "code"] },
@@ -100,7 +102,10 @@ describe("sealed semantic control-plane services", () => {
       targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
     };
 
-    expect(resolveWorkspaceService(empty, GAD_WORKSPACE_SERVICE_PROTOCOL)).toEqual(expected);
+    expect(resolveWorkspaceService(empty, GAD_WORKSPACE_SERVICE_PROTOCOL)).toEqual({
+      ...expected,
+      protocol: GAD_WORKSPACE_SERVICE_PROTOCOL,
+    });
     expect(resolveWorkspaceService(empty, "gad.workspace")).toEqual(expected);
   });
 

@@ -57,6 +57,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     }
 
     const identity = `${source}:${className}`;
+    const egressIdentity = `do:${source}:${className}:${userKey}`;
     const loaderHeaders = { "X-Vibestudio-Loader-Secret": this.env.WORKERD_LOADER_SECRET };
     const versionResponse = await this.env.GATEWAY.fetch(
       new Request(
@@ -84,9 +85,10 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     // One logical DO per host object means one constant facet name. Keeping it
     // stable also makes clone/delete operations portable across host objects.
     const facet = this.ctx.facets.get("do", async () => {
-      // The version already incorporates object-specific builds; omitting the
-      // object key lets objects on the same version share a loaded module graph.
-      const worker = this.env.LOADER.get(`${identity}@${version}`, async () => {
+      // Egress authority is object- and build-specific. Sharing a loaded module
+      // graph would also share its globalOutbound binding and let the first
+      // object lend its identity to every sibling on that version.
+      const worker = this.env.LOADER.get(`${identity}/${userKey}@${version}`, async () => {
         const codeResponse = await this.env.GATEWAY.fetch(
           new Request(
             `http://gateway/_docode/${encodeURIComponent(source)}/${encodeURIComponent(className)}` +
@@ -115,7 +117,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
           mainModule: code.mainModule,
           modules,
           env: code.env,
-          globalOutbound: egressBinding(this.ctx, identity),
+          globalOutbound: egressBinding(this.ctx, egressIdentity),
         };
       });
       return { class: worker.getDurableObjectClass(className) };

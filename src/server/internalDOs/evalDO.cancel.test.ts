@@ -74,17 +74,55 @@ function seedPendingRun(
 }
 
 describe("EvalDO cancellation + forced recovery", () => {
+  it("runs startRun in the DO lifetime and delivers its terminal result directly to its agent", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const call = vi.fn(() => Promise.resolve(undefined));
+    Object.defineProperty(instance, "rpc", { value: { call }, configurable: true });
+    setPriv(instance, "runLocked", () =>
+      Promise.resolve({ success: true, console: "ok", returnValue: 7 })
+    );
+
+    await instance.startRun({
+      runId: "background-run",
+      code: "return 7",
+      agentRef: "do:workers/agent-worker:AiChatWorker:agent-1",
+      agentInvocationId: "invocation-1",
+      channelId: "channel-1",
+    });
+
+    await vi.waitFor(() => {
+      expect(instance.getRun("background-run")).toMatchObject({
+        status: "done",
+        result: { success: true, returnValue: 7 },
+      });
+    });
+    expect(call).toHaveBeenCalledWith(
+      "do:workers/agent-worker:AiChatWorker:agent-1",
+      "onEvalComplete",
+      [
+        expect.objectContaining({
+          runId: "background-run",
+          agentInvocationId: "invocation-1",
+          channelId: "channel-1",
+          result: expect.objectContaining({ success: true, returnValue: 7 }),
+        }),
+      ]
+    );
+  });
+
   it("pages large scope text losslessly without creating eval runs and persists cleanup", async () => {
     const { instance } = await createTestDO(EvalDO);
     const value = `before-${"😀\u0000".repeat(60_000)}-after`;
     const current: Record<string, unknown> = { temporary: value };
     const enterEval = vi.fn();
     const exitEval = vi.fn(() => Promise.resolve());
+    const persist = vi.fn(() => Promise.resolve());
     setPriv(instance, "ensureEngine", () => Promise.resolve({}));
     setPriv(instance, "scopeManager", {
       current,
       api: {},
       hydrate: () => Promise.resolve(),
+      persist,
       enterEval,
       exitEval,
     });
@@ -105,12 +143,8 @@ describe("EvalDO cancellation + forced recovery", () => {
   });
 
   it("persists bounded run progress without queueing another eval", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    await instance.startRun({
-      runId: "run-progress",
-      code: "return 1",
-      syntax: "typescript",
-    });
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPendingRun(sql, "run-progress", { code: "return 1", syntax: "typescript" });
 
     priv<(runId: string, progress: unknown) => void>(instance, "persistRunProgress").call(
       instance,
@@ -225,7 +259,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       status: "running",
     });
     const cleanup = vi.fn(async () => {
-      expect(signal!.aborted).toBe(false);
+      expect(signal!.aborted).toBe(true);
     });
     priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
       "run-A",
@@ -248,6 +282,124 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(result.error).toMatch(/cancelled/i);
     expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'run-A'`).toArray()[0]).toMatchObject({
       status: "cancelled",
+    });
+  });
+
+  it("cancel runs cleanup and abort as one phase so cleanup may wait for run unwind", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const { runLocked, started } = blockUntilAborted();
+    setPriv(instance, "runLocked", runLocked);
+    seedPendingRun(sql, "run-cleanup-waits");
+
+    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "run-cleanup-waits"
+    );
+    const { signal } = await started;
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "run-cleanup-waits",
+      new Set([
+        async () => {
+          if (!signal?.aborted) {
+            await new Promise<void>((resolve) =>
+              signal?.addEventListener("abort", () => resolve(), { once: true })
+            );
+          }
+          await runP;
+        },
+      ])
+    );
+
+    await expect(
+      priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
+        instance,
+        "run-cleanup-waits"
+      )
+    ).resolves.toEqual({ ok: true });
+    await expect(runP).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/cancelled/i),
+    });
+  });
+
+  it("persists scope mutations made by cancellation cleanup after the run unwinds", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const { runLocked, started } = blockUntilAborted();
+    setPriv(instance, "runLocked", runLocked);
+    seedPendingRun(sql, "run-cleanup-scope");
+
+    const scope: Record<string, unknown> = {};
+    const persistedSnapshots: Array<Record<string, unknown>> = [];
+    setPriv(instance, "scopeManager", {
+      current: scope,
+      api: {},
+      hydrate: () => Promise.resolve(),
+      persist: async () => {
+        persistedSnapshots.push(structuredClone(scope));
+      },
+      enterEval: () => undefined,
+      exitEval: () => Promise.resolve(),
+    });
+
+    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "run-cleanup-scope"
+    );
+    await started;
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "run-cleanup-scope",
+      new Set([
+        async () => {
+          scope["terminalRecord"] = { status: "cancelled" };
+        },
+      ])
+    );
+
+    await expect(
+      priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
+        instance,
+        "run-cleanup-scope"
+      )
+    ).resolves.toEqual({ ok: true });
+    await runP;
+    expect(persistedSnapshots.at(-1)).toEqual({
+      terminalRecord: { status: "cancelled" },
+    });
+  });
+
+  it("starts the cleanup owner that is required to settle the eval body", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    let releaseRun!: () => void;
+    const released = new Promise<void>((resolve) => (releaseRun = resolve));
+    let runStarted!: () => void;
+    const started = new Promise<void>((resolve) => (runStarted = resolve));
+    setPriv(instance, "runLocked", async () => {
+      runStarted();
+      await released;
+      return { success: true, console: "" };
+    });
+    seedPendingRun(sql, "cleanup-owns-terminal");
+    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "cleanup-owns-terminal"
+    );
+    await started;
+    const cleanup = vi.fn(async () => releaseRun());
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "cleanup-owns-terminal",
+      new Set([cleanup])
+    );
+
+    await expect(
+      priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
+        instance,
+        "cleanup-owns-terminal"
+      )
+    ).resolves.toEqual({ ok: true });
+    expect(cleanup).toHaveBeenCalledOnce();
+    await expect(runP).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/cancelled/i),
     });
   });
 
@@ -348,7 +500,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
     await cleanupStarted;
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(signal?.aborted).toBe(false);
+    expect(signal?.aborted).toBe(true);
     releaseCleanup();
     const forceRet = await forcePromise;
     expect(forceRet).toEqual({ ok: true });
@@ -853,5 +1005,53 @@ describe("EvalDO cancellation + forced recovery", () => {
     }
     // And aborting the run's controller would unwind those calls (rpc client honors options.signal).
     expect(controller.signal.aborted).toBe(false);
+  });
+
+  it("detaches only post-settlement cleanup calls from the aborted run signal", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const calls: Array<RpcCallOptions | undefined> = [];
+    const fakeRpc = {
+      selfId: "do:test:EvalDO:test-key",
+      call: vi.fn(
+        (_target: string, _method: string, _args: unknown[], options?: RpcCallOptions) => {
+          calls.push(options);
+          return Promise.resolve(null);
+        }
+      ),
+      stream: vi.fn(),
+      streamReadable: vi.fn(),
+      emit: vi.fn(() => Promise.resolve()),
+      on: vi.fn(() => vi.fn()),
+      expose: vi.fn(),
+      exposeAll: vi.fn(),
+      exposeStreaming: vi.fn(),
+      peer: vi.fn(() => ({})),
+      status: vi.fn(() => "connected"),
+      ready: vi.fn(() => Promise.resolve()),
+      onStatusChange: vi.fn(() => vi.fn()),
+    };
+    Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
+    const controller = new AbortController();
+    const cleanupPhase = { active: false };
+    const execution = priv<
+      (
+        input: { contextId: string; causalParent: null; readOnly: boolean },
+        signal: AbortSignal,
+        cleanup: { active: boolean }
+      ) => { rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> } }
+    >(instance, "createExecutionContext").call(
+      instance,
+      { contextId: "ctx", causalParent: null, readOnly: false },
+      controller.signal,
+      cleanupPhase
+    );
+
+    await execution.rpc.call("main", "before", []);
+    controller.abort();
+    cleanupPhase.active = true;
+    await execution.rpc.call("main", "cleanup", []);
+
+    expect(calls[0]?.signal).toBe(controller.signal);
+    expect(calls[1]?.signal).toBeUndefined();
   });
 });

@@ -8,7 +8,7 @@
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelView } from "./panelView.js";
-import type { Panel, PanelLifecycleResult } from "@vibestudio/shared/types";
+import type { Panel, PanelFocusResult, PanelLifecycleResult } from "@vibestudio/shared/types";
 import { webContents as electronWebContents } from "electron";
 import { getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { panelReadinessSnapshot, type PanelReadinessSnapshot } from "./panelReadiness.js";
@@ -167,7 +167,7 @@ export interface TestApi {
   unloadPanel(panelId: string): void;
 
   /** Focus a panel */
-  focusPanel(panelId: string): void;
+  focusPanel(panelId: string): Promise<PanelFocusResult>;
 }
 
 declare global {
@@ -479,15 +479,49 @@ export function setupTestApi(
             return {
               x: Math.round(rect.left + rect.width / 2),
               y: Math.round(rect.top + rect.height / 2),
+              editable: node.isContentEditable ||
+                node instanceof HTMLInputElement ||
+                node instanceof HTMLTextAreaElement,
             };
           })()
         `,
         true
-      )) as false | { x: number; y: number };
+      )) as false | { x: number; y: number; editable: boolean };
       if (!rect) return false;
       wc.focus();
       wc.sendInputEvent({ type: "mouseDown", x: rect.x, y: rect.y, button: "left", clickCount: 1 });
       wc.sendInputEvent({ type: "mouseUp", x: rect.x, y: rect.y, button: "left", clickCount: 1 });
+      // sendInputEvent only enqueues work in the renderer. Resolve after that
+      // renderer has processed the click so a subsequent helper cannot race
+      // React focus restoration or a control-triggered render.
+      await wc.executeJavaScript("new Promise((resolve) => setTimeout(resolve, 0))", true);
+      if (rect.editable) {
+        return wc.executeJavaScript(
+          `
+            (() => {
+              const node = document.querySelector(${JSON.stringify(selector)});
+              if (!(node instanceof HTMLElement)) return false;
+              const ownsFocus = () =>
+                document.activeElement === node ||
+                (document.activeElement instanceof Node && node.contains(document.activeElement));
+              if (!ownsFocus()) node.focus();
+              if (node.isContentEditable) {
+                const selection = getSelection();
+                const anchor = selection?.anchorNode;
+                if (!anchor || !node.contains(anchor)) {
+                  const range = document.createRange();
+                  range.selectNodeContents(node);
+                  range.collapse(false);
+                  selection?.removeAllRanges();
+                  selection?.addRange(range);
+                }
+              }
+              return ownsFocus();
+            })()
+          `,
+          true
+        ) as Promise<boolean>;
+      }
       return true;
     },
 
@@ -549,34 +583,62 @@ export function setupTestApi(
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
       wc.focus();
+      const flushInput = async (): Promise<void> => {
+        // Model human input as a sequence of renderer turns. Sending an
+        // entire string synchronously can enqueue characters behind an Enter
+        // transaction that replaces or refocuses an editor root, dropping the
+        // remainder even though this method already returned successfully.
+        await wc.executeJavaScript("new Promise((resolve) => setTimeout(resolve, 0))", true);
+      };
+      let printable = "";
+      const flushPrintable = async (): Promise<void> => {
+        if (!printable) return;
+        const pending = printable;
+        printable = "";
+        // Unlike a `char` sendInputEvent, insertText is acknowledged after the
+        // focused renderer has accepted the text. This is the correct bridge
+        // for printable input; control keys still travel as real key events.
+        await wc.insertText(pending);
+      };
       for (const char of text) {
         if (char === "\r" || char === "\n") {
+          await flushPrintable();
           wc.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
           wc.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+          await flushInput();
           continue;
         }
         if (char === "\b") {
+          await flushPrintable();
           wc.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
           wc.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+          await flushInput();
           continue;
         }
         if (char === "\t") {
+          await flushPrintable();
           wc.sendInputEvent({ type: "keyDown", keyCode: "Tab" });
           wc.sendInputEvent({ type: "keyUp", keyCode: "Tab" });
+          await flushInput();
           continue;
         }
         if (char === "\u0003") {
+          await flushPrintable();
           wc.sendInputEvent({ type: "keyDown", keyCode: "C", modifiers: ["control"] });
           wc.sendInputEvent({ type: "keyUp", keyCode: "C", modifiers: ["control"] });
+          await flushInput();
           continue;
         }
         if (char === "\u0015") {
+          await flushPrintable();
           wc.sendInputEvent({ type: "keyDown", keyCode: "U", modifiers: ["control"] });
           wc.sendInputEvent({ type: "keyUp", keyCode: "U", modifiers: ["control"] });
+          await flushInput();
           continue;
         }
-        wc.sendInputEvent({ type: "char", keyCode: char });
+        printable += char;
       }
+      await flushPrintable();
     },
 
     async callTerminalPanel(panelId, method, args): Promise<unknown> {
@@ -617,8 +679,8 @@ export function setupTestApi(
       }
     },
 
-    focusPanel(panelId): void {
-      panelRegistry.updateSelectedPath(panelId);
+    focusPanel(panelId): Promise<PanelFocusResult> {
+      return panelOrchestrator.focusPanel(panelId, { loadIfNeeded: true });
     },
   };
 }

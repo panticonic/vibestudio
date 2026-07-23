@@ -91,7 +91,7 @@ function mockWorkerBuild(
         executionDigest: "a".repeat(64) as never,
       },
       sourcemap: false,
-      authority: { requests: [], delegations: [] },
+      authority: { requests: [], evalCeilings: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -108,6 +108,7 @@ function mockWorkerBuild(
 }
 
 type TestWorkerdDeps = WorkerdManagerDeps & WorkerdWorkspaceProvider;
+const testStatePaths = new Set<string>();
 
 class WorkerdManager extends ProductWorkerdManager {
   constructor(deps: TestWorkerdDeps) {
@@ -118,6 +119,8 @@ class WorkerdManager extends ProductWorkerdManager {
 
 function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDeps {
   const build = mockWorkerBuild();
+  const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-manager-test-"));
+  testStatePaths.add(statePath);
   return {
     tokenManager: {
       ensureToken: vi.fn().mockReturnValue("mock-token-123"),
@@ -135,7 +138,7 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
       buildKey: `build:${unitPath}:${ref ?? "main"}`,
       executionDigest: "a".repeat(64),
       authorityRequests: [],
-      authorityDelegations: [],
+      authorityEvalCeilings: [],
     })),
     getBuildByKey: vi.fn(() => build),
     getManifestRoutes: () => [],
@@ -150,7 +153,7 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
         "export class UniversalDO {}; export default { fetch() { return new Response(); } };",
     },
     workspacePath: "/tmp/test-workspace",
-    statePath: "/tmp/test-workspace-state",
+    statePath,
     getProxyPort: () => 49444,
     getSharedEgressPort: () => Promise.resolve(49555),
     registerEgressCaller: () => {},
@@ -208,6 +211,10 @@ afterEach(() => {
     async (service: Parameters<typeof findServicePort>[0]) =>
       service === "workerdInspector" ? 49652 : 49552
   );
+  for (const statePath of testStatePaths) {
+    fs.rmSync(statePath, { recursive: true, force: true });
+  }
+  testStatePaths.clear();
 });
 
 describe("WorkerdManager", () => {
@@ -457,6 +464,114 @@ describe("WorkerdManager", () => {
       expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "ctx:ctx-agent");
     });
 
+    it("restores a persisted DO class at its exact sealed incarnation", async () => {
+      const deps = createMockDeps();
+      const first = new WorkerdManager(deps);
+      const prepared = await first.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "k1",
+        contextId: "ctx-agent",
+      });
+      vi.mocked(deps.bindRuntimeImage).mockClear();
+      const restored = new WorkerdManager(deps);
+
+      await expect(
+        restored.restoreDurableObjectEntity({
+          id: "do:workers/new-do:NewDO:k1",
+          kind: "do",
+          source: {
+            repoPath: "workers/new-do",
+            effectiveVersion: prepared.effectiveVersion,
+          },
+          activeBuildKey: prepared.buildKey,
+          activeExecutionDigest: prepared.executionDigest,
+          activeAuthority: {
+            requests: prepared.authorityRequests,
+            evalCeilings: prepared.authorityEvalCeilings,
+          },
+          contextId: "ctx-agent",
+          className: "NewDO",
+          key: "k1",
+          createdAt: 1,
+          status: "active",
+          cleanupComplete: false,
+        })
+      ).resolves.toBeUndefined();
+      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+      const code = await restored.getDoCode("workers/new-do", "NewDO", "k1");
+      expect(code).not.toBeNull();
+    });
+
+    it("restores and retires a sealed DO after its workspace source ref changes", async () => {
+      const deps = createMockDeps();
+      const first = new WorkerdManager(deps);
+      const prepared = await first.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "k1",
+        contextId: "ctx-agent",
+      });
+      vi.mocked(deps.bindRuntimeImage).mockImplementation(async (unitPath: string) => ({
+        source: unitPath,
+        unitName: unitPath,
+        stateHash: "state:changed",
+        effectiveVersion: "changed-version",
+        buildKey: `build:${unitPath}:changed`,
+        executionDigest: "e".repeat(64),
+        authorityRequests: [],
+        authorityEvalCeilings: [],
+      }));
+      vi.mocked(deps.bindRuntimeImage).mockClear();
+      const restored = new WorkerdManager(deps);
+
+      await restored.restoreDurableObjectEntity({
+        id: "do:workers/new-do:NewDO:k1",
+        kind: "do",
+        source: {
+          repoPath: "workers/new-do",
+          effectiveVersion: prepared.effectiveVersion,
+        },
+        activeBuildKey: prepared.buildKey,
+        activeExecutionDigest: prepared.executionDigest,
+        activeAuthority: {
+          requests: prepared.authorityRequests,
+          evalCeilings: prepared.authorityEvalCeilings,
+        },
+        contextId: "ctx-agent",
+        className: "NewDO",
+        key: "k1",
+        createdAt: 1,
+        status: "active",
+        cleanupComplete: false,
+      });
+
+      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+      await expect(restored.destroyDOEntity("do:workers/new-do:NewDO:k1")).resolves.toBeUndefined();
+    });
+
+    it("registers every userland DO egress caller with its complete sealed image", async () => {
+      const registerEgressCaller = vi.fn();
+      const deps = createMockDeps({ registerEgressCaller });
+      const mgr = new WorkerdManager(deps);
+
+      await mgr.registerAllDOClasses([
+        { source: "workers/agent-worker", className: "AiChatWorker" },
+      ]);
+
+      expect(registerEgressCaller).toHaveBeenCalledWith(
+        "workers/agent-worker:AiChatWorker",
+        expect.objectContaining({
+          code: expect.objectContaining({
+            repoPath: "workers/agent-worker",
+            executionDigest: "a".repeat(64),
+            requested: [],
+            evalCeilings: [],
+          }),
+        })
+      );
+    });
+
     it("serves object-specific stateArgs in userland DO env", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
@@ -577,12 +692,8 @@ describe("WorkerdManager", () => {
         effectiveVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
         buildKey: expect.stringMatching(/^[0-9a-f]{64}$/),
         executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
-        authorityRequests: [
-          expect.objectContaining({ capability: "service:notification.signalUserInbox" }),
-          expect.objectContaining({ capability: "service:workspace-state.alarmClear" }),
-          expect.objectContaining({ capability: "service:workspace-state.alarmSet" }),
-        ],
-        authorityDelegations: [],
+        authorityRequests: [],
+        authorityEvalCeilings: [],
       });
       expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
     });
@@ -1031,11 +1142,13 @@ describe("WorkerdManager", () => {
   });
 
   describe("universal DO host", () => {
-    it("shares dynamically loaded DO module graphs across object keys for the same version", () => {
+    it("keeps object-specific module graphs so global outbound identity cannot be shared", () => {
       expect(compiledWorkerdPrograms.universalDo).toContain(
-        "this.env.LOADER.get(`${identity}@${version}`"
+        "this.env.LOADER.get(`${identity}/${userKey}@${version}`"
       );
-      expect(compiledWorkerdPrograms.universalDo).not.toContain("loaderIdentity");
+      expect(compiledWorkerdPrograms.universalDo).toContain(
+        "const egressIdentity = `do:${source}:${className}:${userKey}`"
+      );
     });
   });
 

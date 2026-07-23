@@ -17,6 +17,7 @@ export function stateLayout(statePath: string) {
   const databases = path.join(statePath, ".databases");
   const contextProjectionsBase = contextProjectionsBasePath(statePath);
   const units = path.join(statePath, "units");
+  const authority = path.join(statePath, "authority");
   return {
     root: statePath,
     adminTokenFile: path.join(statePath, "admin-token"),
@@ -28,8 +29,6 @@ export function stateLayout(statePath: string) {
     logsDir: path.join(statePath, "logs"),
     credentialsAuditDir: path.join(statePath, "credentials-audit"),
     credentialUseGrantsFile: path.join(statePath, "credential-use-grants.json"),
-    capabilityGrantsFile: path.join(statePath, "capability-grants.json"),
-    userlandApprovalGrantsFile: path.join(statePath, "userland-approval-grants.json"),
     disposableGitRemotesDir: path.join(statePath, "disposable-git-remotes"),
     gitCheckoutsDir: gitCheckoutsPath(statePath),
     runtimeImagesFile: path.join(statePath, "runtime-images.json"),
@@ -42,6 +41,17 @@ export function stateLayout(statePath: string) {
     units: {
       root: units,
       metaApprovalGrantsFile: path.join(units, "meta-approval-grants.json"),
+    },
+    authority: {
+      root: authority,
+      grantsDb: path.join(authority, "grants.db"),
+      approvedUnitVersionsFile: path.join(authority, "approved-unit-versions.json"),
+      conduitBlessingsFile: path.join(authority, "conduit-blessings.json"),
+    },
+    governance: {
+      root: path.join(statePath, "governance"),
+      missionsDb: path.join(statePath, "governance", "missions.db"),
+      contentTrustDb: path.join(statePath, "governance", "content-trust.db"),
     },
     databases: {
       root: databases,

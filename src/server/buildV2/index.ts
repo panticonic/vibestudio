@@ -49,7 +49,12 @@ import {
 } from "./buildSource.js";
 import { validateBuildRef } from "./refs.js";
 import { typecheckUnit } from "./typecheckFold.js";
-import { diagnosticsFromError, hasErrors, type BuildDiagnostic } from "./diagnostics.js";
+import {
+  BuildRequestError,
+  diagnosticsFromError,
+  hasErrors,
+  type BuildDiagnostic,
+} from "./diagnostics.js";
 import { recordDiagnostics, diagnosticsForUnit } from "./diagnosticsStore.js";
 import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
@@ -117,7 +122,7 @@ export interface RuntimeImageBinding {
   buildKey: string;
   executionDigest: string;
   authorityRequests: UnitAuthorityManifest["requests"];
-  authorityDelegations: UnitAuthorityManifest["delegations"];
+  authorityEvalCeilings: UnitAuthorityManifest["evalCeilings"];
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +145,8 @@ export interface UnitBuildReport {
   unitName?: string;
   kind: GraphNode["kind"] | "content";
   status: "ok" | "failed" | "skipped";
+  /** All target diagnostics in one agent-actionable list. */
+  diagnostics: BuildDiagnostic[];
   builds: UnitBuildTarget[];
 }
 
@@ -163,6 +170,17 @@ export interface BuildUnitResolution {
   unitName: string;
   kind: GraphNode["kind"];
   stateHash: string;
+  effectiveVersion: string;
+}
+
+export interface BuildUnitIdentityResolution extends BuildUnitResolution {
+  dependencyEvs: Record<string, string>;
+  externalDeps: Record<string, string>;
+}
+
+/** Exact-state discovery row for dynamic runtime and documentation catalogs. */
+export interface BuildUnitCatalogEntry extends BuildUnitResolution {
+  manifest: GraphNode["manifest"];
 }
 
 export interface BuildSystemRootOptions {
@@ -191,7 +209,7 @@ export interface BuildSystemV2 {
     unitPath: string,
     ref: string | undefined,
     options: BuildUnitOptions & { library: true }
-  ): Promise<{ bundle: string }>;
+  ): Promise<{ bundle: string; format: "cjs" | "async-cjs" }>;
   getBuild(
     unitPath: string,
     ref?: string,
@@ -200,6 +218,24 @@ export interface BuildSystemV2 {
 
   /** Resolve a build unit at `main`, a `ctx:*` context selector, or `state:*`. */
   resolveBuildUnit(unitPath: string, ref?: string): Promise<BuildUnitResolution | null>;
+
+  /** Resolve the complete version-bound trust identity without running a build. */
+  resolveBuildUnitIdentity(
+    unitPath: string,
+    ref?: string
+  ): Promise<BuildUnitIdentityResolution | null>;
+
+  /** Enumerate exact executable identities from one immutable workspace view. */
+  listBuildUnitIdentities(
+    ref?: string,
+    kinds?: readonly GraphNode["kind"][]
+  ): Promise<BuildUnitIdentityResolution[]>;
+
+  /** Enumerate build units and their declarations from one exact workspace view. */
+  listBuildUnits(
+    ref?: string,
+    kinds?: readonly GraphNode["kind"][]
+  ): Promise<BuildUnitCatalogEntry[]>;
 
   /** Get an immutable build-store artifact by build key. */
   getBuildByKey(key: string): BuildResult | null;
@@ -216,7 +252,7 @@ export interface BuildSystemV2 {
     specifier: string,
     version: string,
     externals?: string[]
-  ): Promise<{ bundle: string }>;
+  ): Promise<{ bundle: string; format: "cjs" }>;
 
   /** Get effective version by package name or workspace-relative source path. */
   getEffectiveVersion(unitNameOrPath: string): string | null;
@@ -341,10 +377,14 @@ export async function initBuildSystemV2(
   // (scan-on-demand —
   // out-of-band edits made while the server was down become a first-class
   // observed transition right here).
+  const tFresh = Date.now();
   const { stateHash } = await source.ensureFresh();
+  const tGraph = Date.now();
   const graph = await source.discoverGraph(stateHash);
   const nodeCount = graph.allNodes().length;
-  console.log(`[BuildV2] Discovered ${nodeCount} units in workspace`);
+  console.log(
+    `[BuildV2] Discovered ${nodeCount} units in workspace (ensureFresh=${tGraph - tFresh}ms discoverGraph=${Date.now() - tGraph}ms)`
+  );
 
   // Step 2: Compute effective versions. Cold-start fast path: if the
   // persisted EV state was computed at this exact workspace state, reuse it
@@ -357,6 +397,7 @@ export async function initBuildSystemV2(
     contentHashes = persisted.contentHashes;
     console.log(`[BuildV2] EV state reused (workspace unchanged at ${stateHash.slice(0, 18)}…)`);
   } else {
+    const tEv = Date.now();
     const relPaths = graph.allNodes().map((node) => node.relativePath);
     const hashesByPath = await source.unitHashes(stateHash, relPaths);
     const fresh: ContentHashMap = {};
@@ -370,7 +411,7 @@ export async function initBuildSystemV2(
     const changeset = diffEvMaps(persisted?.evMap ?? {}, evMap);
     console.log(
       `[BuildV2] EV diff: ${changeset.changed.length} changed, ` +
-        `${changeset.added.length} added, ${changeset.removed.length} removed`
+        `${changeset.added.length} added, ${changeset.removed.length} removed (${Date.now() - tEv}ms)`
     );
     persistEvState({ stateHash, evMap, contentHashes });
   }
@@ -440,8 +481,11 @@ export async function initBuildSystemV2(
   // Public API
   // ---------------------------------------------------------------------------
 
-  const libraryBuildResult = (build: BuildResult): { bundle: string } => ({
+  const libraryBuildResult = (
+    build: BuildResult
+  ): { bundle: string; format: "cjs" | "async-cjs" } => ({
     bundle: primaryTextArtifactContent(build),
+    format: build.metadata.details.kind === "library" ? build.metadata.details.format : "cjs",
   });
 
   /** Rediscover the graph and recompute all EVs at a state (new/unknown units). */
@@ -461,8 +505,37 @@ export async function initBuildSystemV2(
 
   const rediscoverAt = (atStateHash: string): Promise<void> => trigger.rediscoverAt(atStateHash);
 
+  // Runtime bindings are immutable facts. Cache them by the exact protected
+  // state + unit + EV, not by a mutable source label. The fast path is valid
+  // only while the publication trigger is settled; any queued publication
+  // forces the normal settlement path before selecting an identity.
+  const runtimeBindingCache = new Map<string, RuntimeImageBinding>();
+  const runtimeBindingFlights = new Map<string, Promise<RuntimeImageBinding>>();
+  const runtimeBindingKey = (stateHash: string, unitName: string, ev: string) =>
+    `${stateHash}\0${unitName}\0${ev}`;
+  const usableCachedBinding = (key: string): RuntimeImageBinding | null => {
+    const binding = runtimeBindingCache.get(key);
+    if (!binding) return null;
+    if (buildStore.get(binding.buildKey)) return binding;
+    runtimeBindingCache.delete(key);
+    return null;
+  };
+
   const bindRuntimeImage: BuildSystemV2["bindRuntimeImage"] = async (unitPath, requestedRef) => {
     const ref = validateBuildRef(requestedRef);
+
+    if ((!ref || ref === MAIN_HEAD) && trigger.isSettled()) {
+      const snapshot = currentState();
+      const currentNode = resolveUnit(snapshot.graph, unitPath, workspaceRoot);
+      const currentEv = currentNode ? snapshot.evMap[currentNode.name] : undefined;
+      if (currentNode && currentEv) {
+        const cached = usableCachedBinding(
+          runtimeBindingKey(snapshot.stateHash, currentNode.name, currentEv)
+        );
+        if (cached) return cached;
+      }
+    }
+
     let graphAtState: PackageGraph;
     let evMapAtState: EffectiveVersionMap;
     let stateHash: string;
@@ -505,26 +578,40 @@ export async function initBuildSystemV2(
     const ev = evMapAtState[node.name];
     if (!ev) throw new Error(`No effective version for ${node.name} at ${stateHash}`);
 
-    const buildKey = computeBuildUnitKey(node, ev);
-    const build = await buildUnit(node, ev, graphAtState, workspaceRoot, stateHash);
-    const executionDigest = build.metadata.execution?.executionDigest;
-    if (!executionDigest) {
-      throw new Error(`Runtime build ${build.buildKey} is missing its sealed execution identity`);
-    }
-    const authority = build.metadata.authority;
-    if (!authority) {
-      throw new Error(`Runtime build ${build.buildKey} is missing its sealed authority envelope`);
-    }
-    return {
-      source: node.relativePath,
-      unitName: node.name,
-      stateHash,
-      effectiveVersion: ev,
-      buildKey,
-      executionDigest,
-      authorityRequests: authority.requests,
-      authorityDelegations: authority.delegations,
-    };
+    const identityKey = runtimeBindingKey(stateHash, node.name, ev);
+    const cached = usableCachedBinding(identityKey);
+    if (cached) return cached;
+    const existingFlight = runtimeBindingFlights.get(identityKey);
+    if (existingFlight) return existingFlight;
+
+    const flight = (async (): Promise<RuntimeImageBinding> => {
+      const buildKey = computeBuildUnitKey(node, ev);
+      const build = await buildUnit(node, ev, graphAtState, workspaceRoot, stateHash);
+      const executionDigest = build.metadata.execution?.executionDigest;
+      if (!executionDigest) {
+        throw new Error(`Runtime build ${build.buildKey} is missing its sealed execution identity`);
+      }
+      const authority = build.metadata.authority;
+      if (!authority) {
+        throw new Error(`Runtime build ${build.buildKey} is missing its sealed authority envelope`);
+      }
+      const binding: RuntimeImageBinding = {
+        source: node.relativePath,
+        unitName: node.name,
+        stateHash,
+        effectiveVersion: ev,
+        buildKey,
+        executionDigest,
+        authorityRequests: authority.requests,
+        authorityEvalCeilings: authority.evalCeilings,
+      };
+      runtimeBindingCache.set(identityKey, binding);
+      return binding;
+    })().finally(() => {
+      runtimeBindingFlights.delete(identityKey);
+    });
+    runtimeBindingFlights.set(identityKey, flight);
+    return flight;
   };
 
   // -------------------------------------------------------------------------
@@ -697,16 +784,16 @@ export async function initBuildSystemV2(
     viewStateHash: string
   ): Promise<UnitBuildReport> => {
     const ev = view.evMap[node.name];
-    const base: Omit<UnitBuildReport, "status" | "builds"> = {
+    const base: Omit<UnitBuildReport, "status" | "diagnostics" | "builds"> = {
       repoPath: node.relativePath,
       unitName: node.name,
       kind: node.kind,
     };
     if (!ev) {
-      return { ...base, status: "skipped", builds: [] };
+      return { ...base, status: "skipped", diagnostics: [], builds: [] };
     }
     if (node.kind === "template") {
-      return { ...base, status: "skipped", builds: [] };
+      return { ...base, status: "skipped", diagnostics: [], builds: [] };
     }
 
     const builds: UnitBuildTarget[] = [];
@@ -724,15 +811,16 @@ export async function initBuildSystemV2(
       builds.push(await buildOneTarget(node, ev, view.graph, viewStateHash, { target: "runtime" }));
     }
 
-    const failed = builds.some((b) => hasErrors(b.diagnostics));
-    return { ...base, status: failed ? "failed" : "ok", builds };
+    const diagnostics = builds.flatMap((build) => build.diagnostics);
+    const failed = hasErrors(diagnostics);
+    return { ...base, status: failed ? "failed" : "ok", diagnostics, builds };
   };
 
   const getBuild = async function getBuild(
     unitPath: string,
     ref?: string,
     options?: BuildUnitOptions
-  ): Promise<BuildResult | { bundle: string }> {
+  ): Promise<BuildResult | { bundle: string; format: "cjs" | "async-cjs" }> {
     ref = validateBuildRef(ref);
     // ── Exact state / semantic-context build selector ──
     if (ref && ref !== MAIN_HEAD) {
@@ -758,9 +846,13 @@ export async function initBuildSystemV2(
       if (!node) {
         if (unitPath.startsWith("@vibestudio/") && options?.library) {
           const bundle = await buildPlatformLibrary(unitPath, options.externals ?? []);
-          return { bundle };
+          return { bundle, format: "cjs" };
         }
-        throw new Error(`Unknown build unit at ${ref}: ${unitPath}`);
+        throw new BuildRequestError(
+          "package_not_found",
+          `Unknown build unit at ${ref}: ${unitPath}`,
+          { specifier: unitPath, ref }
+        );
       }
       assertNodeBuildable(node);
 
@@ -810,9 +902,12 @@ export async function initBuildSystemV2(
         // so eval can import them.
         if (unitPath.startsWith("@vibestudio/") && options?.library) {
           const bundle = await buildPlatformLibrary(unitPath, options.externals ?? []);
-          return { bundle };
+          return { bundle, format: "cjs" };
         }
-        throw new Error(`Unknown build unit: ${unitPath}`);
+        throw new BuildRequestError("package_not_found", `Unknown build unit: ${unitPath}`, {
+          specifier: unitPath,
+          ref: "main",
+        });
       }
     }
     assertNodeBuildable(node);
@@ -852,7 +947,9 @@ export async function initBuildSystemV2(
     }
 
     // Build on demand (buildUnit handles cache + coalescing internally)
+    console.log(`[BuildV2] head library ${unitPath}: building ${node.name}`);
     const build = await buildUnit(node, ev, headGraph, workspaceRoot, headStateHash, buildOptions);
+    console.log(`[BuildV2] head library ${unitPath}: build ready ${build.buildKey}`);
     return options?.library ? libraryBuildResult(build) : build;
   } as BuildSystemV2["getBuild"];
 
@@ -865,11 +962,16 @@ export async function initBuildSystemV2(
       requestedRef?: string
     ): Promise<BuildUnitResolution | null> {
       const ref = validateBuildRef(requestedRef);
-      const toResolution = (node: GraphNode, stateHash: string): BuildUnitResolution => ({
+      const toResolution = (
+        node: GraphNode,
+        stateHash: string,
+        effectiveVersion: string
+      ): BuildUnitResolution => ({
         unitPath: node.relativePath,
         unitName: node.name,
         kind: node.kind,
         stateHash,
+        effectiveVersion,
       });
 
       if (ref && ref !== MAIN_HEAD) {
@@ -878,13 +980,24 @@ export async function initBuildSystemV2(
           : await source.resolveContextState(ref.slice("ctx:".length));
         const graph = await source.discoverGraph(stateHash);
         const node = resolveUnit(graph, unitPath, workspaceRoot);
-        return node ? toResolution(node, stateHash) : null;
+        if (!node) return null;
+        const hashes = await contentHashesAt(graph, stateHash);
+        const effectiveVersion = computeEffectiveVersions(graph, hashes).evMap[node.name];
+        if (!effectiveVersion) {
+          throw new Error(`No effective version for ${node.name} at ${stateHash}`);
+        }
+        return toResolution(node, stateHash, effectiveVersion);
       }
 
       const resolveCurrent = (): BuildUnitResolution | null => {
         const snapshot = currentState();
         const node = resolveUnit(snapshot.graph, unitPath, workspaceRoot);
-        return node ? toResolution(node, snapshot.stateHash) : null;
+        if (!node) return null;
+        const effectiveVersion = snapshot.evMap[node.name];
+        if (!effectiveVersion) {
+          throw new Error(`No effective version for ${node.name} at ${snapshot.stateHash}`);
+        }
+        return toResolution(node, snapshot.stateHash, effectiveVersion);
       };
 
       let resolved = resolveCurrent();
@@ -899,13 +1012,151 @@ export async function initBuildSystemV2(
       return resolved;
     },
 
+    async resolveBuildUnitIdentity(
+      unitPath: string,
+      requestedRef?: string
+    ): Promise<BuildUnitIdentityResolution | null> {
+      const ref = validateBuildRef(requestedRef);
+      let stateHash: string;
+      let graph: PackageGraph;
+      let evMap: EffectiveVersionMap;
+      if (ref && ref !== MAIN_HEAD) {
+        stateHash = ref.startsWith("state:")
+          ? ref
+          : await source.resolveContextState(ref.slice("ctx:".length));
+        graph = await source.discoverGraph(stateHash);
+        const hashes = await contentHashesAt(graph, stateHash);
+        evMap = computeEffectiveVersions(graph, hashes).evMap;
+      } else {
+        const snapshot = currentState();
+        stateHash = snapshot.stateHash;
+        graph = snapshot.graph;
+        evMap = snapshot.evMap;
+      }
+      const node = resolveUnit(graph, unitPath, workspaceRoot);
+      if (!node) return null;
+      const effectiveVersion = evMap[node.name];
+      if (!effectiveVersion) {
+        throw new Error(`No effective version for ${node.name} at ${stateHash}`);
+      }
+      const dependencyEvs: Record<string, string> = {};
+      for (const dependency of collectTransitiveInternalDeps(node, graph)) {
+        const dependencyEv = evMap[dependency.name];
+        if (dependencyEv) dependencyEvs[dependency.name] = dependencyEv;
+      }
+      return {
+        unitPath: node.relativePath,
+        unitName: node.name,
+        kind: node.kind,
+        stateHash,
+        effectiveVersion,
+        dependencyEvs,
+        externalDeps: collectTransitiveExternalDeps(node, graph, workspaceRoot, appNodeModuleRoots),
+      };
+    },
+
+    async listBuildUnitIdentities(
+      requestedRef?: string,
+      kinds?: readonly GraphNode["kind"][]
+    ): Promise<BuildUnitIdentityResolution[]> {
+      const ref = validateBuildRef(requestedRef);
+      let stateHash: string;
+      let graph: PackageGraph;
+      let evMap: EffectiveVersionMap;
+      if (ref && ref !== MAIN_HEAD) {
+        stateHash = ref.startsWith("state:")
+          ? ref
+          : await source.resolveContextState(ref.slice("ctx:".length));
+        graph = await source.discoverGraph(stateHash);
+        const hashes = await contentHashesAt(graph, stateHash);
+        evMap = computeEffectiveVersions(graph, hashes).evMap;
+      } else {
+        const snapshot = currentState();
+        stateHash = snapshot.stateHash;
+        graph = snapshot.graph;
+        evMap = snapshot.evMap;
+      }
+      const admittedKinds = kinds ? new Set(kinds) : null;
+      return graph
+        .allNodes()
+        .filter((node) => !admittedKinds || admittedKinds.has(node.kind))
+        .map((node) => {
+          const effectiveVersion = evMap[node.name];
+          if (!effectiveVersion) {
+            throw new Error(`No effective version for ${node.name} at ${stateHash}`);
+          }
+          const dependencyEvs: Record<string, string> = {};
+          for (const dependency of collectTransitiveInternalDeps(node, graph)) {
+            const dependencyEv = evMap[dependency.name];
+            if (dependencyEv) dependencyEvs[dependency.name] = dependencyEv;
+          }
+          return {
+            unitPath: node.relativePath,
+            unitName: node.name,
+            kind: node.kind,
+            stateHash,
+            effectiveVersion,
+            dependencyEvs,
+            externalDeps: collectTransitiveExternalDeps(
+              node,
+              graph,
+              workspaceRoot,
+              appNodeModuleRoots
+            ),
+          };
+        })
+        .sort((left, right) => left.unitName.localeCompare(right.unitName));
+    },
+
+    async listBuildUnits(
+      requestedRef?: string,
+      kinds?: readonly GraphNode["kind"][]
+    ): Promise<BuildUnitCatalogEntry[]> {
+      const ref = validateBuildRef(requestedRef);
+      let stateHash: string;
+      let graph: PackageGraph;
+      let evMap: EffectiveVersionMap;
+      if (ref && ref !== MAIN_HEAD) {
+        stateHash = ref.startsWith("state:")
+          ? ref
+          : await source.resolveContextState(ref.slice("ctx:".length));
+        graph = await source.discoverGraph(stateHash);
+        const hashes = await contentHashesAt(graph, stateHash);
+        evMap = computeEffectiveVersions(graph, hashes).evMap;
+      } else {
+        const snapshot = currentState();
+        stateHash = snapshot.stateHash;
+        graph = snapshot.graph;
+        evMap = snapshot.evMap;
+      }
+      const admittedKinds = kinds ? new Set(kinds) : null;
+      return graph
+        .allNodes()
+        .filter((node) => !admittedKinds || admittedKinds.has(node.kind))
+        .map((node) => {
+          const effectiveVersion = evMap[node.name];
+          if (!effectiveVersion) {
+            throw new Error(`No effective version for ${node.name} at ${stateHash}`);
+          }
+          return {
+            unitPath: node.relativePath,
+            unitName: node.name,
+            kind: node.kind,
+            stateHash,
+            effectiveVersion,
+            manifest: node.manifest,
+          };
+        })
+        .sort((left, right) => left.unitName.localeCompare(right.unitName));
+    },
+
     async getBuildNpm(
       specifier: string,
       version: string,
       externals?: string[]
-    ): Promise<{ bundle: string }> {
+    ): Promise<{ bundle: string; format: "cjs" }> {
       const bundle = await buildNpmLibrary(specifier, version, externals ?? []);
-      return { bundle };
+      return { bundle, format: "cjs" };
     },
 
     getBuildByKey(key: string): BuildResult | null {
@@ -1123,6 +1374,7 @@ export async function initBuildSystemV2(
           repoPath: unitName,
           kind: "content",
           status: "skipped",
+          diagnostics: [],
           builds: [],
         };
       }

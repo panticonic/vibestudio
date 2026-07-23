@@ -21,13 +21,9 @@ describe("internalDOExecutionIdentity", () => {
       buildKey: bundle().buildKey,
       effectiveVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
       executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
-      authorityDelegations: [],
+      authorityEvalCeilings: [],
     });
-    expect(gad.authorityRequests.map((request) => request.capability)).toEqual([
-      "service:notification.signalUserInbox",
-      "service:workspace-state.alarmClear",
-      "service:workspace-state.alarmSet",
-    ]);
+    expect(gad.authorityRequests).toEqual([]);
     expect(workspace.executionDigest).not.toBe(gad.executionDigest);
   });
 

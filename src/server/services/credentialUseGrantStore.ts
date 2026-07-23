@@ -8,11 +8,9 @@ import {
   type VersionedJsonCodec,
 } from "../hostCore/versionedJsonStore.js";
 
-export interface StoredCredentialUseGrant extends CredentialUseGrant {
-  credentialId: string;
-}
+export type StoredCredentialUseGrant = CredentialUseGrant & { credentialId: string };
 
-const CREDENTIAL_USE_GRANT_SCHEMA_VERSION = 1 as const;
+const CREDENTIAL_USE_GRANT_SCHEMA_VERSION = 2 as const;
 
 interface CredentialUseGrantFile {
   grants: StoredCredentialUseGrant[];
@@ -32,12 +30,29 @@ const CREDENTIAL_USE_GRANT_CODEC: VersionedJsonCodec<CredentialUseGrantFile> = {
     }
     return { grants: record["grants"] };
   },
+  migrations: [
+    {
+      version: 2,
+      name: "add-agent-identity-credential-grants",
+      migrate(value) {
+        const record = value as Record<string, unknown>;
+        if (
+          Object.keys(record).some((key) => key !== "schemaVersion" && key !== "grants") ||
+          !Array.isArray(record["grants"]) ||
+          !record["grants"].every(isStoredVersionCredentialUseGrant)
+        ) {
+          throw new Error("version 1 grant store contains invalid data");
+        }
+        return { grants: record["grants"] };
+      },
+    },
+  ],
   unversionedMigration: {
     version: 1,
     name: "recognize-pre-versioning-credential-grants",
     migrate(value) {
       if (Array.isArray(value)) {
-        if (!value.every(isStoredCredentialUseGrant)) {
+        if (!value.every(isStoredVersionCredentialUseGrant)) {
           throw new Error("legacy grant array contains an invalid grant");
         }
         return { grants: value };
@@ -49,7 +64,7 @@ const CREDENTIAL_USE_GRANT_CODEC: VersionedJsonCodec<CredentialUseGrantFile> = {
       if (
         Object.keys(record).length !== 1 ||
         !Array.isArray(record["grants"]) ||
-        !record["grants"].every(isStoredCredentialUseGrant)
+        !record["grants"].every(isStoredVersionCredentialUseGrant)
       ) {
         throw new Error("unversioned grant store does not match the recognized { grants } schema");
       }
@@ -142,6 +157,7 @@ function isStoredCredentialUseGrant(value: unknown): value is StoredCredentialUs
         "scope",
         "repoPath",
         "effectiveVersion",
+        "agentId",
         "grantedAt",
         "grantedBy",
       ].includes(key)
@@ -151,11 +167,48 @@ function isStoredCredentialUseGrant(value: unknown): value is StoredCredentialUs
     (grant.use === "fetch" || grant.use === "git-http" || grant.use === "git-ssh") &&
     typeof grant.resource === "string" &&
     (grant.action === "read" || grant.action === "write" || grant.action === "use") &&
-    grant.scope === "version" &&
     Number.isFinite(grant.grantedAt) &&
     typeof grant.grantedBy === "string" &&
-    typeof grant.repoPath === "string" &&
-    typeof grant.effectiveVersion === "string"
+    ((grant.scope === "version" &&
+      typeof grant.repoPath === "string" &&
+      typeof grant.effectiveVersion === "string" &&
+      !("agentId" in grant)) ||
+      (grant.scope === "agent" &&
+        typeof grant.agentId === "string" &&
+        grant.agentId.length > 0 &&
+        !("repoPath" in grant) &&
+        !("effectiveVersion" in grant)))
+  );
+}
+
+function isStoredVersionCredentialUseGrant(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const grant = value as Record<string, unknown>;
+  return (
+    Object.keys(grant).every((key) =>
+      [
+        "credentialId",
+        "bindingId",
+        "use",
+        "resource",
+        "action",
+        "scope",
+        "repoPath",
+        "effectiveVersion",
+        "grantedAt",
+        "grantedBy",
+      ].includes(key)
+    ) &&
+    typeof grant["credentialId"] === "string" &&
+    typeof grant["bindingId"] === "string" &&
+    (grant["use"] === "fetch" || grant["use"] === "git-http" || grant["use"] === "git-ssh") &&
+    typeof grant["resource"] === "string" &&
+    (grant["action"] === "read" || grant["action"] === "write" || grant["action"] === "use") &&
+    grant["scope"] === "version" &&
+    Number.isFinite(grant["grantedAt"]) &&
+    typeof grant["grantedBy"] === "string" &&
+    typeof grant["repoPath"] === "string" &&
+    typeof grant["effectiveVersion"] === "string"
   );
 }
 
@@ -167,8 +220,8 @@ function storedCredentialUseGrantKey(grant: StoredCredentialUseGrant): string {
     grant.resource,
     grant.action,
     grant.scope,
-    grant.repoPath,
-    grant.effectiveVersion,
+    grant.scope === "version" ? grant.repoPath : grant.agentId,
+    grant.scope === "version" ? grant.effectiveVersion : "",
   ].join("\x00");
 }
 

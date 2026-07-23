@@ -17,7 +17,7 @@ import type {
   Credential,
   CredentialUseGrant,
 } from "@vibestudio/credential-client/types";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import {
   EgressProxy,
   shouldRetryWebSocketConnectWithIpv4,
@@ -33,6 +33,8 @@ const PUBLIC_REFRESH_RECIPE = {
 };
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { createApprovalQueue, type ApprovalQueue } from "./approvalQueue.js";
+import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
+import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 
 class MemoryCredentialStore {
   constructor(private readonly credentials = new Map<string, Credential>()) {}
@@ -76,32 +78,26 @@ class MemoryCredentialUseGrantStore {
   }
 
   upsert(credentialId: string, grant: CredentialUseGrant): void {
-    const key = [
-      credentialId,
-      grant.bindingId,
-      grant.use,
-      grant.resource,
-      grant.action,
-      grant.scope,
-      grant.repoPath,
-      grant.effectiveVersion,
-    ].join("\x00");
+    const key = credentialUseGrantTestKey(credentialId, grant);
     const index = this.grants.findIndex(
-      (entry) =>
-        [
-          entry.credentialId,
-          entry.bindingId,
-          entry.use,
-          entry.resource,
-          entry.action,
-          entry.scope,
-          entry.repoPath,
-          entry.effectiveVersion,
-        ].join("\x00") === key
+      (entry) => credentialUseGrantTestKey(entry.credentialId, entry) === key
     );
     if (index >= 0) this.grants.splice(index, 1);
     this.grants.push({ credentialId, ...grant });
   }
+}
+
+function credentialUseGrantTestKey(credentialId: string, grant: CredentialUseGrant): string {
+  return [
+    credentialId,
+    grant.bindingId,
+    grant.use,
+    grant.resource,
+    grant.action,
+    grant.scope,
+    grant.scope === "version" ? grant.repoPath : grant.agentId,
+    grant.scope === "version" ? grant.effectiveVersion : "",
+  ].join("\x00");
 }
 
 function tempStatePath(): string {
@@ -117,7 +113,36 @@ function workerCaller(
     callerKind: "worker",
     repoPath: source.repoPath ?? "/repo",
     effectiveVersion: source.effectiveVersion ?? "hash-1",
+    executionDigest: "a".repeat(64),
+    requested: [
+      {
+        capability: "external-network-fetch",
+        resource: { kind: "prefix", prefix: "" },
+      },
+    ],
+    evalCeilings: [],
   });
+}
+
+function evalCaller(agentId: string, effectiveVersion = "hash-1") {
+  const callerId = `do:vibestudio/internal:EvalDO:${effectiveVersion}`;
+  return createVerifiedCaller(
+    callerId,
+    "do",
+    {
+      callerId,
+      callerKind: "do",
+      repoPath: "workers/agent-worker",
+      effectiveVersion,
+      executionDigest: "a".repeat(64),
+      requested: [],
+      evalCeilings: [],
+      evalOrigin: { ownerId: agentId, purpose: "agentic-code-execution" },
+    },
+    { entityId: agentId, contextId: "ctx-agent", channelId: "conversation-1" },
+    null,
+    true
+  );
 }
 
 function createCredential(overrides: Partial<Credential> = {}): Credential {
@@ -225,6 +250,35 @@ function createApprovalQueueMock(
     submitCredentialInput: vi.fn(),
     listPending: vi.fn(() => []),
     cancelForCaller: vi.fn(),
+  };
+}
+
+function rawEgressAuthority(approvalQueue: ApprovalQueue) {
+  const grantStore = new CapabilityGrantStore({ statePath: tempStatePath() });
+  const acquisitions = new AcquisitionCoordinator({ approvalQueue, grantStore });
+  const dispatcher = new ServiceDispatcher();
+  dispatcher.setAuthorityAcquirer({
+    request: (input) => acquisitions.request(input),
+    acquire: (input, signal) => acquisitions.requestAndWait(input, signal),
+    consume: (id) => acquisitions.consume(id),
+    invalidate: (digest, owner, principal) => acquisitions.invalidate(digest, owner, principal),
+  });
+  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey, tier }) =>
+    authorizeVerifiedCaller(caller, {
+      workspaceId: "workspace:test",
+      workspaceMember: true,
+      sessionId: caller.agentBinding?.channelId ?? caller.runtime.id,
+      audience: "service:gateway",
+      capability,
+      resourceKey,
+      tier,
+      grantCode: false,
+      grantStore,
+    })
+  );
+  return {
+    authorizeEffect: dispatcher.authorizeHostEffect.bind(dispatcher),
+    grantStore,
   };
 }
 
@@ -411,7 +465,7 @@ describe("EgressProxy", () => {
         res.end(JSON.stringify({ result: "ok" }));
       });
     });
-    const proxy = createProxy();
+    let proxy: EgressProxy | null = null;
     let proxyPort = 0;
     let targetPort = 0;
     try {
@@ -421,6 +475,12 @@ describe("EgressProxy", () => {
           target.off("error", reject);
           resolve((target.address() as AddressInfo).port);
         });
+      });
+      proxy = createProxy(createCredential(), new MemoryAuditLog(), {
+        authorizePlatformRpcCallback: ({ targetUrl, authorization, runtimeId }) =>
+          targetUrl.origin === `http://127.0.0.1:${targetPort}` &&
+          authorization === "Bearer platform-token" &&
+          runtimeId === "do:workers/agent-worker:AiChatWorker:agent-1",
       });
       proxyPort = await proxy.start();
 
@@ -445,7 +505,7 @@ describe("EgressProxy", () => {
         body: JSON.stringify({ type: "emit" }),
       });
     } finally {
-      await proxy.stop();
+      await proxy?.stop();
       await new Promise<void>((resolve) => target.close(() => resolve()));
     }
   });
@@ -459,6 +519,30 @@ describe("EgressProxy", () => {
       });
       expect(res.status).toBe(403);
       await expect(res.text()).resolves.toContain(
+        "Direct egress proxy HTTP forwarding requires an attributed workerd service"
+      );
+    } finally {
+      await proxy.stop();
+    }
+  });
+
+  it("rejects forged platform callback headers without exact host attestation", async () => {
+    const proxy = createProxy(createCredential(), new MemoryAuditLog(), {
+      authorizePlatformRpcCallback: () => false,
+    });
+    try {
+      const proxyPort = await proxy.start();
+      const res = await requestThroughHttpProxy({
+        proxyPort,
+        targetUrl: "http://127.0.0.1:9/rpc",
+        method: "POST",
+        headers: {
+          Authorization: "Bearer attacker",
+          "X-vibestudio-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
+        },
+      });
+      expect(res.status).toBe(403);
+      expect(res.body).toContain(
         "Direct egress proxy HTTP forwarding requires an attributed workerd service"
       );
     } finally {
@@ -1092,11 +1176,12 @@ describe("EgressProxy", () => {
   });
 
   it("gates attributed raw workerd HTTP egress through capability approval", async () => {
-    const approvalQueue = createApprovalQueueMock("session");
+    const approvalQueue = createApprovalQueueMock("version");
+    const authority = rawEgressAuthority(approvalQueue);
     const auditLog = new MemoryAuditLog();
     const proxy = createProxy(createCredential({ bindings: [] }), auditLog, {
       approvalQueue,
-      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      authorizeEffect: authority.authorizeEffect,
     });
     const target = createServer((_req: IncomingMessage, res: ServerResponse) => {
       res.writeHead(200, { "Content-Type": "text/plain" });
@@ -1128,7 +1213,7 @@ describe("EgressProxy", () => {
           repoPath: "/repo",
           resource: {
             type: "url-origin",
-            label: "Target origin",
+            label: "Website",
             value: `http://127.0.0.1:${targetPort}`,
           },
         })
@@ -1145,11 +1230,51 @@ describe("EgressProxy", () => {
     }
   });
 
-  it("reuses raw workerd egress approvals by origin", async () => {
-    const approvalQueue = createApprovalQueueMock("session");
+  it("does not duplicate approval for an exactly attested internal request", async () => {
+    const approvalQueue = createApprovalQueueMock("deny");
+    const authorizeInternalRequest = vi.fn(async () => true);
     const proxy = createProxy(createCredential({ bindings: [] }), new MemoryAuditLog(), {
       approvalQueue,
-      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      authorizeInternalRequest,
+    });
+    const target = createServer((_req: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("internal-ok");
+    });
+    try {
+      const targetPort = await new Promise<number>((resolve, reject) => {
+        target.once("error", reject);
+        target.listen(0, "127.0.0.1", () => {
+          target.off("error", reject);
+          resolve((target.address() as AddressInfo).port);
+        });
+      });
+      const proxyPort = await proxy.startForCaller(workerCaller("worker:test"));
+      const res = await requestThroughHttpProxy({
+        proxyPort,
+        targetUrl: `http://127.0.0.1:${targetPort}/internal`,
+        headers: { Authorization: "Bearer exact-internal-key" },
+      });
+      expect(res.status).toBe(200);
+      expect(authorizeInternalRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetUrl: expect.objectContaining({ port: String(targetPort) }),
+          headers: expect.objectContaining({ authorization: "Bearer exact-internal-key" }),
+        })
+      );
+      expect(approvalQueue.request).not.toHaveBeenCalled();
+    } finally {
+      await proxy.stop();
+      await new Promise<void>((resolve) => target.close(() => resolve()));
+    }
+  });
+
+  it("reuses raw workerd egress approvals by origin", async () => {
+    const approvalQueue = createApprovalQueueMock("version");
+    const authority = rawEgressAuthority(approvalQueue);
+    const proxy = createProxy(createCredential({ bindings: [] }), new MemoryAuditLog(), {
+      approvalQueue,
+      authorizeEffect: authority.authorizeEffect,
     });
     const target = createServer((_req: IncomingMessage, res: ServerResponse) => {
       res.writeHead(200, { "Content-Type": "text/plain" });
@@ -1375,7 +1500,8 @@ describe("EgressProxy", () => {
 
   it("forwards fetches through matching URL-bound credentials", async () => {
     const auditLog = new MemoryAuditLog();
-    const proxy = createProxy(createCredential(), auditLog);
+    const recordExternalIngestion = vi.fn();
+    const proxy = createProxy(createCredential(), auditLog, { recordExternalIngestion });
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -1397,6 +1523,11 @@ describe("EgressProxy", () => {
     expect(new TextDecoder().decode(response.body)).toBe("ok");
     expect(response.finalUrl).toBe("https://api.example.test/v1/items");
     expect(Array.isArray(response.headerPairs)).toBe(true);
+    expect(recordExternalIngestion).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: expect.objectContaining({ id: "worker:test" }) }),
+      new URL("https://api.example.test/v1/items"),
+      "egress-proxy"
+    );
     expect(auditLog.entries[0]).toMatchObject({
       callerId: "worker:test",
       providerId: "url-bound",
@@ -2023,6 +2154,47 @@ describe("EgressProxy", () => {
     });
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("remembers eval credential consent for the agent identity without trusting future code", async () => {
+    const credential = createCredential({ grants: [] });
+    const approvalQueue = {
+      request: vi.fn(async () => "version" as const),
+      resolve: vi.fn(),
+      resolveMatching: vi.fn(),
+      listPending: vi.fn(() => []),
+    };
+    const grantStore = new MemoryCredentialUseGrantStore();
+    const proxy = createProxy(credential, new MemoryAuditLog(), {
+      approvalQueue: approvalQueue as never,
+      credentialUseGrantStore: grantStore,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
+    );
+    const agentId = "do:workers/agent-worker:AiChatWorker:conversation-1";
+
+    await proxy.forwardProxyFetch({
+      caller: evalCaller(agentId, "hash-1"),
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/items",
+      method: "GET",
+    });
+    await proxy.forwardProxyFetch({
+      // Exact code admission is checked before the proxy receives this caller.
+      // Credential consent itself follows the already-reviewed agent identity.
+      caller: evalCaller(agentId, "hash-2"),
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/items",
+      method: "GET",
+    });
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(grantStore.list("cred-1")).toEqual([
+      expect.objectContaining({ scope: "agent", agentId }),
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("keys session grants to the concrete caller identity", async () => {

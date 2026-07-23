@@ -21,9 +21,11 @@ function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): E
         {
           capability: "service:workspace-state.alarmClear",
           resource: { kind: "exact", key: "workspace:test" },
+          tier: "gated",
+          evidence: "exact",
         },
       ],
-      delegations: [],
+      evalCeilings: [],
     },
   };
 }
@@ -51,9 +53,11 @@ describe("resolveCodeIdentity", () => {
         {
           capability: "service:workspace-state.alarmClear",
           resource: { kind: "exact", key: "workspace:test" },
+          tier: "gated",
+          evidence: "exact",
         },
       ],
-      delegations: [],
+      evalCeilings: [],
     });
   });
 
@@ -113,19 +117,29 @@ describe("resolveCodeIdentity", () => {
     );
     owner.activeAuthority = {
       requests: [],
-      delegations: [
+      evalCeilings: [
         {
           audience: "eval",
           purpose: "agentic-code-execution",
           capabilities: [
-            { capability: "rpc:subscribeChannel", resource: { kind: "prefix", prefix: "" } },
+            {
+              capability: "rpc:subscribeChannel",
+              resource: { kind: "prefix", prefix: "" },
+              tier: "gated",
+              evidence: "intentional-broad",
+            },
           ],
         },
         {
           audience: "eval",
           purpose: "tool-eval",
           capabilities: [
-            { capability: "service:fs.readFile", resource: { kind: "prefix", prefix: "" } },
+            {
+              capability: "service:fs.readFile",
+              resource: { kind: "prefix", prefix: "" },
+              tier: "gated",
+              evidence: "intentional-broad",
+            },
           ],
         },
       ],
@@ -143,7 +157,7 @@ describe("resolveCodeIdentity", () => {
       stateArgs: {
         ownerPrincipalId: owner.id,
         subKey: "system-tests",
-        authorityDelegationPurpose: "agentic-code-execution",
+        authorityCeilingPurpose: "agentic-code-execution",
       },
       createdAt: Date.now(),
       status: "active",
@@ -156,8 +170,16 @@ describe("resolveCodeIdentity", () => {
       repoPath: owner.source.repoPath,
       effectiveVersion: owner.source.effectiveVersion,
       executionDigest: owner.activeExecutionDigest,
-      requested: [{ capability: "rpc:subscribeChannel", resource: { kind: "prefix", prefix: "" } }],
-      delegations: [],
+      requested: [
+        {
+          capability: "rpc:subscribeChannel",
+          resource: { kind: "prefix", prefix: "" },
+          tier: "gated",
+          evidence: "intentional-broad",
+        },
+      ],
+      evalCeilings: [],
+      evalOrigin: { ownerId: owner.id, purpose: "agentic-code-execution" },
     });
   });
 
@@ -170,12 +192,17 @@ describe("resolveCodeIdentity", () => {
     );
     owner.activeAuthority = {
       requests: [],
-      delegations: [
+      evalCeilings: [
         {
           audience: "eval",
           purpose: "agentic-code-execution",
           capabilities: [
-            { capability: "rpc:subscribeChannel", resource: { kind: "prefix", prefix: "" } },
+            {
+              capability: "rpc:subscribeChannel",
+              resource: { kind: "prefix", prefix: "" },
+              tier: "gated",
+              evidence: "intentional-broad",
+            },
           ],
         },
       ],
@@ -192,7 +219,7 @@ describe("resolveCodeIdentity", () => {
       parentId: "do:workers/agent-worker:AiChatWorker:other",
       stateArgs: {
         ownerPrincipalId: owner.id,
-        authorityDelegationPurpose: "agentic-code-execution",
+        authorityCeilingPurpose: "agentic-code-execution",
       },
       createdAt: Date.now(),
       status: "active",
@@ -204,7 +231,7 @@ describe("resolveCodeIdentity", () => {
     evalRecord.parentId = owner.id;
     evalRecord.stateArgs = {
       ownerPrincipalId: owner.id,
-      authorityDelegationPurpose: "not-a-purpose",
+      authorityCeilingPurpose: "not-a-purpose",
     };
     cache._onActivate(evalRecord);
     expect(resolveCodeIdentity(cache, evalId)).toBeNull();

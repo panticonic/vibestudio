@@ -1,17 +1,24 @@
-import { REACT_FRAMEWORK_MODULE } from "../platformModules.js";
+import { REACT_FRAMEWORK_ENTRY_MODULE } from "../platformModules.js";
 import type { FrameworkAdapter } from "./types.js";
 
 export const reactAdapter: FrameworkAdapter = {
   id: "react",
 
-  dedupePackages: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
+  dedupePackages: [
+    "react",
+    "react-dom",
+    "react/jsx-runtime",
+    "react/jsx-dev-runtime",
+    "@radix-ui/react-icons",
+    "@radix-ui/themes",
+  ],
 
   jsx: "automatic",
   tsconfigJsx: "react-jsx",
 
   generateEntry(exposeEntryFile: string, entryFile: string, frameworkModule?: string): string {
     // Auto-mount contract module — see platformModules.FRAMEWORK_MODULES.
-    const mountModule = frameworkModule ?? REACT_FRAMEWORK_MODULE;
+    const mountModule = frameworkModule ?? REACT_FRAMEWORK_ENTRY_MODULE;
     return `import "@radix-ui/themes/styles.css";
 import ${JSON.stringify(exposeEntryFile)};
 import { autoMountReactPanel, shouldAutoMount } from ${JSON.stringify(mountModule)};

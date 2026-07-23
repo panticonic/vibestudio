@@ -1,22 +1,23 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
 import { assertAllowedOAuthExternalUrl } from "@vibestudio/shared/externalOpen";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
-import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
+import {
+  EXTERNAL_OPEN_AUTHORITY_RESOLVER,
+  EXTERNAL_OPEN_CAPABILITY,
+  externalOpenMethods,
+} from "@vibestudio/service-schemas/externalOpen";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { ApprovalQueue } from "./approvalQueue.js";
-import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import { withCapability } from "./capabilityPermission.js";
-import type { DeferredResult } from "@vibestudio/shared/serviceDispatcher";
+import {
+  describeCapability,
+  type CapabilityRequesterKind,
+} from "@vibestudio/shared/authorityPresentation";
 
-const CAPABILITY = "external-browser-open";
 const OPEN_EXTERNAL_ALLOWED_SCHEMES = new Set(["http:", "https:", "mailto:"]);
 
 export interface ExternalOpenServiceDeps {
   eventService: EventService;
-  approvalQueue?: ApprovalQueue;
-  grantStore?: CapabilityGrantStore;
 }
 
 export function createExternalOpenService(deps: ExternalOpenServiceDeps): ServiceDefinition {
@@ -32,56 +33,14 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
     ctx: ServiceContext,
     rawUrl: string,
     options?: OpenExternalOptions
-  ): Promise<OpenExternalResult> | DeferredResult {
+  ): Promise<OpenExternalResult> {
     const url = normalizeExternalUrl(rawUrl);
     if (options?.expectedRedirectUri) {
       assertAllowedOAuthExternalUrl(url.toString(), options.expectedRedirectUri);
     }
-    const resource = resourceForExternalUrl(url);
-
-    const gated =
-      ctx.caller.runtime.kind === "panel" ||
-      ctx.caller.runtime.kind === "app" ||
-      ctx.caller.runtime.kind === "worker" ||
-      ctx.caller.runtime.kind === "do";
-    if (!gated) {
-      emitOpen(ctx, url);
-      return Promise.resolve({});
-    }
-    if (!deps.grantStore || !deps.approvalQueue) {
-      throw new Error("External browser open approval is unavailable");
-    }
-    // The open itself happens only after approval, inside the continuation — so
-    // when deferred, the browser opens once the user approves (UX unchanged).
-    return withCapability(
-      { approvalQueue: deps.approvalQueue, grantStore: deps.grantStore },
-      ctx,
-      {
-        capability: CAPABILITY,
-        resource,
-        operation: {
-          kind: "browser",
-          verb: "Open external browser",
-          object: {
-            type: resource.type,
-            label: resource.label,
-            value: url.toString(),
-          },
-          groupKey: `external-browser-open:${ctx.caller.runtime.id}:${resource.key}`,
-        },
-        title: "Open external browser",
-        description: "Allow this code to open URLs in the system browser.",
-        details: externalOpenDetails(url, options),
-        deniedReason: "External browser open denied",
-      },
-      async (authorization) => {
-        if (!authorization.allowed) {
-          throw new Error(authorization.reason ?? "External browser open denied");
-        }
-        emitOpen(ctx, url);
-        return authorization.decision ? { approvalDecision: authorization.decision } : {};
-      }
-    );
+    emitOpen(ctx, url);
+    const decision = ctx.authorityDecisions?.get(EXTERNAL_OPEN_CAPABILITY);
+    return Promise.resolve(decision ? { approvalDecision: decision } : {});
   }
 
   return {
@@ -89,10 +48,53 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
     description: "Approval-gated system browser opens",
     authority: { principals: ["user", "host", "code"] },
     methods: externalOpenMethods,
+    authorityPreparation: {
+      [EXTERNAL_OPEN_AUTHORITY_RESOLVER]: (ctx, [rawUrl, rawOptions]) => {
+        if (!ctx.caller.code && ctx.caller.sessionOrigin !== true) return [];
+        const url = normalizeExternalUrl(String(rawUrl));
+        const options = rawOptions as OpenExternalOptions | undefined;
+        if (options?.expectedRedirectUri) {
+          assertAllowedOAuthExternalUrl(url.toString(), options.expectedRedirectUri);
+        }
+        const resource = resourceForExternalUrl(url);
+        const copy = describeCapability(
+          EXTERNAL_OPEN_CAPABILITY,
+          requesterKind(ctx.caller.runtime.kind)
+        );
+        return [
+          {
+            capability: EXTERNAL_OPEN_CAPABILITY,
+            resourceKey: resource.key,
+            challenge: {
+              title: copy.title,
+              description: copy.description,
+              deniedReason: "Opening this link was not allowed",
+              dedupKey: `external-open:${ctx.caller.runtime.id}:${resource.key}`,
+              resource,
+              operation: {
+                kind: "browser",
+                verb: copy.action,
+                object: resource,
+                groupKey: `external-open:${ctx.caller.runtime.id}:${resource.key}`,
+              },
+              details: externalOpenDetails(url, options),
+            },
+          },
+        ];
+      },
+    },
     handler: defineServiceHandler("externalOpen", externalOpenMethods, {
       openExternal: (ctx, [url, options]) => requestOpen(ctx, url, options),
     }),
   };
+}
+
+function requesterKind(kind: string): CapabilityRequesterKind | undefined {
+  if (kind === "do") return "durable-object";
+  if (kind === "app" || kind === "panel" || kind === "worker" || kind === "extension") {
+    return kind;
+  }
+  return undefined;
 }
 
 function normalizeExternalUrl(rawUrl: string): URL {

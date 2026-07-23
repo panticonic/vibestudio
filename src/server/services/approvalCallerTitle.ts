@@ -191,6 +191,7 @@ export function resolveApprovalRequester(
     (input.callerKind === "worker" || input.callerKind === "do"
       ? (panelTitle ?? directTitle)
       : (directTitle ?? panelTitle)) ?? fallbackLabel(callerRecord, input.callerId);
+  const evalIdentity = input.eval ?? evalMeta(callerRecord);
   const internalIdentity =
     effectiveVersion === "internal" || sourcePath === "vibestudio/internal" || category === "eval";
   const breadcrumbs =
@@ -210,8 +211,6 @@ export function resolveApprovalRequester(
             sourcePath,
           },
         ];
-  const evalIdentity = input.eval ?? evalMeta(callerRecord);
-
   return {
     id: input.callerId,
     kind: input.callerKind,
@@ -230,7 +229,7 @@ export function resolveApprovalRequester(
     effectiveVersion,
     ...(callerRecord?.contextId ? { contextId: callerRecord.contextId } : {}),
     stableIdentityKey: internalIdentity
-      ? input.callerId
+      ? (evalIdentity?.ownerId ?? input.callerId)
       : `${input.repoPath}@${input.effectiveVersion}`,
     ephemeralInstanceKey: input.callerId,
     ...(evalIdentity ? { eval: evalIdentity } : {}),

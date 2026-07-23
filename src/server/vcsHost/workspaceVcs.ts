@@ -106,8 +106,18 @@ interface SemanticRequest {
   input: unknown;
   ingress: {
     causalParent: import("@vibestudio/rpc").RpcCausalParent | null;
+    contextIntegrity: {
+      class: "internal" | "external";
+      externalKeys: readonly string[];
+    };
   };
 }
+
+/** Host lifecycle/source operations are not model cognition. */
+const HOST_SEMANTIC_INTEGRITY = Object.freeze({
+  class: "internal" as const,
+  externalKeys: Object.freeze([]) as readonly string[],
+});
 
 function semanticRequestContextId(request: unknown): string | null {
   if (!request || typeof request !== "object") return null;
@@ -228,6 +238,19 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     this.gadCaller = gad;
   }
 
+  /**
+   * Resolve the product-sealed provenance stamped on one durable channel
+   * envelope. This is a control-plane read, not a semantic VCS command: routing
+   * it through `vcsSemanticDispatch` would conflate the GAD's log API with the
+   * finite semantic-workspace command vocabulary.
+   */
+  getChannelEnvelopeIntegrity(input: {
+    channelId: string;
+    envelopeId: string;
+  }): Promise<{ contentClass: "internal" | "external" } | null> {
+    return this.gad().call("getChannelEnvelope", input);
+  }
+
   /** Dispatch meaning, drain exact host commands, acknowledge, and continue. */
   async semanticCall<T>(
     method: string,
@@ -259,7 +282,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   semanticDirectCall<T>(method: string, input: unknown): Promise<T> {
     return this.semanticCall<T>(method, {
       input,
-      ingress: { causalParent: null },
+      ingress: { causalParent: null, contextIntegrity: HOST_SEMANTIC_INTEGRITY },
     } satisfies SemanticRequest);
   }
 
@@ -268,7 +291,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       "vcsPush",
       {
         input,
-        ingress: { causalParent: null },
+        ingress: { causalParent: null, contextIntegrity: HOST_SEMANTIC_INTEGRITY },
       } satisfies SemanticRequest,
       { kind: "workspace-initialization" }
     );
@@ -278,11 +301,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   semanticCausalCall<T>(
     method: string,
     input: unknown,
-    causalParent: RpcCausalParent | null
+    causalParent: RpcCausalParent | null,
+    contextIntegrity: SemanticRequest["ingress"]["contextIntegrity"]
   ): Promise<T> {
     return this.semanticCall<T>(method, {
       input,
-      ingress: { causalParent },
+      ingress: { causalParent, contextIntegrity },
     } satisfies SemanticRequest);
   }
 
@@ -291,13 +315,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   semanticPublishCall<T>(
     input: unknown,
     causalParent: RpcCausalParent | null,
-    caller: VerifiedCaller
+    caller: VerifiedCaller,
+    contextIntegrity: SemanticRequest["ingress"]["contextIntegrity"]
   ): Promise<T> {
     return this.semanticCall<T>(
       "vcsPush",
       {
         input,
-        ingress: { causalParent },
+        ingress: { causalParent, contextIntegrity },
       } satisfies SemanticRequest,
       { kind: "caller", caller }
     );
@@ -461,6 +486,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         repoPath: String(request["repoPath"] ?? ""),
         path: String(request["path"] ?? ""),
         contentHash,
+        authoredChangeId: String(request["authoredChangeId"] ?? ""),
+        authoredByWorkUnitId: String(request["authoredByWorkUnitId"] ?? ""),
+        contentClass: request["contentClass"] === "internal" ? "internal" : "external",
+        externalKeys: Array.isArray(request["externalKeys"])
+          ? request["externalKeys"].map(String)
+          : [],
         mode: Number(request["mode"]),
         content: this.fileContent(bytes),
       };

@@ -171,6 +171,8 @@ describe("injectHtmlTransforms", () => {
     expect(html).toContain("<title>Agentic Chat</title>");
     expect(html).toContain('<link rel="stylesheet" href="./bundle.css" />');
     expect(html).toContain('<base href="./">');
+    expect(html).toContain('<link rel="preload" href="./__transport.js" as="script" />');
+    expect(html).toContain('<link rel="modulepreload" href="./bundle.js" />');
     expect(html).toContain('<script src="./__loader.js" data-bundle-src="./bundle.js"></script>');
   });
 
@@ -196,6 +198,7 @@ describe("injectHtmlTransforms", () => {
     );
 
     expect(html).toContain('href="./bundle-XYZ789.css"');
+    expect(html).toContain('<link rel="modulepreload" href="./bundle-ABC123.js" />');
     expect(html).toContain(
       '<script src="./__loader.js" data-bundle-src="./bundle-ABC123.js"></script>'
     );

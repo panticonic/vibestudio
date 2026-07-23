@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import { DurableObjectBase, rpc } from "./index.js";
-import { createTestDO } from "./test-utils.js";
+import { createTestDO, createTestDirectAuthority } from "./test-utils.js";
 
 /**
  * Regression for the path-aware `assertInboundAllowed`: a server-only DO (like
@@ -11,9 +11,19 @@ import { createTestDO } from "./test-utils.js";
  * subscribed EvalDO ("DO RPC relay failed (500): EvalDO is server-only").
  */
 class ServerOnlyProbeDO extends DurableObjectBase {
+  static override eventIntake = [
+    {
+      topicPrefix: "vcs:",
+      principals: ["code"],
+      effect: { kind: "runtime-intrinsic" },
+      tier: "open",
+      sensitivity: "write",
+    },
+  ] as const;
+
   protected createTables(): void {}
 
-  @rpc({ principals: ["host", "user", "code"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
   echo(...args: unknown[]): unknown[] {
     return args;
   }
@@ -49,7 +59,11 @@ describe("assertInboundAllowed path distinction", () => {
       args: ["hi"],
       __instanceToken: "token",
       __instanceId: "do:internal/WorkspaceDO:test-key",
-      __caller: { callerId: "do:other", callerKind: "do" },
+      __caller: {
+        callerId: "do:other",
+        callerKind: "do",
+        authorization: createTestDirectAuthority({ callerKind: "do", method: "echo" }),
+      },
     });
     expect(res.status).toBe(500);
     await expect(res.json()).resolves.toMatchObject({
@@ -63,7 +77,11 @@ describe("assertInboundAllowed path distinction", () => {
       args: ["hi"],
       __instanceToken: "token",
       __instanceId: "do:internal/WorkspaceDO:test-key",
-      __caller: { callerId: "main", callerKind: "server" },
+      __caller: {
+        callerId: "main",
+        callerKind: "server",
+        authorization: createTestDirectAuthority({ callerKind: "server", method: "echo" }),
+      },
     });
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual(["hi"]);
@@ -75,7 +93,14 @@ describe("assertInboundAllowed path distinction", () => {
     const res = await post(instance, "test-key/__rpc", {
       message: { type: "event", event: "vcs:publication", payload: { ok: true } },
       delivery: {
-        caller: { callerId: "do:workers/pubsub-channel:PubSubChannel:c", callerKind: "do" },
+        caller: {
+          callerId: "do:workers/pubsub-channel:PubSubChannel:c",
+          callerKind: "do",
+          authorization: createTestDirectAuthority({
+            callerKind: "do",
+            method: "__event:vcs:publication",
+          }),
+        },
       },
     });
     // The guard must NOT reject it — delivery returns 200 (no listener is fine).

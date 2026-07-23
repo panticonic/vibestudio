@@ -1,10 +1,9 @@
 import type { PendingCapabilityApproval } from "@vibestudio/shared/approvals";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import {
-  requestCapabilityPermission,
-  type CapabilityPermissionDeps,
-  type CapabilityPermissionResult,
-} from "./capabilityPermission.js";
+import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
+import type {
+  AuthorityChallengePresentation,
+  VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
 
 /**
  * The single context-isolation capability. A control-plane action (launch a
@@ -18,10 +17,10 @@ export const CONTEXT_BOUNDARY_CAPABILITY = "context.boundary" as const;
 
 /** Grant key: one approval covers a (subject, target-context) pair. */
 export function contextBoundaryResourceKey(targetContextId: string, subjectId: string): string {
-  return `context:${targetContextId}:requester:${subjectId}`;
+  return `context/${encodeURIComponent(targetContextId)}/requester/${encodeURIComponent(subjectId)}`;
 }
 
-export interface ContextBoundaryDeps extends CapabilityPermissionDeps {
+export interface ContextBoundaryDeps {
   /** True when the target context already holds state (active entity OR a materialized folder). */
   contextExists(contextId: string): boolean;
   /** Human label for the entity owning the target context, for prompt copy. */
@@ -45,10 +44,9 @@ export interface ContextBoundaryAction {
 
 export interface ContextBoundaryRequest {
   /**
-   * Identity the prompt/grant is attributed to. MUST carry `.code` (a
-   * panel/worker/do/app principal) — `requestCapabilityPermission` denies
-   * (does not prompt) a `server`/`shell` caller, so callers resolve a concrete
-   * subject (the acting entity, or the host-set anchor entity) first.
+   * Identity the prepared authority leaf is attributed to. Callers resolve a
+   * concrete acting entity (or the host-set anchor entity) before dispatch so
+   * the unified evaluator can bind the prompt and grant to its sealed origin.
    */
   subjectCaller: VerifiedCaller;
   /** The acting/origin context. `null` => no usable origin (treated as foreign). */
@@ -57,6 +55,11 @@ export interface ContextBoundaryRequest {
   targetContextId: string;
   action: ContextBoundaryAction;
 }
+
+export type PreparedContextBoundarySelection = PreparedAuthoritySelection & {
+  capability: typeof CONTEXT_BOUNDARY_CAPABILITY;
+  challenge: AuthorityChallengePresentation;
+};
 
 function cleanActionLabel(verb: string): string {
   return verb.replace(/\s+in$/i, "").trim();
@@ -209,30 +212,21 @@ function defaultTargetLabelName(action: ContextBoundaryAction): string {
 }
 
 /**
- * The single context-boundary gate. Prompts iff `targetContextId` is foreign to
- * the subject AND already exists. Pure (no side effects); run it BEFORE any
- * mutation so denial is non-destructive.
+ * Resolve the complete context-boundary authority leaf from current host state.
+ * This function is side-effect free: the dispatcher may call it before a wait
+ * and again at the handler boundary to detect ownership/target drift.
  */
-export async function requireContextBoundaryPermission(
+export function prepareContextBoundarySelection(
   deps: ContextBoundaryDeps,
   request: ContextBoundaryRequest
-): Promise<CapabilityPermissionResult> {
+): PreparedContextBoundarySelection | null {
   const { subjectCaller, originContextId, targetContextId, action } = request;
-
-  // Own context → free (subsumes self-targeting).
-  if (originContextId != null && targetContextId === originContextId) {
-    return { allowed: true };
-  }
-  // Foreign but fresh (no existing state to intrude on) → free.
-  if (!deps.contextExists(targetContextId)) {
-    return { allowed: true };
-  }
+  if (originContextId != null && targetContextId === originContextId) return null;
+  if (!deps.contextExists(targetContextId)) return null;
 
   const subjectId = subjectCaller.runtime.id;
   const ownerLabel = deps.resolveContextOwnerLabel?.(targetContextId);
   const target = ownerLabel ?? targetContextId;
-  const resourceKey = contextBoundaryResourceKey(targetContextId, subjectId);
-
   const details: NonNullable<PendingCapabilityApproval["details"]> = [];
   if (ownerLabel) details.push({ label: "Owner", value: ownerLabel });
   details.push({ label: "Workspace branch", value: targetContextId });
@@ -243,22 +237,25 @@ export async function requireContextBoundaryPermission(
     });
   }
 
-  return requestCapabilityPermission(deps, {
-    caller: subjectCaller,
+  return {
     capability: CONTEXT_BOUNDARY_CAPABILITY,
-    ...(action.severity ? { severity: action.severity } : {}),
-    dedupKey: `context-boundary:${subjectId}:${targetContextId}`,
-    ...(action.signal ? { signal: action.signal } : {}),
-    resource: { type: "context", label: "Workspace branch", value: target, key: resourceKey },
-    operation: {
-      kind: action.kind,
-      verb: action.verb,
-      object: { type: "context", label: "Workspace branch", value: target },
-      ...(action.groupKey ? { groupKey: action.groupKey } : {}),
+    resourceKey: contextBoundaryResourceKey(targetContextId, subjectId),
+    authorizingCaller: subjectCaller,
+    challenge: {
+      title: promptTitle(action),
+      description: promptDescription(action, ownerLabel, targetContextId),
+      ...(action.severity ? { severity: action.severity } : {}),
+      deniedReason: `${action.verb} denied: ${target} is another existing workspace branch`,
+      dedupKey: `context-boundary:${subjectId}:${targetContextId}`,
+      resource: { type: "context", label: "Workspace branch", value: target },
+      operation: {
+        kind: action.kind,
+        verb: action.verb,
+        object: { type: "context", label: "Workspace branch", value: target },
+        ...(action.groupKey ? { groupKey: action.groupKey } : {}),
+      },
+      details,
+      ...(action.signal ? { signal: action.signal } : {}),
     },
-    title: promptTitle(action),
-    description: promptDescription(action, ownerLabel, targetContextId),
-    details,
-    deniedReason: `${action.verb} denied: ${target} is another existing workspace branch`,
-  });
+  };
 }

@@ -43,7 +43,12 @@ class SchemaEpochProbeDO extends DurableObjectBase {
     }
   }
 
-  @rpc
+  @rpc({
+    effect: { kind: "semantic", capability: "test.storage.read" },
+    tier: "gated",
+    principals: ["host"],
+    sensitivity: "read",
+  })
   countRows(): number {
     return (this.sql.exec(`SELECT COUNT(*) as count FROM epoch_rows`).one() as { count: number })
       .count;

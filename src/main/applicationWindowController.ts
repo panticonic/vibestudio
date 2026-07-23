@@ -128,7 +128,7 @@ export class ApplicationWindowController {
       width: 1200,
       height: 600,
       show: false,
-      icon: path.join(__dirname, "assets", "brand", "vibestudio-icon-512.png"),
+      icon: path.join(__dirname, "assets", "brand", "vibestudio-symbol-512.png"),
       skipTaskbar: this.deps.isHeadlessHost,
       backgroundColor: chrome.background,
       titleBarStyle: "hidden",
@@ -167,6 +167,12 @@ export class ApplicationWindowController {
       this.deps.getApprovalAttention()?.handleWindowFocus();
       void this.deps.getApprovalAttention()?.refresh({ quiet: true });
     });
+    // Release child views and overlays while Electron's native window is still
+    // alive. Waiting for `closed` means BaseWindow has already destroyed those
+    // children, so ownership cleanup becomes a second native destroy and panel
+    // sessions can outlive their host during quit. Keep `closed` as an
+    // idempotent fallback for abnormal native teardown.
+    window.on("close", () => this.teardownLifetime(lifetime));
     window.on("closed", () => this.teardownLifetime(lifetime));
 
     this.attachWorkspaceWindowServices(lifetime);

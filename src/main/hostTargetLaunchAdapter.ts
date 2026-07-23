@@ -47,7 +47,7 @@ export function readyElectronLaunchEvent(
     effectiveVersion: launch.effectiveVersion ?? null,
     executionDigest: launch.executionDigest,
     authorityRequests: launch.authorityRequests,
-    authorityDelegations: launch.authorityDelegations,
+    authorityEvalCeilings: launch.authorityEvalCeilings,
     adoptionPolicy: launch.adoptionPolicy ?? "immediate",
     selectedForHost: true,
   };

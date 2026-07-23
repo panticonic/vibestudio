@@ -85,7 +85,6 @@ export class HostTargetLaunchCoordinator {
 
   async publishPendingStartupApprovals(target: HostTarget): Promise<PendingUnitBatchApproval[]> {
     await this.deps.awaitStartupUnitReconcile?.();
-    await this.deps.prepareHostTarget?.(target);
     const requiredExtensions = new Set(this.deps.getRequiredExtensionSources?.(target) ?? []);
     const settlement = this.deps.startupApprovals.publishPending(
       "startup",
@@ -99,8 +98,11 @@ export class HostTargetLaunchCoordinator {
     // A manual approval is registered synchronously by publishPending and is
     // returned above without blocking on the user's decision. With no pending
     // approval, publication is either empty or auto-approved; readiness must
-    // wait for that activation to settle before inspecting providers/apps.
+    // wait for the exact-version trust decision before any provider/app build
+    // begins. This keeps the review phase distinct from activation and prevents
+    // a target-specific reconcile from creating a duplicate approval.
     await settlement;
+    await this.deps.prepareHostTarget?.(target);
     return this.pendingLaunchApprovals(target);
   }
 
@@ -282,6 +284,8 @@ export class HostTargetLaunchCoordinator {
     await this.deps.awaitStartupUnitReconcile?.();
     const alreadyPending = this.pendingLaunchApprovals(target);
     if (alreadyPending.length > 0) return approvalRequiredResult(target, alreadyPending);
+    const startupApprovals = await this.pendingOrPublishedStartupApprovals(target);
+    if (startupApprovals.length > 0) return approvalRequiredResult(target, startupApprovals);
 
     const appHost = this.deps.getAppHost();
     if (!appHost) return unavailableResult(target, "App host is not available", []);
@@ -293,8 +297,6 @@ export class HostTargetLaunchCoordinator {
         details: this.hostTargetPreparingDetails(target, launch.details),
       };
     }
-    const pending = await this.pendingOrPublishedStartupApprovals(target);
-    if (pending.length > 0) return approvalRequiredResult(target, pending);
     if (
       target === "react-native" &&
       launch.status === "unavailable" &&

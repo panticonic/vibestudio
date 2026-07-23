@@ -136,6 +136,51 @@ describe("runStartupReconciliation", () => {
     expect(result.lifecycleRecovered).toBe(true);
   });
 
+  it("restores active runtime images before lifecycle recovery", async () => {
+    workspaceDO.entityActivate({
+      kind: "do",
+      source: { repoPath: "workers/agent-worker", effectiveVersion: "v1" },
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: { requests: [], evalCeilings: [] },
+      contextId: "ctx-agent",
+      className: "AiChatWorker",
+      key: "agent-1",
+    });
+    const order: string[] = [];
+    const restoreRuntimes = vi.fn(async () => {
+      order.push("restore");
+    });
+    const recoverLifecycle = vi.fn(async () => {
+      order.push("recover");
+    });
+
+    await runStartupReconciliation({
+      dispatchWorkspaceDO,
+      entityCache: new EntityCache(),
+      restoreRuntimes,
+      recoverLifecycle,
+    });
+
+    expect(restoreRuntimes).toHaveBeenCalledWith([
+      expect.objectContaining({ className: "AiChatWorker", key: "agent-1" }),
+    ]);
+    expect(order).toEqual(["restore", "recover"]);
+  });
+
+  it("does not admit lifecycle recovery when runtime restoration fails", async () => {
+    const recoverLifecycle = vi.fn();
+    await expect(
+      runStartupReconciliation({
+        dispatchWorkspaceDO,
+        entityCache: new EntityCache(),
+        restoreRuntimes: () => Promise.reject(new Error("sealed image unavailable")),
+        recoverLifecycle,
+      })
+    ).rejects.toThrow("sealed image unavailable");
+    expect(recoverLifecycle).not.toHaveBeenCalled();
+  });
+
   it("warns but does not fail when lifecycle recovery fails", async () => {
     const entityCache = new EntityCache();
     const warnings: Array<{ msg: string; args: unknown[] }> = [];

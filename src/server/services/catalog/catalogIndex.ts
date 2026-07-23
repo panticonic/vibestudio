@@ -73,6 +73,7 @@ function runtimeSurfaceSourceKey(surface: RuntimeSurface): string {
         entry.description ?? "",
         entry.schemaRef ?? "",
         (entry.members ?? []).join(","),
+        JSON.stringify(entry.methodCatalog ?? null),
       ].join(":")
     )
     .sort()
@@ -87,7 +88,11 @@ function sourceKey(deps: BuildCatalogDeps): string {
     .map(runtimeSurfaceSourceKey)
     .sort()
     .join("\\u001f");
-  return `${services}\\u001e${surfaces}`;
+  const workspace = (deps.workspaceCapabilities ?? [])
+    .map((entry) => JSON.stringify(entry))
+    .sort()
+    .join("\\u001f");
+  return `${services}\\u001e${surfaces}\\u001e${workspace}`;
 }
 
 function tokenize(text: string): string[] {

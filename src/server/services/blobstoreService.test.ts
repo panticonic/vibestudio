@@ -5,7 +5,8 @@ import * as path from "path";
 import * as os from "os";
 import { Readable } from "stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { TreeListCursorSchema } from "@vibestudio/service-schemas/blobstore";
 import {
   buildWorktreeManifest,
@@ -294,7 +295,7 @@ describe("blobstoreService", () => {
   it("exposes metadata RPC, shell/server delete and list, and denies panel deletion", async () => {
     const { server, baseUrl } = await startBlobstoreServer(blobsDir);
     const service = createBlobstoreService({ blobsDir });
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(service.definition);
     dispatcher.markInitialized();
 
@@ -382,7 +383,7 @@ describe("blobstoreService", () => {
     async function putViaRpc(digest: string, body: string): Promise<void> {
       const service = createBlobstoreService({ blobsDir });
       await service.start?.();
-      const dispatcher = new ServiceDispatcher();
+      const dispatcher = createTestServiceDispatcher();
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       const result = (await dispatcher.dispatch(
@@ -396,7 +397,7 @@ describe("blobstoreService", () => {
 
     function dispatchGetRange(digest: string, offset: number, length: number): Promise<unknown> {
       const service = createBlobstoreService({ blobsDir });
-      const dispatcher = new ServiceDispatcher();
+      const dispatcher = createTestServiceDispatcher();
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       return dispatcher.dispatch(
@@ -454,7 +455,7 @@ describe("blobstoreService", () => {
       // as UTF-8 and corrupt the bytes).
       const service = createBlobstoreService({ blobsDir });
       await service.start?.();
-      const dispatcher = new ServiceDispatcher();
+      const dispatcher = createTestServiceDispatcher();
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       await dispatcher.dispatch(
@@ -747,7 +748,7 @@ describe("blobstoreService", () => {
 
       // Node blobs live in the same store keyed by the hash's hex suffix.
       const service = createBlobstoreService({ blobsDir });
-      const dispatcher = new ServiceDispatcher();
+      const dispatcher = createTestServiceDispatcher();
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       await expect(
@@ -1266,7 +1267,7 @@ describe("blobstoreService", () => {
     it("exposes the tree APIs over RPC with the blobstore policy (materializeTree admin-only)", async () => {
       const service = createBlobstoreService({ blobsDir });
       await service.start?.();
-      const dispatcher = new ServiceDispatcher();
+      const dispatcher = createTestServiceDispatcher();
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       const panel = { caller: createVerifiedCaller("p1", "panel") };
@@ -1428,7 +1429,7 @@ describe("blobstoreService", () => {
     async function putViaRpc(body: string): Promise<string> {
       const service = createBlobstoreService({ blobsDir });
       await service.start?.();
-      const dispatcher = new ServiceDispatcher();
+      const dispatcher = createTestServiceDispatcher();
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       const result = (await dispatcher.dispatch(
@@ -1446,7 +1447,7 @@ describe("blobstoreService", () => {
       opts?: { caseInsensitive?: boolean; contextLines?: number; maxMatches?: number }
     ): Promise<unknown> {
       const service = createBlobstoreService({ blobsDir });
-      const dispatcher = new ServiceDispatcher();
+      const dispatcher = createTestServiceDispatcher();
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       return dispatcher.dispatch(

@@ -5,13 +5,22 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 const adblockMethods = defineServiceMethods({
-  getConfig: { args: z.tuple([]), access: { sensitivity: "read" } },
-  setEnabled: { args: z.tuple([z.boolean()]), access: { sensitivity: "write" } },
+  getConfig: {
+    args: z.tuple([]),
+    access: { sensitivity: "read" },
+  },
+  setEnabled: {
+    args: z.tuple([z.boolean()]),
+    access: { sensitivity: "write" },
+  },
   setListEnabled: {
     args: z.tuple([z.enum(["ads", "privacy", "annoyances", "social"]), z.boolean()]),
     access: { sensitivity: "write" },
   },
-  addCustomList: { args: z.tuple([z.string()]), access: { sensitivity: "write" } },
+  addCustomList: {
+    args: z.tuple([z.string()]),
+    access: { sensitivity: "write" },
+  },
   removeCustomList: {
     args: z.tuple([z.string()]),
     access: { sensitivity: "destructive" },
@@ -31,8 +40,14 @@ const adblockMethods = defineServiceMethods({
     authority: { principals: ["user", "code"] },
     access: { sensitivity: "read" },
   },
-  resetStats: { args: z.tuple([]), access: { sensitivity: "destructive" } },
-  rebuildEngine: { args: z.tuple([]), access: { sensitivity: "write" } },
+  resetStats: {
+    args: z.tuple([]),
+    access: { sensitivity: "destructive" },
+  },
+  rebuildEngine: {
+    args: z.tuple([]),
+    access: { sensitivity: "write" },
+  },
   isActive: {
     args: z.tuple([]),
     authority: { principals: ["user", "code"] },

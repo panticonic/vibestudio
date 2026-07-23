@@ -43,6 +43,7 @@ export function createShellCore(deps: {
     getSlotHistory: (slotId) => call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
     resolveActiveEntity: (id) =>
       call<EntityRecord | null>("workspace-state", "entity.resolveActive", [id]),
+    resolveEntity: (id) => call<EntityRecord | null>("workspace-state", "entity.resolve", [id]),
     resolveSlotByEntity: (entityId) =>
       call<string | null>("workspace-state", "slot.resolveByEntity", [entityId]),
     createSlot: (input) => call<void>("workspace-state", "slot.create", [input]),
@@ -61,6 +62,10 @@ export function createShellCore(deps: {
 
   const runtime: RuntimeClient = {
     createEntity: (spec) => call<RuntimeEntityHandle>("runtime", "createEntity", [spec]),
+    reservePanelEntity: (spec) =>
+      call<RuntimeEntityHandle>("runtime", "reservePanelEntity", [spec]),
+    activatePanelEntity: (spec) =>
+      call<RuntimeEntityHandle>("runtime", "activatePanelEntity", [spec]),
     retireEntity: (id) => call<void>("runtime", "retireEntity", [{ id }]),
   };
 

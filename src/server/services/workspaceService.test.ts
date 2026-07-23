@@ -253,6 +253,16 @@ describe("workspace service handler", () => {
     expect(result).toEqual(makeConfig());
   });
 
+  it("validates candidate workspace config without mutating it", async () => {
+    const service = makeService();
+    await expect(
+      service.handler(panelCtx, "validateConfig", [
+        "systemEpoch: 1\nservices:\n  - source: workers/incomplete\n    name: incomplete\n",
+      ])
+    ).rejects.toThrow(/services\.0/);
+    expect(await service.handler(panelCtx, "getConfig", [])).toEqual(makeConfig());
+  });
+
   it("units.inspector returns the inspector URL for a matching unit", async () => {
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
@@ -273,6 +283,35 @@ describe("workspace service handler", () => {
       service.handler(panelCtx, "units.inspector", ["@workspace-extensions/git-tools"])
     ).resolves.toEqual({ url: "ws://127.0.0.1:9229/abcdef" });
     await expect(service.handler(panelCtx, "units.inspector", ["missing"])).resolves.toBeNull();
+  });
+
+  it("records external unit-log ingestion before returning diagnostics", async () => {
+    const recordContextIngestion = vi.fn();
+    const log = {
+      workspaceId: "test-ws",
+      unitName: "panels/example",
+      kind: "panel" as const,
+      timestamp: 1,
+      level: "error" as const,
+      message: "hostile page text",
+      source: "console" as const,
+    };
+    const service = createWorkspaceService({
+      workspace: makeWorkspace(),
+      getConfig: () => makeConfig(),
+      setConfigField: vi.fn(),
+      listUnitLogs: () => [log],
+      recordContextIngestion,
+    });
+
+    await expect(
+      service.handler(panelCtx, "units.logs", ["panels/example", undefined])
+    ).resolves.toEqual([log]);
+    expect(recordContextIngestion).toHaveBeenCalledWith(panelCtx, {
+      key: "log:panel:panels/example",
+      via: "workspace-units:logs",
+      classification: "external",
+    });
   });
 
   it("units.bakeAppDist delegates only for shell callers", async () => {

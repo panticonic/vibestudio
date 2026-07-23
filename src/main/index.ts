@@ -199,12 +199,11 @@ import {
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
 import { authorizeVerifiedCaller } from "../server/services/authorityRuntime.js";
-import { autofillMethods } from "@vibestudio/service-schemas/autofill";
-import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
 import { callerHasPlatformCapability, viewHasAppCapability } from "./services/appCapabilities.js";
+import { createAutofillService } from "./services/autofillService.js";
 import { assertPresent } from "../lintHelpers";
 import { ApplicationWindowController } from "./applicationWindowController.js";
 import { AsyncStateConvergenceLoop } from "./asyncStateConvergenceLoop.js";
@@ -241,6 +240,8 @@ if (process.env["VIBESTUDIO_DEBUG_PATHS"] === "1") {
 // Configuration Initialization
 // =============================================================================
 
+console.log(`[Perf] main module evaluated at ${Math.round(process.uptime() * 1000)}ms uptime`);
+
 // Load central environment variables first (.env from ~/.config/vibestudio/)
 loadCentralEnv();
 
@@ -273,6 +274,11 @@ try {
     message: error instanceof Error ? error.message : String(error),
     detail: formatUnknownError(error),
   };
+}
+
+if (startupMode.kind === "local" && startupMode.isEphemeral) {
+  retryWorkspaceName = startupMode.workspaceName;
+  retryWorkspaceIsEphemeral = true;
 }
 
 if (
@@ -308,6 +314,8 @@ let electronHostTargetSyncLoop: AsyncStateConvergenceLoop<ElectronHostTargetSync
   null;
 let bootstrapWorkspaceRpcReady = false;
 let bootstrapStartupDetail: string | null = null;
+let bootstrapConnectionKind: "local" | "remote" | null =
+  startupMode.kind === "local" ? "local" : null;
 let desktopAutoUpdater: {
   downloadUpdate(): Promise<unknown>;
   quitAndInstall(): void;
@@ -1320,6 +1328,7 @@ type BootstrapWorkspaceEntry = { name: string; lastOpened: number };
 
 type BootstrapConnectionState = {
   mode: "choose-connection" | "starting" | "connected" | "failed";
+  connectionKind: "local" | "remote" | null;
   localWorkspaces: BootstrapWorkspaceEntry[];
   lastLocalWorkspaceName: string | null;
   isDev: boolean;
@@ -1367,13 +1376,17 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
   if (mode !== "choose-connection" && mode !== "failed") {
     return {
       mode,
+      connectionKind: bootstrapConnectionKind,
       localWorkspaces: [],
       lastLocalWorkspaceName: null,
       isDev: isDev(),
       pendingPairLink,
       pendingPairConfirmed: startupInvocation.pendingPairConfirmed,
       startupError: bootstrapStartupError,
-      serverLogPath: startupMode.kind === "local" ? getLocalHubLogPath() : null,
+      serverLogPath:
+        bootstrapConnectionKind === "local" && startupMode.kind === "local"
+          ? getLocalHubLogPath()
+          : null,
       startupDetail: bootstrapStartupDetail,
     };
   }
@@ -1383,15 +1396,30 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
   }));
   return {
     mode,
+    connectionKind: bootstrapConnectionKind,
     localWorkspaces,
     lastLocalWorkspaceName: centralData.getLastOpenedWorkspace()?.name ?? null,
     isDev: isDev(),
     pendingPairLink,
     pendingPairConfirmed: startupInvocation.pendingPairConfirmed,
     startupError: bootstrapStartupError,
-    serverLogPath: startupMode.kind === "local" ? getLocalHubLogPath() : null,
+    serverLogPath:
+      bootstrapConnectionKind === "local" && startupMode.kind === "local"
+        ? getLocalHubLogPath()
+        : null,
     startupDetail: bootstrapStartupDetail,
   };
+}
+
+/**
+ * Push the current bootstrap connection state to the launch-gate renderer.
+ * Event-driven complement to the pull `get-state` IPC: the renderer applies
+ * pushes immediately and keeps a slow poll only as a liveness fallback.
+ */
+function pushBootstrapConnectionState(): void {
+  const shellContents = applicationWindow.viewManager?.getShellWebContents();
+  if (!shellContents || shellContents.isDestroyed()) return;
+  shellContents.send("vibestudio:bootstrap:state-changed", getBootstrapConnectionState());
 }
 
 function normalizeBootstrapWorkspaceName(rawName: unknown): string {
@@ -1436,7 +1464,9 @@ function installBootstrapConnectionHandlers(): void {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:open-log");
     const expectedPath =
       bootstrapStartupError?.logPath ??
-      (startupMode.kind === "local" ? getLocalHubLogPath() : null);
+      (bootstrapConnectionKind === "local" && startupMode.kind === "local"
+        ? getLocalHubLogPath()
+        : null);
     if (typeof rawPath !== "string" || !expectedPath) return;
     if (path.resolve(rawPath) !== path.resolve(expectedPath)) return;
     // Opening a file may outlive the bootstrap renderer: a successful startup
@@ -1510,6 +1540,7 @@ function installBootstrapConnectionHandlers(): void {
 
 app.on("ready", async () => {
   performance.mark("startup:ready");
+  console.log(`[Perf] app ready at ${Math.round(process.uptime() * 1000)}ms uptime`);
 
   ipcMain.handle("vibestudio:drain-pair-link", (event) => {
     if (!canAccessIncomingPairLinks(event.sender.id)) {
@@ -1811,13 +1842,22 @@ app.on("ready", async () => {
     }
   }
 
-  // A persisted WebRTC remote pairing skips the chooser: establishServerSession
-  // dials it over the pipe regardless of the (pending/local) startup mode.
-  // `--skip-remote-pairing` (set by the recovery chooser) suppresses auto-dial
-  // for one launch so a failed remote connect lands on the chooser, not a re-dial loop.
+  // A saved remote is resumed only for an ordinary interactive "continue where
+  // I left off" launch. Development's ephemeral default, an explicit workspace,
+  // a headless host, a pairing link, and the chooser are authoritative intents:
+  // credential-store state must not silently replace any of them.
   const skipRemotePairingLaunch = startupInvocation.skipRemotePairing;
-  const storedRemoteAtLaunch = loadStoredRemotePairing();
-  remotePairedAtLaunch = storedRemoteAtLaunch !== null && !skipRemotePairingLaunch;
+  const shouldResumeSavedRemote =
+    startupMode.kind === "local" &&
+    startupMode.connectionIntent === "resume-saved-remote" &&
+    !skipRemotePairingLaunch;
+  const storedRemoteAtLaunch = shouldResumeSavedRemote ? loadStoredRemotePairing() : null;
+  remotePairedAtLaunch = storedRemoteAtLaunch !== null;
+  bootstrapConnectionKind = remotePairedAtLaunch
+    ? "remote"
+    : startupMode.kind === "local"
+      ? "local"
+      : null;
 
   // A FRESH pairing the chooser redeems THIS launch (set from a remote choice
   // below). When present, establishServerSession keeps its WebRTC pipe as the
@@ -1850,6 +1890,7 @@ app.on("ready", async () => {
     applicationWindow.create();
     const choice = await chooserChoice;
     if (choice.kind === "local") {
+      bootstrapConnectionKind = "local";
       // Resolve (creating if missing) the chosen local workspace in-process and
       // promote `startupMode` to local so the connected setup spawns its server.
       retryWorkspaceName = choice.name;
@@ -1875,16 +1916,19 @@ app.on("ready", async () => {
             }`,
             detail: formatUnknownError(error),
           };
+          pushBootstrapConnectionState();
           return;
         }
         const autoApproveStartupUnits =
           process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" || startup.resolved.created;
         startupMode = {
           kind: "local",
+          connectionIntent: "local",
           wsDir: startup.resolved.wsDir,
           workspaceName: startup.resolved.name,
           workspaceId: startup.resolved.workspace.config.id,
           isEphemeral: false,
+          ephemeralLifecycle: null,
           autoApproveStartupUnits,
         };
         workspaceId = startupMode.workspaceId;
@@ -1892,6 +1936,7 @@ app.on("ready", async () => {
       }
     } else {
       // Remote: leave startupMode pending; the fresh pairing becomes the session.
+      bootstrapConnectionKind = "remote";
       pendingRemotePairing = choice.pairing;
       log.info("[bootstrap] Remote server chosen; pairing the session over WebRTC");
     }
@@ -1906,7 +1951,7 @@ app.on("ready", async () => {
   }
 
   const dispatcher = new ServiceDispatcher();
-  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey, tier }) =>
     authorizeVerifiedCaller(caller, {
       workspaceId,
       workspaceMember: true,
@@ -1914,6 +1959,8 @@ app.on("ready", async () => {
       audience: "electron-main-services",
       capability,
       resourceKey,
+      tier,
+      grantCode: Boolean(caller.code),
     })
   );
 
@@ -1926,7 +1973,7 @@ app.on("ready", async () => {
       !identity.effectiveVersion ||
       !identity.executionDigest ||
       !identity.requested ||
-      !identity.delegations
+      !identity.evalCeilings
     ) {
       return null;
     }
@@ -1937,7 +1984,7 @@ app.on("ready", async () => {
       effectiveVersion: identity.effectiveVersion,
       executionDigest: identity.executionDigest,
       requested: identity.requested,
-      delegations: identity.delegations,
+      evalCeilings: identity.evalCeilings,
     } as const;
   };
 
@@ -2080,6 +2127,7 @@ app.on("ready", async () => {
       : startupMode.kind === "local"
         ? `Starting local workspace “${startupMode.workspaceName}”…`
         : null;
+    pushBootstrapConnectionState();
 
     eventService.emit("server-connection-changed", {
       status: "connecting",
@@ -2094,9 +2142,13 @@ app.on("ready", async () => {
     const establish = (mode: ConnectedStartupMode | null) =>
       establishServerSession({
         mode,
+        onStartupPhase: (detail) => {
+          bootstrapStartupDetail = detail;
+          pushBootstrapConnectionState();
+        },
         pendingPairing: pendingRemotePairing ?? undefined,
         pendingPairLabel: readPendingPairLabel(),
-        skipStoredRemote: skipRemotePairingLaunch,
+        storedRemote: storedRemoteAtLaunch ?? undefined,
         centralData,
         onMainSessionTerminalClose: (error) => {
           const message = error.message || "The paired server ended this session.";
@@ -2589,27 +2641,14 @@ app.on("ready", async () => {
     }
 
     // Register autofill service (uses lazy resolution since autofillManager is created in browser-data start)
-    const invokeAutofill = (
-      ctx: ServiceContext,
-      method: keyof typeof autofillMethods,
-      args: unknown[]
-    ): Promise<unknown> => {
-      if (!autofillManager) throw new Error("Autofill not initialized");
-      return autofillManager.getServiceDefinition().handler(ctx, method, args);
-    };
-    electronContainer.registerRpc({
-      name: "autofill",
-      description: "Password autofill management",
-      authority: { principals: ["user", "host", "code"] },
-      methods: autofillMethods,
-      handler: defineServiceHandler("autofill", autofillMethods, {
-        confirmSave: (ctx, args) => invokeAutofill(ctx, "confirmSave", args),
-        listSavedPasswords: (ctx, args) => invokeAutofill(ctx, "listSavedPasswords", args),
-        deleteSavedPassword: (ctx, args) => invokeAutofill(ctx, "deleteSavedPassword", args),
-        listNeverSaveOrigins: (ctx, args) => invokeAutofill(ctx, "listNeverSaveOrigins", args),
-        removeNeverSaveOrigin: (ctx, args) => invokeAutofill(ctx, "removeNeverSaveOrigin", args),
-      }),
-    });
+    electronContainer.registerRpc(
+      createAutofillService({
+        invoke: (ctx, method, args) => {
+          if (!autofillManager) throw new Error("Autofill not initialized");
+          return autofillManager.getServiceDefinition().handler(ctx, method, args);
+        },
+      })
+    );
     // Each local watch retains its server topics for exactly the lifetime of
     // its response. The bridge folds all retained topics into one server watch.
     {
@@ -2804,6 +2843,7 @@ app.on("ready", async () => {
     // Workspace RPC is now registered; the bootstrap shell may leave its
     // starting state and open the startup approval gate.
     bootstrapWorkspaceRpcReady = true;
+    pushBootstrapConnectionState();
     applicationWindow.attachWorkspaceServices({
       panelRegistry,
       panelOrchestrator,
@@ -2890,16 +2930,21 @@ app.on("ready", async () => {
         detail: remoteStartupFailed
           ? "The saved pairing was kept unless the server rejected it. Check the server or choose another workspace."
           : "Retry the startup, or choose another server or workspace.",
-        ...(startupMode.kind === "local" ? { logPath: getLocalHubLogPath() } : {}),
+        ...(bootstrapConnectionKind === "local" && startupMode.kind === "local"
+          ? { logPath: getLocalHubLogPath() }
+          : {}),
       };
       remotePairedAtLaunch = false;
+      pushBootstrapConnectionState();
       log.error(`[bootstrap] Startup failed; keeping recovery window open: ${message}`);
       return;
     }
     if (IS_HEADLESS_HOST) {
       writeHeadlessStartupError(
         error,
-        startupMode.kind === "local" ? startupMode.wsDir : undefined
+        bootstrapConnectionKind === "local" && startupMode.kind === "local"
+          ? startupMode.wsDir
+          : undefined
       );
     }
     app.exit(1);

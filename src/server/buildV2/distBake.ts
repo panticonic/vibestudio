@@ -40,7 +40,7 @@ export interface AppDistBakeManifest {
     executionDigest: string;
     execution: NonNullable<BuildMetadata["execution"]>;
     authorityRequests: NonNullable<BuildMetadata["authority"]>["requests"];
-    authorityDelegations: NonNullable<BuildMetadata["authority"]>["delegations"];
+    authorityEvalCeilings: NonNullable<BuildMetadata["authority"]>["evalCeilings"];
   };
   artifacts: BuildArtifactManifestEntry[];
 }
@@ -106,7 +106,7 @@ export function createAppDistBakeManifest(opts: {
       executionDigest,
       execution,
       authorityRequests: authority.requests,
-      authorityDelegations: authority.delegations,
+      authorityEvalCeilings: authority.evalCeilings,
     },
     artifacts,
   };

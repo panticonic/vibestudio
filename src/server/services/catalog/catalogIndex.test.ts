@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { createCatalogIndex } from "./catalogIndex.js";
+import type { BuildCatalogDeps } from "./buildCatalog.js";
 
 const blobstore: ServiceDefinition = {
   name: "blobstore",
@@ -22,7 +23,11 @@ const blobstore: ServiceDefinition = {
   handler: async () => undefined,
 };
 
-const load = () => ({ definitions: [blobstore] });
+const testTierLookup = (method: string) =>
+  method.startsWith("blobstore.") || method.startsWith("demo2.")
+    ? { tier: "open" as const, session: "family" as const, rationale: "Explicit catalog fixture" }
+    : null;
+const load = () => ({ definitions: [blobstore], tierLookup: testTierLookup });
 
 describe("createCatalogIndex", () => {
   it("ranks token-overlap hits and filters by caller", () => {
@@ -59,7 +64,7 @@ describe("createCatalogIndex", () => {
 
   it("picks up new definitions without explicit rebuild", () => {
     let defs: ServiceDefinition[] = [blobstore];
-    const index = createCatalogIndex(() => ({ definitions: defs }));
+    const index = createCatalogIndex(() => ({ definitions: defs, tierLookup: testTierLookup }));
     expect(index.get("service:demo2", "server")).toBeNull();
     defs = [
       ...defs,
@@ -74,6 +79,27 @@ describe("createCatalogIndex", () => {
     expect(index.get("service:demo2", "server")).toBeTruthy();
   });
 
+  it("picks up workspace capability changes from the live declaration source", () => {
+    let workspaceCapabilities: NonNullable<BuildCatalogDeps["workspaceCapabilities"]> = [];
+    const index = createCatalogIndex(() => ({
+      ...load(),
+      workspaceCapabilities,
+    }));
+    expect(index.get("workspace:notes", "worker")).toBeNull();
+    workspaceCapabilities = [
+      {
+        name: "notes",
+        source: "workers/notes",
+        protocols: ["notes.v1"],
+        principals: ["code"],
+        target: { kind: "worker", routePath: "/rpc" },
+      },
+    ];
+    expect(index.get("workspace:notes", "worker")).toMatchObject({
+      access: { capability: "workspace-service:notes" },
+    });
+  });
+
   it("caps oversized direct search requests instead of rejecting discovery", () => {
     const index = createCatalogIndex(load);
     expect(index.search("", "server", { limit: 200 })).toHaveLength(3);
@@ -81,7 +107,7 @@ describe("createCatalogIndex", () => {
 
   it("picks up same-name definition replacements without explicit rebuild", () => {
     let defs: ServiceDefinition[] = [blobstore];
-    const index = createCatalogIndex(() => ({ definitions: defs }));
+    const index = createCatalogIndex(() => ({ definitions: defs, tierLookup: testTierLookup }));
     expect(index.get("service:blobstore.admin.wipe", "panel")).toBeNull();
 
     defs = [

@@ -5,11 +5,13 @@ describe("readyElectronLaunchEvent", () => {
   it("preserves the selected artifact's immutable execution authority", () => {
     const authorityRequests = [
       {
-        capability: "service:events.watch",
-        resource: { kind: "exact" as const, key: "service:events.watch" },
+        capability: "events.watch",
+        resource: { kind: "exact" as const, key: "events.watch" },
+        tier: "gated" as const,
+        evidence: "exact" as const,
       },
     ];
-    const authorityDelegations = [
+    const authorityEvalCeilings = [
       {
         audience: "eval" as const,
         purpose: "agentic-code-execution" as const,
@@ -17,6 +19,8 @@ describe("readyElectronLaunchEvent", () => {
           {
             capability: "runtime:entity.create",
             resource: { kind: "prefix" as const, prefix: "panels/" },
+            tier: "gated" as const,
+            evidence: "bounded-dynamic" as const,
           },
         ],
       },
@@ -36,7 +40,7 @@ describe("readyElectronLaunchEvent", () => {
         effectiveVersion: "ev-1",
         executionDigest: "a".repeat(64),
         authorityRequests,
-        authorityDelegations,
+        authorityEvalCeilings,
         adoptionPolicy: "prompt",
       },
       {
@@ -52,10 +56,10 @@ describe("readyElectronLaunchEvent", () => {
       url: "http://gateway.test/_a/shell/index.html",
       executionDigest: "a".repeat(64),
       authorityRequests,
-      authorityDelegations,
+      authorityEvalCeilings,
     });
     expect(event?.authorityRequests).toEqual(authorityRequests);
-    expect(event?.authorityDelegations).toEqual(authorityDelegations);
+    expect(event?.authorityEvalCeilings).toEqual(authorityEvalCeilings);
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -71,7 +75,7 @@ describe("readyElectronLaunchEvent", () => {
         appId: "@workspace-apps/shell",
         buildKey: "cache-key",
         artifactRoute: "/_a/shell/index.html",
-        authorityRequests: [{ capability: "service:events.watch" }],
+        authorityRequests: [{ capability: "events.watch" }],
       },
       { resolveArtifactRoute: vi.fn(), warn }
     );

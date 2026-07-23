@@ -52,6 +52,7 @@ export function getLocalHubLogPath(): string {
 export interface HubProcessManagerConfig {
   workspaceName: string;
   ephemeral: boolean;
+  ephemeralLifecycle: "replace" | "resume" | null;
   appRoot: string;
   appVersion: string;
   logLevel?: string;
@@ -67,7 +68,8 @@ export interface HubWorkspaceTarget {
   deviceId: string;
   refreshToken: string;
   serverId: string;
-  serverBootId: string;
+  /** Stable machine-hub process identity, never the routed child's boot id. */
+  hubServerBootId: string;
   workspaceId: string;
   attached: boolean;
 }
@@ -179,6 +181,8 @@ async function postJson(
 
 export class HubProcessManager {
   private current: HubWorkspaceTarget | null = null;
+  /** Consumed once the new dev session owns a freshly established lifecycle. */
+  private ephemeralReplacementPending = false;
   private restartTimestamps: number[] = [];
   private isStopping = false;
   private ensureAlivePromise: Promise<void> | null = null;
@@ -186,11 +190,15 @@ export class HubProcessManager {
   private verifiedHubPids = new Set<number>();
 
   constructor(private readonly config: HubProcessManagerConfig) {
+    if (config.ephemeral !== (config.ephemeralLifecycle !== null)) {
+      throw new Error("Ephemeral workspace mode requires one explicit lifecycle intent");
+    }
     if (config.ephemeral && config.workspaceName !== EPHEMERAL_DEV_WORKSPACE_NAME) {
       throw new Error(
         `Ephemeral desktop sessions use the canonical workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}"`
       );
     }
+    this.ephemeralReplacementPending = config.ephemeralLifecycle === "replace";
   }
 
   async attachOrSpawn(): Promise<HubWorkspaceTarget> {
@@ -428,7 +436,31 @@ export class HubProcessManager {
     );
     let workspace: z.infer<typeof HubWorkspaceEntrySchema>;
     if (this.config.ephemeral) {
+      if (target.attached && this.ephemeralReplacementPending) {
+        const visible = await hubControl.listWorkspaces();
+        const previous = visible.find((entry) => entry.name === this.config.workspaceName);
+        if (previous && previous.ephemeral !== true) {
+          throw new Error(
+            `Cannot replace persistent workspace "${this.config.workspaceName}" with ephemeral dev`
+          );
+        }
+        if (previous) {
+          const deleted = await hubControl.deleteWorkspace({
+            workspace: this.config.workspaceName,
+          });
+          if (!deleted.deleted || deleted.workspaceId !== previous.workspaceId) {
+            throw new Error("Hub did not retire the previous ephemeral workspace lifecycle");
+          }
+          log.info(
+            `[ephemeral] Retired previous ${this.config.workspaceName} lifecycle ${previous.workspaceId}`
+          );
+        }
+      }
       workspace = await hubControl.ensureEphemeralWorkspace();
+      // The replace intent belongs to this desktop launch, not to every later
+      // reconnect. A freshly spawned hub already satisfies it; an attached hub
+      // satisfies it after the delete+ensure sequence above.
+      this.ephemeralReplacementPending = false;
       if (workspace.name !== this.config.workspaceName || workspace.ephemeral !== true) {
         throw new Error("Hub did not establish the requested ephemeral workspace lifecycle");
       }
@@ -452,8 +484,7 @@ export class HubProcessManager {
       deviceId: credential.deviceId,
       refreshToken: credential.refreshToken,
       serverId: target.record.serverId,
-      serverBootId:
-        typeof routed.serverBootId === "string" ? routed.serverBootId : target.record.serverBootId,
+      hubServerBootId: target.record.serverBootId,
       workspaceId: routed.workspaceId,
       attached: target.attached,
     };
@@ -534,7 +565,7 @@ export class HubProcessManager {
     if (!current) return;
     const lease = this.liveLease();
     const attached = lease ? await this.tryAttach(lease) : null;
-    if (attached?.record.serverBootId === current.serverBootId) return;
+    if (attached?.record.serverBootId === current.hubServerBootId) return;
     if (attached) {
       const credential = await this.ensureDeviceCredential(attached);
       this.current = await this.routeWorkspace(attached, credential);

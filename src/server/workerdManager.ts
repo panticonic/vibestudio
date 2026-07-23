@@ -20,8 +20,10 @@ import { pathToFileURL } from "url";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { FsService } from "@vibestudio/shared/fsService";
-import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
+import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { productDirectMethodCapability } from "@vibestudio/shared/authority/directMethodEffects";
 import { primaryTextArtifactContent, type BuildResult } from "./buildV2/buildStore.js";
+import type { WorkspaceRpcMethodDoc } from "./buildV2/workspaceRpcCatalog.js";
 import type { ProtectedPublicationEvent, RuntimeImageBinding } from "./buildV2/index.js";
 import { validateBuildRef } from "./buildV2/refs.js";
 import type { RouteRegistry, ManifestRouteDecl } from "./routeRegistry.js";
@@ -45,6 +47,7 @@ import { encodeUniversalKey } from "./doDispatch.js";
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
 import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
+import { destroyWorkerdConnections } from "./workerdRpcRelay.js";
 
 const log = createDevLogger("WorkerdManager");
 /** uniqueKey of the single static namespace that hosts all userland DO facets.
@@ -494,7 +497,7 @@ export class WorkerdManager {
       buildKey: binding.buildKey,
       executionDigest: binding.executionDigest,
       authorityRequests: binding.authorityRequests,
-      authorityDelegations: binding.authorityDelegations,
+      authorityEvalCeilings: binding.authorityEvalCeilings,
       effectiveVersion: binding.effectiveVersion,
       ...(scopeRef ? { scopeRef } : {}),
     });
@@ -510,7 +513,7 @@ export class WorkerdManager {
       buildKey: identity.buildKey,
       executionDigest: identity.executionDigest,
       authorityRequests: identity.authorityRequests,
-      authorityDelegations: identity.authorityDelegations,
+      authorityEvalCeilings: identity.authorityEvalCeilings,
       effectiveVersion: identity.effectiveVersion,
     });
   }
@@ -741,7 +744,7 @@ export class WorkerdManager {
     buildKey: string;
     executionDigest: string;
     authorityRequests: RuntimeImageRecord["authorityRequests"];
-    authorityDelegations: RuntimeImageRecord["authorityDelegations"];
+    authorityEvalCeilings: RuntimeImageRecord["authorityEvalCeilings"];
   }> {
     if (!this.isSemanticControlPlane(args.source, args.className, args.key)) {
       this.requireWorkspaceProvider("Durable Object entity activation");
@@ -780,8 +783,125 @@ export class WorkerdManager {
       buildKey: image.buildKey,
       executionDigest: image.executionDigest,
       authorityRequests: image.authorityRequests,
-      authorityDelegations: image.authorityDelegations,
+      authorityEvalCeilings: image.authorityEvalCeilings,
     };
+  }
+
+  /**
+   * Re-materialize one durable incarnation from its persisted runtime-image
+   * binding before alarms or lifecycle callbacks are admitted after restart.
+   * The content-addressed artifact must match the exact sealed identity
+   * recorded by WorkspaceDO; a missing artifact or unknown class is a startup
+   * integrity failure, never an implicit rebuild or upgrade.
+   */
+  async restoreDurableObjectEntity(record: EntityRecord): Promise<void> {
+    if (record.kind !== "do" || !record.className) {
+      throw new Error(`Cannot restore non-DO runtime entity ${record.id}`);
+    }
+    if (!record.activeBuildKey || !record.activeExecutionDigest || !record.activeAuthority) {
+      throw new Error(`Durable Object ${record.id} has no sealed active execution identity`);
+    }
+    const internalImageId = `do-service:${doServiceKey(record.source.repoPath, record.className)}`;
+    const persistedImage =
+      this.runtimeImages.get(record.id) ??
+      (isInternalDOSource(record.source.repoPath) ? this.runtimeImages.get(internalImageId) : null);
+    if (!persistedImage) {
+      throw new Error(`Durable Object ${record.id} has no persisted runtime image`);
+    }
+    const persistedAuthority = {
+      requests: persistedImage.authorityRequests,
+      evalCeilings: persistedImage.authorityEvalCeilings,
+    };
+    if (
+      persistedImage.buildKey !== record.activeBuildKey ||
+      persistedImage.executionDigest !== record.activeExecutionDigest ||
+      persistedImage.effectiveVersion !== record.source.effectiveVersion ||
+      JSON.stringify(persistedAuthority) !== JSON.stringify(record.activeAuthority)
+    ) {
+      throw new Error(
+        `Durable Object ${record.id} has a persisted runtime image that does not match its sealed active execution identity`
+      );
+    }
+
+    if (isInternalDOSource(record.source.repoPath)) {
+      await this.ensureDOClass(record.source.repoPath, record.className, {
+        objectKey: record.key,
+        imageId: record.id,
+        stateArgs: record.stateArgs,
+      });
+    } else {
+      this.restoreSealedUserlandDOClass(record, persistedImage);
+      await this.ensureWorkerdRunning();
+    }
+
+    const restored = this.runtimeImages.get(record.id) ?? persistedImage;
+    const restoredAuthority = {
+      requests: restored.authorityRequests,
+      evalCeilings: restored.authorityEvalCeilings,
+    };
+    if (
+      restored.buildKey !== record.activeBuildKey ||
+      restored.executionDigest !== record.activeExecutionDigest ||
+      restored.effectiveVersion !== record.source.effectiveVersion ||
+      JSON.stringify(restoredAuthority) !== JSON.stringify(record.activeAuthority)
+    ) {
+      throw new Error(
+        `Durable Object ${record.id} could not restore its sealed active execution identity`
+      );
+    }
+  }
+
+  /**
+   * Restore the routing metadata for an active userland Durable Object from
+   * the content-addressed runtime image recorded at activation time.
+   *
+   * This deliberately never calls bindRuntimeImage(). The workspace ref may
+   * have advanced, been reverted, or disappeared since the object started;
+   * rebuilding from that mutable ref would silently upgrade the object (or
+   * make cleanup impossible). The exact build artifact is therefore a durable
+   * part of the active entity identity and must still be available by key.
+   */
+  private restoreSealedUserlandDOClass(record: EntityRecord, image: RuntimeImageRecord): void {
+    const source = record.source.repoPath;
+    const className = assertPresent(record.className);
+    const sourceSegments = source.split("/").filter(Boolean);
+    if (sourceSegments.length !== 2) {
+      throw new Error(`DO source path must be exactly 2 segments, got: "${source}"`);
+    }
+    if (
+      !this.requireWorkspaceProvider("sealed runtime image restoration").getBuildByKey(
+        image.buildKey
+      )
+    ) {
+      throw new RuntimeImageUnavailableError(
+        `Durable Object ${record.id} is missing its sealed build artifact ${image.buildKey}`
+      );
+    }
+
+    const serviceKey = doServiceKey(source, className);
+    let service = this.doServices.get(serviceKey);
+    if (!service) {
+      const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
+      service = {
+        buildKey: image.buildKey,
+        className,
+        imageId: image.id,
+        serviceName: `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`,
+        source,
+        ...(image.scopeRef ? { scopeRef: image.scopeRef } : {}),
+      };
+      this.doServices.set(serviceKey, service);
+      this.registerRoutesForDoClass(source, className);
+    }
+
+    const stateArgs = recordStateArgs(record.stateArgs);
+    this.doObjectBuilds.set(doObjectBuildKey(source, className, record.key), {
+      imageId: image.id,
+      buildKey: image.buildKey,
+      ...(image.scopeRef ? { scopeRef: image.scopeRef } : {}),
+      ...(stateArgs ? { stateArgs } : {}),
+    });
+    this.registerDoEgressCaller(source, className, image, record.key);
   }
 
   /**
@@ -804,7 +924,7 @@ export class WorkerdManager {
     buildKey: string;
     executionDigest: string;
     authorityRequests: RuntimeImageRecord["authorityRequests"];
-    authorityDelegations: RuntimeImageRecord["authorityDelegations"];
+    authorityEvalCeilings: RuntimeImageRecord["authorityEvalCeilings"];
   }> {
     this.requireWorkspaceProvider("worker start");
     const targetId = canonicalEntityId({ kind: "worker", source: args.source, key: args.key });
@@ -845,7 +965,7 @@ export class WorkerdManager {
           buildKey: image.buildKey,
           executionDigest: image.executionDigest,
           authorityRequests: image.authorityRequests,
-          authorityDelegations: image.authorityDelegations,
+          authorityEvalCeilings: image.authorityEvalCeilings,
         };
       }
       throw new Error(
@@ -938,7 +1058,7 @@ export class WorkerdManager {
         buildKey: image.buildKey,
         executionDigest: image.executionDigest,
         authorityRequests: image.authorityRequests,
-        authorityDelegations: image.authorityDelegations,
+        authorityEvalCeilings: image.authorityEvalCeilings,
       };
     } catch (error) {
       instance.status = "error";
@@ -1033,11 +1153,20 @@ export class WorkerdManager {
    * `unregisterEgressCaller(callerId)` on destroy.
    */
   private registerEgressCaller(instance: WorkerInstance): void {
+    const image = this.runtimeImages.get(instance.runtimeImageId);
+    if (!image || image.executionDigest !== instance.executionDigest) {
+      throw new Error(
+        `Cannot register egress for ${instance.callerId} without its exact sealed runtime image`
+      );
+    }
     const caller = createVerifiedCaller(instance.callerId, "worker", {
       callerId: instance.callerId,
       callerKind: "worker",
       repoPath: instance.source,
-      effectiveVersion: instance.effectiveVersion ?? instance.buildKey ?? "unknown",
+      effectiveVersion: image.effectiveVersion,
+      executionDigest: image.executionDigest,
+      requested: image.authorityRequests,
+      evalCeilings: image.authorityEvalCeilings,
     });
     this.deps.registerEgressCaller(instance.callerId, caller);
   }
@@ -1330,6 +1459,44 @@ export class WorkerdManager {
   }
 
   /**
+   * Resolve a userland DO method from the exact build currently bound to this
+   * object. Product-sealed GAD is the only static exception: it is a reviewed
+   * host workspace service, while all workspace-built classes fail closed
+   * without an exact artifact catalog entry.
+   */
+  resolveDoRpcMethodAuthority(
+    source: string,
+    className: string,
+    objectKey: string,
+    method: string
+  ): Pick<WorkspaceRpcMethodDoc, "effect" | "access"> | null {
+    if (this.isSemanticControlPlane(source, className, objectKey)) {
+      const capability = productDirectMethodCapability(className, method);
+      return capability
+        ? {
+            effect: { kind: "semantic", capability },
+            access: { tier: "critical", sensitivity: "destructive" },
+          }
+        : {
+            effect: { kind: "workspace-service" },
+            access: { tier: "open", sensitivity: "read" },
+          };
+    }
+    if (isInternalDOSource(source)) return null;
+    const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
+    const service = this.doServices.get(doServiceKey(source, className));
+    const buildKey = objectBuild?.buildKey ?? service?.buildKey;
+    if (!buildKey) return null;
+    const build = this.requireWorkspaceProvider("direct DO authority").getBuildByKey(buildKey);
+    if (!build || build.metadata.kind !== "worker") return null;
+    return (
+      build.metadata.workspaceRpcCatalog?.find(
+        (entry) => entry.className === className && entry.name === method
+      ) ?? null
+    );
+  }
+
+  /**
    * Serializable code + env for a userland DO class, for the UniversalDO facet
    * host. Mirrors the per-class DO service bindings the old static config
    * generated. Capability bindings (globalOutbound) are attached by the host.
@@ -1366,7 +1533,7 @@ export class WorkerdManager {
       } else {
         svc.buildKey = record.buildKey;
       }
-      this.registerDoEgressCaller(source, className, record.effectiveVersion);
+      this.registerDoEgressCaller(source, className, record, objectKey);
     });
     if (objectBuildKey && objectBuild) {
       this.doObjectBuilds.set(objectBuildKey, {
@@ -1389,7 +1556,7 @@ export class WorkerdManager {
     const serviceCallerId = `do-service:${serviceKey}`;
     const serviceToken = this.ensureWorkerBearer(serviceCallerId);
     // Keep the egress attribution registered for this class identity.
-    this.registerDoEgressCaller(source, className, image.effectiveVersion);
+    this.registerDoEgressCaller(source, className, image, objectKey);
 
     const env: Record<string, unknown> = {
       RPC_AUTH_TOKEN: serviceToken,
@@ -1424,13 +1591,22 @@ export class WorkerdManager {
 
   /** Register a userland DO class's identity (`source:className`) for attributed
    *  egress through the shared listener. The UniversalDO host stamps this id. */
-  private registerDoEgressCaller(source: string, className: string, buildKey: string): void {
-    const identity = `${source}:${className}`;
-    const caller = createVerifiedCaller(`do-service:${identity}`, "worker", {
-      callerId: `do-service:${identity}`,
-      callerKind: "worker",
+  private registerDoEgressCaller(
+    source: string,
+    className: string,
+    image: RuntimeImageRecord,
+    objectKey?: string
+  ): void {
+    const classIdentity = `${source}:${className}`;
+    const identity = objectKey ? `do:${source}:${className}:${objectKey}` : classIdentity;
+    const caller = createVerifiedCaller(identity, objectKey ? "do" : "worker", {
+      callerId: identity,
+      callerKind: objectKey ? "do" : "worker",
       repoPath: source,
-      effectiveVersion: buildKey,
+      effectiveVersion: image.effectiveVersion,
+      executionDigest: image.executionDigest,
+      requested: image.authorityRequests,
+      evalCeilings: image.authorityEvalCeilings,
     });
     this.deps.registerEgressCaller(identity, caller);
   }
@@ -1470,12 +1646,16 @@ export class WorkerdManager {
       // Don't grep this string expecting to find a registered principal.
       const serviceCallerId = `do-service:${serviceKey}`;
       const serviceToken = this.ensureWorkerBearer(serviceCallerId);
+      const serviceIdentity = internalDOExecutionIdentity(internalBundle, className);
 
       const serviceCaller = createVerifiedCaller(serviceCallerId, "worker", {
         callerId: serviceCallerId,
         callerKind: "worker",
-        repoPath: doService.source,
-        effectiveVersion: doService.buildKey,
+        repoPath: serviceIdentity.source,
+        effectiveVersion: serviceIdentity.effectiveVersion,
+        executionDigest: serviceIdentity.executionDigest,
+        requested: serviceIdentity.authorityRequests,
+        evalCeilings: serviceIdentity.authorityEvalCeilings,
       });
       const bindings: object[] = [
         { name: "RPC_AUTH_TOKEN", text: serviceToken },
@@ -2164,6 +2344,7 @@ export class WorkerdManager {
           this.workerdDiagnostics(proc.pid)
         )}`
       );
+      await destroyWorkerdConnections(`workerd process generation ended: ${reason}`);
       proc.kill("SIGTERM");
       // Wait for the process to exit so the port is released before respawn.
       // `proc.killed` only reports that a signal was *sent*, not that the
@@ -2250,7 +2431,7 @@ export class WorkerdManager {
       });
       if (!isInternalDOSource(source)) {
         this.registerRoutesForDoClass(source, className);
-        this.registerDoEgressCaller(source, className, image.effectiveVersion);
+        this.registerDoEgressCaller(source, className, image);
       } else {
         internalAdded = true;
       }
@@ -2362,7 +2543,7 @@ export class WorkerdManager {
       });
       if (!isInternalDOSource(source)) {
         this.registerRoutesForDoClass(source, className);
-        this.registerDoEgressCaller(source, className, assertPresent(image).effectiveVersion);
+        this.registerDoEgressCaller(source, className, assertPresent(image));
       }
     }
 
@@ -2618,7 +2799,7 @@ export class WorkerdManager {
         buildKey: completedBuildKey,
         executionDigest: assertPresent(completed.metadata.execution).executionDigest,
         authorityRequests: assertPresent(completed.metadata.authority).requests,
-        authorityDelegations: assertPresent(completed.metadata.authority).delegations,
+        authorityEvalCeilings: assertPresent(completed.metadata.authority).evalCeilings,
         effectiveVersion: completed.metadata.ev,
         ...(scopeRef ? { scopeRef } : {}),
       });
@@ -2650,7 +2831,7 @@ export class WorkerdManager {
       const image = updateImageFromCompleted(svc.imageId, svc.scopeRef);
       if (image) {
         svc.buildKey = image.buildKey;
-        this.registerDoEgressCaller(svc.source, svc.className, image.effectiveVersion);
+        this.registerDoEgressCaller(svc.source, svc.className, image);
       }
     }
     for (const [key, objectBuild] of trackedObjects) {
@@ -2696,7 +2877,7 @@ export class WorkerdManager {
           source,
         });
         this.registerRoutesForDoClass(source, className);
-        this.registerDoEgressCaller(source, className, image.effectiveVersion);
+        this.registerDoEgressCaller(source, className, image);
         log.info(`Registered new DO class ${source}:${className} from push (no restart)`);
       }
     }

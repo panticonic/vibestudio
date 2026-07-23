@@ -40,14 +40,14 @@ import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import { CompositorRecovery } from "./compositorRecovery.js";
 import type { CapabilityScope } from "@vibestudio/rpc";
-import type { EvalAuthorityDelegation } from "@vibestudio/shared/authorityManifest";
+import type { EvalAuthorityCeiling } from "@vibestudio/shared/authorityManifest";
 
 export interface HostedCodeIdentity {
   source?: string;
   effectiveVersion?: string | null;
   executionDigest?: string | null;
   requested?: readonly CapabilityScope[];
-  delegations?: readonly EvalAuthorityDelegation[];
+  evalCeilings?: readonly EvalAuthorityCeiling[];
 }
 
 const log = createDevLogger("ViewManager");
@@ -374,6 +374,7 @@ export class ViewManager {
 
     // Show window and finalize bounds after shell content loads
     this.shellView.webContents.on("did-finish-load", () => {
+      console.log(`[Perf] shell view loaded at ${Math.round(process.uptime() * 1000)}ms uptime`);
       this.updateShellBounds();
       // Show window now that content is ready (avoids layout flash)
       if (options.showWindowOnShellLoad !== false && !this.window.isVisible()) {

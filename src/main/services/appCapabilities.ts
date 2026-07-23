@@ -35,13 +35,17 @@ export function requireAppCapability(
   surface: string
 ): void {
   if (ctx.caller.runtime.kind !== "app") {
-    throw new Error(`${surface} is restricted to app callers`);
+    throw accessError(`${surface} is restricted to app callers`);
   }
   const viewInfo = viewManager.getViewInfo(ctx.caller.runtime.id);
   if (viewHasAppCapability(ctx.caller.runtime.id, viewInfo, capability)) return;
-  throw new Error(
+  throw accessError(
     `${surface} requires app capability '${capability}' for ${ctx.caller.runtime.id}`
   );
+}
+
+function accessError(message: string): Error {
+  return Object.assign(new Error(message), { code: "EACCES" });
 }
 
 /**

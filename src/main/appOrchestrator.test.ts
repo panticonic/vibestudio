@@ -19,7 +19,7 @@ function sealedAuthority(executionDigest = EXECUTION_DIGEST_1) {
   return {
     executionDigest,
     authorityRequests: [],
-    authorityDelegations: [],
+    authorityEvalCeilings: [],
   };
 }
 
@@ -113,7 +113,7 @@ describe("AppOrchestrator", () => {
         effectiveVersion: "ev-shell",
         executionDigest: EXECUTION_DIGEST_1,
         requested: [],
-        delegations: [],
+        evalCeilings: [],
       }
     );
     expect(panelView.setViewVisible).toHaveBeenCalledWith("@workspace-apps/shell", true);
@@ -208,7 +208,7 @@ describe("AppOrchestrator", () => {
         source: "apps/shell",
         executionDigest: EXECUTION_DIGEST_2,
         requested: [],
-        delegations: [],
+        evalCeilings: [],
       }
     );
     expect(orchestrator.listPendingAppUpdates()).toEqual([]);
@@ -294,7 +294,7 @@ describe("AppOrchestrator", () => {
             executionDigest: execution.executionDigest,
             execution,
             authorityRequests: [],
-            authorityDelegations: [],
+            authorityEvalCeilings: [],
           },
           artifacts,
         })
@@ -310,7 +310,7 @@ describe("AppOrchestrator", () => {
         effectiveVersion: "ev-shell",
         executionDigest: execution.executionDigest,
         authorityRequests: [],
-        authorityDelegations: [],
+        authorityEvalCeilings: [],
       });
       await expect(orchestrator.loadBakedApp(root)).resolves.toBe(true);
 
@@ -324,7 +324,7 @@ describe("AppOrchestrator", () => {
           effectiveVersion: "ev-shell",
           executionDigest: execution.executionDigest,
           requested: [],
-          delegations: [],
+          evalCeilings: [],
         }
       );
     } finally {
@@ -341,7 +341,7 @@ describe("AppOrchestrator", () => {
       target: "electron" as const,
       url: "http://localhost/app",
       authorityRequests: [],
-      authorityDelegations: [],
+      authorityEvalCeilings: [],
     };
 
     await expect(orchestrator.applyAppAvailable(event)).rejects.toThrow(
@@ -401,7 +401,7 @@ describe("AppOrchestrator", () => {
             executionDigest: execution.executionDigest,
             execution,
             authorityRequests: [],
-            authorityDelegations: [],
+            authorityEvalCeilings: [],
           },
           artifacts,
         })

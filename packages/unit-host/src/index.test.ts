@@ -7,16 +7,14 @@ import {
   UnitHost,
   UnitRegistry,
   UnitTrustResolver,
-  authorizeUnitSourceChange,
+  FileUnitIdentityApprovalStore,
   canonicalUnitBuildIdentity,
   collectTransitiveUnitDependencyEvs,
   createPendingUnitRegistryEntry,
   createUnitBatchEntryBase,
   createUnitBuildIdentity,
   findUnitGraphNode,
-  normalizeUnitRepoPath,
   unitBuildIdentityFromRegistryEntry,
-  unitChangeSessionGrantKey,
   unitWorkspaceLogRecord,
   unitWorkspaceStatus,
   type UnitDeclaration,
@@ -215,6 +213,33 @@ describe("UnitRegistry", () => {
   });
 });
 
+describe("FileUnitIdentityApprovalStore", () => {
+  it("persists exact reviewed identities independently of activation", () => {
+    const root = tempRoot();
+    const first = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "app" });
+    first.approveMany(["identity:b", "identity:a"]);
+
+    const reloaded = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "app" });
+    expect(reloaded.has("identity:a")).toBe(true);
+    expect(reloaded.has("identity:b")).toBe(true);
+    expect(reloaded.has("identity:other")).toBe(false);
+  });
+
+  it("fails closed on unknown persisted schemas", () => {
+    const root = tempRoot();
+    const file = path.join(root, "units", "extension", "approvals.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ schemaVersion: 2, unitKind: "extension", identityKeys: [] })
+    );
+
+    expect(
+      () => new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "extension" })
+    ).toThrow(/Unsupported or invalid extension approval-store schema/);
+  });
+});
+
 describe("workspace unit summaries", () => {
   it("maps registry entries to shared workspace status rows", () => {
     expect(unitWorkspaceStatus("extension", entry({
@@ -369,183 +394,6 @@ describe("UnitTrustResolver", () => {
   });
 });
 
-describe("authorizeUnitSourceChange", () => {
-  const descriptor = {
-    kind: "extension",
-    sourceRoot: "extensions",
-    buildKind: "extension",
-    approvalFraming: {
-      serviceName: "extensions",
-      unitLabel: "extension",
-      unitLabelPlural: "extensions",
-      nativeCode: true,
-    },
-    seedTrustEligible: true,
-  } as const;
-  const node = {
-    name: "@workspace-extensions/a",
-    relativePath: "extensions/a",
-  };
-  const activeEntry = entry({
-    activeBundleKey: "bundle",
-    activeEv: "ev",
-    status: "running",
-  });
-
-  function makeGrantStore() {
-    const active = new Set<string>();
-    return {
-      active,
-      hasActive: (key: string) => active.has(key),
-      grant: (key: string) => {
-        active.add(key);
-      },
-    };
-  }
-
-  it("normalizes repo paths before ownership lookup", async () => {
-    const grantStore = makeGrantStore();
-    const seen: string[] = [];
-
-    await authorizeUnitSourceChange({
-      descriptor,
-      grantStore,
-      grantTtlMs: 1000,
-      findInstalledByRepo: (repoPath) => {
-        seen.push(repoPath);
-        return null;
-      },
-      requestApproval: async () => "once",
-    }, {
-      caller: { runtime: { id: "panel:one", kind: "panel" } },
-      repoPath: "workspace/extensions/a",
-      branch: "main",
-      commit: "abc",
-    });
-
-    expect(seen).toEqual(["extensions/a"]);
-    expect(normalizeUnitRepoPath("/workspace/extensions/a/")).toBe("extensions/a");
-  });
-
-  it("denies unsupported runtime callers before prompting", async () => {
-    const grantStore = makeGrantStore();
-    const prompted: string[] = [];
-
-    const result = await authorizeUnitSourceChange({
-      descriptor,
-      grantStore,
-      grantTtlMs: 1000,
-      findInstalledByRepo: () => ({ entry: activeEntry, node }),
-      requestApproval: async () => {
-        prompted.push("prompted");
-        return "once";
-      },
-    }, {
-      caller: { runtime: { id: "extension:one", kind: "extension" } },
-      repoPath: "extensions/a",
-      branch: "main",
-      commit: "abc",
-    });
-
-    expect(result).toEqual({
-      allowed: false,
-      reason: "Extension source changes from extension callers are not supported",
-    });
-    expect(prompted).toEqual([]);
-  });
-
-  it("records session grants after approval", async () => {
-    const grantStore = makeGrantStore();
-    const promptedBranches: string[] = [];
-    const request = {
-      caller: {
-        runtime: { id: "panel:one", kind: "panel" },
-        code: {
-          callerKind: "panel",
-          repoPath: "panels/main",
-          effectiveVersion: "ev-panel",
-        },
-      },
-      repoPath: "extensions/a",
-      branch: "refs/heads/main",
-      commit: "abc",
-    };
-
-    await expect(authorizeUnitSourceChange({
-      descriptor,
-      grantStore,
-      grantTtlMs: 1000,
-      findInstalledByRepo: () => ({ entry: activeEntry, node }),
-      requestApproval: async ({ request: sourceChange }) => {
-        promptedBranches.push(sourceChange.branch);
-        return "session";
-      },
-    }, request)).resolves.toEqual({ allowed: true });
-
-    await expect(authorizeUnitSourceChange({
-      descriptor,
-      grantStore,
-      grantTtlMs: 1000,
-      findInstalledByRepo: () => ({ entry: activeEntry, node }),
-      requestApproval: async () => {
-        promptedBranches.push("unexpected");
-        return "session";
-      },
-    }, { ...request, branch: "main" })).resolves.toEqual({ allowed: true });
-
-    expect(grantStore.active.has(
-      unitChangeSessionGrantKey("panel:one", "@workspace-extensions/a", "extensions/a", "main"),
-    )).toBe(true);
-    expect(promptedBranches).toEqual(["main"]);
-  });
-
-  it("gates source changes to the installed unit ref instead of hardcoded main branches", async () => {
-    const grantStore = makeGrantStore();
-    const prompted: string[] = [];
-    const featureEntry = entry({
-      source: { kind: "workspace-repo", repo: "extensions/a", ref: "feature" },
-      activeBundleKey: "bundle",
-      status: "running",
-    });
-    const baseRequest = {
-      caller: {
-        runtime: { id: "panel:one", kind: "panel" },
-        code: {
-          callerKind: "panel",
-          repoPath: "panels/main",
-          effectiveVersion: "ev-panel",
-        },
-      },
-      repoPath: "extensions/a",
-      commit: "abc",
-    };
-
-    await expect(authorizeUnitSourceChange({
-      descriptor,
-      grantStore,
-      grantTtlMs: 1000,
-      findInstalledByRepo: () => ({ entry: featureEntry, node }),
-      requestApproval: async () => {
-        prompted.push("prompted");
-        return "once";
-      },
-    }, { ...baseRequest, branch: "main" })).resolves.toEqual({ allowed: true });
-
-    await expect(authorizeUnitSourceChange({
-      descriptor,
-      grantStore,
-      grantTtlMs: 1000,
-      findInstalledByRepo: () => ({ entry: featureEntry, node }),
-      requestApproval: async () => {
-        prompted.push("prompted");
-        return "once";
-      },
-    }, { ...baseRequest, branch: "refs/heads/feature" })).resolves.toEqual({ allowed: true });
-
-    expect(prompted).toEqual(["prompted"]);
-  });
-});
-
 describe("UnitHost", () => {
   interface TestNode extends UnitGraphNode {
     version: string;
@@ -656,6 +504,28 @@ describe("UnitHost", () => {
     await host.whenSettled();
 
     expect(applied).toEqual([node.name]);
+    expect(prompted).toEqual([]);
+  });
+
+  it("retains exact preapproval for declarations not included in an earlier subset reconcile", async () => {
+    const second: TestNode = {
+      name: "@workspace-extensions/b",
+      relativePath: "extensions/b",
+      version: "1.0.0",
+    };
+    const { host, applied, prompted, node } = makeHarness({ extraNode: second });
+    const declarations = [
+      { source: node.relativePath, ref: "main" },
+      { source: second.relativePath, ref: "main" },
+    ];
+    const approval = host.approvalForDeclarations(declarations);
+
+    host.acceptPreapprovedTrust(approval.identityKeys);
+    await host.reconcileDeclared([declarations[0]!], { removeUndeclared: false });
+    await host.reconcileDeclared([declarations[1]!], { removeUndeclared: false });
+    await host.whenSettled();
+
+    expect(applied).toEqual([node.name, second.name]);
     expect(prompted).toEqual([]);
   });
 

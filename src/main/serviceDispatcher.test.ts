@@ -6,15 +6,42 @@ import { z } from "zod";
 import {
   createVerifiedCaller,
   ServiceError,
+  ServiceDispatcher,
   parseServiceMethod,
 } from "@vibestudio/shared/serviceDispatcher";
-import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import {
+  createTestServiceDispatcher,
+  testAuthority,
+} from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { fsMethods } from "@vibestudio/service-schemas/fs";
 import { RemoteRpcError, RpcBoundaryError } from "@vibestudio/rpc";
 import type { ServiceContext, ServiceHandler } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
 const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
+
+const UNIT_METHODS = [
+  ...["echo", "fail", "svc", "alpha", "beta", "a", "b"].flatMap((service) => [
+    `${service}.hello`,
+    `${service}.run`,
+  ]),
+  "typed.greet",
+  "typedReturn.ok",
+  "typedReturn.bad",
+  "voidReturn.okNull",
+  "voidReturn.okUndefined",
+  "voidReturn.badObject",
+  "workspace.logs",
+  "norm.m",
+  "overloaded.readFile",
+  "realFs.readFile",
+  "realFs.glob",
+  "svc.doStuff",
+] as const;
+
+function createDispatcher() {
+  return createTestServiceDispatcher({ openMethods: UNIT_METHODS });
+}
 
 function makeService(name: string, handler: ServiceHandler): ServiceDefinition {
   return {
@@ -29,8 +56,64 @@ function makeService(name: string, handler: ServiceHandler): ServiceDefinition {
 }
 
 describe("ServiceDispatcher", () => {
+  it("threads invocation cancellation into a parked authority acquisition", async () => {
+    const sd = new ServiceDispatcher({
+      tierLookup: () => ({
+        tier: "gated",
+        session: "family",
+        rationale: "Cancellation propagation test",
+      }),
+      capabilityLookup: () => "test:parked-authority",
+    });
+    const caller = createVerifiedCaller(
+      "eval:test",
+      "agent",
+      null,
+      {
+        agentId: "agent-test",
+        entityId: "agent:test",
+        contextId: "ctx-test",
+        channelId: "chat-test",
+      },
+      { userId: "user-test", handle: "Test User" },
+      true
+    );
+    sd.setAuthorityResolver(({ capability, resourceKey }) => ({
+      ...testAuthority(caller, capability, resourceKey),
+      grants: [],
+    }));
+    const acquire = vi.fn(async (_input: unknown, signal?: AbortSignal) => {
+      expect(signal).toBe(controller.signal);
+      return { state: "closed" as const };
+    });
+    sd.setAuthorityAcquirer({
+      request: vi.fn(),
+      acquire,
+      consume: vi.fn(() => false),
+      invalidate: vi.fn(),
+    });
+    sd.registerService({
+      name: "parked",
+      authority: { principals: ["session"] },
+      methods: { run: { args: z.tuple([]), access: { sensitivity: "read" } } },
+      handler: vi.fn(),
+    });
+    sd.markInitialized();
+    const controller = new AbortController();
+
+    await expect(
+      sd.dispatch(
+        { caller, signal: controller.signal, authorityAcquisition: "wait" },
+        "parked",
+        "run",
+        []
+      )
+    ).rejects.toThrow(/lacks test:parked-authority/i);
+    expect(acquire).toHaveBeenCalledTimes(1);
+  });
+
   it("dispatch before markInitialized: registered services work, unknown services get the retryable not-initialized error", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService(makeService("echo", async (_ctx, method, args) => ({ method, args })));
 
     // A registered service is fully wired and may be called during boot
@@ -46,14 +129,14 @@ describe("ServiceDispatcher", () => {
   });
 
   it("dispatch throws ServiceError for unknown service", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.markInitialized();
 
     await expect(sd.dispatch(ctx, "nope", "foo", [])).rejects.toThrow("Unknown service");
   });
 
   it("dispatch calls registered handler and returns result", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService(makeService("echo", async (_ctx, method, args) => ({ method, args })));
     sd.markInitialized();
 
@@ -62,7 +145,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("dispatch wraps non-ServiceError exceptions in ServiceError", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService(
       makeService("fail", async () => {
         throw new Error("boom");
@@ -120,7 +203,7 @@ describe("ServiceDispatcher", () => {
   ])(
     "preserves $label provenance when wrapping it",
     async ({ error, errorKind, code, sourceCause, errorData }) => {
-      const sd = createTestServiceDispatcher();
+      const sd = createDispatcher();
       sd.registerService(
         makeService("fail", async () => {
           throw error;
@@ -146,7 +229,7 @@ describe("ServiceDispatcher", () => {
   );
 
   it("registerService warns on overwrite", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     sd.registerService(makeService("svc", async () => {}));
@@ -159,7 +242,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("hasService and getServices reflect registrations", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService(makeService("alpha", async () => {}));
     sd.registerService(makeService("beta", async () => {}));
 
@@ -169,7 +252,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("getServiceDefinitions returns all definitions", () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService(makeService("a", async () => {}));
     sd.registerService(makeService("b", async () => {}));
 
@@ -179,7 +262,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("exposes authority from the registered definition", () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService({
       name: "restricted",
       authority: { principals: ["user"] },
@@ -198,7 +281,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("validates args against Zod schema when method is defined", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService({
       name: "typed",
       authority: { principals: ["user"] },
@@ -218,7 +301,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("validates declared return schemas in dev/test", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService({
       name: "typedReturn",
       authority: { principals: ["user"] },
@@ -237,7 +320,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("accepts null as the wire representation of declared void returns", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService({
       name: "voidReturn",
       authority: { principals: ["user"] },
@@ -261,7 +344,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("reports service, method, argument path, and a readable summary on validation failure", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService({
       name: "workspace",
       authority: { principals: ["user"] },
@@ -288,7 +371,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("normalizes wire args: pads omitted trailing optionals and maps null→undefined", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     let seen: unknown[] = [];
     sd.registerService({
       name: "norm",
@@ -315,7 +398,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("normalizes wire args for tuple overload unions", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     let seen: unknown[] = [];
     sd.registerService({
       name: "overloaded",
@@ -358,7 +441,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("normalizes the real fs overloaded schemas", async () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     const seen = new Map<string, unknown[]>();
     sd.registerService({
       name: "realFs",
@@ -383,7 +466,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("getMethodSchema returns method definition", () => {
-    const sd = createTestServiceDispatcher();
+    const sd = createDispatcher();
     sd.registerService({
       name: "svc",
       authority: { principals: ["user"] },

@@ -28,6 +28,7 @@ type ServiceListRow =
       description?: string;
       protocols: string[];
       source: string;
+      docsId?: string;
       kind: "durable-object";
       className: string;
       defaultObjectKey: string | null;
@@ -39,6 +40,7 @@ type ServiceListRow =
       description?: string;
       protocols: string[];
       source: string;
+      docsId: string;
       kind: "worker";
       routePath: string;
     };
@@ -87,15 +89,19 @@ export function createWorkerService(deps: {
     contextId?: string;
     buildRef?: string;
   }) => Promise<void>;
+  assertUserlandServiceExposure?: (
+    ctx: ServiceContext,
+    input: { name: string; provider: string; providerEv: string }
+  ) => void | Promise<void>;
 }): ServiceDefinition {
   const { buildSystem, workspaceDecls } = deps;
   const dynamicWorkspaceServiceLeaf = {
     capability: "workspace-service:*",
+    tier: "gated" as const,
     requirement: {
       kind: "selected" as const,
-      principals: ["host", "user", "code", "entity"] as const,
+      principals: ["host", "user", "code"] as const,
     },
-    evalAcquisition: { kind: "baseline" as const },
   };
   const reviewedInternalTargetLeaf = {
     capability: "service:workers.resolveDurableObject",
@@ -103,7 +109,6 @@ export function createWorkerService(deps: {
       kind: "selected" as const,
       principals: ["code"] as const,
     },
-    evalAcquisition: { kind: "baseline" as const },
   };
   const preparedResolutionAuthority = (method: "resolveService" | "resolveDurableObject") => {
     const capability = `service:workers.${method}`;
@@ -112,7 +117,7 @@ export function createWorkerService(deps: {
       // service. Entity-bound agents/DOs must be able to reach this preparer;
       // the selected service leaf below still enforces whether that exact
       // service admits the entity principal.
-      requirement: requirementForPrincipals(["user", "host", "code", "entity"], capability),
+      requirement: requirementForPrincipals(["user", "host", "code"], capability),
       resource: { kind: "literal" as const, key: capability },
       prepared: {
         resolver:
@@ -136,18 +141,21 @@ export function createWorkerService(deps: {
       access: { sensitivity: "read" as const },
     },
     listServices: {
-      description: "List product-owned and workspace-authored services available here",
+      description:
+        "List product-owned and workspace-authored services visible in the caller's live context; workspace rows include the live docs catalog id. In eval import the top-level workers API from @workspace/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval.",
       args: z.tuple([]),
       access: { sensitivity: "read" as const },
     },
     resolveService: {
-      description: "Resolve a workspace service by name or protocol",
+      description:
+        "Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @workspace/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API.",
       args: z.tuple([z.string(), z.string().nullable().optional()]),
       access: { sensitivity: "read" as const },
       authority: preparedResolutionAuthority("resolveService"),
     },
     resolveDurableObject: {
-      description: "Resolve a Durable Object RPC target by source/class/key",
+      description:
+        "Resolve and activate a concrete Durable Object RPC target by source/class/key when no declared workspace service fits. The returned target is a lifecycle handle as well as an RPC address: when the caller owns a disposable object, clear any test data and pass that same target to workers.destroy(...) so its durable storage is retired.",
       args: z.tuple([z.string(), z.string(), z.string()]),
       access: { sensitivity: "read" as const },
       authority: preparedResolutionAuthority("resolveDurableObject"),
@@ -161,18 +169,49 @@ export function createWorkerService(deps: {
     methods,
     authorityPreparation: {
       "workers.resolveService.workspace-service": async (ctx, [query, objectKey]) => {
-        const { service } = await resolveWorkspaceServiceForCaller(
+        const scoped = await resolveWorkspaceServiceForCaller(
           ctx,
           String(query),
           objectKey == null ? null : String(objectKey)
         );
+        const { service } = scoped;
+        if (service.origin === "workspace") {
+          await deps.assertUserlandServiceExposure?.(ctx, {
+            name: service.name,
+            provider: service.source,
+            providerEv: await exactProviderEv(scoped, service.source),
+          });
+        }
         const capability = `workspace-service:${service.name}`;
+        const serviceTitle = service.title?.trim() || humanizeServiceName(service.name);
+        const resourceKey =
+          service.kind === "durable-object" ? service.targetId : service.routeBasePath;
         return [
           {
             capability,
-            resourceKey:
-              service.kind === "durable-object" ? service.targetId : service.routeBasePath,
+            resourceKey,
             requirement: requirementForPrincipals(service.authority.principals, capability),
+            challenge: {
+              title: `Use ${serviceTitle}`,
+              description:
+                service.description?.trim() ||
+                `Use the ${serviceTitle} service provided by this workspace.`,
+              deniedReason: `${serviceTitle} access was not approved`,
+              dedupKey: `workspace-service:${service.name}:${resourceKey}`,
+              resource: { type: "workspace-service", label: "Service", value: serviceTitle },
+              operation: {
+                kind: "runtime",
+                verb: `use ${serviceTitle}`,
+                object: { type: "workspace-service", label: "Service", value: serviceTitle },
+                groupKey: `workspace-service:${service.name}`,
+              },
+              details: [
+                { label: "Provided by", value: service.source },
+                ...(service.protocols.length > 0
+                  ? [{ label: "Works with", value: service.protocols.join(", ") }]
+                  : []),
+              ],
+            },
           },
         ];
       },
@@ -184,6 +223,16 @@ export function createWorkerService(deps: {
           String(objectKey)
         );
         const targetId = `do:${String(source)}:${String(className)}:${String(objectKey)}`;
+        for (const authority of scoped.authority) {
+          if (!authority.capability.startsWith("workspace-service:")) continue;
+          if (source !== INTERNAL_DO_SOURCE) {
+            await deps.assertUserlandServiceExposure?.(ctx, {
+              name: authority.capability.slice("workspace-service:".length),
+              provider: String(source),
+              providerEv: await exactProviderEv(scoped, String(source)),
+            });
+          }
+        }
         return scoped.authority.map(({ capability, principals }) => ({
           capability,
           resourceKey: targetId,
@@ -192,19 +241,19 @@ export function createWorkerService(deps: {
       },
     },
     handler: defineServiceHandler("workers", methods, {
-      listSources: () => {
-        const graph = buildSystem.getGraph();
-        return graph
-          .allNodes()
-          .filter((n) => n.kind === "worker")
-          .map((n) => ({
-            name: n.name,
-            source: n.relativePath,
-            title: n.manifest.title,
-            entry: n.manifest.entry,
-            classes: n.manifest.durable?.classes ?? [],
-            agent: n.manifest.agent,
-          }));
+      listSources: async (ctx) => {
+        const contextId = deps.getCallerContextId?.(ctx.caller.runtime.id);
+        const units = await buildSystem.listBuildUnits(contextId ? `ctx:${contextId}` : undefined, [
+          "worker",
+        ]);
+        return units.map((n) => ({
+          name: n.unitName,
+          source: n.unitPath,
+          title: n.manifest.title,
+          entry: n.manifest.entry,
+          classes: n.manifest.durable?.classes ?? [],
+          agent: n.manifest.agent,
+        }));
       },
       listServices: async (ctx) => {
         const mainRows = [...listProductServiceRows(), ...listServiceRows(workspaceDecls)];
@@ -333,12 +382,37 @@ export function createWorkerService(deps: {
 
     const scoped = await declarationsForCallerContext(ctx);
     if (!scoped) throw new Error(missingDurableObjectMessage(source, className));
-    assertDurableObjectDeclared(scoped.decls, source, className);
+    const contextUnits = await buildSystem.listBuildUnits(scoped.buildRef, ["worker"]);
+    const worker = contextUnits.find((unit) => unit.unitPath === source);
+    if (!worker?.manifest.durable?.classes?.some((entry) => entry.className === className)) {
+      throw new Error(missingDurableObjectMessage(source, className));
+    }
     return {
       ...scoped,
       authority: durableObjectAuthority(scoped.decls, source, className),
     };
   }
+
+  async function exactProviderEv(scoped: ScopedDeclarations, source: string): Promise<string> {
+    if (scoped.scope === "main") {
+      const ev = buildSystem.getEffectiveVersion(source);
+      if (!ev) throw new Error(`No effective version for workspace service provider ${source}`);
+      return ev;
+    }
+    const resolved = await buildSystem.resolveBuildUnit(source, scoped.buildRef);
+    if (!resolved) {
+      throw new Error(`No exact context build for workspace service provider ${source}`);
+    }
+    return resolved.effectiveVersion;
+  }
+}
+
+function humanizeServiceName(name: string): string {
+  return name
+    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .replace(/[._:/#-]+/gu, " ")
+    .trim()
+    .replace(/^./u, (character) => character.toUpperCase());
 }
 
 function isMissingServiceError(err: unknown, query: string): boolean {
@@ -386,6 +460,7 @@ function listServiceRows(decls: WorkspaceDeclarations): ServiceListRow[] {
       description: service.description,
       protocols: service.protocols ?? [],
       source: service.source,
+      docsId: `workspace:${service.name}`,
     };
     if (service.durableObject) {
       const singleton = decls.singletons.find(service.source, service.durableObject.className);
@@ -434,20 +509,4 @@ function assertDurableObjectExists(
   }
 
   throw new Error(missingDurableObjectMessage(source, className));
-}
-
-function assertDurableObjectDeclared(
-  decls: WorkspaceDeclarations,
-  source: string,
-  className: string
-): void {
-  const declared =
-    decls.singletons.find(source, className) ||
-    decls.services.some(
-      (service) => service.source === source && service.durableObject?.className === className
-    ) ||
-    decls.routes.some(
-      (route) => route.source === source && route.durableObject?.className === className
-    );
-  if (!declared) throw new Error(missingDurableObjectMessage(source, className));
 }

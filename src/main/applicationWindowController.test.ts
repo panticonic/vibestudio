@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type WindowEvent = "focus" | "closed";
+type WindowEvent = "focus" | "close" | "closed";
 
 interface MockWindow {
   destroyed: boolean;
@@ -230,6 +230,21 @@ describe("ApplicationWindowController window lifetime", () => {
     expect(mocks.setMemoryMonitorViewManager).toHaveBeenCalledWith(null);
     expect(harness.controller.window).toBeNull();
     expect(harness.onWindowClosed).toHaveBeenCalledOnce();
+  });
+
+  it("tears down native child views before window destruction and treats closed as a fallback", () => {
+    const harness = createHarness();
+    harness.controller.create();
+    const window = expectPresent(mocks.windows[0]);
+    const viewManager = expectPresent(mocks.viewManagers[0]);
+
+    window.emit("close");
+    window.emit("closed");
+
+    expect(viewManager.destroy).toHaveBeenCalledOnce();
+    expect(harness.stopElectronHostTargetLaunchLoop).toHaveBeenCalledOnce();
+    expect(harness.onWindowClosed).toHaveBeenCalledOnce();
+    expect(harness.controller.window).toBeNull();
   });
 });
 

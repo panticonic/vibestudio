@@ -1,22 +1,23 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { stateLayout } from "../stateLayout.js";
-import {
-  unitChangeSessionGrantKey,
-  type UnitMetaChangeApprovalProvider,
-} from "@vibestudio/unit-host";
+import { unitChangeSessionGrantKey, type UnitChangeApprovalProvider } from "@vibestudio/unit-host";
 import type { DiffReviewEntry, DiffReviewFile, UnitBatchEntry } from "@vibestudio/shared/approvals";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type {
+  HostAuthorityEffect,
+  ServiceContext,
+  VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { compareUtf16CodeUnits, EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { countLines, countLineDiff } from "@vibestudio/shared/lineDiff";
 import { blobPath, diffTrees, getBytes, statBlob } from "./blobstoreService.js";
 import { joinRepoPrefix } from "../vcsHost/paths.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import { requestCapabilityPermission } from "./capabilityPermission.js";
-import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import type { RefGate, RefGateBatch, RefGateBatchEntry } from "./protectedRefStore.js";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 
 const WORKSPACE_MAIN_ADVANCE_CAPABILITY = "workspace-main-advance";
 // Deliberately DISTINCT from the write capability: a generic
@@ -456,9 +457,9 @@ export function createMainAdvanceApprovalGate(deps: {
   approvalQueue: ApprovalQueue;
   grantStore: MetaApprovalGrantStore;
   grantTtlMs: number;
-  capabilityGrantStore: CapabilityGrantStore;
+  authorizeEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void>;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-  getProviders(): Array<UnitMetaChangeApprovalProvider<UnitBatchEntry> | null | undefined>;
+  getProviders(): Array<UnitChangeApprovalProvider<UnitBatchEntry> | null | undefined>;
 }): MainAdvanceApprovalGate {
   return {
     async approve(candidate) {
@@ -480,25 +481,25 @@ export function createMainAdvanceApprovalGate(deps: {
         throw new Error(`Unknown caller identity: ${candidate.caller.runtime.id}`);
       }
 
-      if (!metaChanged) {
-        await approveWorkspaceMainAdvance(deps, candidate);
-        return;
-      }
-
       const providers = deps
         .getProviders()
         .filter(
-          (provider): provider is UnitMetaChangeApprovalProvider<UnitBatchEntry> =>
+          (provider): provider is UnitChangeApprovalProvider<UnitBatchEntry> =>
             provider !== null && provider !== undefined
         );
       const approvals = await Promise.all(
         providers.map(async (provider) => ({
           provider,
-          approval: await provider.metaChangeApprovalForCommit(candidate.stateHash),
+          approval: await provider.unitChangeApprovalForCommit(candidate.stateHash),
         }))
       );
       const units = approvals.flatMap(({ approval }) => approval.units);
       const identityKeys = approvals.flatMap(({ approval }) => approval.identityKeys);
+
+      if (!metaChanged && units.length === 0) {
+        await approveWorkspaceMainAdvance(deps, candidate);
+        return;
+      }
 
       const grantKey = unitChangeSessionGrantKey(
         candidate.caller.runtime.id,
@@ -510,7 +511,6 @@ export function createMainAdvanceApprovalGate(deps: {
       if (deps.grantStore.hasActive(grantKey) && units.length === 0 && onlyMetaChanged) return;
 
       if (
-        onlyMetaChanged &&
         units.length > 0 &&
         identityKeys.length > 0 &&
         identityKeys.every((key) => deps.grantStore.hasActive(metaIdentityGrantKey(key)))
@@ -529,18 +529,20 @@ export function createMainAdvanceApprovalGate(deps: {
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
         dedupKey: `unit-meta-change:${candidate.caller.runtime.id}:${candidate.stateHash}`,
-        trigger: "meta-change",
-        title: metaChangeTitle(units),
-        description: metaChangeDescription(units),
+        trigger: metaChanged ? "meta-change" : "source-change",
+        title: unitChangeTitle(units, metaChanged),
+        description: unitChangeDescription(units, metaChanged),
         units,
-        configWrite: {
-          repoPath: "meta",
-          summary: metaChangeSummary(candidate),
-        },
+        configWrite: metaChanged
+          ? {
+              repoPath: "meta",
+              summary: metaChangeSummary(candidate),
+            }
+          : null,
         ...(candidate.diffReview ? { diffReview: candidate.diffReview } : {}),
       });
-      if (decision === "deny") {
-        throw new Error("Workspace config push denied");
+      if (decision === "deny" || decision === "dismiss") {
+        throw new Error(metaChanged ? "Workspace config push denied" : "Workspace update denied");
       }
       for (const { provider, approval } of approvals) {
         provider.acceptPreapprovedTrust(approval.identityKeys);
@@ -565,29 +567,22 @@ export function createMainAdvanceApprovalGate(deps: {
       if (!identity || identity.callerKind !== runtimeKind) {
         throw new Error(`Unknown caller identity: ${candidate.caller.runtime.id}`);
       }
-      const authorization = await requestCapabilityPermission(
-        {
-          approvalQueue: deps.approvalQueue,
-          grantStore: deps.capabilityGrantStore,
+      await authorizeProtectedPublication(deps, candidate.caller, {
+        capability: WORKSPACE_MAIN_ADVANCE_CAPABILITY,
+        resourceKey: "workspace-source-change:main",
+        tier: "gated",
+        args: [candidate.previousEventId, candidate.publishedEventId],
+        preparedState: {
+          previousEventId: candidate.previousEventId,
+          publishedEventId: candidate.publishedEventId,
         },
-        {
-          caller: candidate.caller,
-          capability: WORKSPACE_MAIN_ADVANCE_CAPABILITY,
+        challenge: {
           dedupKey: `workspace-semantic-advance:${candidate.publishedEventId}`,
-          resource: {
-            type: "vcs-head",
-            label: "Head",
-            value: "workspace main",
-            key: "workspace-source-change:main",
-          },
+          resource: { type: "vcs-head", label: "Head", value: "workspace main" },
           operation: {
             kind: "workspace",
             verb: "advance workspace history",
-            object: {
-              type: "vcs-head",
-              label: "Head",
-              value: "workspace main",
-            },
+            object: { type: "vcs-head", label: "Head", value: "workspace main" },
             groupKey: `workspace-semantic-advance:${candidate.publishedEventId}`,
           },
           title: "Advance workspace history",
@@ -599,11 +594,8 @@ export function createMainAdvanceApprovalGate(deps: {
             { label: "Published event", value: candidate.publishedEventId },
           ],
           deniedReason: "Workspace main update denied",
-        }
-      );
-      if (!authorization.allowed) {
-        throw new Error(authorization.reason ?? "Workspace main update denied");
-      }
+        },
+      });
     },
 
     async approveRepoDeletion(candidate) {
@@ -629,24 +621,16 @@ export function createMainAdvanceApprovalGate(deps: {
         dependents.length > 0
           ? ` WARNING: ${dependents.length} repo(s) depend on it and will likely fail to build: ${dependents.join(", ")}.`
           : "";
-      const authorization = await requestCapabilityPermission(
-        {
-          approvalQueue: deps.approvalQueue,
-          grantStore: deps.capabilityGrantStore,
-        },
-        {
-          caller: candidate.caller,
-          capability: WORKSPACE_REPO_DELETE_CAPABILITY,
+      await authorizeProtectedPublication(deps, candidate.caller, {
+        capability: WORKSPACE_REPO_DELETE_CAPABILITY,
+        resourceKey: `workspace-repo-delete:${candidate.repoPath}`,
+        tier: "critical",
+        args: [candidate.repoPath, candidate.stateHash],
+        preparedState: candidate,
+        challenge: {
           severity: "severe",
-          // Per-repo resource key: a grant only ever covers THIS repo, and the
-          // state-scoped dedupKey keeps each distinct deletion its own prompt.
           dedupKey: `workspace-repo-delete:${candidate.repoPath}:${candidate.stateHash}`,
-          resource: {
-            type: "vcs-repo",
-            label: "Repo",
-            value: candidate.repoPath,
-            key: `workspace-repo-delete:${candidate.repoPath}`,
-          },
+          resource: { type: "vcs-repo", label: "Repo", value: candidate.repoPath },
           operation: {
             kind: "workspace",
             verb: "delete repo (archives history)",
@@ -668,45 +652,29 @@ export function createMainAdvanceApprovalGate(deps: {
           ],
           ...(candidate.diffReview ? { diffReview: candidate.diffReview } : {}),
           deniedReason: `Deletion of ${candidate.repoPath} denied`,
-        }
-      );
-      if (!authorization.allowed) {
-        throw new Error(authorization.reason ?? `Deletion of ${candidate.repoPath} denied`);
-      }
+        },
+      });
     },
   };
 }
 
 async function approveWorkspaceMainAdvance(
-  deps: {
-    approvalQueue: ApprovalQueue;
-    capabilityGrantStore: CapabilityGrantStore;
-  },
+  deps: { authorizeEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void> },
   candidate: MainAdvanceApprovalCandidate
 ): Promise<void> {
-  const authorization = await requestCapabilityPermission(
-    {
-      approvalQueue: deps.approvalQueue,
-      grantStore: deps.capabilityGrantStore,
-    },
-    {
-      caller: candidate.caller,
-      capability: WORKSPACE_MAIN_ADVANCE_CAPABILITY,
+  await authorizeProtectedPublication(deps, candidate.caller, {
+    capability: WORKSPACE_MAIN_ADVANCE_CAPABILITY,
+    resourceKey: "workspace-source-change:main",
+    tier: "gated",
+    args: [candidate.repoPath, candidate.stateHash, candidate.changedPaths],
+    preparedState: candidate,
+    challenge: {
       dedupKey: `workspace-source-change:main:${candidate.stateHash}`,
-      resource: {
-        type: "vcs-head",
-        label: "Head",
-        value: "workspace main",
-        key: "workspace-source-change:main",
-      },
+      resource: { type: "vcs-head", label: "Head", value: "workspace main" },
       operation: {
         kind: "workspace",
         verb: "update workspace main",
-        object: {
-          type: "vcs-head",
-          label: "Head",
-          value: "workspace main",
-        },
+        object: { type: "vcs-head", label: "Head", value: "workspace main" },
         groupKey: `workspace-source-change:main:${candidate.stateHash}`,
       },
       title: mainAdvanceTitle(candidate),
@@ -714,11 +682,35 @@ async function approveWorkspaceMainAdvance(
       details: mainAdvanceDetails(candidate),
       ...(candidate.diffReview ? { diffReview: candidate.diffReview } : {}),
       deniedReason: "Workspace main update denied",
-    }
-  );
-  if (!authorization.allowed) {
-    throw new Error(authorization.reason ?? "Workspace main update denied");
+    },
+  });
+}
+
+async function authorizeProtectedPublication(
+  deps: { authorizeEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void> },
+  caller: VerifiedCaller,
+  input: {
+    capability: string;
+    resourceKey: string;
+    tier: "gated" | "critical";
+    args: readonly unknown[];
+    preparedState: unknown;
+    challenge: NonNullable<HostAuthorityEffect["challenge"]>;
   }
+): Promise<void> {
+  await deps.authorizeEffect({ caller, authorityAcquisition: "wait" } as ServiceContext, {
+    service: "vcs",
+    method: "vcsPush",
+    capability: input.capability,
+    resourceKey: input.resourceKey,
+    requirement: requirementForPrincipals(["host", "user", "code", "session"], input.capability),
+    tier: input.tier,
+    sessionAdmission: "family",
+    args: input.args,
+    preparedStateDigest: sha256Canonical(input.preparedState),
+    challenge: input.challenge,
+    sensitivity: "write",
+  });
 }
 
 function isMetaPath(filePath: string): boolean {
@@ -746,24 +738,34 @@ function metaChangeSummary(candidate: MainAdvanceApprovalCandidate): string {
       : `${metaPaths.length} workspace config files changed`;
 }
 
-function metaChangeTitle(units: UnitBatchEntry[]): string {
+function unitChangeTitle(units: UnitBatchEntry[], metaChanged: boolean): string {
   const hasApps = units.some((unit) => unit.unitKind === "app");
   const hasExtensions = units.some((unit) => unit.unitKind === "extension");
+  const hasPanels = units.some((unit) => unit.unitKind === "panel");
+  const hasWorkers = units.some((unit) => unit.unitKind === "worker");
   const hasScheduledJobs = units.some((unit) => unit.unitKind === "scheduled-job");
   const hasAgentHeartbeats = units.some((unit) => unit.unitKind === "agent-heartbeat");
-  if ([hasApps, hasExtensions, hasScheduledJobs, hasAgentHeartbeats].filter(Boolean).length > 1) {
+  if (
+    [hasApps, hasExtensions, hasPanels, hasWorkers, hasScheduledJobs, hasAgentHeartbeats].filter(
+      Boolean
+    ).length > 1
+  ) {
     return "Workspace units changed";
   }
   if (hasApps) return "Workspace apps changed";
   if (hasExtensions) return "Workspace extensions changed";
+  if (hasPanels) return "Workspace panels changed";
+  if (hasWorkers) return "Workspace workers changed";
   if (hasScheduledJobs) return "Workspace scheduled jobs changed";
   if (hasAgentHeartbeats) return "Workspace agent heartbeats changed";
-  return "Edit workspace config";
+  return metaChanged ? "Edit workspace config" : "Update workspace main";
 }
 
-function metaChangeDescription(units: UnitBatchEntry[]): string {
+function unitChangeDescription(units: UnitBatchEntry[], metaChanged: boolean): string {
   const appCount = units.filter((unit) => unit.unitKind === "app").length;
   const extensionCount = units.filter((unit) => unit.unitKind === "extension").length;
+  const panelCount = units.filter((unit) => unit.unitKind === "panel").length;
+  const workerCount = units.filter((unit) => unit.unitKind === "worker").length;
   const jobCount = units.filter((unit) => unit.unitKind === "scheduled-job").length;
   const heartbeatCount = units.filter((unit) => unit.unitKind === "agent-heartbeat").length;
   const parts: string[] = [];
@@ -777,6 +779,16 @@ function metaChangeDescription(units: UnitBatchEntry[]): string {
       `${appCount} privileged app${appCount === 1 ? "" : "s"} that will run in the app host`
     );
   }
+  if (panelCount > 0) {
+    parts.push(
+      `${panelCount} panel${panelCount === 1 ? "" : "s"} that will run in the workspace UI`
+    );
+  }
+  if (workerCount > 0) {
+    parts.push(
+      `${workerCount} worker${workerCount === 1 ? "" : "s"} that will run in the workspace runtime`
+    );
+  }
   if (jobCount > 0) {
     parts.push(`${jobCount} scheduled job${jobCount === 1 ? "" : "s"} that will run automatically`);
   }
@@ -785,9 +797,14 @@ function metaChangeDescription(units: UnitBatchEntry[]): string {
       `${heartbeatCount} agent heartbeat${heartbeatCount === 1 ? "" : "s"} that will run unattended`
     );
   }
-  return parts.length > 0
-    ? `This push edits workspace config and adds ${parts.join(" and ")}.`
-    : "This push edits sensitive workspace configuration.";
+  if (parts.length > 0) {
+    return metaChanged
+      ? `This push edits workspace config and updates ${parts.join(" and ")}.`
+      : `This push updates ${parts.join(" and ")}. Approving trusts the exact reviewed versions for first activation.`;
+  }
+  return metaChanged
+    ? "This push edits sensitive workspace configuration."
+    : "This push updates workspace main.";
 }
 
 function mainAdvanceTitle(_candidate: MainAdvanceApprovalCandidate): string {

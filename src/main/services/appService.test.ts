@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { createAppService } from "./appService.js";
 
 vi.mock("electron", () => ({
@@ -18,7 +20,9 @@ vi.mock("electron", () => ({
 function makeService() {
   const appOrchestrator = {
     applyPendingAppUpdate: vi.fn(async () => true),
-    listPendingAppUpdates: vi.fn(() => [{ appId: "@workspace-apps/shell" }]),
+    listPendingAppUpdates: vi.fn(() => [
+      { appId: "@workspace-apps/shell", url: "https://updates.example/app" },
+    ]),
   };
   const viewManager = {
     getViewInfo: vi.fn((id: string) =>
@@ -34,6 +38,9 @@ function makeService() {
       call: vi.fn(async (serviceName: string, method: string) => {
         if (serviceName === "workspace" && method === "getInfo") return { path: "/workspace" };
         if (serviceName === "build" && method === "getAboutPages") return [];
+        if (serviceName === "build" && method === "recompute") {
+          return { changed: [], added: [], removed: [] };
+        }
         return null;
       }),
       getConnectionStatus: vi.fn(() => "connected"),
@@ -42,55 +49,70 @@ function makeService() {
     getAppOrchestrator: () => appOrchestrator as never,
     connectionMode: "local",
   });
-  return { service, viewManager, appOrchestrator };
+  const dispatcher = createTestServiceDispatcher();
+  dispatcher.registerService(service);
+  dispatcher.markInitialized();
+  return { service, dispatcher, viewManager, appOrchestrator };
+}
+
+function appCaller() {
+  const manifest = JSON.parse(
+    readFileSync(new URL("../../../workspace/apps/shell/package.json", import.meta.url), "utf8")
+  ) as {
+    vibestudio: {
+      authority: {
+        requests: Array<{
+          capability: string;
+          resource: { kind: "exact"; key: string } | { kind: "prefix"; prefix: string };
+        }>;
+      };
+    };
+  };
+  return createVerifiedCaller("@workspace-apps/shell", "app", {
+    callerId: "@workspace-apps/shell",
+    callerKind: "app",
+    repoPath: "apps/shell",
+    effectiveVersion: "ev-shell",
+    executionDigest: "a".repeat(64),
+    requested: manifest.vibestudio.authority.requests,
+    evalCeilings: [],
+  });
 }
 
 describe("createAppService", () => {
-  it("does not grant app-host capabilities to the bootstrap shell caller", async () => {
-    const { service } = makeService();
+  it("allows a live user-origin shell to exercise app host capabilities", async () => {
+    const { dispatcher } = makeService();
     const shellCtx = { caller: createVerifiedCaller("shell", "shell") };
 
     await expect(
-      service.handler(shellCtx, "openExternal", ["https://example.com"])
-    ).rejects.toThrow(/restricted to app callers/);
-    await expect(service.handler(shellCtx, "clearBuildCache", [])).rejects.toThrow(
-      /restricted to app callers/
-    );
+      dispatcher.dispatch(shellCtx, "app", "openExternal", ["https://example.com"])
+    ).resolves.toBeUndefined();
+    await expect(
+      dispatcher.dispatch(shellCtx, "app", "clearBuildCache", [])
+    ).resolves.toBeUndefined();
   });
 
   it("allows app callers with declared capabilities to use app-host surfaces", async () => {
-    const { service } = makeService();
-    const appCtx = {
-      caller: createVerifiedCaller("@workspace-apps/shell", "app", {
-        callerId: "@workspace-apps/shell",
-        callerKind: "app",
-        repoPath: "apps/shell",
-        effectiveVersion: "ev-shell",
-      }),
-    };
+    const { dispatcher } = makeService();
+    const appCtx = { caller: appCaller() };
 
     await expect(
-      service.handler(appCtx, "openExternal", ["https://example.com"])
+      dispatcher.dispatch(appCtx, "app", "openExternal", ["https://example.com"])
     ).resolves.toBeUndefined();
   });
 
   it("lets shell and panel-hosting apps apply queued app updates", async () => {
-    const { service, appOrchestrator } = makeService();
-    const shellCtx = { caller: createVerifiedCaller("shell", "shell") };
+    const { dispatcher, appOrchestrator } = makeService();
+    const shellCtx = { caller: createHostCaller("shell", "shell") };
     const appCtx = {
-      caller: createVerifiedCaller("@workspace-apps/shell", "app", {
-        callerId: "@workspace-apps/shell",
-        callerKind: "app",
-        repoPath: "apps/shell",
-        effectiveVersion: "ev-shell",
-      }),
+      caller: appCaller(),
     };
 
     await expect(
-      service.handler(shellCtx, "applyUpdate", ["@workspace-apps/shell"])
+      dispatcher.dispatch(shellCtx, "app", "applyUpdate", ["@workspace-apps/shell"])
     ).resolves.toEqual({ applied: true });
-    await expect(service.handler(appCtx, "listPendingUpdates", [])).resolves.toEqual([
-      { appId: "@workspace-apps/shell" },
+    await expect(dispatcher.dispatch(appCtx, "app", "listPendingUpdates", [])).resolves.toEqual([
+      { appId: "@workspace-apps/shell", url: "https://updates.example/app" },
     ]);
     expect(appOrchestrator.applyPendingAppUpdate).toHaveBeenCalledWith("@workspace-apps/shell");
   });

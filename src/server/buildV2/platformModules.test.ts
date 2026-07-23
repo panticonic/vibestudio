@@ -18,7 +18,7 @@ import {
   TERMINAL_SHIM_SIGNAL_EXIT,
   TERMINAL_SHIM_TERMINAL_SIZE,
   FRAMEWORK_MODULES,
-  REACT_FRAMEWORK_MODULE,
+  REACT_FRAMEWORK_ENTRY_MODULE,
   SVELTE_FRAMEWORK_MODULE,
   frameworkEntryModule,
   detectFrameworkFromDependencies,
@@ -40,10 +40,16 @@ describe("platform module names (contract values)", () => {
 
   it("declares the framework auto-mount modules with their mount exports", () => {
     expect(FRAMEWORK_MODULES).toEqual([
-      { framework: "react", module: "@workspace/react", autoMountExport: "autoMountReactPanel" },
+      {
+        framework: "react",
+        module: "@workspace/react",
+        entryModule: "@workspace/react/auto-mount",
+        autoMountExport: "autoMountReactPanel",
+      },
       {
         framework: "svelte",
         module: "@workspace/svelte",
+        entryModule: "@workspace/svelte",
         autoMountExport: "autoMountSveltePanel",
       },
     ]);
@@ -52,7 +58,7 @@ describe("platform module names (contract values)", () => {
 
 describe("frameworkEntryModule", () => {
   it("maps framework ids to their default workspace modules", () => {
-    expect(frameworkEntryModule("react")).toBe(REACT_FRAMEWORK_MODULE);
+    expect(frameworkEntryModule("react")).toBe(REACT_FRAMEWORK_ENTRY_MODULE);
     expect(frameworkEntryModule("svelte")).toBe(SVELTE_FRAMEWORK_MODULE);
   });
 

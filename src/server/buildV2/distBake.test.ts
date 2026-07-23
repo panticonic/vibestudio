@@ -106,9 +106,11 @@ function appBuild(overrides: Partial<BuildResult> = {}): BuildResult {
           {
             capability: "service:events.watch",
             resource: { kind: "exact", key: "service:events.watch" },
+            tier: "gated",
+            evidence: "exact",
           },
         ],
-        delegations: [],
+        evalCeilings: [],
       },
       execution: executionIdentity(artifacts),
       details: {
@@ -157,7 +159,7 @@ describe("app dist bake", () => {
             resource: { kind: "exact", key: "service:events.watch" },
           },
         ],
-        authorityDelegations: [],
+        authorityEvalCeilings: [],
       },
     });
     expect(manifest.artifacts.map((artifact) => artifact.path)).toEqual([

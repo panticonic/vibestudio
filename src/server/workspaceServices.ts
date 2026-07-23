@@ -18,7 +18,13 @@ export interface WorkspaceServiceResolution {
   origin: "product" | "workspace";
   name: string;
   title?: string;
+  action?: string;
   description?: string;
+  /**
+   * The protocol that matched this resolution request. Absent when the caller
+   * resolved by service name rather than by one of the declared protocols.
+   */
+  protocol?: string;
   protocols: string[];
   source: string;
   authority: WorkspaceServiceAuthority;
@@ -77,7 +83,8 @@ export function resolveWorkspaceService(
   for (const service of decls.services) {
     const protocols = service.protocols ?? [];
     if (service.name !== query && !protocols.includes(query)) continue;
-    return buildResolution(service, decls.singletons, objectKey ?? null, decls.routes);
+    const resolved = buildResolution(service, decls.singletons, objectKey ?? null, decls.routes);
+    return protocols.includes(query) ? { ...resolved, protocol: query } : resolved;
   }
   throw new Error(`No workspace service registered for ${query}`);
 }
@@ -100,7 +107,9 @@ function resolveProductWorkspaceService(
     origin: "product",
     name: service.name,
     title: service.title,
+    action: (service as { action?: string }).action,
     description: service.description,
+    ...(service.protocols.includes(query) ? { protocol: query } : {}),
     protocols: [...service.protocols],
     source: service.source,
     authority: { principals: [...service.authority.principals] },
@@ -135,6 +144,7 @@ function buildResolution(
       origin: "workspace",
       name: service.name,
       title: service.title,
+      action: service.action,
       description: service.description,
       protocols,
       source,
@@ -163,6 +173,7 @@ function buildResolution(
     origin: "workspace",
     name: service.name,
     title: service.title,
+    action: service.action,
     description: service.description,
     protocols,
     source,

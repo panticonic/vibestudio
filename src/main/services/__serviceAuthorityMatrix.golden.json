@@ -221,6 +221,53 @@
       }
     }
   },
+  "autofill": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "confirmSave": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "deleteSavedPassword": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "listNeverSaveOrigins": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listSavedPasswords": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "removeNeverSaveOrigin": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
   "desktopEvents": {
     "service": {
       "principals": ["user", "code", "host"]

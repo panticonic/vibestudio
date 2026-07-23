@@ -1,7 +1,6 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type {
   WorkspaceConfig,
   WorkspaceGitRemoteConfig,
@@ -43,22 +42,11 @@ import {
   type GitInteropProviderResult,
 } from "@vibestudio/service-schemas/gitInterop";
 import type { DisposableGitRemoteManager } from "./disposableGitRemoteManager.js";
-import type { ApprovalQueue } from "./approvalQueue.js";
-import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import { requestCapabilityPermission } from "./capabilityPermission.js";
 import { deleteDynamicProperty } from "../../lintHelpers";
-import { isAuthorizedChrome } from "./chromeTrust.js";
-
-const SHARED_GIT_REMOTE_CAPABILITY = "workspace-shared-git-remote";
-const GIT_UPSTREAM_CAPABILITY = "workspace-git-upstream";
 
 type GitInteropServiceDeps = {
   workspacePath?: string;
   workspaceConfig?: WorkspaceConfig;
-  approvalQueue?: ApprovalQueue;
-  grantStore?: CapabilityGrantStore;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-  workspaceConfigMutationWouldChange?: (mutate: WorkspaceConfigMutation) => Promise<boolean>;
   persistWorkspaceConfigMutation?: (input: {
     ctx: ServiceContext;
     mutate: WorkspaceConfigMutation;
@@ -90,7 +78,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
         const validRepoPath = normalizeWorkspaceRepoPath(normalizedRepoPath);
         const normalizedRemote = validateWorkspaceGitRemote(remoteInput);
 
-        await ensureSharedRemotePermission(ctx, deps, validRepoPath, "set", normalizedRemote);
         const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
           mutate: (currentConfig) =>
             setDeclaredRemoteInConfig(currentConfig, validRepoPath, normalizedRemote),
@@ -107,7 +94,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
         const validRepoPath = normalizeWorkspaceRepoPath(normalizedRepoPath);
         const existing = getRemoteForApproval(deps.workspaceConfig, validRepoPath, remoteName);
 
-        await ensureSharedRemotePermission(ctx, deps, validRepoPath, "remove", existing);
         const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
           mutate: (currentConfig) => {
             const withoutRemote = removeDeclaredRemoteFromConfig(
@@ -148,7 +134,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           );
         }
 
-        await ensureUpstreamPermission(ctx, deps, validRepoPath, "set", normalizedUpstream);
         const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
           mutate: (currentConfig) => {
             if (
@@ -179,7 +164,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
         } catch {
           existing = null;
         }
-        await ensureUpstreamPermission(ctx, deps, validRepoPath, "remove", existing);
         const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
           mutate: (currentConfig) => removeDeclaredUpstreamFromConfig(currentConfig, validRepoPath),
           summary: workspaceConfigUpstreamSummary(validRepoPath, existing, "remove"),
@@ -204,7 +188,6 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           ...(existing.authorName ? { authorName: existing.authorName } : {}),
         };
 
-        await ensureUpstreamPermission(ctx, deps, validRepoPath, "set", nextUpstream);
         const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
           mutate: (currentConfig) => {
             const currentUpstream = getDeclaredUpstreamForRepo(currentConfig, validRepoPath);
@@ -385,11 +368,6 @@ async function detachUpstream(
   const forgetRemote = options?.forgetRemote === true;
   const remoteName = forgetRemote ? (options?.remote ?? existing?.remote ?? "origin") : null;
 
-  await ensureUpstreamPermission(ctx, deps, validRepoPath, "remove", existing);
-  if (forgetRemote && remoteName) {
-    const remoteForApproval = getRemoteForApproval(deps.workspaceConfig, validRepoPath, remoteName);
-    await ensureSharedRemotePermission(ctx, deps, validRepoPath, "remove", remoteForApproval);
-  }
   const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
     mutate: (currentConfig) => {
       const withoutUpstream = removeDeclaredUpstreamFromConfig(currentConfig, validRepoPath);
@@ -529,13 +507,6 @@ async function importWorkspaceRepo(
     });
   };
 
-  await ensureWorkspaceConfigWritePermission(
-    ctx,
-    deps,
-    validRepoPath,
-    normalizedRemote,
-    mutateConfig
-  );
   const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
     mutate: mutateConfig,
     summary: workspaceConfigImportSummary(validRepoPath, normalizedRemote),
@@ -582,175 +553,6 @@ async function importWorkspaceRepo(
   return { path: validRepoPath, remote: normalizedRemote, candidate };
 }
 
-async function ensureWorkspaceConfigWritePermission(
-  ctx: ServiceContext,
-  deps: Pick<
-    GitInteropServiceDeps,
-    "workspaceConfig" | "workspaceConfigMutationWouldChange" | "approvalQueue" | "hasAppCapability"
-  >,
-  unitPath: string,
-  remote: WorkspaceGitRemoteConfig,
-  mutateConfig: WorkspaceConfigMutation
-): Promise<void> {
-  if (!(await configMutationWouldChange(deps, mutateConfig))) return;
-  if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
-  if (
-    ctx.caller.runtime.kind !== "panel" &&
-    ctx.caller.runtime.kind !== "app" &&
-    ctx.caller.runtime.kind !== "worker" &&
-    ctx.caller.runtime.kind !== "do" &&
-    ctx.caller.runtime.kind !== "extension"
-  ) {
-    throw new Error("Workspace config edit is unavailable for this caller");
-  }
-  const identity = ctx.caller.code;
-  if (!identity) throw new Error("Workspace config edit requires a verified code identity");
-  if (!deps.approvalQueue) throw new Error("Workspace config edit is unavailable");
-
-  const decision = await deps.approvalQueue.request({
-    kind: "unit-batch",
-    callerId: ctx.caller.runtime.id,
-    callerKind: ctx.caller.runtime.kind,
-    ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
-    repoPath: identity.repoPath,
-    effectiveVersion: identity.effectiveVersion,
-    dedupKey: `git-import-config:${unitPath}:${remote.name}:${remote.url}:${remote.branch ?? ""}`,
-    trigger: "meta-change",
-    title: "Import external Git project",
-    description: "This import adds an external Git project declaration to workspace config.",
-    units: [],
-    configWrite: {
-      repoPath: "meta",
-      summary: workspaceConfigImportSummary(unitPath, remote),
-    },
-  });
-  if (decision === "deny") throw new Error("Workspace config edit denied");
-}
-
-async function ensureSharedRemotePermission(
-  ctx: ServiceContext,
-  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore" | "hasAppCapability">,
-  unitPath: string,
-  operation: "set" | "remove",
-  remote: WorkspaceGitRemoteConfig | null
-): Promise<void> {
-  if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
-  if (
-    ctx.caller.runtime.kind !== "panel" &&
-    ctx.caller.runtime.kind !== "app" &&
-    ctx.caller.runtime.kind !== "worker" &&
-    ctx.caller.runtime.kind !== "do" &&
-    ctx.caller.runtime.kind !== "extension"
-  ) {
-    throw new Error("Shared remote configuration is unavailable for this caller");
-  }
-  if (!deps.approvalQueue || !deps.grantStore) {
-    throw new Error("Shared remote configuration is unavailable");
-  }
-  const details = [
-    {
-      label: "Operation",
-      value: operation === "set" ? "Add or update shared remote" : "Remove shared remote",
-    },
-    { label: "Workspace unit", value: unitPath },
-  ];
-  if (remote) {
-    details.push({ label: "Remote name", value: remote.name });
-    if (remote.url) details.push({ label: "Remote URL", value: displayRemoteUrl(remote.url) });
-    if (remote.branch) details.push({ label: "Branch", value: remote.branch });
-  }
-  const authorization = await requestCapabilityPermission(
-    {
-      approvalQueue: deps.approvalQueue,
-      grantStore: deps.grantStore,
-    },
-    {
-      caller: ctx.caller,
-      capability: SHARED_GIT_REMOTE_CAPABILITY,
-      dedupKey: null,
-      resource: { type: "git-remote", label: "Workspace unit", value: unitPath },
-      operation: {
-        kind: "git",
-        verb: operation === "set" ? "Configure shared remote" : "Remove shared remote",
-        object: { type: "git-remote", label: "Workspace unit", value: unitPath },
-      },
-      title:
-        operation === "set"
-          ? `Configure Git remote for ${unitPath}`
-          : `Remove Git remote for ${unitPath}`,
-      description:
-        "Allow this code version to change the external Git remote shared by workspace contexts.",
-      details,
-      deniedReason: "Shared remote configuration denied",
-    }
-  );
-  if (!authorization.allowed) {
-    throw new Error(authorization.reason ?? "Shared remote configuration denied");
-  }
-}
-
-async function ensureUpstreamPermission(
-  ctx: ServiceContext,
-  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore" | "hasAppCapability">,
-  unitPath: string,
-  operation: "set" | "remove",
-  upstream: Pick<WorkspaceGitUpstreamConfig, "remote" | "branch" | "autoPush"> | null
-): Promise<void> {
-  if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
-  if (
-    ctx.caller.runtime.kind !== "panel" &&
-    ctx.caller.runtime.kind !== "app" &&
-    ctx.caller.runtime.kind !== "worker" &&
-    ctx.caller.runtime.kind !== "do" &&
-    ctx.caller.runtime.kind !== "extension"
-  ) {
-    throw new Error("Upstream tracking configuration is unavailable for this caller");
-  }
-  if (!deps.approvalQueue || !deps.grantStore) {
-    throw new Error("Upstream tracking configuration is unavailable");
-  }
-  const details = [
-    {
-      label: "Operation",
-      value: operation === "set" ? "Track external Git remote" : "Remove upstream tracking",
-    },
-    { label: "Workspace unit", value: unitPath },
-  ];
-  if (upstream) {
-    details.push({ label: "Remote", value: upstream.remote });
-    if (upstream.branch) details.push({ label: "Branch", value: upstream.branch });
-    details.push({ label: "Auto-push", value: upstream.autoPush ? "on" : "off" });
-  }
-  const authorization = await requestCapabilityPermission(
-    {
-      approvalQueue: deps.approvalQueue,
-      grantStore: deps.grantStore,
-    },
-    {
-      caller: ctx.caller,
-      capability: GIT_UPSTREAM_CAPABILITY,
-      dedupKey: null,
-      resource: { type: "git-upstream", label: "Workspace unit", value: unitPath },
-      operation: {
-        kind: "git",
-        verb: operation === "set" ? "Track external Git remote" : "Remove upstream tracking",
-        object: { type: "git-upstream", label: "Workspace unit", value: unitPath },
-      },
-      title:
-        operation === "set"
-          ? `Track ${unitPath} on an external Git remote`
-          : `Stop tracking ${unitPath} on an external Git remote`,
-      description:
-        "Allow this code version to change upstream tracking. No egress happens on approval; pushing prompts separately.",
-      details,
-      deniedReason: "Upstream tracking configuration denied",
-    }
-  );
-  if (!authorization.allowed) {
-    throw new Error(authorization.reason ?? "Upstream tracking configuration denied");
-  }
-}
-
 async function persistWorkspaceConfigMutation(
   ctx: ServiceContext,
   deps: Pick<GitInteropServiceDeps, "workspaceConfig" | "persistWorkspaceConfigMutation">,
@@ -770,18 +572,6 @@ async function persistWorkspaceConfigMutation(
   });
   mutateWorkspaceConfig(deps.workspaceConfig, result.nextConfig);
   return result;
-}
-
-async function configMutationWouldChange(
-  deps: Pick<GitInteropServiceDeps, "workspaceConfig" | "workspaceConfigMutationWouldChange">,
-  mutate: WorkspaceConfigMutation
-): Promise<boolean> {
-  if (deps.workspaceConfigMutationWouldChange) {
-    return await deps.workspaceConfigMutationWouldChange(mutate);
-  }
-  if (!deps.workspaceConfig) return true;
-  const nextConfig = mutate(deps.workspaceConfig);
-  return JSON.stringify(deps.workspaceConfig) !== JSON.stringify(nextConfig);
 }
 
 async function propagateSharedRemote(

@@ -446,52 +446,12 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   }
 
   async function deleteClientConfig(
-    ctx: ServiceContext,
+    _ctx: ServiceContext,
     params: DeleteClientConfigParams
   ): Promise<void> {
     const request = params as DeleteClientConfigRequest;
     const existing = await clientConfigStore.load(request.configId);
     if (!existing) return;
-    if (!canCallerBypassCredentialMutationApproval(ctx)) {
-      if (!approvalQueue || !isUserlandRuntimeCaller(ctx)) {
-        throw new Error("Client config deletion approval is unavailable for this caller");
-      }
-      const identity = resolveApprovalIdentity(ctx);
-      const decision = await approvalQueue.request({
-        kind: "capability",
-        dedupKey: `delete-client-config:${request.configId}`,
-        callerId: ctx.caller.runtime.id,
-        callerKind: ctx.caller.runtime.kind,
-        ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
-        repoPath: identity.repoPath,
-        effectiveVersion: identity.effectiveVersion,
-        capability: "client-config-delete",
-        operation: {
-          kind: "service-setup",
-          verb: "Disable service configuration",
-          object: {
-            type: "client-config",
-            label: "Service",
-            value: request.configId,
-          },
-          groupKey: `delete-client-config:${request.configId}`,
-        },
-        title: `Disable ${request.configId}`,
-        description: "Delete this client config for new connections and future refreshes.",
-        resource: {
-          type: "client-config",
-          label: "Config",
-          value: request.configId,
-        },
-        details: [
-          { label: "Sign-in origin", value: new URL(existing.authorizeUrl).origin },
-          { label: "Token origin", value: new URL(existing.tokenUrl).origin },
-        ],
-      });
-      if (decision === "deny") {
-        throw new Error("Client config deletion denied");
-      }
-    }
     await clientConfigStore.save({
       ...existing,
       status: "deleted",
@@ -623,8 +583,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       resource: grant.resource,
       action: grant.action,
       scope: grant.scope,
-      repoPath: grant.repoPath,
-      effectiveVersion: grant.effectiveVersion,
+      ...(grant.scope === "agent"
+        ? { agentId: grant.agentId }
+        : { repoPath: grant.repoPath, effectiveVersion: grant.effectiveVersion }),
       grantedAt: grant.grantedAt,
       grantedBy: grant.grantedBy,
       subjects,
@@ -635,12 +596,13 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     grant: CredentialUseGrant,
     runtimeIndex: CredentialRuntimeIndex
   ): Promise<CredentialAccessSubjectSummary[]> {
-    const subjects = runtimeIndex.activeEntities.filter(
-      (entity) =>
-        isCredentialAccessSubjectKind(entity.kind) &&
-        entity.source.repoPath === grant.repoPath &&
-        entity.source.effectiveVersion === grant.effectiveVersion
-    );
+    const subjects = runtimeIndex.activeEntities.filter((entity) => {
+      if (!isCredentialAccessSubjectKind(entity.kind)) return false;
+      return grant.scope === "agent"
+        ? entity.id === grant.agentId
+        : entity.source.repoPath === grant.repoPath &&
+            entity.source.effectiveVersion === grant.effectiveVersion;
+    });
     return Promise.all(
       subjects.map((entity) => summarizeCredentialSubject(entity.id, entity, runtimeIndex))
     );
@@ -723,7 +685,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (!credential) {
       return;
     }
-    await ensureCredentialRevocationApproved(ctx, credential, params.credentialId);
     try {
       await revokeProviderTokenIfConfigured(credential);
     } catch (error) {
@@ -743,59 +704,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       id: credential.id ?? params.credentialId,
       revokedAt: Date.now(),
     } as Credential & { id: string });
-  }
-
-  async function ensureCredentialRevocationApproved(
-    ctx: ServiceContext,
-    credential: Credential,
-    credentialId: string
-  ): Promise<void> {
-    if (canCallerBypassCredentialMutationApproval(ctx)) {
-      return;
-    }
-    if (!approvalQueue || !isUserlandRuntimeCaller(ctx)) {
-      throw new Error("Credential revocation approval is unavailable for this caller");
-    }
-
-    const identity = resolveApprovalIdentity(ctx);
-    const targetId = credential.id ?? credentialId;
-    const label = credential.label ?? credential.connectionLabel ?? targetId;
-    const decision = await approvalQueue.request({
-      kind: "capability",
-      dedupKey: `revoke-credential:${targetId}`,
-      callerId: ctx.caller.runtime.id,
-      callerKind: ctx.caller.runtime.kind,
-      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
-      repoPath: identity.repoPath,
-      effectiveVersion: identity.effectiveVersion,
-      capability: "credential-revoke",
-      severity: "severe",
-      operation: {
-        kind: "credential",
-        verb: "Revoke credential",
-        object: {
-          type: "credential",
-          label: "Credential",
-          value: label,
-        },
-        groupKey: `revoke-credential:${targetId}`,
-      },
-      title: `Revoke ${label}`,
-      description: "Allow this requester to revoke this stored credential.",
-      resource: {
-        type: "credential",
-        label: "Credential",
-        value: label,
-      },
-      details: [
-        { label: "Credential ID", value: targetId },
-        { label: "Requester", value: ctx.caller.runtime.id },
-        { label: "Source", value: identity.repoPath },
-      ],
-    });
-    if (decision === "deny") {
-      throw new Error("Credential revocation denied");
-    }
   }
 
   async function revokeProviderTokenIfConfigured(credential: Credential): Promise<void> {
@@ -1017,13 +925,19 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     callerId: string;
     repoPath: string;
     effectiveVersion: string;
+    agentId?: string;
   } {
     const identity = ctx.caller.code;
     const entity = identity ? null : resolveRuntimeEntityForApproval(ctx.caller.runtime.id);
+    const agentId =
+      ctx.caller.sessionOrigin === true
+        ? (identity?.evalOrigin?.ownerId ?? ctx.caller.agentBinding?.entityId)
+        : undefined;
     return {
       callerId: identity?.callerId ?? entity?.id ?? ctx.caller.runtime.id,
       repoPath: identity?.repoPath ?? entity?.source.repoPath ?? ctx.caller.runtime.id,
       effectiveVersion: identity?.effectiveVersion ?? entity?.source.effectiveVersion ?? "unknown",
+      ...(agentId ? { agentId } : {}),
     };
   }
 
@@ -1085,7 +999,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       ]),
       replacementCredentialLabel: params.replacementCredentialLabel,
     });
-    if (decision === "deny") {
+    if (decision === "deny" || decision === "dismiss") {
       throw new Error("Credential approval denied");
     }
     return decision;
@@ -1280,7 +1194,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         credential.metadata?.["oauthTokenOrigin"],
       ]),
     });
-    if (decision === "deny") {
+    if (decision === "deny" || decision === "dismiss") {
       throw new Error("Credential approval denied");
     }
     const now = Date.now();
@@ -1323,10 +1237,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     );
   }
 
-  function canCallerBypassCredentialMutationApproval(ctx: ServiceContext): boolean {
-    return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
-  }
-
   function grantSessionCredentialUse(
     credentialId: string,
     identity: CredentialSessionGrantScope,
@@ -1337,7 +1247,12 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
 
   function resolvePendingCredentialUseGrants(
     credentialId: string,
-    identity: { callerId?: string; repoPath: string; effectiveVersion: string },
+    identity: {
+      callerId?: string;
+      repoPath: string;
+      effectiveVersion: string;
+      agentId?: string;
+    },
     decision: Exclude<GrantedDecision, "deny" | "once">,
     usage: CredentialUseContext
   ): void {
@@ -1354,10 +1269,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         return false;
       }
       if (decision === "session") return approval.callerId === identity.callerId;
-      return (
-        approval.repoPath === identity.repoPath &&
-        approval.effectiveVersion === identity.effectiveVersion
-      );
+      return identity.agentId
+        ? approval.requester?.stableIdentityKey === identity.agentId
+        : approval.repoPath === identity.repoPath &&
+            approval.effectiveVersion === identity.effectiveVersion;
     }, "once");
   }
 
@@ -1676,7 +1591,7 @@ function gitRemoteFromUrl(targetUrl: URL): string {
 }
 
 function grantForDecision(
-  identity: { repoPath: string; effectiveVersion: string },
+  identity: { repoPath: string; effectiveVersion: string; agentId?: string },
   decision: Exclude<GrantedDecision, "deny" | "once" | "session">,
   grantedAt: number,
   usage: CredentialUseContext
@@ -1689,12 +1604,14 @@ function grantForDecision(
     grantedAt,
     grantedBy: decision,
   };
-  return {
-    ...base,
-    scope: "version",
-    repoPath: identity.repoPath,
-    effectiveVersion: identity.effectiveVersion,
-  };
+  return identity.agentId
+    ? { ...base, scope: "agent", agentId: identity.agentId }
+    : {
+        ...base,
+        scope: "version",
+        repoPath: identity.repoPath,
+        effectiveVersion: identity.effectiveVersion,
+      };
 }
 
 function upsertCredentialUseGrant(
@@ -1714,18 +1631,18 @@ function credentialUseGrantKey(grant: CredentialUseGrant): string {
     grant.resource,
     grant.action,
     grant.scope,
-    grant.repoPath,
-    grant.effectiveVersion,
+    grant.scope === "version" ? grant.repoPath : grant.agentId,
+    grant.scope === "version" ? grant.effectiveVersion : "",
   ].join("\x00");
 }
 
 function grantAppliesToIdentity(
   grant: CredentialUseGrant,
-  identity: { repoPath: string; effectiveVersion: string }
+  identity: { repoPath: string; effectiveVersion: string; agentId?: string }
 ): boolean {
-  return (
-    grant.repoPath === identity.repoPath && grant.effectiveVersion === identity.effectiveVersion
-  );
+  return grant.scope === "agent"
+    ? !!identity.agentId && grant.agentId === identity.agentId
+    : grant.repoPath === identity.repoPath && grant.effectiveVersion === identity.effectiveVersion;
 }
 
 function hasOAuthAudienceDomainMismatch(

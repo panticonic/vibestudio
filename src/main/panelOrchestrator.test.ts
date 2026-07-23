@@ -18,7 +18,7 @@ function makePanel(id: string, children: Panel[] = [], overrides?: Partial<Panel
     buildKey: "b".repeat(64),
     executionDigest: "e".repeat(64),
     authorityRequests: [],
-    authorityDelegations: [],
+    authorityEvalCeilings: [],
     children,
     snapshot,
     artifacts: {},
@@ -203,14 +203,6 @@ function createOrchestrator(
       const panel = registry.getPanel(String(id));
       if (!panel) return null;
       const contextId = opts?.contextId ?? getCurrentSnapshot(panel).contextId;
-      const snapshot = {
-        source: String(src),
-        contextId,
-        options: opts?.ref ? { ref: opts.ref } : {},
-        ...(opts?.stateArgs ? { stateArgs: opts.stateArgs } : {}),
-      };
-      panel.snapshot = snapshot;
-      panel.runtimeEntityId = asPanelEntityId(`panel:nav-${id}-next`);
       return {
         id,
         title: id,
@@ -492,7 +484,7 @@ describe("PanelOrchestrator.focusPanel", () => {
     registry.addPanel(panel, null, { addAsRoot: true });
 
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
-    const loadedPanels = new Set<string>();
+    const loadedPanels = new Set<string>([panel.id]);
     panelView.hasView.mockImplementation((panelId: string) => loadedPanels.has(panelId));
     panelView.createViewForBrowser.mockImplementation(async (panelId: string) => {
       loadedPanels.add(panelId);
@@ -775,7 +767,7 @@ describe("PanelOrchestrator.createPanel", () => {
 });
 
 describe("PanelOrchestrator.navigatePanel", () => {
-  it("routes host-mediated panel replacement through the shell connection and rebuilds the view", async () => {
+  it("routes replacement through the shell connection and lets the authoritative tree load once", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/current", [], {
       runtimeEntityId: asPanelEntityId("panel:nav-current"),
@@ -783,7 +775,7 @@ describe("PanelOrchestrator.navigatePanel", () => {
     registry.addPanel(panel, null, { addAsRoot: true });
 
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
-    const loadedPanels = new Set<string>();
+    const loadedPanels = new Set<string>([panel.id]);
     panelView.hasView.mockImplementation((panelId: string) => loadedPanels.has(panelId));
     panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
       loadedPanels.add(panelId);
@@ -800,6 +792,23 @@ describe("PanelOrchestrator.navigatePanel", () => {
       { stateArgs: { initialPrompt: "hello" } },
     ]);
     expect(serverClient.callAs).not.toHaveBeenCalled();
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([
+        makePanel(panel.id, [], {
+          runtimeEntityId: asPanelEntityId(`panel:nav-${panel.id}-next`),
+          snapshot: {
+            source: "panels/chat",
+            contextId: `ctx-${panel.id}`,
+            options: {},
+            stateArgs: { initialPrompt: "hello" },
+          },
+        }),
+      ])
+    );
+
+    expect(panelView.createViewForPanel).toHaveBeenCalledTimes(1);
     expect(panelView.createViewForPanel).toHaveBeenCalledWith(
       panel.id,
       expect.stringContaining("/panels/chat/"),
@@ -813,11 +822,24 @@ describe("PanelOrchestrator.navigatePanel", () => {
     registry.addPanel(panel, null, { addAsRoot: true });
 
     const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.hasView.mockImplementation((panelId: string) => panelId === panel.id);
     panelView.createViewForPanel.mockImplementationOnce(async () => {
       orchestrator.applyBuildComplete("panels/chat", "compile failed");
     });
 
     await orchestrator.navigatePanel(panel.id, "panels/chat");
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([
+        makePanel(panel.id, [], {
+          runtimeEntityId: asPanelEntityId(`panel:nav-${panel.id}-next`),
+          snapshot: {
+            source: "panels/chat",
+            contextId: `ctx-${panel.id}`,
+            options: {},
+          },
+        }),
+      ])
+    );
 
     expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
       buildState: "error",
@@ -828,7 +850,7 @@ describe("PanelOrchestrator.navigatePanel", () => {
 });
 
 describe("PanelOrchestrator.applyBuildComplete", () => {
-  it("updates duplicate-source slots without pretending unloaded slots have native views", () => {
+  it("records source completion without pretending any slot selected or loaded that build", () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const first = makePanel("panel:tree/slot-a", [], {
       snapshot: {
@@ -856,17 +878,43 @@ describe("PanelOrchestrator.applyBuildComplete", () => {
     orchestrator.applyBuildComplete("panels/chat");
 
     expect(registry.getPanel(first.id)?.artifacts).toMatchObject({
-      buildState: "ready",
+      buildState: "building",
       buildRevision: 12,
-      htmlPath: expect.stringContaining("/panels/chat/"),
+      buildProgress: "Build complete — waiting for runtime activation",
     });
-    expect(registry.getPanel(first.id)?.state?.view.exists).toBe(true);
+    expect(registry.getPanel(first.id)?.artifacts.htmlPath).toBeUndefined();
+    expect(registry.getPanel(first.id)?.state?.view.exists).toBe(false);
     expect(registry.getPanel(second.id)?.artifacts).toMatchObject({
-      buildState: "ready",
+      buildState: "building",
       buildRevision: 12,
+      buildProgress: "Build complete — waiting for runtime activation",
     });
     expect(registry.getPanel(second.id)?.artifacts.htmlPath).toBeUndefined();
     expect(registry.getPanel(second.id)?.state?.view.exists).toBe(false);
+  });
+
+  it("does not derive a panel URL when the slot has not received its immutable build key", () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/slot-a", [], {
+      buildKey: null,
+      executionDigest: null,
+      snapshot: {
+        source: "panels/chat",
+        contextId: "ctx-a",
+        options: {},
+      },
+      artifacts: { buildState: "building", buildProgress: "Waiting for build..." },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.hasView.mockReturnValue(true);
+
+    expect(() => orchestrator.applyBuildComplete("panels/chat")).not.toThrow();
+    expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
+      buildState: "building",
+      buildProgress: "Build complete — waiting for runtime activation",
+    });
   });
 });
 

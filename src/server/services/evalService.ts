@@ -19,144 +19,20 @@ interface EvalSandboxRecoveryInput {
   evalDoRef: { source: string; className: string; objectKey: string };
 }
 
-/** Parse a `do:<source>:<className>:<objectKey>` runtime id into a DO ref (source may contain '/'). */
-function parseDoRef(
-  runtimeId: string
-): { source: string; className: string; objectKey: string } | null {
-  if (!runtimeId.startsWith("do:")) return null;
-  const rest = runtimeId.slice(3);
-  const firstColon = rest.indexOf(":");
-  if (firstColon < 0) return null;
-  const source = rest.slice(0, firstColon);
-  const afterSource = rest.slice(firstColon + 1);
-  const secondColon = afterSource.indexOf(":");
-  if (secondColon < 0) return null;
-  const className = afterSource.slice(0, secondColon);
-  const objectKey = afterSource.slice(secondColon + 1);
-  if (!source || !className || !objectKey) return null;
-  return { source, className, objectKey };
-}
-
 /**
- * Hold the EvalDO's `executeRun` on a background Node task (no request-scoped limit), then push the
- * result to the owning agent DO (`onEvalComplete`, server-stamped). The held dispatch uses the
- * deliberately-held dispatch path (`dispatchHeld`). On failure (e.g. a server restart dropped the
- * connection) the EvalDO's boot reconciliation marks the run interrupted and the agent's `getRun`
- * poll backstop surfaces it — so this is fire-and-forget.
+ * Only an explicitly timed run needs a host-held observer: a synchronous CPU loop can prevent the
+ * EvalDO's own AbortSignal timer from firing. This observer is therefore an external process
+ * watchdog, not the execution or completion channel. Untimed runs never hold a host request.
  */
-async function pushEvalComplete(
-  doDispatch: HeldDoDispatcher,
-  agentRef: string | undefined,
-  channelId: string | undefined,
-  runId: string,
-  agentInvocationId: string | undefined,
-  result: unknown
-): Promise<void> {
-  if (!agentRef) return;
-  const agentDoRef = parseDoRef(agentRef);
-  if (!agentDoRef) return;
-  // `channelId` lets the agent route the resume; `runId` addresses the eval
-  // effect while `agentInvocationId` preserves its parent tool causality.
-  await doDispatch
-    .dispatch(agentDoRef, "onEvalComplete", {
-      runId,
-      agentInvocationId,
-      result,
-      channelId,
-    })
-    .catch((err) => {
-      console.warn(
-        `[eval] onEvalComplete push to ${agentRef} failed (getRun poll backstop covers it):`,
-        err instanceof Error ? err.message : err
-      );
-    });
-}
-
-async function runHeldAndDeliver(
+async function watchTimedRun(
   doDispatch: HeldDoDispatcher,
   evalDoRef: { source: string; className: string; objectKey: string },
   runId: string,
-  agentRef: string | undefined,
-  channelId: string | undefined,
-  agentInvocationId: string | undefined,
-  timeoutMs: number | undefined,
-  recoverUnresponsiveSandbox: ((input: EvalSandboxRecoveryInput) => Promise<void>) | undefined,
+  timeoutMs: number,
+  recoverUnresponsiveSandbox: (input: EvalSandboxRecoveryInput) => Promise<void>,
   watchdogGraceMs: number
 ): Promise<void> {
-  try {
-    const result = await dispatchHeldEval(
-      doDispatch,
-      evalDoRef,
-      runId,
-      timeoutMs,
-      recoverUnresponsiveSandbox,
-      watchdogGraceMs
-    );
-    await pushEvalComplete(doDispatch, agentRef, channelId, runId, agentInvocationId, result);
-  } catch (err) {
-    console.warn(`[eval] held run ${runId} failed:`, err instanceof Error ? err.message : err);
-    // F2: the held dispatch died (e.g. a server restart dropped the connection). The agent's own
-    // `getRun` poll backstop MAY re-fire, but if its `deferRedrive` never re-runs the eval gate the
-    // parked invocation hangs forever. So reconcile the run's TERMINAL state from the EvalDO and push
-    // an `onEvalComplete` ourselves — but ONLY when the run is actually terminal. A `done`/`cancelled`
-    // run (boot reconciliation marks an interrupted run with a failed result) settles the agent's
-    // invocation; a still-`pending`/`running` run (genuinely in flight elsewhere) is LEFT ALONE so we
-    // never cut a legitimately long-running eval short — its own completion push covers it.
-    if (!agentRef) return;
-    try {
-      const reconciled = (await doDispatch.dispatch(evalDoRef, "getRun", runId)) as {
-        status?: string;
-        result?: unknown;
-      };
-      const status = String(reconciled?.status ?? "unknown");
-      if (status === "done" && reconciled.result != null) {
-        await pushEvalComplete(
-          doDispatch,
-          agentRef,
-          channelId,
-          runId,
-          agentInvocationId,
-          reconciled.result
-        );
-      } else if (status === "cancelled" || status === "unknown") {
-        // No durable result to deliver — synthesize a terminal failure so the parked invocation
-        // settles instead of hanging. (`pending`/`running` deliberately fall through: do not bound.)
-        await pushEvalComplete(doDispatch, agentRef, channelId, runId, agentInvocationId, {
-          success: false,
-          console: "",
-          error:
-            reconciled?.result != null
-              ? String((reconciled.result as { error?: unknown })?.error ?? "eval run interrupted")
-              : "eval run interrupted",
-        });
-      }
-    } catch (reconcileErr) {
-      console.warn(
-        `[eval] reconcile getRun for ${runId} after held failure also failed:`,
-        reconcileErr instanceof Error ? reconcileErr.message : reconcileErr
-      );
-    }
-  }
-}
-
-/**
- * EvalDO's in-isolate AbortSignal settles ordinary async timeouts. A synchronous
- * CPU loop can prevent that timer from ever running, so the Node host keeps the
- * same durable deadline outside workerd. Crossing the grace period means the
- * sandbox process is unresponsive; recovery recycles that process boundary and
- * boot reconciliation turns the orphaned run into a durable terminal result.
- */
-async function dispatchHeldEval(
-  doDispatch: HeldDoDispatcher,
-  evalDoRef: { source: string; className: string; objectKey: string },
-  runId: string,
-  timeoutMs: number | undefined,
-  recoverUnresponsiveSandbox: ((input: EvalSandboxRecoveryInput) => Promise<void>) | undefined,
-  watchdogGraceMs: number
-): Promise<unknown> {
   const held = doDispatch.dispatchHeld(evalDoRef, "executeRun", runId);
-  if (timeoutMs === undefined || recoverUnresponsiveSandbox === undefined) return held;
-
   const timeoutError = new Error(
     `eval run ${runId} exceeded its ${timeoutMs}ms sandbox deadline and required runtime recovery`
   );
@@ -184,7 +60,7 @@ async function dispatchHeldEval(
     timer.unref?.();
   });
   try {
-    return await Promise.race([guardedHeld, watchdog]);
+    await Promise.race([guardedHeld, watchdog]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
@@ -227,9 +103,8 @@ export function createEvalService(deps: {
   entityStore: WorkspaceEntityStore;
   tokenManager: TokenManager;
   /**
-   * Host-wide background-work registry (idle-exit monitor). Every held eval
-   * execution reports begin/end so a detached server won't idle-exit while
-   * background eval work is still running.
+   * Host-wide background-work registry (idle-exit monitor). Synchronous calls and explicit
+   * host watchdogs report begin/end; ordinary asynchronous runs live inside the EvalDO.
    */
   activity?: import("./activityRegistry.js").ActivityRegistry;
   /** Host-process safety boundary for synchronous sandbox CPU starvation. */
@@ -356,7 +231,7 @@ export function createEvalService(deps: {
   ): Promise<{ objectKey: string }> {
     const { ownerId, contextId } = owner;
     const objectKey = evalDoKey(ownerId, subKey);
-    const authorityDelegationPurpose = agentBinding ? "agentic-code-execution" : "tool-eval";
+    const authorityCeilingPurpose = agentBinding ? "agentic-code-execution" : "tool-eval";
     // Fast path: the EvalDO entity is sticky (idle-eviction aborts the instance
     // but never retires the entity), so once it's active in the cache for the
     // right context there's nothing to do — re-activating every run is a wasted
@@ -374,7 +249,7 @@ export function createEvalService(deps: {
       active.contextId === contextId &&
       JSON.stringify(active.agentBinding ?? null) === JSON.stringify(agentBinding ?? null) &&
       activeStateArgs?.["ownerPrincipalId"] === ownerId &&
-      activeStateArgs["authorityDelegationPurpose"] === authorityDelegationPurpose
+      activeStateArgs["authorityCeilingPurpose"] === authorityCeilingPurpose
     ) {
       return { objectKey };
     }
@@ -399,7 +274,7 @@ export function createEvalService(deps: {
       // bootstrap caller with no subject.
       ownerUserId,
       agentBinding,
-      stateArgs: { ownerPrincipalId: ownerId, subKey, authorityDelegationPurpose },
+      stateArgs: { ownerPrincipalId: ownerId, subKey, authorityCeilingPurpose },
     });
     return { objectKey };
   }
@@ -495,7 +370,7 @@ export function createEvalService(deps: {
       }
     }
     // Refuse an unscoped or trajectory-drifting agent relay before activating
-    // an EvalDO or minting any presenter delegation.
+    // an EvalDO or exposing any presenter authority ceiling.
     const { objectKey } = await ensureEvalDO(
       owner,
       runArgs.subKey ?? "default",
@@ -532,7 +407,7 @@ export function createEvalService(deps: {
   return {
     name: "eval",
     description: "Owner-scoped sandbox eval backed by a per-owner internal EvalDO",
-    authority: { principals: ["code", "user", "host", "entity"] },
+    authority: { principals: ["code", "user", "host"] },
     methods: evalMethods,
     handler: defineServiceHandler("eval", evalMethods, {
       run: async (ctx, [runArgs]) => {
@@ -548,37 +423,36 @@ export function createEvalService(deps: {
         }
       },
       startRun: async (ctx, [runArgs]) => {
-        // Async run for a caller that can't hold a connection (an agent). Insert the row (so getRun
-        // works immediately), kick off the held execution + completion push on a background Node
-        // task, and return the runId at once.
+        // Async agent run: the EvalDO persists and schedules it under its own lifetime, then returns
+        // immediately. Its terminal row is canonical and its own owner-scoped callback settles the
+        // agent. The host keeps no execution request open.
         const runId = runArgs.runId ?? randomUUID();
-        const { evalDoRef, assembledArgs, agentRef, channelId } = await prepareRun(ctx, runArgs);
-        const started: unknown = await deps.doDispatch.dispatch(evalDoRef, "startRun", {
+        const { evalDoRef, assembledArgs } = await prepareRun(ctx, runArgs);
+        await deps.doDispatch.dispatch(evalDoRef, "startRun", {
           ...assembledArgs,
           runId,
         });
-        const status =
-          started && typeof started === "object" && "status" in started
-            ? String(started.status)
-            : "unknown";
-        // Kick the held execution ONLY for a FRESH (pending) row. A deferRedrive re-issue of an
-        // already-`running`/`done` run must NOT spawn a second held executeRun (idempotent startRun
-        // returns the existing status). A stuck `pending` (held task died pre-dispatch) is re-kicked.
-        if (status === "pending") {
-          deps.activity?.begin(`eval:${runId}`);
-          void runHeldAndDeliver(
+        const timeoutMs = assembledArgs["timeoutMs"];
+        if (typeof timeoutMs === "number" && deps.recoverUnresponsiveSandbox) {
+          const activityId = `eval-watchdog:${runId}`;
+          deps.activity?.begin(activityId);
+          void watchTimedRun(
             deps.doDispatch,
             evalDoRef,
             runId,
-            agentRef,
-            channelId,
-            ctx.causalParent?.invocationId,
-            typeof assembledArgs["timeoutMs"] === "number" ? assembledArgs["timeoutMs"] : undefined,
+            timeoutMs,
             deps.recoverUnresponsiveSandbox,
             deps.watchdogGraceMs ?? DEFAULT_EVAL_WATCHDOG_GRACE_MS
-          ).finally(() => {
-            deps.activity?.end(`eval:${runId}`);
-          });
+          )
+            .catch((error) => {
+              console.warn(
+                `[eval] timed run watchdog ${runId} completed through recovery:`,
+                error instanceof Error ? error.message : error
+              );
+            })
+            .finally(() => {
+              deps.activity?.end(activityId);
+            });
         }
         return { runId };
       },

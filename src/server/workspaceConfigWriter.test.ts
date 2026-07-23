@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import type { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
 import {
@@ -8,6 +8,9 @@ import {
 } from "./workspaceConfigWriter.js";
 
 const WORKSPACE_ID = "ws_opaque_test";
+const INTERNAL_AUTHORIZATION = {
+  contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
+} as unknown as NonNullable<ServiceContext["authorization"]>;
 
 const mainState = { kind: "event" as const, eventId: "event:main" };
 const editedState = { kind: "application" as const, applicationId: "application:config" };
@@ -132,7 +135,8 @@ describe("workspaceConfigWriter", () => {
     const ctx = {
       caller: createVerifiedCaller("shell:dev", "shell"),
       requestId: "request:config",
-    };
+      authorization: INTERNAL_AUTHORIZATION,
+    } satisfies ServiceContext;
 
     const result = await writer.applyMutation({
       ctx,
@@ -178,7 +182,8 @@ describe("workspaceConfigWriter", () => {
       null,
       expect.objectContaining({
         runtime: expect.objectContaining({ id: "shell:dev", kind: "shell" }),
-      })
+      }),
+      { class: "internal", externalKeys: [] }
     );
   });
 

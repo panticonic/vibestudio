@@ -102,7 +102,7 @@ describe("resolveApprovalCallerTitle", () => {
       category: "eval",
       title: "Agentic Chat",
       panel: { id: "panel:nav-chat", title: "Agentic Chat" },
-      stableIdentityKey: "do:vibestudio/internal:EvalDO:run-1",
+      stableIdentityKey: "do:workers/agent:AgentDO:session",
       eval: {
         ownerId: "do:workers/agent:AgentDO:session",
         subKey: "turn-17",

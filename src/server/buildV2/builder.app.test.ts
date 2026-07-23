@@ -51,9 +51,11 @@ describe("buildUnit app builds", () => {
               {
                 capability: "app.getInfo",
                 resource: { kind: "exact", key: "global" },
+                tier: "gated",
+                evidence: "exact",
               },
             ],
-            delegations: [],
+            evalCeilings: [],
           },
           app: {
             target: "electron",
@@ -108,17 +110,30 @@ describe("buildUnit app builds", () => {
           path: expect.stringMatching(/^bundle-[A-Za-z0-9]+\.css$/u),
           role: "css",
         }),
+        expect.objectContaining({
+          path: expect.stringMatching(/^bundle-[A-Za-z0-9]+\.js\.map$/u),
+          role: "map",
+        }),
+        expect.objectContaining({
+          path: expect.stringMatching(/^bundle-[A-Za-z0-9]+\.css\.map$/u),
+          role: "map",
+        }),
       ])
     );
+    const primary = result.artifacts.find((artifact) => artifact.role === "primary");
+    expect(primary?.content).toMatch(/sourceMappingURL=bundle-[A-Za-z0-9]+\.js\.map/u);
+    expect(primary?.content).not.toContain("sourceMappingURL=data:");
     expect(result.buildKey).toBe(result.metadata.buildKey);
     expect(result.metadata.authority).toEqual({
       requests: [
         {
           capability: "app.getInfo",
           resource: { kind: "exact", key: "global" },
+          tier: "gated",
+          evidence: "exact",
         },
       ],
-      delegations: [],
+      evalCeilings: [],
     });
   });
 

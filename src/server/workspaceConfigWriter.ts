@@ -57,6 +57,23 @@ function sameState(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
 }
 
 const SYSTEM_CAUSE: RpcCausalParent | null = null;
+const SYSTEM_INTEGRITY = Object.freeze({
+  class: "internal" as const,
+  externalKeys: Object.freeze([]) as readonly string[],
+});
+
+function integrityFor(ctx: ServiceContext): {
+  class: "internal" | "external";
+  externalKeys: readonly string[];
+} {
+  const fact = ctx.authorization?.contextIntegrity;
+  if (!fact) {
+    throw new Error("Workspace config mutation requires resolved context-integrity authority");
+  }
+  return fact.class === "external"
+    ? { class: "external", externalKeys: [...fact.externalKeys] }
+    : { class: "internal", externalKeys: [] };
+}
 
 export function createWorkspaceConfigMainWriter(deps: {
   /** Hub-owned workspace identity. Never derive authority from a mutable checkout path. */
@@ -67,10 +84,11 @@ export function createWorkspaceConfigMainWriter(deps: {
 
   const readConfig = async (
     contextId: string,
-    causalParent: RpcCausalParent | null
+    causalParent: RpcCausalParent | null,
+    contextIntegrity: { class: "internal" | "external"; externalKeys: readonly string[] }
   ): Promise<WorkspaceConfigAtState> => {
     const call = <T>(method: string, input: unknown): Promise<T> =>
-      deps.vcs.semanticCausalCall<T>(method, input, causalParent);
+      deps.vcs.semanticCausalCall<T>(method, input, causalParent, contextIntegrity);
     const status = await call<VcsStatusResult>("vcsStatus", { contextId });
     const state = status.workingHead;
     const repositoryRefs = new Map<
@@ -181,7 +199,8 @@ export function createWorkspaceConfigMainWriter(deps: {
   ): Promise<WorkspaceConfigMutationResult> =>
     withFreshContext(async (contextId) => {
       const causalParent = input.ctx.causalParent ?? null;
-      const current = await readConfig(contextId, causalParent);
+      const contextIntegrity = integrityFor(input.ctx);
+      const current = await readConfig(contextId, causalParent, contextIntegrity);
       const rendered = render(current.text, current.config, input.mutate);
       if (rendered.nextContent === current.text) {
         return { changed: false, nextConfig: rendered.nextConfig };
@@ -204,7 +223,8 @@ export function createWorkspaceConfigMainWriter(deps: {
             },
           ],
         },
-        causalParent
+        causalParent,
+        contextIntegrity
       );
       const committed = await deps.vcs.semanticCausalCall<VcsCommitResult>(
         "vcsCommit",
@@ -214,7 +234,8 @@ export function createWorkspaceConfigMainWriter(deps: {
           expectedWorkingHead: edit.workingHead,
           message: input.summary,
         },
-        causalParent
+        causalParent,
+        contextIntegrity
       );
       if (committed.event.kind !== "event") {
         throw new Error("Workspace config commit did not produce an event");
@@ -227,7 +248,8 @@ export function createWorkspaceConfigMainWriter(deps: {
           expectedMainEventId: current.status.mainEventId,
         },
         causalParent,
-        input.ctx.caller
+        input.ctx.caller,
+        contextIntegrity
       );
       return { changed: true, nextConfig: rendered.nextConfig };
     });
@@ -235,7 +257,7 @@ export function createWorkspaceConfigMainWriter(deps: {
   return {
     wouldMutate: (mutate) =>
       withFreshContext(async (contextId) => {
-        const current = await readConfig(contextId, SYSTEM_CAUSE);
+        const current = await readConfig(contextId, SYSTEM_CAUSE, SYSTEM_INTEGRITY);
         return render(current.text, current.config, mutate).nextContent !== current.text;
       }),
     applyMutation(input) {

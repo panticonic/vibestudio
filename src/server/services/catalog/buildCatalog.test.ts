@@ -4,6 +4,12 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
 import type { CatalogEntry } from "@vibestudio/service-schemas/docs";
 import { buildCatalog, isCatalogEntryVisible } from "./buildCatalog.js";
+import { workerRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtimeSurface.worker";
+
+const testTierLookup = (method: string) =>
+  method.startsWith("demo.")
+    ? { tier: "open" as const, session: "family" as const, rationale: "Explicit catalog fixture" }
+    : null;
 
 const demo: ServiceDefinition = {
   name: "demo",
@@ -61,6 +67,7 @@ describe("buildCatalog", () => {
   const entries = buildCatalog({
     definitions: [demo],
     runtimeSurfaces: { panel: panelSurface, workerRuntime: workerSurface },
+    tierLookup: testTierLookup,
   });
 
   it("emits a service parent + one entry per agent-facing method", () => {
@@ -68,6 +75,36 @@ describe("buildCatalog", () => {
     expect(byId(entries, "service:demo.get").parent).toBe("service:demo");
     expect(byId(entries, "service:demo.admin.wipe").qualifiedName).toBe("demo.admin.wipe");
     expect(entries.some((entry) => entry.id === "service:demo.internalTransport")).toBe(false);
+  });
+
+  it("discovers workspace-declared capabilities without a checked-in census", () => {
+    const dynamic = buildCatalog({
+      definitions: [],
+      workspaceCapabilities: [
+        {
+          name: "example.notes",
+          title: "Notes",
+          description: "A workspace-local notes provider",
+          source: "workers/notes",
+          protocols: ["example.notes.v1"],
+          principals: ["code"],
+          target: { kind: "durable-object", className: "NotesDO" },
+        },
+      ],
+    });
+    expect(byId(dynamic, "workspace:example.notes")).toMatchObject({
+      surface: "workspace",
+      qualifiedName: "example.notes",
+      access: {
+        capability: "workspace-service:example.notes",
+        principals: ["code"],
+        source: "workers/notes",
+        protocols: ["example.notes.v1"],
+        target: { kind: "durable-object", className: "NotesDO" },
+      },
+    });
+    expect(isCatalogEntryVisible(byId(dynamic, "workspace:example.notes"), "worker")).toBe(true);
+    expect(isCatalogEntryVisible(byId(dynamic, "workspace:example.notes"), "server")).toBe(false);
   });
 
   it("omits a transport-only service parent when every method has a modern wrapper", () => {
@@ -87,6 +124,7 @@ describe("buildCatalog", () => {
   it("projects hidden transport schemas under the modern runtime namespace", () => {
     const projected = buildCatalog({
       definitions: [demo],
+      tierLookup: testTierLookup,
       runtimeSurfaces: {
         workerRuntime: {
           target: "workerRuntime",
@@ -150,6 +188,7 @@ describe("buildCatalog", () => {
     expect(byId(projected, "runtime:workerRuntime.gad").description).toContain(
       'docs_open("runtime:workerRuntime.gad.query")'
     );
+    expect(byId(projected, "runtime:workerRuntime.gad").members).toEqual(["query"]);
   });
 
   it("serializes args/returns JSON Schema and carries description/examples", () => {
@@ -161,18 +200,24 @@ describe("buildCatalog", () => {
     expect(wipe.returnsSchema).toBeUndefined();
   });
 
-  it("derives access.callers with method > service precedence", () => {
+  it("derives authority principals with method > service precedence and includes reviewed tier", () => {
     const access = (id: string) =>
-      (byId(entries, id).access as { callers?: string[] } | undefined) ?? {};
-    expect(access("service:demo.get").callers).toEqual(["panel", "server"]); // service policy
-    expect(access("service:demo.admin.wipe").callers).toEqual(["server"]); // method policy
-    expect(access("service:demo.probe").callers).toEqual(["do", "worker"]); // method policy
+      (byId(entries, id).access as
+        | { principals?: string[]; tier?: string; sessionAdmission?: string }
+        | undefined) ?? {};
+    expect(access("service:demo.get")).toMatchObject({
+      principals: ["code", "host"],
+      tier: "open",
+      sessionAdmission: "family",
+    });
+    expect(access("service:demo.admin.wipe").principals).toEqual(["host"]);
+    expect(access("service:demo.probe").principals).toEqual(["code"]);
   });
 
   it("emits runtime entries", () => {
     const foo = byId(entries, "runtime:panel.foo");
     expect(foo.surface).toBe("runtime");
-    expect(foo.members).toEqual(["a", "b"]);
+    expect(foo.members).toBeUndefined();
     expect((foo.access as { callers?: string[] }).callers).toEqual(["panel"]);
     expect(
       (byId(entries, "runtime:workerRuntime.bar").access as { callers?: string[] }).callers
@@ -180,10 +225,34 @@ describe("buildCatalog", () => {
   });
 });
 
+it("documents runtime-owned worker lifecycle helpers without exposing raw transport calls", () => {
+  const projected = buildCatalog({
+    definitions: [],
+    runtimeSurfaces: { workerRuntime: workerRuntimeSurface },
+  });
+  expect(byId(projected, "runtime:workerRuntime.workers.create")).toMatchObject({
+    qualifiedName: "workers.create",
+    signature: "create(source: string, options?: WorkerCreateOptions): Promise<WorkerEntityHandle>",
+    access: { callers: ["worker", "do"] },
+  });
+  expect(byId(projected, "runtime:workerRuntime.workers.destroy").description).toContain(
+    "disposable target from workers.resolveDurableObject"
+  );
+  expect(byId(projected, "runtime:workerRuntime.workers.resolveService")).toMatchObject({
+    qualifiedName: "workers.resolveService",
+    signature:
+      "resolveService(query: string, objectKey?: string | null): Promise<ResolvedWorkspaceService>",
+  });
+  expect(byId(projected, "runtime:workerRuntime.workers.listServices").description).toContain(
+    "exact semantic context"
+  );
+});
+
 describe("isCatalogEntryVisible", () => {
   const entries = buildCatalog({
     definitions: [demo],
     runtimeSurfaces: { panel: panelSurface, workerRuntime: workerSurface },
+    tierLookup: testTierLookup,
   });
   const get = byId(entries, "service:demo.get");
   const wipe = byId(entries, "service:demo.admin.wipe");

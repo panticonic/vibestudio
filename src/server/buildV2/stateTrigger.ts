@@ -149,6 +149,8 @@ export class StateTransitionTrigger extends EventEmitter {
   private readonly workspaceRoot: string;
   private readonly source: WorkspaceStateSource;
   private unsubscribe: (() => void) | null = null;
+  private queuedRevision = 0;
+  private settledRevision = 0;
 
   constructor(opts: {
     graph: PackageGraph;
@@ -219,10 +221,19 @@ export class StateTransitionTrigger extends EventEmitter {
     return this.queue.then(() => undefined);
   }
 
+  /** Whether the protected-publication subscription has no queued transition. */
+  isSettled(): boolean {
+    return this.queuedRevision === this.settledRevision;
+  }
+
   private handlePublication(event: ProtectedPublicationEvent): void {
+    const revision = ++this.queuedRevision;
     this.queue = this.queue
       .then(() => this.process(event))
-      .catch((error) => console.error(`[StateTrigger] Error processing publication:`, error));
+      .catch((error) => console.error(`[StateTrigger] Error processing publication:`, error))
+      .finally(() => {
+        this.settledRevision = revision;
+      });
   }
 
   private async process(event: ProtectedPublicationEvent): Promise<void> {

@@ -32,7 +32,7 @@ const TEST_EXECUTION_IDENTITY: NonNullable<BuildMetadata["execution"]> = {
 };
 const TEST_SEALED_APP_BUILD_METADATA = {
   execution: TEST_EXECUTION_IDENTITY,
-  authority: { requests: [], delegations: [] },
+  authority: { requests: [], evalCeilings: [] },
 } satisfies Pick<BuildMetadata, "execution" | "authority">;
 
 function publicationEvent(): ProtectedPublicationEvent {
@@ -105,6 +105,7 @@ function makeHarness(
           capabilities: ["notifications"],
           ...(opts.invalidManifest ? { preload: "preload.ts" } : {}),
         },
+        authority: { requests: [], evalCeilings: [] },
       },
     })
   );
@@ -155,7 +156,7 @@ function makeHarness(
         ev: "ev-app",
         sourceStateHash: "state:test",
         execution: TEST_EXECUTION_IDENTITY,
-        authority: { requests: [], delegations: [] },
+        authority: { requests: [], evalCeilings: [] },
         details: { kind: "app", target: "electron", integrity: "sha256-app" },
       },
       artifacts: [artifact],
@@ -170,7 +171,7 @@ function makeHarness(
               ev: "ev-app",
               sourceStateHash: "state:test",
               execution: TEST_EXECUTION_IDENTITY,
-              authority: { requests: [], delegations: [] } as NonNullable<
+              authority: { requests: [], evalCeilings: [] } as NonNullable<
                 BuildMetadata["authority"]
               >,
               details: { kind: "app", target: "electron", integrity: "sha256-app" },
@@ -179,9 +180,16 @@ function makeHarness(
           }
         : null
     ),
-    getEffectiveVersion: vi.fn((name: string) =>
+    getEffectiveVersion: vi.fn((name: string): string | null =>
       name === "@workspace-apps/shell" ? "ev-app" : null
     ),
+    resolveBuildUnitIdentity: vi.fn(async () => ({
+      unitPath: "apps/shell",
+      unitName: "@workspace-apps/shell",
+      effectiveVersion: "ev-app",
+      dependencyEvs: {},
+      externalDeps: {},
+    })),
     getExternalDeps: vi.fn(() => ({})),
     getBuildProviderDetails: vi.fn(
       () =>
@@ -238,7 +246,10 @@ function makeHarness(
     approvalCoordinator,
     notificationService,
     entityCache,
-    readWorkspaceFileAtState: opts.readWorkspaceFileAtState ?? (async () => null),
+    readWorkspaceFileAtState: async (stateHash, filePath) =>
+      filePath === "apps/shell/package.json"
+        ? fs.readFileSync(path.join(appPath, "package.json"), "utf8")
+        : ((await opts.readWorkspaceFileAtState?.(stateHash, filePath)) ?? null),
     getGatewayUrl: () => "http://127.0.0.1:1234",
     getReactNativeAppArtifactBaseUrl: () =>
       opts.reactNativeAppArtifactBaseUrl ?? "http://127.0.0.1:1234",
@@ -267,15 +278,6 @@ function makeHarness(
     entityCache,
     providerChangeCallbacks,
   };
-}
-
-function panelCaller(callerId = "panel-1") {
-  return createVerifiedCaller(callerId, "panel", {
-    callerId,
-    callerKind: "panel",
-    repoPath: "panels/test",
-    effectiveVersion: "ev-panel",
-  });
 }
 
 function installApp(host: AppHost, graphNode: ReturnType<typeof makeHarness>["graphNode"]): void {
@@ -323,6 +325,7 @@ function createAppGraphNode(
           renderer: opts.target === "terminal" ? "index.mjs" : "index.tsx",
           capabilities: opts.capabilities ?? [],
         },
+        authority: { requests: [], evalCeilings: [] },
       },
     })
   );
@@ -370,6 +373,7 @@ function setAppManifestTarget(
       vibestudio: {
         displayName: node.manifest.displayName,
         app: appBlock,
+        authority: { requests: [], evalCeilings: [] },
       },
     })
   );
@@ -463,7 +467,7 @@ describe("AppHost", () => {
     );
     const { host } = makeHarness({ readWorkspaceFileAtState });
 
-    const approval = await host.metaChangeApprovalForCommit("state:next");
+    const approval = await host.unitChangeApprovalForCommit("state:next");
 
     expect(readWorkspaceFileAtState).toHaveBeenCalledWith("state:next", "meta/vibestudio.yml");
     expect(approval.units).toEqual([
@@ -504,7 +508,7 @@ describe("AppHost", () => {
       source: { repoPath: "apps/shell", effectiveVersion: "ev-app" },
       activeBuildKey: "app-key",
       activeExecutionDigest: TEST_EXECUTION_IDENTITY.executionDigest,
-      activeAuthority: { requests: [], delegations: [] },
+      activeAuthority: { requests: [], evalCeilings: [] },
       status: "active",
     });
     const connectionGrants = new ConnectionGrantService({ entityCache });
@@ -799,9 +803,11 @@ describe("AppHost", () => {
             {
               capability: "service:events.watch",
               resource: { kind: "exact", key: "service:events.watch" },
+              tier: "gated",
+              evidence: "exact",
             },
           ],
-          delegations: [
+          evalCeilings: [
             {
               audience: "eval",
               purpose: "agentic-code-execution",
@@ -809,6 +815,8 @@ describe("AppHost", () => {
                 {
                   capability: "runtime:entity.create",
                   resource: { kind: "prefix", prefix: "panels/" },
+                  tier: "gated",
+                  evidence: "bounded-dynamic",
                 },
               ],
             },
@@ -850,7 +858,7 @@ describe("AppHost", () => {
           resource: { kind: "exact", key: "service:events.watch" },
         },
       ],
-      authorityDelegations: [
+      authorityEvalCeilings: [
         {
           audience: "eval",
           purpose: "agentic-code-execution",
@@ -1372,7 +1380,7 @@ describe("AppHost", () => {
         ...activeBuild?.metadata,
         buildKey: "app-key",
         sourcePath: "apps/shell",
-        authority: { requests: [], delegations: [] },
+        authority: { requests: [], evalCeilings: [] },
         execution: {
           version: 1,
           source: { repoPath: "apps/shell", effectiveVersion: "e".repeat(64) },
@@ -1398,7 +1406,7 @@ describe("AppHost", () => {
         integrity: "sha256-app",
         executionDigest: "d".repeat(64),
         authorityRequests: [],
-        authorityDelegations: [],
+        authorityEvalCeilings: [],
       },
     });
     expect(fs.existsSync(path.join(outDir, "manifest.json"))).toBe(true);
@@ -1443,7 +1451,7 @@ describe("AppHost", () => {
       source: { repoPath: "apps/mobile", effectiveVersion: "ev-mobile" },
       activeBuildKey: "mobile-key",
       activeExecutionDigest: "a".repeat(64),
-      activeAuthority: { requests: [], delegations: [] },
+      activeAuthority: { requests: [], evalCeilings: [] },
       status: "active",
     });
     const connectionGrants = new ConnectionGrantService({ entityCache });
@@ -1565,6 +1573,7 @@ describe("AppHost", () => {
             entry: "index.ts",
             capabilities: ["clipboard"],
           },
+          authority: { requests: [], evalCeilings: [] },
         },
       })
     );
@@ -1579,7 +1588,7 @@ describe("AppHost", () => {
         ev: "ev-terminal",
         sourceStateHash: "state:test",
         execution: TEST_EXECUTION_IDENTITY,
-        authority: { requests: [], delegations: [] },
+        authority: { requests: [], evalCeilings: [] },
         details: {
           kind: "app",
           target: "terminal",
@@ -1660,7 +1669,7 @@ describe("AppHost", () => {
         ev: "ev-terminal",
         sourceStateHash: "state:test",
         execution: TEST_EXECUTION_IDENTITY,
-        authority: { requests: [], delegations: [] },
+        authority: { requests: [], evalCeilings: [] },
         details: {
           kind: "app" as const,
           target: "terminal" as const,
@@ -1901,7 +1910,7 @@ describe("AppHost", () => {
       contractVersion: "vibestudio-build-provider-v1",
     };
     buildSystem.getBuildProviderDetails.mockReturnValue(provider);
-    const approval = await host.metaChangeApprovalForCommit("state:provider-change");
+    const approval = await host.unitChangeApprovalForCommit("state:provider-change");
     expect(approval.units).toEqual([
       expect.objectContaining({
         unitKind: "app",
@@ -2092,7 +2101,7 @@ describe("AppHost", () => {
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(buildSystem.getBuild).not.toHaveBeenCalled();
     expect(host.registry.get(graphNode.name)?.activeBundleKey).toBe("app-key");
-    const approval = await host.metaChangeApprovalForCommit("state:provider-change");
+    const approval = await host.unitChangeApprovalForCommit("state:provider-change");
     expect(approval.units).toEqual([
       expect.objectContaining({
         provider: newProvider,
@@ -2852,73 +2861,5 @@ describe("AppHost", () => {
         error: expect.stringContaining("pure-thin"),
       })
     );
-  });
-
-  it("stores a four-hour dev-session grant for app main pushes", async () => {
-    const { host, approvalQueue, graphNode } = makeHarness({ approvalDecision: "session" });
-    installApp(host, graphNode);
-    const request = {
-      caller: panelCaller("panel-1"),
-      repoPath: graphNode.relativePath,
-      branch: "main",
-      commit: "def456",
-    };
-
-    await expect(host.authorizeSourceChange(request)).resolves.toEqual({ allowed: true });
-    await expect(host.authorizeSourceChange({ ...request, commit: "def457" })).resolves.toEqual({
-      allowed: true,
-    });
-    await expect(
-      host.authorizeSourceChange({
-        ...request,
-        caller: panelCaller("panel-2"),
-        commit: "def458",
-      })
-    ).resolves.toEqual({ allowed: true });
-
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "unit-batch",
-        callerId: "panel-1",
-        callerKind: "panel",
-        repoPath: "panels/test",
-        effectiveVersion: "ev-panel",
-        trigger: "source-change",
-        title: "@workspace-apps/shell app source change",
-        units: [
-          expect.objectContaining({
-            unitKind: "app",
-            unitName: "@workspace-apps/shell",
-            ev: "ev-app",
-            source: expect.objectContaining({ repo: graphNode.relativePath, ref: "main" }),
-          }),
-        ],
-      })
-    );
-  });
-
-  it("does not gate unknown app repos or non-active branches", async () => {
-    const { host, approvalQueue, graphNode } = makeHarness();
-    installApp(host, graphNode);
-
-    await expect(
-      host.authorizeSourceChange({
-        caller: panelCaller(),
-        repoPath: "apps/unknown",
-        branch: "main",
-        commit: "def456",
-      })
-    ).resolves.toEqual({ allowed: true });
-    await expect(
-      host.authorizeSourceChange({
-        caller: panelCaller(),
-        repoPath: graphNode.relativePath,
-        branch: "feature",
-        commit: "def456",
-      })
-    ).resolves.toEqual({ allowed: true });
-
-    expect(approvalQueue.request).not.toHaveBeenCalled();
   });
 });

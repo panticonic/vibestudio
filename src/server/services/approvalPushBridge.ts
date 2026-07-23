@@ -6,6 +6,7 @@ import {
   type PushApprovalDataPayload,
 } from "@vibestudio/shared/approvalContract";
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
+import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ApprovalQueueWithListeners } from "./approvalQueue.js";
 import type { PushDeliveryTarget, PushServiceInternal } from "./pushService.js";
@@ -62,11 +63,11 @@ function actionsFor(approval: PendingApproval): readonly string[] {
 }
 
 const ACTION_TITLES: Record<string, string> = {
-  once: "Once",
-  session: "Session",
-  deny: "Deny",
-  open: "Open",
-  version: "Trust Version",
+  once: HOST_APPROVAL_COPY.pushActions.once,
+  session: HOST_APPROVAL_COPY.pushActions.session,
+  deny: HOST_APPROVAL_COPY.pushActions.deny,
+  open: HOST_APPROVAL_COPY.pushActions.open,
+  version: HOST_APPROVAL_COPY.pushActions.version,
 };
 
 function actionPayloadFor(approval: PendingApproval): Array<{ id: string; title: string }> {
@@ -75,10 +76,10 @@ function actionPayloadFor(approval: PendingApproval): Array<{ id: string; title:
     title:
       id === "once" && approval.kind === "unit-batch"
         ? approval.trigger === "source-change"
-          ? "Approve change"
+          ? HOST_APPROVAL_COPY.pushActions.approveChange
           : approval.trigger === "management"
-            ? "Approve"
-            : "Approve all"
+            ? HOST_APPROVAL_COPY.pushActions.approve
+            : HOST_APPROVAL_COPY.pushActions.approveAll
         : (ACTION_TITLES[id] ?? id),
   }));
 }

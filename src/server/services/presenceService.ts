@@ -44,7 +44,7 @@ export function createPresenceTracker(
 
 export function createPresenceService(deps: { presence: PresenceTracker }): ServiceDefinition {
   const readAuthority: ServiceAuthorityPolicy = {
-    principals: ["host", "user", "code", "entity"],
+    principals: ["host", "user", "code"],
   };
   const methods = {
     markPanelActive: { args: z.tuple([z.string()]) },

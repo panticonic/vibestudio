@@ -10,6 +10,18 @@ const context = (userId: string) =>
   }) as never;
 
 describe("phoneProvisioning proxy", () => {
+  it("carries semantic capabilities with its reusable method contract", () => {
+    const definition = createPhoneProvisioningProxyService({
+      getUserConnections: () => [],
+      getClientBridge: () => undefined,
+    });
+
+    expect(definition.methods["providers"]?.capability).toBe("mobile.devices.read");
+    expect(definition.methods["devices"]?.capability).toBe("mobile.devices.read");
+    expect(definition.methods["install"]?.capability).toBe("mobile.install");
+    expect(definition.methods["openPairing"]?.capability).toBe("mobile.pair");
+  });
+
   it("only exposes desktops belonging to the authenticated account", async () => {
     const call = vi.fn(async () => [
       {

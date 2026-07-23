@@ -2,12 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
+import { testAuthority } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
 import { createPanelCdpService, type PanelCdpServiceDeps } from "./panelCdpService.js";
 import type { PanelAccessPermissionDeps } from "./panelAccessPermission.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
+
+type AuthorityTestDeps = { approvalQueue: ApprovalQueue; grantStore: CapabilityGrantStore };
+type PanelAccessTestDeps = PanelAccessPermissionDeps & AuthorityTestDeps;
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-cdp-"));
@@ -48,6 +58,10 @@ function ctx(id = "panel:requester") {
       callerKind: "panel",
       repoPath: "panels/requester",
       effectiveVersion: "version-1",
+      requested: [
+        { capability: "panel.inspect", resource: { kind: "network", value: "*" } },
+        { capability: "context.boundary", resource: { kind: "network", value: "*" } },
+      ],
     }),
   };
 }
@@ -59,6 +73,10 @@ function runtimeCtx(kind: "worker" | "do", id: string) {
       callerKind: kind,
       repoPath: `workers/${id}`,
       effectiveVersion: "version-1",
+      requested: [
+        { capability: "panel.inspect", resource: { kind: "network", value: "*" } },
+        { capability: "context.boundary", resource: { kind: "network", value: "*" } },
+      ],
     }),
   };
 }
@@ -69,11 +87,9 @@ function runtimeCtx(kind: "worker" | "do", id: string) {
  * prompts once with `context.boundary`. Same-context / context-less targets are
  * free.
  */
-function accessFields(
-  overrides: Partial<PanelAccessPermissionDeps> = {}
-): PanelAccessPermissionDeps {
+function accessFields(overrides: Partial<PanelAccessTestDeps> = {}): PanelAccessTestDeps {
   return {
-    approvalQueue: approvalQueueMock("session"),
+    approvalQueue: approvalQueueMock("version"),
     grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
     contextExists: vi.fn(() => true),
     resolveContextOwnerLabel: vi.fn(() => "owner"),
@@ -92,17 +108,64 @@ function accessFields(
   };
 }
 
-type CdpTestDeps = Partial<PanelAccessPermissionDeps> &
+type CdpTestDeps = Partial<PanelAccessTestDeps> &
   Omit<PanelCdpServiceDeps, keyof PanelAccessPermissionDeps>;
 
 /** Merge context-boundary defaults (overridable per test) with the CDP deps. */
+type ResolvedCdpTestDeps = PanelCdpServiceDeps & AuthorityTestDeps;
+const serviceDeps = new WeakMap<object, ResolvedCdpTestDeps>();
 function cdpService(deps: CdpTestDeps) {
-  return createPanelCdpService({ ...accessFields(deps), ...deps });
+  const resolved = { ...accessFields(deps), ...deps } as ResolvedCdpTestDeps;
+  const service = createPanelCdpService(resolved);
+  serviceDeps.set(service, resolved);
+  return service;
+}
+
+async function dispatchCdp(
+  service: ReturnType<typeof createPanelCdpService>,
+  context: ServiceContext,
+  method: string,
+  args: unknown[]
+) {
+  const deps = serviceDeps.get(service);
+  if (!deps) throw new Error("Missing CDP test deps");
+  const dispatcher = new ServiceDispatcher();
+  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) => {
+    const resolved = testAuthority(caller, capability, resourceKey);
+    return capability === CONTEXT_BOUNDARY_CAPABILITY
+      ? {
+          ...resolved,
+          grants: deps.grantStore.grantsForSubjects(
+            [resolved.context.authorizingOrigin.principal],
+            capability
+          ),
+        }
+      : resolved;
+  });
+  const acquisition = new AcquisitionCoordinator({
+    approvalQueue: deps.approvalQueue,
+    grantStore: deps.grantStore,
+  });
+  dispatcher.setAuthorityAcquirer({
+    request: (input) => acquisition.request(input),
+    acquire: (input) => acquisition.requestAndWait(input),
+    consume: (grantId) => acquisition.consume(grantId),
+    invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
+      acquisition.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+  });
+  dispatcher.registerService(service);
+  dispatcher.markInitialized();
+  return dispatcher.dispatch(
+    { ...context, authorityAcquisition: "wait" },
+    "panelCdp",
+    method,
+    args
+  );
 }
 
 describe("panelCdpService", () => {
   it("gates endpoint minting on a cross-context target", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("version");
     const endpoint = { wsEndpoint: "ws://server/cdp/target", token: "t" };
     const getEndpoint = vi.fn(async () => endpoint);
     const service = cdpService({
@@ -116,7 +179,9 @@ describe("panelCdpService", () => {
       getEndpoint,
     });
 
-    await expect(service.handler(ctx(), "getCdpEndpoint", ["target"])).resolves.toEqual(endpoint);
+    await expect(dispatchCdp(service, ctx(), "getCdpEndpoint", ["target"])).resolves.toEqual(
+      endpoint
+    );
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -158,9 +223,9 @@ describe("panelCdpService", () => {
       getEndpoint,
     });
 
-    await service.handler(ctx("panel:requester-one"), "getCdpEndpoint", ["target"]);
-    await service.handler(ctx("panel:requester-one"), "getCdpEndpoint", ["target"]);
-    await service.handler(ctx("panel:requester-two"), "getCdpEndpoint", ["target"]);
+    await dispatchCdp(service, ctx("panel:requester-one"), "getCdpEndpoint", ["target"]);
+    await dispatchCdp(service, ctx("panel:requester-one"), "getCdpEndpoint", ["target"]);
+    await dispatchCdp(service, ctx("panel:requester-two"), "getCdpEndpoint", ["target"]);
 
     expect(getEndpoint).toHaveBeenCalledTimes(3);
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);
@@ -191,8 +256,8 @@ describe("panelCdpService", () => {
       getEndpoint,
     });
 
-    await expect(service.handler(ctx(), "getCdpEndpoint", ["target"])).rejects.toThrow(
-      "is another agent or panel's existing state"
+    await expect(dispatchCdp(service, ctx(), "getCdpEndpoint", ["target"])).rejects.toThrow(
+      /denied/i
     );
 
     expect(getEndpoint).not.toHaveBeenCalled();
@@ -211,8 +276,8 @@ describe("panelCdpService", () => {
       getEndpoint,
     });
 
-    await expect(service.handler(ctx(), "getCdpEndpoint", ["target"])).rejects.toThrow(
-      "is another agent or panel's existing state"
+    await expect(dispatchCdp(service, ctx(), "getCdpEndpoint", ["target"])).rejects.toThrow(
+      /denied/i
     );
     expect(getEndpoint).not.toHaveBeenCalled();
   });
@@ -220,7 +285,7 @@ describe("panelCdpService", () => {
   it("does not treat non-panel runtime ids as CDP targets", async () => {
     const getEndpoint = vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/worker", token: "t" }));
     const service = cdpService({
-      approvalQueue: approvalQueueMock("session"),
+      approvalQueue: approvalQueueMock("version"),
       getTarget: (panelId) =>
         panelId.startsWith("worker:") || panelId.startsWith("do:") ? null : { id: panelId },
       getEndpoint,
@@ -239,7 +304,7 @@ describe("panelCdpService", () => {
   it.each([["worker", "worker:agent"] as const, ["do", "do:Store:key"] as const])(
     "allows %s callers to request CDP for cross-context panel targets",
     async (kind, callerId) => {
-      const approvalQueue = approvalQueueMock("session");
+      const approvalQueue = approvalQueueMock("version");
       const endpoint = { wsEndpoint: "ws://server/cdp/target", token: "t" };
       const getEndpoint = vi.fn(async () => endpoint);
       const service = cdpService({
@@ -249,7 +314,7 @@ describe("panelCdpService", () => {
       });
 
       await expect(
-        service.handler(runtimeCtx(kind, callerId), "getCdpEndpoint", ["target"])
+        dispatchCdp(service, runtimeCtx(kind, callerId), "getCdpEndpoint", ["target"])
       ).resolves.toEqual(endpoint);
 
       expect(approvalQueue.request).toHaveBeenCalledWith(
@@ -276,7 +341,15 @@ describe("panelCdpService", () => {
       getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/shell", token: "t" })),
     });
 
-    await service.handler(ctx(), "getCdpEndpoint", ["shell"]);
+    const caller = createVerifiedCaller(
+      "agent:privileged",
+      "agent",
+      null,
+      { entityId: "privileged", contextId: "ctx-caller", channelId: "chan" },
+      null,
+      true
+    );
+    await dispatchCdp(service, { caller }, "getCdpEndpoint", ["shell"]);
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -287,7 +360,7 @@ describe("panelCdpService", () => {
   });
 
   it("gates drive verbs with the context-boundary capability", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("version");
     const drive = vi.fn(async () => undefined);
     const service = cdpService({
       approvalQueue,
@@ -302,7 +375,7 @@ describe("panelCdpService", () => {
     });
 
     await expect(
-      service.handler(ctx(), "navigate", ["target", "https://example.com"])
+      dispatchCdp(service, ctx(), "navigate", ["target", "https://example.com"])
     ).resolves.toBeUndefined();
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
@@ -314,7 +387,7 @@ describe("panelCdpService", () => {
   });
 
   it("allows panel caller drive verbs against cross-context workspace panels with approval", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("version");
     const drive = vi.fn(async () => undefined);
     const logAccess = vi.fn();
     const service = cdpService({
@@ -332,7 +405,7 @@ describe("panelCdpService", () => {
     });
 
     await expect(
-      service.handler(ctx(), "navigate", ["chat-panel", "https://example.com"])
+      dispatchCdp(service, ctx(), "navigate", ["chat-panel", "https://example.com"])
     ).resolves.toBeUndefined();
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
@@ -354,7 +427,7 @@ describe("panelCdpService", () => {
   });
 
   it("allows panel caller raw CDP endpoints against cross-context workspace panels with approval", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("version");
     const endpoint = { wsEndpoint: "ws://server/cdp/chat", token: "t" };
     const getEndpoint = vi.fn(async () => endpoint);
     const service = cdpService({
@@ -369,7 +442,7 @@ describe("panelCdpService", () => {
       getEndpoint,
     });
 
-    await expect(service.handler(ctx(), "getCdpEndpoint", ["chat-panel"])).resolves.toEqual(
+    await expect(dispatchCdp(service, ctx(), "getCdpEndpoint", ["chat-panel"])).resolves.toEqual(
       endpoint
     );
 
@@ -380,7 +453,7 @@ describe("panelCdpService", () => {
   });
 
   it("allows non-panel callers to drive same-context workspace panels without prompting", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("version");
     const drive = vi.fn(async () => undefined);
     const service = cdpService({
       approvalQueue,
@@ -399,7 +472,7 @@ describe("panelCdpService", () => {
   });
 
   it("gates historical console access with the context-boundary capability", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("version");
     const consoleHistory = vi.fn(async () => ({
       entries: [
         {
@@ -423,7 +496,7 @@ describe("panelCdpService", () => {
     });
 
     await expect(
-      service.handler(ctx(), "consoleHistory", ["target", { limit: 20, errorLimit: 20 }])
+      dispatchCdp(service, ctx(), "consoleHistory", ["target", { limit: 20, errorLimit: 20 }])
     ).resolves.toMatchObject({
       entries: [expect.objectContaining({ message: "loaded" })],
       capacity: { entries: 1000, errors: 500 },
@@ -447,14 +520,14 @@ describe("panelCdpService", () => {
       consoleHistory,
     });
 
-    await expect(service.handler(ctx(), "consoleHistory", ["target"])).rejects.toThrow(
-      "is another agent or panel's existing state"
+    await expect(dispatchCdp(service, ctx(), "consoleHistory", ["target"])).rejects.toThrow(
+      /denied/i
     );
     expect(consoleHistory).not.toHaveBeenCalled();
   });
 
   it("rejects non-http navigation before prompting or driving", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("version");
     const drive = vi.fn(async () => undefined);
     const service = cdpService({
       approvalQueue,
@@ -472,29 +545,40 @@ describe("panelCdpService", () => {
   });
 
   it("captures a screenshot through deps.screenshot with the cdp gate", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("version");
     const shot = { data: "aGk=", mimeType: "image/png" as const, width: 800, height: 600 };
     const screenshot = vi.fn(async () => shot);
+    const recordContextIngestion = vi.fn();
     const service = cdpService({
       approvalQueue,
       getTarget: () => ({
         id: "target",
         title: "Target",
-        kind: "workspace",
+        kind: "browser",
+        source: "browser:https://docs.example.com/guide",
         contextId: "ctx-target",
       }),
       getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target" })),
       screenshot,
+      recordContextIngestion,
     });
 
     await expect(
-      service.handler(ctx(), "screenshot", ["target", { format: "png" }])
+      dispatchCdp(service, ctx(), "screenshot", ["target", { format: "png" }])
     ).resolves.toEqual(shot);
     // Cross-context ⇒ the same context-boundary prompt as raw CDP access.
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
     );
     expect(screenshot).toHaveBeenCalledWith("target", "panel:requester", { format: "png" });
+    expect(recordContextIngestion).toHaveBeenCalledWith(expect.anything(), {
+      key: "web:docs.example.com",
+      via: "panel-cdp:screenshot",
+      classification: "external",
+    });
+    expect(screenshot.mock.invocationCallOrder[0]).toBeLessThan(
+      recordContextIngestion.mock.invocationCallOrder[0]!
+    );
   });
 
   it("agent callers screenshot same-context panels freely via their credential binding", async () => {
@@ -528,7 +612,7 @@ describe("panelCdpService", () => {
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
 
-  it("agent callers are denied (not prompted, never anchor-substituted) cross-context", async () => {
+  it("lets a session-bound agent acquire cross-context panel access without anchor substitution", async () => {
     const approvalQueue = approvalQueueMock("session");
     const screenshot = vi.fn(async () => ({
       data: "aGk=",
@@ -554,18 +638,27 @@ describe("panelCdpService", () => {
       getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target" })),
       screenshot,
     });
-    const agentCaller = createVerifiedCaller("agent:ent-1", "agent", null, {
-      entityId: "ent-1",
-      contextId: "ctx-agent",
-      channelId: "chan-1",
-      agentId: "agt_1",
-    });
+    const agentCaller = createVerifiedCaller(
+      "agent:ent-1",
+      "agent",
+      null,
+      {
+        entityId: "ent-1",
+        contextId: "ctx-agent",
+        channelId: "chan-1",
+        agentId: "agt_1",
+      },
+      null,
+      true
+    );
 
     await expect(
-      service.handler({ caller: agentCaller }, "screenshot", ["target", undefined])
-    ).rejects.toThrow(/agents may only automate panels in their own context/);
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(screenshot).not.toHaveBeenCalled();
+      dispatchCdp(service, { caller: agentCaller }, "screenshot", ["target", undefined])
+    ).resolves.toEqual({ data: "aGk=", mimeType: "image/png", width: 1, height: 1 });
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
+    );
+    expect(screenshot).toHaveBeenCalledTimes(1);
   });
 
   it("bypasses approval for shell callers", async () => {

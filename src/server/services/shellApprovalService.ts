@@ -16,7 +16,10 @@ import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ResolvedVia } from "@vibestudio/shared/governance/types";
 import type { ApprovalQueue, ApprovalResolver } from "./approvalQueue.js";
-import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import {
+  authorityResourceForApprovalScope,
+  type CapabilityGrantStore,
+} from "./capabilityGrantStore.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 
 /**
@@ -107,28 +110,43 @@ export function createShellApprovalService(deps: {
             "ENOSYS"
           );
         }
-        const resourceKey = pending.grantResourceKey ?? pending.resource?.value;
-        if (!resourceKey) {
+        const snapshot = pending.snapshot;
+        if (
+          !snapshot ||
+          snapshot.capability !== pending.capability ||
+          snapshot.resourceKey !== pending.grantResourceKey ||
+          !pending.resourceScope
+        ) {
           throw new ServiceError(
             serviceName,
             "blockCapability",
-            "Capability resource is missing",
+            "Capability approval has no canonical invocation snapshot",
             "EINVAL"
           );
         }
-        deps.capabilityGrantStore.grant(
-          pending.capability,
-          resourceKey,
-          {
-            callerId: pending.callerId,
-            repoPath: pending.repoPath,
-            effectiveVersion: pending.effectiveVersion,
-          },
-          "version",
-          pending.resourceScope,
-          Date.now(),
-          "deny"
-        );
+        if (pending.cardType === "confirm.critical") {
+          throw new ServiceError(
+            serviceName,
+            "blockCapability",
+            "Critical confirmations cannot create standing decisions",
+            "EINVAL"
+          );
+        }
+        deps.capabilityGrantStore.issue({
+          effect: "deny",
+          capability: snapshot.capability,
+          resource: authorityResourceForApprovalScope(pending.resourceScope),
+          subject: snapshot.callerPrincipal,
+          constraints: snapshot.callerPrincipal.startsWith("session:")
+            ? {
+                sessionId: snapshot.sessionId,
+                ...(snapshot.mission === "-" ? {} : { missionSubject: snapshot.mission }),
+                lineageAtConsent: [],
+              }
+            : { lineageAtConsent: [] },
+          issuedBy: ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : "user:system",
+          provenance: "acquisition",
+        });
         await approvalQueue.resolve(approvalId, "deny", resolverFrom(ctx, deviceLabelFor));
         metrics.recordApprovalResolved({ decision: "deny", source: ctx.caller.runtime.kind });
       },

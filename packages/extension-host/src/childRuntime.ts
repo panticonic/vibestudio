@@ -18,6 +18,7 @@ import {
   createExtensionProxy,
   type ExtensionsClient,
   type RegistryEntry,
+  type UserlandApprovalRequest,
 } from "@vibestudio/extension";
 import { createCredentialClient } from "@vibestudio/credential-client";
 import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
@@ -40,21 +41,6 @@ interface HealthDetail {
   summary: string;
   reasons?: string[];
   retryAt?: number;
-}
-
-interface UserlandApprovalRequest {
-  subject: { id: string; label?: string };
-  title: string;
-  summary?: string;
-  warning?: string;
-  details?: Array<{ label: string; value: string }>;
-  promptOptions?: "scoped" | "choices";
-  options?: Array<{
-    value: string;
-    label: string;
-    description?: string;
-    tone?: "primary" | "danger" | "neutral";
-  }>;
 }
 
 type ExtensionRuntimePhase = "runtime-import" | "activate" | "invoke" | "fetch";
@@ -567,6 +553,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
     selfId: extensionName,
     callerKind: "extension",
     transport,
+    authorityAcquisition: "wait",
   });
 
   await new Promise<void>((resolve, reject) => {

@@ -6,11 +6,17 @@
  * lifecycle columns (status, retired_at, cleanup_complete). Slot rows hold
  * the panel-tree position; slot_history holds the navigation history.
  *
- * This pre-release store has one exact current schema. Older workspace state
- * is reset by the workspace lifecycle instead of being translated here.
+ * This pre-release store has one exact current schema. Supported prior
+ * production schemas advance only through declared, validated migrations.
  */
 
-import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
+import {
+  DurableObjectBase,
+  rpc,
+  type DurableObjectContext,
+  type DurableObjectSchemaMigration,
+} from "@vibestudio/durable";
+import type { SchemaSqlStorage } from "@vibestudio/durable/schema";
 import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import {
   IdentityCollisionError,
@@ -46,7 +52,7 @@ interface DbEntityRow {
   parent_id: string | null;
   owner_user_id: string | null;
   created_at: number;
-  status: "active" | "retired";
+  status: "preparing" | "active" | "retired";
   retired_at: number | null;
   cleanup_complete: number; // SQLite stores boolean as 0/1
   error: string | null;
@@ -321,11 +327,76 @@ function validateActiveBuildKey(buildKey: string | undefined): string | null {
   return buildKey;
 }
 
+const WORKSPACE_ENTITY_COLUMNS = [
+  "id",
+  "kind",
+  "source_repo_path",
+  "source_effective_version",
+  "active_build_key",
+  "active_execution_digest",
+  "active_authority",
+  "context_id",
+  "class_name",
+  "key",
+  "state_args",
+  "agent_entity_id",
+  "agent_channel_id",
+  "parent_id",
+  "owner_user_id",
+  "created_at",
+  "status",
+  "retired_at",
+  "cleanup_complete",
+  "error",
+  "display_title",
+] as const;
+
+function assertWorkspaceEntityColumns(sql: SchemaSqlStorage, label: string): void {
+  const columns = sql
+    .exec(`PRAGMA table_info(entities)`)
+    .toArray()
+    .map((column) => String(column["name"]));
+  if (JSON.stringify(columns) !== JSON.stringify(WORKSPACE_ENTITY_COLUMNS)) {
+    throw new Error(`${label} entities schema is unknown: ${JSON.stringify(columns)}`);
+  }
+}
+
+function assertWorkspaceEntityStatuses(
+  sql: SchemaSqlStorage,
+  allowed: readonly string[],
+  label: string
+): void {
+  const placeholders = allowed.map(() => "?").join(", ");
+  const unknown = sql
+    .exec(`SELECT status FROM entities WHERE status NOT IN (${placeholders}) LIMIT 1`, ...allowed)
+    .toArray()[0];
+  if (unknown) {
+    throw new Error(`${label} contains unknown entity status ${String(unknown["status"])}`);
+  }
+}
+
 export class WorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 24;
+  static override schemaVersion = 25;
 
   protected override schemaProductionBaseline() {
     return { version: 24, name: "workspace-state-v24" } as const;
+  }
+
+  protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [
+      {
+        version: 25,
+        name: "introduce-preparing-panel-lifecycle",
+        validateSource: (sql) => {
+          assertWorkspaceEntityColumns(sql, "WorkspaceDO v24");
+          assertWorkspaceEntityStatuses(sql, ["active", "retired"], "WorkspaceDO v24");
+        },
+        // The v24 SQLite column intentionally had no CHECK constraint. The
+        // migration is semantic: after this ledger entry, "preparing" is a
+        // recognized durable lifecycle state written by entityReservePanel.
+        migrate: () => {},
+      },
+    ];
   }
 
   constructor(ctx: DurableObjectContext, env: unknown) {
@@ -532,22 +603,12 @@ export class WorkspaceDO extends DurableObjectBase {
 
   protected override validateSchema(): void {
     super.validateSchema();
-    const entityColumns = this.sql.exec(`PRAGMA table_info(entities)`).toArray();
-    if (!entityColumns.some((column) => column["name"] === "active_execution_digest")) {
-      throw new Error(
-        `${this.constructor.name} schema validation failed: entities.active_execution_digest is missing`
-      );
-    }
-    if (!entityColumns.some((column) => column["name"] === "active_authority")) {
-      throw new Error(
-        `${this.constructor.name} schema validation failed: entities.active_authority is missing`
-      );
-    }
-    if (!entityColumns.some((column) => column["name"] === "active_build_key")) {
-      throw new Error(
-        `${this.constructor.name} schema validation failed: entities.active_build_key is missing`
-      );
-    }
+    assertWorkspaceEntityColumns(this.sql, `${this.constructor.name} v25`);
+    assertWorkspaceEntityStatuses(
+      this.sql,
+      ["preparing", "active", "retired"],
+      `${this.constructor.name} v25`
+    );
   }
 
   getWorkspaceId(): string {
@@ -565,7 +626,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * - Prior 'retired' row with identical identity → reactivate (flip status).
    * - Prior row with mismatched identity → throw IDENTITY_COLLISION.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   entityActivate(input: EntityActivateInput): EntityRecord {
     const nextBuildKey = validateActiveBuildKey(input.activeBuildKey);
     const nextExecutionDigest = validateActiveExecutionDigest(input.activeExecutionDigest);
@@ -700,8 +766,129 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
+  /**
+   * Reserve a panel incarnation before its immutable execution image is ready.
+   * The row is durable and can be referenced by a slot immediately, but the
+   * `preparing` status keeps it out of every active-principal query.
+   */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
+  entityReservePanel(input: EntityActivateInput): EntityRecord {
+    if (input.kind !== "panel") {
+      throw new Error("entityReservePanel only accepts panel entities");
+    }
+    if (input.activeBuildKey || input.activeExecutionDigest || input.activeAuthority) {
+      throw new Error("A panel reservation cannot carry an execution identity");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const id = canonicalEntityId({
+        kind: input.kind,
+        source: input.source.repoPath,
+        key: input.key,
+      });
+      const existing = this.readEntityRow(id);
+      if (existing) {
+        this.assertIdentityMatches(id, existing, input);
+        if (existing.status === "retired") {
+          throw new Error(`Cannot reserve retired panel entity ${id}`);
+        }
+        return this.rowToEntity(existing);
+      }
+
+      const now = Date.now();
+      this.sql.exec(
+        `INSERT INTO entities (
+          id, kind, source_repo_path, source_effective_version, active_build_key,
+          active_execution_digest, active_authority, context_id, class_name, key,
+          state_args, agent_entity_id, agent_channel_id, parent_id, owner_user_id,
+          created_at, status, retired_at, cleanup_complete, error
+        ) VALUES (?, 'panel', ?, '', NULL, NULL, NULL, ?, NULL, ?, ?, NULL, NULL, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
+        id,
+        input.source.repoPath,
+        input.contextId,
+        input.key,
+        input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
+        input.parentId ?? null,
+        input.ownerUserId ?? null,
+        now
+      );
+      const row = this.readEntityRow(id);
+      if (!row) throw new Error(`entityReservePanel: failed to read row after insert: ${id}`);
+      return this.rowToEntity(row);
+    });
+  }
+
+  /**
+   * Advance the executable version of one live durable identity without
+   * replacing its storage identity. Stable coordinates (kind/source path,
+   * context, class, key, owner) remain immutable; only the exact reviewed
+   * source version and its sealed execution tuple move together.
+   */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
+  entityAdvanceExecution(input: EntityActivateInput): EntityRecord {
+    const nextBuildKey = validateActiveBuildKey(input.activeBuildKey);
+    const nextExecutionDigest = validateActiveExecutionDigest(input.activeExecutionDigest);
+    const nextAuthority = serializeActiveAuthority(input.activeAuthority);
+    if (nextBuildKey === null || nextExecutionDigest === null || nextAuthority === null) {
+      throw new Error(
+        "entity execution advance requires a complete build key, execution digest, and authority manifest"
+      );
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const id = canonicalEntityId({
+        kind: input.kind,
+        source: input.source.repoPath,
+        className: input.className,
+        key: input.key,
+      });
+      const existing = this.readEntityRow(id);
+      if (!existing) throw new Error(`entityAdvanceExecution: unknown entity ${id}`);
+      if (existing.status !== "active" && existing.status !== "preparing") {
+        throw new Error(`entityAdvanceExecution: entity ${id} is ${existing.status}`);
+      }
+      this.assertStableIdentityMatches(id, existing, input);
+      const nextOwnerUserId = input.ownerUserId ?? null;
+      if (existing.owner_user_id !== nextOwnerUserId) {
+        throw new IdentityCollisionError(id, {
+          field: "ownerUserId",
+          existing: existing.owner_user_id,
+          attempted: nextOwnerUserId,
+        });
+      }
+      this.sql.exec(
+        `UPDATE entities
+            SET source_effective_version = ?, active_build_key = ?,
+                active_execution_digest = ?, active_authority = ?,
+                status = 'active', error = NULL
+          WHERE id = ?`,
+        input.source.effectiveVersion,
+        nextBuildKey,
+        nextExecutionDigest,
+        nextAuthority,
+        id
+      );
+      const row = this.readEntityRow(id);
+      if (!row) throw new Error(`entityAdvanceExecution: failed to read ${id} after update`);
+      return this.rowToEntity(row);
+    });
+  }
+
   /** Mark a single entity as retired. Idempotent. Returns the retired record (or null if not found). */
-  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "destructive",
+  })
   entityRetire(id: string): EntityRecord | null {
     return this.ctx.storage.transactionSync(() => {
       const row = this.readEntityRow(id);
@@ -736,13 +923,23 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Mark cleanup_complete=1 after server-side hooks succeed. */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   entityCleanupComplete(id: string): void {
     this.sql.exec(`UPDATE entities SET cleanup_complete = 1 WHERE id = ?`, id);
   }
 
   /** Find rows whose cleanup hooks need retrying. */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   entityFindIncompleteCleanups(): EntityRecord[] {
     const rows = this.sql
       .exec(`SELECT * FROM entities WHERE retired_at IS NOT NULL AND cleanup_complete = 0`)
@@ -754,7 +951,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * Hard-delete retired rows older than the grace window and unreferenced by slot_history.
    * Never deletes active rows; never deletes history-referenced rows. Fires no hooks.
    */
-  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "destructive",
+  })
   entityGc(opts: GcOptions = {}): string[] {
     const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
     const cutoff = Date.now() - graceMs;
@@ -795,20 +997,35 @@ export class WorkspaceDO extends DurableObjectBase {
 
   // ── Entity reads ──
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   entityResolve(id: string): EntityRecord | null {
     const row = this.readEntityRow(id);
     return row ? this.rowToEntity(row) : null;
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   entityResolveActive(id: string): EntityRecord | null {
     const row = this.readEntityRow(id);
     if (!row || row.status !== "active") return null;
     return this.rowToEntity(row);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   entityResolveContext(id: string): string | null {
     const row = this.readEntityRow(id);
     return row ? row.context_id : null;
@@ -819,7 +1036,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * `entityId`, or null. Backed by `idx_slots_current`. This is the authoritative,
    * lease-independent way to find the tree slot a panel's runtime entity belongs to.
    */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   slotResolveByEntity(entityId: string): string | null {
     const row = this.sql
       .exec(`SELECT slot_id FROM slots WHERE current_entity_id = ? AND closed_at IS NULL`, entityId)
@@ -837,7 +1059,12 @@ export class WorkspaceDO extends DurableObjectBase {
   // lifecycle.* operations
   // ─────────────────────────────────────────────────────────────
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   lifecycleLeaseUpsert(input: LifecycleLeaseInput): void {
     this.assertLifecycleKey(input);
     const now = Date.now();
@@ -857,7 +1084,12 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   lifecycleLeaseClear(input: LifecycleKey): void {
     this.assertLifecycleKey(input);
     this.sql.exec(
@@ -873,7 +1105,12 @@ export class WorkspaceDO extends DurableObjectBase {
   // ─────────────────────────────────────────────────────────────
 
   /** Register/replace a DO's wake time (absolute epoch ms). */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   alarmSet(input: LifecycleKey & { wakeAt: number }): void {
     this.assertLifecycleKey(input);
     this.ctx.storage.transactionSync(() => {
@@ -903,7 +1140,12 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Clear a DO's pending alarm (no-op if none). */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   alarmClear(input: LifecycleKey): void {
     this.assertLifecycleKey(input);
     this.sql.exec(
@@ -915,7 +1157,12 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Soonest pending wake time, or null when no alarms are scheduled. */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   alarmNextWakeAt(): number | null {
     const row = this.sql.exec(`SELECT MIN(wake_at) AS next FROM do_alarms`).toArray()[0] as
       | { next: number | null }
@@ -926,7 +1173,12 @@ export class WorkspaceDO extends DurableObjectBase {
   /** Return alarms due at/before `now` without acknowledging them. The driver
    *  clears or replaces each row only after the handler outcome is durable, so
    *  a server crash or failed acknowledgement cannot lose the sole wake. */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   alarmListDue(now: number): Array<LifecycleKey & { wakeAt: number }> {
     const rows = this.sql
       .exec(
@@ -959,7 +1211,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * deleted; jobs whose `specHash` is unchanged keep their durable
    * `next_run_at`; new or respecified jobs adopt `initialNextRunAt`.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   recurringSync(input: { jobs: RecurringJobRow[] }): void {
     this.ctx.storage.transactionSync(() => {
       const names = input.jobs.map((j) => j.name);
@@ -1023,7 +1280,12 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Jobs due at/before `now`. Rows stay put; the registry marks each run. */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   recurringDue(now: number): RecurringJobRow[] {
     return (
       this.sql
@@ -1038,7 +1300,12 @@ export class WorkspaceDO extends DurableObjectBase {
     ).map(rowToRecurringJob);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   recurringMarkRun(input: { name: string; lastRunAt: number; nextRunAt: number }): void {
     this.sql.exec(
       `UPDATE recurring_jobs
@@ -1051,7 +1318,12 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   recurringMarkSucceeded(input: { name: string; finishedAt: number; durationMs: number }): void {
     this.sql.exec(
       `UPDATE recurring_jobs
@@ -1067,7 +1339,12 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   recurringMarkFailed(input: {
     name: string;
     failedAt: number;
@@ -1095,7 +1372,12 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   recurringNextWakeAt(): number | null {
     const row = this.sql
       .exec(`SELECT MIN(next_run_at) AS next FROM recurring_jobs`)
@@ -1103,7 +1385,12 @@ export class WorkspaceDO extends DurableObjectBase {
     return row && row.next !== null ? row.next : null;
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   recurringList(): RecurringJobRow[] {
     return (
       this.sql.exec(`SELECT * FROM recurring_jobs ORDER BY name`).toArray() as Array<
@@ -1112,7 +1399,12 @@ export class WorkspaceDO extends DurableObjectBase {
     ).map(rowToRecurringJob);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   heartbeatRegister(input: HeartbeatRegistryRow): void {
     const now = Date.now();
     this.sql.exec(
@@ -1148,7 +1440,12 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   heartbeatRemove(input: {
     name: string;
     source?: string;
@@ -1169,7 +1466,12 @@ export class WorkspaceDO extends DurableObjectBase {
     this.sql.exec(`DELETE FROM heartbeat_registry WHERE name = ?`, input.name);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   heartbeatList(): HeartbeatRegistryRow[] {
     return (
       this.sql.exec(`SELECT * FROM heartbeat_registry ORDER BY name`).toArray() as Array<
@@ -1178,7 +1480,12 @@ export class WorkspaceDO extends DurableObjectBase {
     ).map(rowToHeartbeatRegistry);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   lifecycleListLeases(): LifecycleLease[] {
     const rows = this.sql
       .exec(
@@ -1204,7 +1511,12 @@ export class WorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   lifecycleOpenEpoch(input: LifecycleEpochInput): string {
     return this.ctx.storage.transactionSync(() => {
       const seqRow = this.sql
@@ -1234,7 +1546,12 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   lifecycleRecordOp(input: LifecycleOpInput): void {
     this.assertLifecycleKey(input.key);
     this.insertLifecycleOp(
@@ -1247,7 +1564,12 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   lifecycleListOps(epochId: string): LifecycleOp[] {
     const rows = this.sql
       .exec(
@@ -1279,12 +1601,22 @@ export class WorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   lifecycleCompleteEpoch(epochId: string): void {
     this.sql.exec(`UPDATE lifecycle_epochs SET status = 'completed' WHERE epoch_id = ?`, epochId);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   lifecycleListResumeTargets(): LifecycleKey[] {
     const rows = this.sql
       .exec(
@@ -1303,7 +1635,12 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Return all active entities (used by restart revival to re-attach runtime). */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   entityListActive(): EntityRecord[] {
     const rows = this.sql
       .exec(`SELECT * FROM entities WHERE status = 'active' ORDER BY created_at`)
@@ -1312,10 +1649,34 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Return active entities of a given kind (used by singleton reconciliation). */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   entityListActiveByKind(kind: EntityKind): EntityRecord[] {
     const rows = this.sql
       .exec(`SELECT * FROM entities WHERE status = 'active' AND kind = ? ORDER BY created_at`, kind)
+      .toArray() as unknown as DbEntityRow[];
+    return rows.map((row) => this.rowToEntity(row));
+  }
+
+  /**
+   * Return every entity record attached to a context, including retired rows.
+   * Context ownership must survive entity retirement long enough for the
+   * creator to reclaim the now-empty context without acquiring foreign-state
+   * authority.
+   */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
+  entityListByContext(contextId: string): EntityRecord[] {
+    const rows = this.sql
+      .exec(`SELECT * FROM entities WHERE context_id = ? ORDER BY created_at`, contextId)
       .toArray() as unknown as DbEntityRow[];
     return rows.map((row) => this.rowToEntity(row));
   }
@@ -1329,7 +1690,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * (context_id, owner_context_id, kind); `created_at` is preserved on conflict,
    * `owner_entity_id` refreshed.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   contextEdgeUpsert(input: {
     contextId: string;
     ownerContextId: string;
@@ -1350,7 +1716,12 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** List edges owned BY a context (the owner side), optionally scoped to one kind. */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   contextEdgeListByOwner(input: {
     ownerContextId: string;
     kind?: "lifecycle" | "lineage";
@@ -1376,7 +1747,12 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** List edges INTO a context (the child side) — walk up for authz/teardown. */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   contextEdgeListByChild(contextId: string): Array<{
     ownerContextId: string;
     kind: "lifecycle" | "lineage";
@@ -1397,7 +1773,12 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Delete every inbound edge of a context (called on teardown). */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   contextEdgeDeleteByChild(contextId: string): void {
     this.sql.exec(`DELETE FROM context_edges WHERE context_id = ?`, contextId);
   }
@@ -1406,7 +1787,12 @@ export class WorkspaceDO extends DurableObjectBase {
   // slot.* operations
   // ─────────────────────────────────────────────────────────────
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   slotCreate(input: SlotCreateInput): void {
     this.ctx.storage.transactionSync(() => {
       const existing = this.sql
@@ -1439,7 +1825,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * slot pointer change in one transaction; the old incarnation remains active
    * until the caller observes this commit and retires it.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   slotCommitPreparedNavigation(
     input: SlotCommitPreparedNavigationInput
   ): SlotCommitPreparedNavigationResult {
@@ -1538,7 +1929,12 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   slotUpdateCurrentStateArgs(slotId: string, stateArgs: unknown): void {
     this.ctx.storage.transactionSync(() => {
       const slot = this.requireSlot(slotId);
@@ -1562,13 +1958,23 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   slotSetParent(slotId: string, parentSlotId: string | null): void {
     this.requireSlot(slotId);
     this.sql.exec(`UPDATE slots SET parent_slot_id = ? WHERE slot_id = ?`, parentSlotId, slotId);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   slotSetPosition(slotId: string, positionId: string): void {
     this.requireSlot(slotId);
     this.sql.exec(`UPDATE slots SET position_id = ? WHERE slot_id = ?`, positionId, slotId);
@@ -1583,7 +1989,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * or keeps its current owner when no mover subject is supplied. Authorization
    * is permissive (any member may restructure any tree); only attribution moves.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   slotMove(
     slotId: string,
     parentSlotId: string | null,
@@ -1669,7 +2080,12 @@ export class WorkspaceDO extends DurableObjectBase {
     return ids;
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   slotClose(slotId: string): void {
     this.ctx.storage.transactionSync(() => {
       this.requireSlot(slotId);
@@ -1682,7 +2098,12 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   slotGet(slotId: string): DbSlotRow | null {
     const row = this.sql
       .exec(
@@ -1703,7 +2124,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * tree for a "just my tree" view (backed by idx_slots_owner) but is NOT the
    * default.
    */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   slotListOpen(filter?: { owner?: string }): DbSlotRow[] {
     if (filter?.owner !== undefined) {
       return this.sql
@@ -1728,7 +2154,12 @@ export class WorkspaceDO extends DurableObjectBase {
       .toArray() as unknown as DbSlotRow[];
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   slotHistory(slotId: string): DbSlotHistoryRow[] {
     return this.sql
       .exec(`SELECT * FROM slot_history WHERE slot_id = ? ORDER BY cursor`, slotId)
@@ -1745,7 +2176,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * Returns the slot's current entity id when one is bound, so callers (the
    * workspace-state RPC handler) can refresh their entity-keyed caches.
    */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   panelIndex(input: IndexablePanel): string | null {
     const now = Date.now();
     let resolvedEntityId: string | null = null;
@@ -1826,7 +2262,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * the slot is empty / closed) so callers can mirror the change into their
    * entity-keyed caches without a second round-trip.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   panelUpdateTitle(slotId: string, title: string): string | null {
     const row = this.sql
       .exec(`SELECT current_entity_id FROM slots WHERE slot_id = ?`, slotId)
@@ -1837,7 +2278,12 @@ export class WorkspaceDO extends DurableObjectBase {
     return entityId;
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   panelIncrementAccess(entityId: string): void {
     this.sql.exec(
       `UPDATE panel_search_metadata SET access_count = access_count + 1 WHERE slot_id = ?`,
@@ -1856,7 +2302,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * FTS staging row's title alone in that case (rather than blanking it) so
    * the panel stays findable in search.
    */
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   entitySetDisplayTitle(entityId: string, title: string | null): void {
     const normalized = typeof title === "string" ? title.trim() : "";
     const stored = normalized.length > 0 ? normalized : null;
@@ -1886,7 +2337,12 @@ export class WorkspaceDO extends DurableObjectBase {
    * lookups (e.g. when building a pending approval) don't have to round-trip
    * to the DO on the hot path.
    */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   entityListDisplayTitles(): Array<{ id: string; title: string }> {
     return this.sql
       .exec(
@@ -1923,7 +2379,12 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
   panelSearch(query: string, limit = 50): PanelSearchResult[] {
     const safeQuery = this.sanitizeSearchQuery(query);
     if (!safeQuery) return [];
@@ -1961,7 +2422,12 @@ export class WorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
   panelRebuildIndex(): void {
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(`DELETE FROM panel_search_metadata`);
@@ -2301,17 +2767,27 @@ export class WorkspaceDO extends DurableObjectBase {
     existing: DbEntityRow,
     input: EntityActivateInput
   ): void {
+    this.assertStableIdentityMatches(id, existing, input);
+    if (existing.source_effective_version !== input.source.effectiveVersion) {
+      throw new IdentityCollisionError(id, {
+        field: "source.effectiveVersion",
+        existing: existing.source_effective_version,
+        attempted: input.source.effectiveVersion,
+      });
+    }
+  }
+
+  private assertStableIdentityMatches(
+    id: string,
+    existing: DbEntityRow,
+    input: EntityActivateInput
+  ): void {
     const checks: Array<{ field: string; existing: unknown; attempted: unknown }> = [
       { field: "kind", existing: existing.kind, attempted: input.kind },
       {
         field: "source.repoPath",
         existing: existing.source_repo_path,
         attempted: input.source.repoPath,
-      },
-      {
-        field: "source.effectiveVersion",
-        existing: existing.source_effective_version,
-        attempted: input.source.effectiveVersion,
       },
       { field: "contextId", existing: existing.context_id, attempted: input.contextId },
       { field: "className", existing: existing.class_name, attempted: input.className ?? null },

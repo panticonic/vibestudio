@@ -1,4 +1,10 @@
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
+import type {
+  AuthenticatedCaller,
+  AuthorizationContext,
+  DirectAuthorityAttestation,
+} from "@vibestudio/rpc";
+import { rpcMethodAuthority } from "@vibestudio/rpc";
 
 type BindParams = Parameters<Database["run"]>[1];
 
@@ -112,6 +118,76 @@ const AGENTIC_ENV_DEFAULTS: Record<string, string> = {
   WORKER_CLASS_NAME: "TestDO",
 };
 
+export function createTestDirectAuthority(input: {
+  callerKind: AuthenticatedCaller["callerKind"];
+  method: string;
+  /** Exact semantic effect declared by the receiver method, when applicable. */
+  capability?: string;
+  effect?: DirectAuthorityAttestation["effect"];
+  source?: string;
+  className?: string;
+  objectKey?: string;
+  now?: number;
+}): DirectAuthorityAttestation {
+  const now = input.now ?? Date.now();
+  const audience = `do:${input.source ?? "test"}:${input.className ?? "TestDO"}:${input.objectKey ?? "test-key"}`;
+  const isHost = input.callerKind === "server";
+  const principal = isHost
+    ? ("host:test" as const)
+    : (`code:tests/durable@${"a".repeat(64)}` as `code:${string}`);
+  const capability = input.capability ?? `rpc:${input.method}`;
+  const context: AuthorizationContext = {
+    authorizingOrigin: isHost
+      ? { kind: "host", principal: principal as `host:${string}` }
+      : { kind: "code", principal: principal as `code:${string}` },
+    host: isHost ? (principal as `host:${string}`) : null,
+    actingUser: isHost ? null : "user:test",
+    entity: null,
+    incarnation: null,
+    executingCode: isHost
+      ? null
+      : {
+          principal: principal as `code:${string}`,
+          requested: [{ capability, resource: { kind: "exact", key: audience } }],
+          sourceLineage: { class: "internal", externalKeys: [] },
+        },
+    initiatorChain: [principal],
+    ownerChain: isHost ? [] : ["user:test"],
+    agentBinding: null,
+    workspace: { workspaceId: "test", member: true, role: "member", revision: "test" },
+    session: { id: "test", audience, version: "1", expiresAt: now + 60_000 },
+    contextIntegrity: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
+  };
+  return {
+    audience,
+    method: input.method,
+    effect:
+      input.effect ??
+      (input.capability
+        ? { kind: "semantic", capability }
+        : { kind: "runtime-intrinsic" }),
+    capability,
+    resourceKey: audience,
+    issuedAt: now,
+    expiresAt: now + 60_000,
+    nonce: crypto.randomUUID(),
+    context,
+    grants: [
+      {
+        id: `test:${input.method}:${principal}`,
+        subject: principal,
+        effect: "allow",
+        capability,
+        resource: { kind: "exact", key: audience },
+        issuedBy: "test-fixture",
+        createdAt: now,
+        constraints: { lineageAtConsent: [] },
+        provenance: "explicit-test-fixture",
+      },
+    ],
+  };
+}
+
 export async function createTestDO<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   DOClass: new (ctx: any, env: any) => T,
@@ -171,6 +247,9 @@ export async function createTestDO<T>(
     blockConcurrencyWhile<TValue>(fn: () => Promise<TValue>) {
       return fn();
     },
+    waitUntil(promise: Promise<unknown>) {
+      void promise.catch(() => undefined);
+    },
   };
 
   const mergedEnv = { ...AGENTIC_ENV_DEFAULTS, ...env };
@@ -182,6 +261,9 @@ export async function createTestDO<T>(
       throw new Error("DO instance does not have a fetch() method");
     }
     const url = `http://test/${encodeURIComponent(objectKey)}/${encodeURIComponent(method)}`;
+    const declaration = rpcMethodAuthority(instance as object, method);
+    const capability =
+      declaration?.effect.kind === "semantic" ? declaration.effect.capability : undefined;
     const request = new Request(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -194,7 +276,18 @@ export async function createTestDO<T>(
         args,
         __instanceToken: "token",
         __instanceId: "do:internal/WorkspaceDO:test-key",
-        __caller: { callerId: "main", callerKind: "server" },
+        __caller: {
+          callerId: "main",
+          callerKind: "server",
+          authorization: createTestDirectAuthority({
+            callerKind: "server",
+            method,
+            capability,
+            source: String(mergedEnv["WORKER_SOURCE"]),
+            className: String(mergedEnv["WORKER_CLASS_NAME"]),
+            objectKey,
+          }),
+        },
       }),
     });
     const response = await fetchable.fetch(request);

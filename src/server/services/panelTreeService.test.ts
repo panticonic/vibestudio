@@ -2,11 +2,23 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
+import { testAuthority } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
 import { createPanelTreeService, type PanelTreeServiceDeps } from "./panelTreeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
+
+type PanelTreeTestDeps = PanelTreeServiceDeps & {
+  approvalQueue: ApprovalQueue;
+  grantStore: CapabilityGrantStore;
+};
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-tree-"));
@@ -47,8 +59,54 @@ function ctx() {
       callerKind: "panel",
       repoPath: "panels/requester",
       effectiveVersion: "v1",
+      requested: [
+        { capability: "service:panelTree.*", resource: { kind: "network", value: "*" } },
+        { capability: "service:workspace-state.*", resource: { kind: "network", value: "*" } },
+        { capability: "context.boundary", resource: { kind: "network", value: "*" } },
+      ],
     }),
   };
+}
+
+async function dispatchPanelTree(
+  service: ReturnType<typeof createPanelTreeService>,
+  deps: PanelTreeTestDeps,
+  context: ServiceContext,
+  method: string,
+  args: unknown[]
+) {
+  const dispatcher = new ServiceDispatcher();
+  dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) => {
+    const resolved = testAuthority(caller, capability, resourceKey);
+    return capability === CONTEXT_BOUNDARY_CAPABILITY
+      ? {
+          ...resolved,
+          grants: deps.grantStore.grantsForSubjects(
+            [resolved.context.authorizingOrigin.principal],
+            capability
+          ),
+        }
+      : resolved;
+  });
+  const acquisition = new AcquisitionCoordinator({
+    approvalQueue: deps.approvalQueue,
+    grantStore: deps.grantStore,
+  });
+  dispatcher.setAuthorityAcquirer({
+    request: (input) => acquisition.request(input),
+    acquire: (input) => acquisition.requestAndWait(input),
+    consume: (grantId) => acquisition.consume(grantId),
+    invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
+      acquisition.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+  });
+  dispatcher.registerService(service);
+  dispatcher.markInitialized();
+  return dispatcher.dispatch(
+    { ...context, authorityAcquisition: "wait" },
+    "panelTree",
+    method,
+    args
+  );
 }
 
 function chromeAppCtx() {
@@ -58,6 +116,10 @@ function chromeAppCtx() {
       callerKind: "app",
       repoPath: "apps/shell",
       effectiveVersion: "v1",
+      requested: [
+        { capability: "service:panelTree.*", resource: { kind: "network", value: "*" } },
+        { capability: "context.boundary", resource: { kind: "network", value: "*" } },
+      ],
     }),
   };
 }
@@ -67,7 +129,7 @@ function chromeAppCtx() {
  * `ctx-caller`; any target enriched with a foreign `contextId` (or a foreign
  * `requestedContextId` for create/navigate) that already exists prompts once.
  */
-function treeDeps(overrides: Partial<PanelTreeServiceDeps> = {}): PanelTreeServiceDeps {
+function treeDeps(overrides: Partial<PanelTreeTestDeps> = {}): PanelTreeTestDeps {
   return {
     approvalQueue: approvalQueueMock("session"),
     grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
@@ -99,7 +161,8 @@ describe("panelTreeService", () => {
   it("delegates open list operations without approval", async () => {
     const approvalQueue = approvalQueueMock("deny");
     const bridge = vi.fn(async () => [{ panelId: "panel-1" }]);
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
+    const deps = treeDeps({ approvalQueue, bridge });
+    const service = createPanelTreeService(deps);
 
     await expect(service.handler(ctx(), "list", [null])).resolves.toEqual([{ panelId: "panel-1" }]);
 
@@ -117,7 +180,8 @@ describe("panelTreeService", () => {
   it("delegates root listing without approval", async () => {
     const approvalQueue = approvalQueueMock("deny");
     const bridge = vi.fn(async () => [{ panelId: "root-1" }]);
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
+    const deps = treeDeps({ approvalQueue, bridge });
+    const service = createPanelTreeService(deps);
 
     await expect(service.handler(ctx(), "roots", [])).resolves.toEqual([{ panelId: "root-1" }]);
 
@@ -149,15 +213,25 @@ describe("panelTreeService", () => {
   });
 
   it("context-boundary gates structural operations before delegating", async () => {
-    const approvalQueue = approvalQueueMock("once");
+    const approvalQueue = approvalQueueMock("version");
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
         ? { id: "target", title: "Target", source: "panels/target", contextId: "ctx-target" }
-        : undefined
+        : {
+            panelId: "target",
+            operation: "close",
+            status: "closed",
+            loaded: false,
+            rebuilt: false,
+            reloaded: false,
+          }
     );
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
+    const deps = treeDeps({ approvalQueue, bridge });
+    const service = createPanelTreeService(deps);
 
-    await expect(service.handler(ctx(), "close", ["target"])).resolves.toBeUndefined();
+    await expect(
+      dispatchPanelTree(service, deps, ctx(), "close", ["target"])
+    ).resolves.toMatchObject({ panelId: "target", status: "closed" });
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
     expect(approvalQueue.request).toHaveBeenCalledWith(
@@ -180,11 +254,21 @@ describe("panelTreeService", () => {
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
         ? { id: "target", title: "Target", source: "panels/target", contextId: "ctx-caller" }
-        : undefined
+        : {
+            panelId: "target",
+            operation: "close",
+            status: "archived",
+            loaded: false,
+            rebuilt: false,
+            reloaded: false,
+          }
     );
     const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
 
-    await expect(service.handler(ctx(), "close", ["target"])).resolves.toBeUndefined();
+    await expect(service.handler(ctx(), "close", ["target"])).resolves.toMatchObject({
+      panelId: "target",
+      status: "archived",
+    });
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenLastCalledWith({
@@ -206,14 +290,24 @@ describe("panelTreeService", () => {
             runtimeEntityId: "panel:target",
             contextId: "ctx-target",
           }
-        : undefined
+        : {
+            panelId: "target",
+            operation: "close",
+            status: "archived",
+            loaded: false,
+            rebuilt: false,
+            reloaded: false,
+          }
     );
     const hasAppCapability = vi.fn(
       (_callerId: string, capability: string) => capability === "panel-hosting"
     );
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge, hasAppCapability }));
+    const deps = treeDeps({ approvalQueue, bridge, hasAppCapability });
+    const service = createPanelTreeService(deps);
 
-    await expect(service.handler(chromeAppCtx(), "archive", ["target"])).resolves.toBeUndefined();
+    await expect(
+      dispatchPanelTree(service, deps, chromeAppCtx(), "archive", ["target"])
+    ).resolves.toMatchObject({ panelId: "target", status: "archived" });
 
     expect(hasAppCapability).toHaveBeenCalledWith("@workspace-apps/shell", "panel-hosting");
     expect(approvalQueue.request).not.toHaveBeenCalled();
@@ -230,12 +324,20 @@ describe("panelTreeService", () => {
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
         ? { id: "target", title: "Target", source: "panels/target", contextId: "ctx-target" }
-        : undefined
+        : {
+            panelId: "target",
+            operation: "close",
+            status: "closed",
+            loaded: false,
+            rebuilt: false,
+            reloaded: false,
+          }
     );
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
+    const deps = treeDeps({ approvalQueue, bridge });
+    const service = createPanelTreeService(deps);
 
-    await service.handler(ctx(), "close", ["target"]);
-    await service.handler(ctx(), "close", ["target"]);
+    await dispatchPanelTree(service, deps, ctx(), "close", ["target"]);
+    await dispatchPanelTree(service, deps, ctx(), "close", ["target"]);
 
     // No double-prompt: the second close reuses the remembered grant.
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
@@ -248,7 +350,7 @@ describe("panelTreeService", () => {
   });
 
   it("gates creating a panel into another existing context", async () => {
-    const approvalQueue = approvalQueueMock("once");
+    const approvalQueue = approvalQueueMock("version");
     const bridge = vi.fn(async (request: { method: string; args: unknown[] }) =>
       request.method === "metadata"
         ? {
@@ -259,12 +361,15 @@ describe("panelTreeService", () => {
           }
         : { id: "created", title: "Created", kind: "workspace" }
     );
-    const service = createPanelTreeService(
-      treeDeps({ approvalQueue, bridge, resolveCallerContext: vi.fn(async () => "ctx-caller") })
-    );
+    const deps = treeDeps({
+      approvalQueue,
+      bridge,
+      resolveCallerContext: vi.fn(async () => "ctx-caller"),
+    });
+    const service = createPanelTreeService(deps);
 
     await expect(
-      service.handler(ctx(), "create", [
+      dispatchPanelTree(service, deps, ctx(), "create", [
         "panels/child",
         { parentId: "parent", contextId: "ctx-foreign" },
       ])
@@ -278,7 +383,9 @@ describe("panelTreeService", () => {
         grantResourceKey: contextBoundaryResourceKey("ctx-foreign", "panel:requester"),
       })
     );
-    expect(bridge).toHaveBeenCalledTimes(2);
+    // Prepared host state is resolved once before acquisition and once again
+    // at the handler boundary, then the mutation runs.
+    expect(bridge).toHaveBeenCalledTimes(3);
     expect(bridge).toHaveBeenNthCalledWith(1, {
       callerId: "panel:requester",
       callerKind: "panel",
@@ -286,6 +393,12 @@ describe("panelTreeService", () => {
       args: ["parent"],
     });
     expect(bridge).toHaveBeenNthCalledWith(2, {
+      callerId: "panel:requester",
+      callerKind: "panel",
+      method: "metadata",
+      args: ["parent"],
+    });
+    expect(bridge).toHaveBeenNthCalledWith(3, {
       callerId: "panel:requester",
       callerKind: "panel",
       method: "create",
@@ -300,7 +413,8 @@ describe("panelTreeService", () => {
         ? { id: request.args[0] as string, title: "Parent", source: "panels/parent" }
         : { id: "created", title: "Created", kind: "workspace" }
     );
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
+    const deps = treeDeps({ approvalQueue, bridge });
+    const service = createPanelTreeService(deps);
 
     await expect(
       service.handler(ctx(), "create", ["panels/child", { parentId: "parent" }])
@@ -328,6 +442,7 @@ describe("panelTreeService", () => {
       source: "panels/missing",
       options: { parentId: "parent" },
     });
+    expect(validateOpenPanelSource).toHaveBeenCalledTimes(1);
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(bridge).not.toHaveBeenCalled();
   });
@@ -344,14 +459,15 @@ describe("panelTreeService", () => {
           }
         : { id: "created", title: "Created", kind: "workspace" }
     );
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
+    const deps = treeDeps({ approvalQueue, bridge });
+    const service = createPanelTreeService(deps);
 
     await expect(
-      service.handler(ctx(), "create", [
+      dispatchPanelTree(service, deps, ctx(), "create", [
         "panels/child",
         { parentId: "parent", contextId: "ctx-foreign" },
       ])
-    ).rejects.toThrow("another existing workspace branch");
+    ).rejects.toThrow(/denied/i);
 
     // The gate runs before bridge mutation: only the metadata probe ran.
     expect(bridge).toHaveBeenCalledTimes(1);
@@ -397,13 +513,12 @@ describe("panelTreeService", () => {
         ? { id: "target", title: "Target", contextId: "ctx-target" }
         : undefined
     );
-    const service = createPanelTreeService(
-      treeDeps({ approvalQueue: approvalQueueMock("deny"), bridge })
-    );
+    const deps = treeDeps({ approvalQueue: approvalQueueMock("deny"), bridge });
+    const service = createPanelTreeService(deps);
 
     await expect(
-      service.handler(ctx(), "setStateArgs", ["target", { mode: "edit" }])
-    ).rejects.toThrow("another existing workspace branch");
+      dispatchPanelTree(service, deps, ctx(), "setStateArgs", ["target", { mode: "edit" }])
+    ).rejects.toThrow(/denied/i);
 
     expect(bridge).toHaveBeenCalledTimes(1);
     expect(bridge).toHaveBeenCalledWith(
@@ -518,7 +633,7 @@ describe("panelTreeService", () => {
   });
 
   it("does not prompt when navigating a panel with no context change (no contextId)", async () => {
-    const approvalQueue = approvalQueueMock("once");
+    const approvalQueue = approvalQueueMock("version");
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
         ? { id: "target", title: "Target", source: "panels/target", contextId: "ctx-x" }
@@ -544,23 +659,26 @@ describe("panelTreeService", () => {
   });
 
   it("gates navigating a panel into another existing context (X→Y)", async () => {
-    const approvalQueue = approvalQueueMock("once");
+    const approvalQueue = approvalQueueMock("version");
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
         ? { id: "target", title: "Target", source: "panels/target", contextId: "ctx-x" }
         : { id: "target", title: "Next" }
     );
-    const service = createPanelTreeService(
-      treeDeps({
-        approvalQueue,
-        bridge,
-        contextExists: vi.fn(() => true),
-        resolveCallerContext: vi.fn(async () => "ctx-x"),
-      })
-    );
+    const deps = treeDeps({
+      approvalQueue,
+      bridge,
+      contextExists: vi.fn(() => true),
+      resolveCallerContext: vi.fn(async () => "ctx-x"),
+    });
+    const service = createPanelTreeService(deps);
 
     await expect(
-      service.handler(ctx(), "navigate", ["target", "panels/next", { contextId: "ctx-y" }])
+      dispatchPanelTree(service, deps, ctx(), "navigate", [
+        "target",
+        "panels/next",
+        { contextId: "ctx-y" },
+      ])
     ).resolves.toEqual({ id: "target", title: "Next" });
 
     // Exactly one prompt — keyed on the DESTINATION context (ctx-y), not ctx-x.
@@ -581,7 +699,7 @@ describe("panelTreeService", () => {
   });
 
   it("gates a history back/forward into another existing context", async () => {
-    const approvalQueue = approvalQueueMock("once");
+    const approvalQueue = approvalQueueMock("version");
     const bridge = vi.fn(async (request: { method: string }) => {
       if (request.method === "metadata") {
         return { id: "target", title: "Target", source: "panels/target", contextId: "ctx-x" };
@@ -589,16 +707,15 @@ describe("panelTreeService", () => {
       if (request.method === "historyTargetContext") return "ctx-y";
       return { id: "target", title: "Back" };
     });
-    const service = createPanelTreeService(
-      treeDeps({
-        approvalQueue,
-        bridge,
-        contextExists: vi.fn(() => true),
-        resolveCallerContext: vi.fn(async () => "ctx-x"),
-      })
-    );
+    const deps = treeDeps({
+      approvalQueue,
+      bridge,
+      contextExists: vi.fn(() => true),
+      resolveCallerContext: vi.fn(async () => "ctx-x"),
+    });
+    const service = createPanelTreeService(deps);
 
-    await service.handler(ctx(), "navigateHistory", ["target", -1]);
+    await dispatchPanelTree(service, deps, ctx(), "navigateHistory", ["target", -1]);
 
     // Peeked the destination history-entry context and prompted once keyed on it.
     expect(bridge).toHaveBeenCalledWith(
@@ -655,21 +772,23 @@ describe("panelTreeService", () => {
       options: { contextId: "ctx-missing" },
       targetPanelId: "target",
     });
+    expect(validateOpenPanelSource).toHaveBeenCalledTimes(1);
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(bridge).not.toHaveBeenCalled();
   });
 
   it("gates object-shaped structural operations (movePanel) by target panel context", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("version");
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
         ? { id: "target", title: "Target", contextId: "ctx-target" }
         : undefined
     );
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
+    const deps = treeDeps({ approvalQueue, bridge });
+    const service = createPanelTreeService(deps);
 
     await expect(
-      service.handler(ctx(), "movePanel", [
+      dispatchPanelTree(service, deps, ctx(), "movePanel", [
         { panelId: "target", newParentId: null, targetPosition: 0 },
       ])
     ).resolves.toBeUndefined();
@@ -690,39 +809,28 @@ describe("panelTreeService", () => {
   });
 
   it("forwards operation-specific verbs for host control-plane operations", async () => {
-    const approvalQueue = approvalQueueMock("once");
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
         ? { id: "target", title: "Target", contextId: "ctx-target" }
         : undefined
     );
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
-
-    await expect(service.handler(ctx(), "takeOver", ["target"])).resolves.toBeUndefined();
-    await expect(
-      service.handler(ctx(), "openDevTools", ["target", "detach"])
-    ).resolves.toBeUndefined();
-    await expect(service.handler(ctx(), "rebuildPanel", ["target"])).resolves.toBeUndefined();
-
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        capability: CONTEXT_BOUNDARY_CAPABILITY,
-        operation: expect.objectContaining({ verb: "Take over panel in" }),
-      })
-    );
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        operation: expect.objectContaining({ verb: "Open DevTools in" }),
-      })
-    );
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        operation: expect.objectContaining({ verb: "Rebuild panel in" }),
-      })
-    );
+    const service = createPanelTreeService(treeDeps({ bridge }));
+    const cases = [
+      ["takeOver", ["target"], "Take over panel in"],
+      ["openDevTools", ["target", "detach"], "Open DevTools in"],
+      ["rebuildPanel", ["target"], "Rebuild panel in"],
+    ] as const;
+    for (const [method, args, verb] of cases) {
+      const prepare = service.authorityPreparation?.[`panelTree.${method}.contextBoundary`];
+      await expect(prepare?.(ctx(), [...args])).resolves.toEqual([
+        expect.objectContaining({
+          capability: CONTEXT_BOUNDARY_CAPABILITY,
+          challenge: expect.objectContaining({
+            operation: expect.objectContaining({ verb }),
+          }),
+        }),
+      ]);
+    }
   });
 
   it("leaves read-only built-in agent introspection open", async () => {
@@ -746,16 +854,21 @@ describe("panelTreeService", () => {
   });
 
   it("gates agent mode changes as a cross-context state change", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("version");
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
         ? { id: "target", title: "Target", contextId: "ctx-target" }
         : { mode: "fixture" }
     );
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
+    const deps = treeDeps({ approvalQueue, bridge });
+    const service = createPanelTreeService(deps);
 
     await expect(
-      service.handler(ctx(), "callAgent", ["target", "_agent.setMode", ["fixture"]])
+      dispatchPanelTree(service, deps, ctx(), "callAgent", [
+        "target",
+        "_agent.setMode",
+        ["fixture"],
+      ])
     ).resolves.toEqual({
       mode: "fixture",
     });

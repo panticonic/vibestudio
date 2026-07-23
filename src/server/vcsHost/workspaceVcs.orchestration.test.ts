@@ -59,6 +59,20 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("reads channel provenance through the GAD log API, outside semantic VCS dispatch", async () => {
+    const { vcs } = await harness();
+    const call = vi.fn(async () => ({ contentClass: "external" as const }));
+    await vcs.attachGad({ call } as never);
+
+    await expect(
+      vcs.getChannelEnvelopeIntegrity({ channelId: "channel:one", envelopeId: "message:one" })
+    ).resolves.toEqual({ contentClass: "external" });
+    expect(call).toHaveBeenCalledWith("getChannelEnvelope", {
+      channelId: "channel:one",
+      envelopeId: "message:one",
+    });
+  });
+
   it("keeps cached composed workspace views rooted during content GC", async () => {
     const { blobsDir, vcs } = await harness();
     const cached = await putBytes(blobsDir, Buffer.from("cached-composed-view"));

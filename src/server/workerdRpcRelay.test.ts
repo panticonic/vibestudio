@@ -3,6 +3,8 @@ import {
   doRefUrl,
   encodeUniversalKey,
   postToDurableObject,
+  releaseDurableObjectRelaySeal,
+  sealAndDrainDurableObjectRelays,
   streamFromDurableObject,
 } from "./workerdRpcRelay.js";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
@@ -124,6 +126,55 @@ describe("workerdRpcRelay", () => {
       code: "RevisionChanged",
       errorData,
     });
+  });
+
+  it("seals retirement admission, drains accepted relays, and reopens after the boundary", async () => {
+    const ref = { source: "workers/agent", className: "AgentDO", objectKey: "retiring" };
+    const targetId = "do:workers/agent:AgentDO:retiring";
+    let releaseFetch!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await blocked;
+        return responseEnvelope({ first: true });
+      })
+      .mockImplementation(async () => responseEnvelope({ reopened: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const admitted = postToDurableObject(ref, "first", [], {
+      workerdUrl: "http://127.0.0.1:8787",
+      workerdGatewayToken: "gateway-token",
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const drained = sealAndDrainDurableObjectRelays(targetId);
+
+    await expect(
+      postToDurableObject(ref, "late", [], {
+        workerdUrl: "http://127.0.0.1:8787",
+        workerdGatewayToken: "gateway-token",
+      })
+    ).rejects.toMatchObject({ code: "DO_NOT_CREATED" });
+    let drainSettled = false;
+    void drained.then(() => {
+      drainSettled = true;
+    });
+    await Promise.resolve();
+    expect(drainSettled).toBe(false);
+
+    releaseFetch();
+    await expect(admitted).resolves.toEqual({ first: true });
+    await drained;
+    releaseDurableObjectRelaySeal(targetId);
+
+    await expect(
+      postToDurableObject(ref, "after-reactivation", [], {
+        workerdUrl: "http://127.0.0.1:8787",
+        workerdGatewayToken: "gateway-token",
+      })
+    ).resolves.toEqual({ reopened: true });
   });
 
   it("annotates fetch failures with the DO relay URL and low-level cause", async () => {

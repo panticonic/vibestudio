@@ -4,14 +4,14 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
-  unitChangeSessionGrantKey,
-  type UnitMetaChangeApprovalProvider,
-} from "@vibestudio/unit-host";
+  createVerifiedCaller,
+  type HostAuthorityEffect,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
+import { unitChangeSessionGrantKey, type UnitChangeApprovalProvider } from "@vibestudio/unit-host";
 import { EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { mirrorWorktreeTree, putBytes } from "./blobstoreService.js";
 import {
   createMainAdvanceApprovalGate,
@@ -89,20 +89,25 @@ function approvalQueue(decision: "once" | "session" | "version" | "deny") {
 function gateDeps(opts: { decision?: "once" | "session" | "version" | "deny" } = {}) {
   const queue = approvalQueue(opts.decision ?? "once");
   const grantStore = new MemoryGrantStore();
+  const authorizeEffect = vi.fn(async (_ctx: ServiceContext, effect: HostAuthorityEffect) => {
+    if ((opts.decision ?? "once") === "deny") {
+      throw new Error(effect.challenge?.deniedReason ?? "Authority denied");
+    }
+  });
   return {
     approvalQueue: queue,
     grantStore,
     grantTtlMs: 1000,
-    capabilityGrantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-    getProviders: () => [] as UnitMetaChangeApprovalProvider<UnitBatchEntry>[],
+    authorizeEffect,
+    getProviders: () => [] as UnitChangeApprovalProvider<UnitBatchEntry>[],
   };
 }
 
 describe("createMainAdvanceApprovalGate", () => {
   it("approves main meta advances with the semantic unit-batch prompt", async () => {
     const deps = gateDeps({ decision: "session" });
-    const provider: UnitMetaChangeApprovalProvider<UnitBatchEntry> = {
-      metaChangeApprovalForCommit: vi.fn(async () => ({
+    const provider: UnitChangeApprovalProvider<UnitBatchEntry> = {
+      unitChangeApprovalForCommit: vi.fn(async () => ({
         units: [unit],
         identityKeys: ["identity:unit"],
       })),
@@ -115,7 +120,7 @@ describe("createMainAdvanceApprovalGate", () => {
 
     await gate.approve(candidate());
 
-    expect(provider.metaChangeApprovalForCommit).toHaveBeenCalledWith("state:next");
+    expect(provider.unitChangeApprovalForCommit).toHaveBeenCalledWith("state:next");
     expect(deps.approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "unit-batch",
@@ -139,8 +144,8 @@ describe("createMainAdvanceApprovalGate", () => {
 
   it("does not re-prompt for the same preapproved meta identity on retry", async () => {
     const deps = gateDeps({ decision: "once" });
-    const provider: UnitMetaChangeApprovalProvider<UnitBatchEntry> = {
-      metaChangeApprovalForCommit: vi.fn(async () => ({
+    const provider: UnitChangeApprovalProvider<UnitBatchEntry> = {
+      unitChangeApprovalForCommit: vi.fn(async () => ({
         units: [unit],
         identityKeys: ["identity:unit"],
       })),
@@ -159,10 +164,10 @@ describe("createMainAdvanceApprovalGate", () => {
     expect(provider.acceptPreapprovedTrust).toHaveBeenCalledTimes(2);
   });
 
-  it("approves non-meta main advances with the workspace repo write capability prompt", async () => {
+  it("combines a non-meta main advance and affected unit trust in one prompt", async () => {
     const deps = gateDeps({ decision: "version" });
-    const provider: UnitMetaChangeApprovalProvider<UnitBatchEntry> = {
-      metaChangeApprovalForCommit: vi.fn(async () => ({ units: [unit], identityKeys: [] })),
+    const provider: UnitChangeApprovalProvider<UnitBatchEntry> = {
+      unitChangeApprovalForCommit: vi.fn(async () => ({ units: [unit], identityKeys: [] })),
       acceptPreapprovedTrust: vi.fn(),
     };
     const gate = createMainAdvanceApprovalGate({ ...deps, getProviders: () => [provider] });
@@ -173,28 +178,19 @@ describe("createMainAdvanceApprovalGate", () => {
 
     expect(deps.approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "capability",
+        kind: "unit-batch",
         callerId: "panel-1",
         callerKind: "panel",
         repoPath: "panels/test",
         effectiveVersion: "ev-panel",
-        capability: "workspace-main-advance",
-        grantResourceKey: "workspace-source-change:main",
-        title: "Update workspace main",
-        description: "This advance moves workspace main and changes 1 path.",
-        resource: {
-          type: "vcs-head",
-          label: "Head",
-          value: "workspace main",
-        },
-        details: [
-          { label: "Repo", value: "apps/shell" },
-          { label: "State", value: "state:next" },
-          { label: "Changes", value: "apps/shell/index.tsx" },
-        ],
+        trigger: "source-change",
+        title: "Workspace extensions changed",
+        units: [unit],
+        configWrite: null,
       })
     );
-    expect(provider.metaChangeApprovalForCommit).not.toHaveBeenCalled();
+    expect(provider.unitChangeApprovalForCommit).toHaveBeenCalledWith("state:next");
+    expect(provider.acceptPreapprovedTrust).toHaveBeenCalledWith([]);
   });
 
   it("approves a content-identical semantic advance with its exact event edge", async () => {
@@ -208,19 +204,21 @@ describe("createMainAdvanceApprovalGate", () => {
       via: "do:Agent:one",
     });
 
-    expect(deps.approvalQueue.request).toHaveBeenCalledWith(
+    expect(deps.authorizeEffect).toHaveBeenCalledWith(
+      expect.objectContaining({ authorityAcquisition: "wait" }),
       expect.objectContaining({
-        kind: "capability",
         capability: "workspace-main-advance",
-        dedupKey: "workspace-semantic-advance:event:after",
-        title: "Advance workspace history",
-        description:
-          "This advances workspace main to a new semantic event without changing protected repository content.",
-        details: [
-          { label: "Via", value: "do:Agent:one" },
-          { label: "Previous event", value: "event:before" },
-          { label: "Published event", value: "event:after" },
-        ],
+        challenge: expect.objectContaining({
+          dedupKey: "workspace-semantic-advance:event:after",
+          title: "Advance workspace history",
+          description:
+            "This advances workspace main to a new semantic event without changing protected repository content.",
+          details: [
+            { label: "Via", value: "do:Agent:one" },
+            { label: "Previous event", value: "event:before" },
+            { label: "Published event", value: "event:after" },
+          ],
+        }),
       })
     );
   });
@@ -244,6 +242,7 @@ describe("createMainAdvanceApprovalGate", () => {
     );
 
     expect(deps.approvalQueue.request).not.toHaveBeenCalled();
+    expect(deps.authorizeEffect).not.toHaveBeenCalled();
   });
 
   it("does not let meta session grants skip mixed workspace changes", async () => {
@@ -259,7 +258,7 @@ describe("createMainAdvanceApprovalGate", () => {
       ...deps,
       getProviders: () => [
         {
-          metaChangeApprovalForCommit: vi.fn(async () => ({ units: [], identityKeys: [] })),
+          unitChangeApprovalForCommit: vi.fn(async () => ({ units: [], identityKeys: [] })),
           acceptPreapprovedTrust: vi.fn(),
         },
       ],
@@ -301,6 +300,7 @@ describe("createMainAdvanceApprovalGate", () => {
     );
 
     expect(deps.approvalQueue.request).not.toHaveBeenCalled();
+    expect(deps.authorizeEffect).not.toHaveBeenCalled();
   });
 
   it("forwards the diff-review payload onto the workspace-main-advance prompt", async () => {
@@ -322,8 +322,9 @@ describe("createMainAdvanceApprovalGate", () => {
       candidate({ repoPath: "apps/shell", changedPaths: ["apps/shell/index.tsx"], diffReview })
     );
 
-    expect(deps.approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "capability", diffReview })
+    expect(deps.authorizeEffect).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ challenge: expect.objectContaining({ diffReview }) })
     );
   });
 
@@ -332,7 +333,7 @@ describe("createMainAdvanceApprovalGate", () => {
       ...gateDeps({ decision: "deny" }),
       getProviders: () => [
         {
-          metaChangeApprovalForCommit: vi.fn(async () => ({ units: [], identityKeys: [] })),
+          unitChangeApprovalForCommit: vi.fn(async () => ({ units: [], identityKeys: [] })),
           acceptPreapprovedTrust: vi.fn(),
         },
       ],
@@ -368,12 +369,13 @@ describe("createMainAdvanceApprovalGate", () => {
 
       await gate.approveRepoDeletion(deletionCandidate);
 
-      expect(deps.approvalQueue.request).toHaveBeenCalledWith(
+      expect(deps.authorizeEffect).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
-          kind: "capability",
           capability: "workspace-repo-delete",
-          severity: "severe",
-          grantResourceKey: "workspace-repo-delete:panels/old",
+          tier: "critical",
+          resourceKey: "workspace-repo-delete:panels/old",
+          challenge: expect.objectContaining({ severity: "severe" }),
         })
       );
     });
@@ -385,21 +387,15 @@ describe("createMainAdvanceApprovalGate", () => {
       );
     });
 
-    it("is NOT auto-approved by a prior generic workspace-main-advance grant", async () => {
+    it("uses a capability distinct from ordinary workspace-main-advance", async () => {
       const deps = gateDeps({ decision: "deny" });
-      // Pre-grant the ordinary write capability broadly for this caller.
-      deps.capabilityGrantStore.grant(
-        "workspace-main-advance",
-        "workspace-source-change:main",
-        { callerId: "panel-1", repoPath: "panels/test", effectiveVersion: "ev-panel" },
-        "session"
-      );
       const gate = createMainAdvanceApprovalGate(deps);
 
-      // The deletion must STILL prompt (and here be denied) — the write grant
-      // does not cover the distinct `workspace-repo-delete` capability.
       await expect(gate.approveRepoDeletion(deletionCandidate)).rejects.toThrow(/denied/);
-      expect(deps.approvalQueue.request).toHaveBeenCalledTimes(1);
+      expect(deps.authorizeEffect).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ capability: "workspace-repo-delete" })
+      );
     });
   });
 

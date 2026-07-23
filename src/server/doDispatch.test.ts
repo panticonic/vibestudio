@@ -3,7 +3,7 @@ import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { doRefKey, doRefUrl, encodeUniversalKey, DODispatch } from "./doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
-import { WORKERD_CONNECTION_DISPATCHER } from "./workerdRpcRelay.js";
+import { getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
 
 /** Expected workerd path for a userland DO ref (UniversalDO facet host). */
 function userlandUrl(ref: DORef, methodPath: string): string {
@@ -118,7 +118,7 @@ describe("DODispatch", () => {
 
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
-        dispatcher: WORKERD_CONNECTION_DISPATCHER,
+        dispatcher: getWorkerdConnectionDispatcher(),
       });
     });
 

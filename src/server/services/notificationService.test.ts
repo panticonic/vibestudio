@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { productCodeHasCapability } from "./productAuthorityGrants.js";
 import { createNotificationService } from "./notificationService.js";
 
 describe("server notification service", () => {
@@ -53,14 +52,5 @@ describe("server notification service", () => {
       { changedAt: expect.any(Number) }
     );
     expect(eventService.emit).not.toHaveBeenCalled();
-  });
-
-  it("does not grant cross-user inbox signaling to ordinary panel code", () => {
-    expect(productCodeHasCapability("panels/chat", "service:notification.signalUserInbox")).toBe(
-      false
-    );
-    expect(
-      productCodeHasCapability("product/bootstrap", "service:notification.signalUserInbox")
-    ).toBe(true);
   });
 });

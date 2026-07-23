@@ -22,6 +22,7 @@ type BootstrapBridge = {
   retryStartup: () => Promise<unknown>;
   chooseConnection: () => Promise<unknown>;
   openLog: (path: string) => Promise<unknown>;
+  onStateChanged: (handler: (state: unknown) => void) => () => void;
 };
 
 const bootstrapTransport: TransportBridge = (() => {
@@ -64,6 +65,11 @@ const bootstrapBridge: BootstrapBridge = {
   retryStartup: () => ipcRenderer.invoke("vibestudio:bootstrap:retry-startup"),
   chooseConnection: () => ipcRenderer.invoke("vibestudio:bootstrap:choose-connection"),
   openLog: (path) => ipcRenderer.invoke("vibestudio:bootstrap:open-log", path),
+  onStateChanged: (handler) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: unknown): void => handler(state);
+    ipcRenderer.on("vibestudio:bootstrap:state-changed", listener);
+    return () => ipcRenderer.removeListener("vibestudio:bootstrap:state-changed", listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("__vibestudioTransport", bootstrapTransport);

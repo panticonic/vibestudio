@@ -233,6 +233,33 @@ describe("effectiveVersion", () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
+
+    it("invalidates workspace builds when a linked local package implementation changes", () => {
+      const previousAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-local-package-"));
+      try {
+        fs.writeFileSync(path.join(root, "package.json"), '{"name":"host"}');
+        fs.writeFileSync(path.join(root, "pnpm-lock.yaml"), "lock\n");
+        fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
+        const rpcDir = path.join(root, "packages", "rpc");
+        fs.mkdirSync(path.join(rpcDir, "dist"), { recursive: true });
+        fs.writeFileSync(path.join(rpcDir, "package.json"), '{"name":"@vibestudio/rpc"}');
+        fs.writeFileSync(path.join(rpcDir, "dist", "client.js"), "export const protocol = 1;\n");
+        delete process.env["VIBESTUDIO_APP_ROOT"];
+        setBuildRootConfig({ appRoot: root });
+        const before = computeBuildKey("unit-a", "ev1", true);
+
+        fs.writeFileSync(path.join(rpcDir, "dist", "client.js"), "export const protocol = 2;\n");
+        // A source-server restart/reconfiguration begins a new root snapshot.
+        setBuildRootConfig({ appRoot: root });
+        expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
+      } finally {
+        if (previousAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
+        else process.env["VIBESTUDIO_APP_ROOT"] = previousAppRoot;
+        setBuildRootConfig(null);
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("root-dependency fingerprint (build-key hermeticity)", () => {
