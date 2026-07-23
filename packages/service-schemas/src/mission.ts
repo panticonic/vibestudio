@@ -40,6 +40,7 @@ export const missionCharterSchema = z
             })
             .strict()
         ),
+        workspaceServiceDiscovery: z.enum(["bound", "live-declarations"]),
         evalNetwork: z.enum(["none", "declared-origins", "unrestricted"]),
         declaredOrigins: z.array(z.string()),
       })
@@ -83,7 +84,8 @@ export const missionRecordSchema = z
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
     seeded: z.boolean().optional(),
-    standingRestrictions: z.array(missionStandingRestrictionSchema).optional(),
+    permissions: z.array(missionPermissionSchema),
+    standingRestrictions: z.array(missionStandingRestrictionSchema),
   })
   .strict();
 

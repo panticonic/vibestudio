@@ -5,12 +5,14 @@ import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
 import type { ResourceScope, SessionMissionFact } from "@vibestudio/rpc";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { hostCapabilityMethods } from "@vibestudio/shared/authority/hostMethodCapabilities";
 import {
   missionAllowsService,
   missionClosureDigest,
   missionFact,
   missionSubject,
   type MissionCharter,
+  type MissionPermission,
   type MissionRecord,
   type MissionStandingRestriction,
   type MissionState,
@@ -18,11 +20,6 @@ import {
 import { stateLayout } from "../stateLayout.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { MISSION_MIGRATION_PLAN } from "./missionSchema.js";
-
-export interface MissionPermission {
-  capability: string;
-  resource: ResourceScope;
-}
 
 export interface SeededMissionInput {
   productSnapshotState: string;
@@ -69,6 +66,8 @@ export class MissionRegistry {
     name: string;
     charter: MissionCharter;
     owner: { userId: string; deviceId: string };
+    permissions?: readonly MissionPermission[];
+    standingRestrictions?: readonly MissionStandingRestriction[];
     missionId?: string;
     seeded?: boolean;
     now?: number;
@@ -83,20 +82,24 @@ export class MissionRegistry {
     ) {
       throw new Error("Mission identity, name, and owner are required");
     }
-    const closureDigest = missionClosureDigest(input.charter);
+    const permissions = normalizePermissions(input.permissions ?? []);
+    const standingRestrictions = normalizeStandingRestrictions(input.standingRestrictions ?? []);
+    const closureDigest = missionClosureDigest(input.charter, permissions, standingRestrictions);
     this.db
       .prepare(
         `INSERT INTO missions
-      (mission_id,name,revision,charter_json,owner_user_id,owner_device_id,state,closure_digest,standing_restrictions_json,seeded,created_at,updated_at)
-      VALUES (?,?,1,?,?,?,'draft',?,'[]',?,?,?)`
+      (mission_id,name,revision,charter_json,permissions_json,owner_user_id,owner_device_id,state,closure_digest,standing_restrictions_json,seeded,created_at,updated_at)
+      VALUES (?,?,1,?,?,?,?,'draft',?,?,?,?,?)`
       )
       .run(
         missionId,
         input.name,
         canonicalJson(input.charter),
+        canonicalJson(permissions),
         input.owner.userId,
         input.owner.deviceId,
         closureDigest,
+        canonicalJson(standingRestrictions),
         input.seeded ? 1 : 0,
         now,
         now
@@ -109,6 +112,8 @@ export class MissionRegistry {
     input: {
       name?: string;
       charter?: MissionCharter;
+      permissions?: readonly MissionPermission[];
+      standingRestrictions?: readonly MissionStandingRestriction[];
       now?: number;
       actingUserId: string;
       forkOwner?: { userId: string; deviceId: string };
@@ -124,13 +129,19 @@ export class MissionRegistry {
         name: input.name ?? `${current.name} (custom)`,
         charter: input.charter ?? current.charter,
         owner: input.forkOwner,
+        permissions: input.permissions ?? current.permissions,
+        standingRestrictions: input.standingRestrictions ?? current.standingRestrictions,
         ...(input.now === undefined ? {} : { now: input.now }),
       });
     }
     this.assertOwnedBy(current, input.actingUserId);
     const now = input.now ?? Date.now();
     const charter = input.charter ?? current.charter;
-    const digest = missionClosureDigest(charter);
+    const permissions = normalizePermissions(input.permissions ?? current.permissions);
+    const standingRestrictions = normalizeStandingRestrictions(
+      input.standingRestrictions ?? current.standingRestrictions
+    );
+    const digest = missionClosureDigest(charter, permissions, standingRestrictions);
     const charterChanged = digest !== current.closureDigest;
     const nextState: MissionState =
       charterChanged && current.state !== "draft" ? "needs-reapproval" : current.state;
@@ -138,23 +149,29 @@ export class MissionRegistry {
       this.db
         .prepare(
           `INSERT INTO mission_revisions
-        (mission_id,revision,charter_json,closure_digest,recorded_at) VALUES (?,?,?,?,?)`
+        (mission_id,revision,charter_json,closure_digest,recorded_at,permissions_json,standing_restrictions_json)
+        VALUES (?,?,?,?,?,?,?)`
         )
         .run(
           current.missionId,
           current.revision,
           canonicalJson(current.charter),
           current.closureDigest,
-          now
+          now,
+          canonicalJson(current.permissions),
+          canonicalJson(current.standingRestrictions)
         );
       this.db
         .prepare(
-          `UPDATE missions SET name=?,revision=?,charter_json=?,state=?,closure_digest=?,updated_at=? WHERE mission_id=?`
+          `UPDATE missions SET name=?,revision=?,charter_json=?,permissions_json=?,
+           standing_restrictions_json=?,state=?,closure_digest=?,updated_at=? WHERE mission_id=?`
         )
         .run(
           input.name ?? current.name,
           current.revision + 1,
           canonicalJson(charter),
+          canonicalJson(permissions),
+          canonicalJson(standingRestrictions),
           nextState,
           digest,
           now,
@@ -182,9 +199,6 @@ export class MissionRegistry {
         "EACCES"
       );
     }
-    const digest = missionClosureDigest(current.charter);
-    if (digest !== current.closureDigest)
-      throw new Error("Mission closure cache disagrees with its charter");
     if (!this.opts.isConduitBlessed(current.charter.harness)) {
       throw coded(
         "Mission harness is not a product-blessed conduit at this exact version",
@@ -195,7 +209,8 @@ export class MissionRegistry {
     const standingRestrictions = normalizeStandingRestrictions(
       input.standingRestrictions ?? current.standingRestrictions ?? []
     );
-    const subject = missionSubject(current);
+    const digest = missionClosureDigest(current.charter, permissions, standingRestrictions);
+    const subject = missionSubject({ missionId: current.missionId, closureDigest: digest });
     for (const permission of permissions) {
       if (!missionAllowsCapability(current.charter, permission.capability)) {
         throw coded(
@@ -239,9 +254,16 @@ export class MissionRegistry {
     }
     this.db
       .prepare(
-        "UPDATE missions SET state='active', standing_restrictions_json=?, updated_at=? WHERE mission_id=?"
+        `UPDATE missions SET state='active', permissions_json=?,
+         standing_restrictions_json=?, closure_digest=?, updated_at=? WHERE mission_id=?`
       )
-      .run(canonicalJson(standingRestrictions), now, current.missionId);
+      .run(
+        canonicalJson(permissions),
+        canonicalJson(standingRestrictions),
+        digest,
+        now,
+        current.missionId
+      );
     return this.require(current.missionId);
   }
 
@@ -274,7 +296,7 @@ export class MissionRegistry {
       }
     }
     const standingRestrictions = normalizeStandingRestrictions(input.standingRestrictions ?? []);
-    const closureDigest = missionClosureDigest(input.charter);
+    const closureDigest = missionClosureDigest(input.charter, permissions, standingRestrictions);
     const existing = this.get(input.missionId);
     if (existing && existing.seeded !== true) {
       throw coded(`Mission id ${input.missionId} is already user-owned`, "EACCES");
@@ -296,21 +318,23 @@ export class MissionRegistry {
           this.db
             .prepare(
               `INSERT INTO mission_revisions
-               (mission_id,revision,charter_json,closure_digest,recorded_at)
-               VALUES (?,?,?,?,?)`
+               (mission_id,revision,charter_json,closure_digest,recorded_at,permissions_json,standing_restrictions_json)
+               VALUES (?,?,?,?,?,?,?)`
             )
             .run(
               existing.missionId,
               existing.revision,
               canonicalJson(existing.charter),
               existing.closureDigest,
-              now
+              now,
+              canonicalJson(existing.permissions),
+              canonicalJson(existing.standingRestrictions)
             );
         }
         this.db
           .prepare(
             `UPDATE missions
-             SET name=?,revision=?,charter_json=?,owner_user_id='system',
+             SET name=?,revision=?,charter_json=?,permissions_json=?,owner_user_id='system',
                  owner_device_id='system',state='needs-reapproval',closure_digest=?,
                  standing_restrictions_json=?,seeded=1,seed_snapshot_state=?,updated_at=?
              WHERE mission_id=?`
@@ -319,6 +343,7 @@ export class MissionRegistry {
             input.name,
             existing.revision + (existing.closureDigest === closureDigest ? 0 : 1),
             canonicalJson(input.charter),
+            canonicalJson(permissions),
             closureDigest,
             canonicalJson(standingRestrictions),
             input.productSnapshotState,
@@ -330,14 +355,15 @@ export class MissionRegistry {
           .prepare(
             `INSERT INTO missions
              (mission_id,name,revision,charter_json,owner_user_id,owner_device_id,state,
-              closure_digest,standing_restrictions_json,seeded,created_at,updated_at,
+              permissions_json,closure_digest,standing_restrictions_json,seeded,created_at,updated_at,
               seed_snapshot_state)
-             VALUES (?,?,1,?,'system','system','needs-reapproval',?,?,1,?,?,?)`
+             VALUES (?,?,1,?,'system','system','needs-reapproval',?,?,?,1,?,?,?)`
           )
           .run(
             input.missionId,
             input.name,
             canonicalJson(input.charter),
+            canonicalJson(permissions),
             closureDigest,
             canonicalJson(standingRestrictions),
             now,
@@ -397,7 +423,8 @@ export class MissionRegistry {
     this.assertOwnedBy(current, actingUserId, { allowSeeded: true });
     if (
       current.state !== "paused" ||
-      missionClosureDigest(current.charter) !== current.closureDigest ||
+      missionClosureDigest(current.charter, current.permissions, current.standingRestrictions) !==
+        current.closureDigest ||
       !this.opts.isConduitBlessed(current.charter.harness)
     ) {
       throw coded("Mission must be re-approved before it can resume", "EACCES");
@@ -430,10 +457,14 @@ export class MissionRegistry {
     runId: string;
     now?: number;
   }): SessionMissionFact {
+    if (!input.sessionId || !input.taskRef || !input.runId) {
+      throw new Error("Mission session identity, task reference, and run identity are required");
+    }
     const current = this.require(input.missionId);
     if (
       current.state !== "active" ||
-      missionClosureDigest(current.charter) !== current.closureDigest
+      missionClosureDigest(current.charter, current.permissions, current.standingRestrictions) !==
+        current.closureDigest
     ) {
       throw coded(`Mission ${current.missionId} is not active at its approved closure`, "EACCES");
     }
@@ -441,6 +472,54 @@ export class MissionRegistry {
       throw coded("Mission harness is no longer a product-blessed conduit", "EACCES");
     }
     const fact = missionFact(current);
+    const existingSession = this.db
+      .prepare(
+        `SELECT mission_id,closure_digest,task_ref,ended_at
+         FROM mission_sessions WHERE session_id=?`
+      )
+      .get(input.sessionId) as
+      | {
+          mission_id: SQLOutputValue;
+          closure_digest: SQLOutputValue;
+          task_ref: SQLOutputValue;
+          ended_at: SQLOutputValue;
+        }
+      | undefined;
+    if (existingSession) {
+      const existingRun = this.db
+        .prepare(
+          `SELECT mission_id,closure_digest,session_id,finished_at
+           FROM mission_runs WHERE run_id=?`
+        )
+        .get(input.runId) as
+        | {
+            mission_id: SQLOutputValue;
+            closure_digest: SQLOutputValue;
+            session_id: SQLOutputValue;
+            finished_at: SQLOutputValue;
+          }
+        | undefined;
+      if (
+        String(existingSession.mission_id) === current.missionId &&
+        String(existingSession.closure_digest) === current.closureDigest &&
+        String(existingSession.task_ref) === input.taskRef &&
+        existingSession.ended_at === null &&
+        existingRun !== undefined &&
+        String(existingRun.mission_id) === current.missionId &&
+        String(existingRun.closure_digest) === current.closureDigest &&
+        String(existingRun.session_id) === input.sessionId &&
+        existingRun.finished_at === null
+      ) {
+        return fact;
+      }
+      throw coded(
+        `Mission session ${input.sessionId} or run ${input.runId} already names a different lifecycle`,
+        "EACCES"
+      );
+    }
+    if (this.db.prepare("SELECT 1 FROM mission_runs WHERE run_id=?").get(input.runId)) {
+      throw coded(`Mission run ${input.runId} already exists`, "EACCES");
+    }
     const now = input.now ?? Date.now();
     this.transaction(() => {
       this.db
@@ -503,10 +582,12 @@ export class MissionRegistry {
     const isUserlandResolutionBoundary =
       (qualifiedMethod === "workers.resolveService" ||
         qualifiedMethod === "workers.resolveDurableObject") &&
-      mission.charter.toolExposure.userlandServices.length > 0;
+      (mission.charter.toolExposure.userlandServices.length > 0 ||
+        mission.charter.toolExposure.workspaceServiceDiscovery === "live-declarations");
     if (
       mission.state !== "active" ||
-      missionClosureDigest(mission.charter) !== mission.closureDigest ||
+      missionClosureDigest(mission.charter, mission.permissions, mission.standingRestrictions) !==
+        mission.closureDigest ||
       (!isUserlandResolutionBoundary && !missionAllowsService(mission.charter, qualifiedMethod))
     ) {
       throw coded(
@@ -525,6 +606,9 @@ export class MissionRegistry {
     const fact = this.factForSession(input.sessionId);
     if (!fact) return;
     const mission = this.require(fact.missionId);
+    if (mission.charter.toolExposure.workspaceServiceDiscovery === "live-declarations") {
+      return;
+    }
     const binding = mission.charter.toolExposure.userlandServices.find(
       (entry) => entry.name === input.name && entry.provider === input.provider
     );
@@ -555,7 +639,8 @@ export class MissionRegistry {
     const mission = rowToMission(row);
     if (
       mission.state !== "active" ||
-      missionClosureDigest(mission.charter) !== mission.closureDigest ||
+      missionClosureDigest(mission.charter, mission.permissions, mission.standingRestrictions) !==
+        mission.closureDigest ||
       !this.opts.isConduitBlessed(mission.charter.harness)
     ) {
       throw coded(`Mission ${mission.missionId} cannot use network egress`, "EMISSIONSCOPE");
@@ -678,7 +763,11 @@ type Row = Record<string, SQLOutputValue>;
 
 function rowToMission(row: Row): MissionRecord {
   const charter = JSON.parse(String(row["charter_json"])) as MissionCharter;
-  const closureDigest = missionClosureDigest(charter);
+  const permissions = JSON.parse(String(row["permissions_json"])) as MissionPermission[];
+  const standingRestrictions = JSON.parse(
+    String(row["standing_restrictions_json"])
+  ) as MissionStandingRestriction[];
+  const closureDigest = missionClosureDigest(charter, permissions, standingRestrictions);
   if (closureDigest !== String(row["closure_digest"]))
     throw new Error(`Mission ${String(row["mission_id"])} has an invalid closure cache`);
   return {
@@ -689,9 +778,8 @@ function rowToMission(row: Row): MissionRecord {
     owner: { userId: String(row["owner_user_id"]), deviceId: String(row["owner_device_id"]) },
     state: String(row["state"]) as MissionState,
     closureDigest,
-    standingRestrictions: JSON.parse(
-      String(row["standing_restrictions_json"])
-    ) as MissionRecord["standingRestrictions"],
+    permissions,
+    standingRestrictions,
     seeded: Number(row["seeded"]) === 1,
     createdAt: Number(row["created_at"]),
     updatedAt: Number(row["updated_at"]),
@@ -705,9 +793,14 @@ function capabilityMethod(capability: string): string {
 function missionAllowsCapability(charter: MissionCharter, capability: string): boolean {
   if (capability.startsWith("workspace-service:")) {
     const name = capability.slice("workspace-service:".length);
-    return charter.toolExposure.userlandServices.some((binding) => binding.name === name);
+    return (
+      charter.toolExposure.workspaceServiceDiscovery === "live-declarations" ||
+      charter.toolExposure.userlandServices.some((binding) => binding.name === name)
+    );
   }
-  return missionAllowsService(charter, capabilityMethod(capability));
+  const directMethod = capabilityMethod(capability);
+  if (missionAllowsService(charter, directMethod)) return true;
+  return hostCapabilityMethods(capability).some((method) => missionAllowsService(charter, method));
 }
 
 function normalizePermissions(input: readonly MissionPermission[]): MissionPermission[] {

@@ -15,38 +15,78 @@ const charter = (): MissionCharter => ({
   toolExposure: {
     services: ["logs.query", "notification.*"],
     userlandServices: [],
+    workspaceServiceDiscovery: "bound",
     evalNetwork: "none",
     declaredOrigins: [],
   },
   model: { modelId: "openai-codex:gpt-5.3-codex-spark", params: { reasoningEffort: "medium" } },
   trigger: { kind: "cron", cron: "0 2 * * *" },
 });
+const closure = (value: MissionCharter): string => missionClosureDigest(value, [], []);
 
 describe("mission closure", () => {
   it("changes for behavioral edits but not registry identity", () => {
-    const first = missionClosureDigest(charter());
-    expect(
-      missionClosureDigest({ ...charter(), trigger: { kind: "cron", cron: "0 3 * * *" } })
-    ).not.toBe(first);
+    const first = closure(charter());
+    expect(closure({ ...charter(), trigger: { kind: "cron", cron: "0 3 * * *" } })).not.toBe(first);
     expect(missionSubject({ missionId: "msn_one", closureDigest: first })).not.toBe(
       missionSubject({ missionId: "msn_two", closureDigest: first })
     );
+  });
+
+  it("changes when approved allows or standing denies change", () => {
+    const empty = missionClosureDigest(charter(), [], []);
+    expect(
+      missionClosureDigest(
+        charter(),
+        [
+          {
+            capability: "service:notification.post",
+            resource: { kind: "exact", key: "service:notification.post" },
+          },
+        ],
+        []
+      )
+    ).not.toBe(empty);
+    expect(
+      missionClosureDigest(
+        charter(),
+        [],
+        [{ capability: "credential.use", resourceKey: "credentials:all" }]
+      )
+    ).not.toBe(empty);
   });
 
   it("enforces structural method exposure and rejects global wildcards", () => {
     expect(missionAllowsService(charter(), "notification.post")).toBe(true);
     expect(missionAllowsService(charter(), "credential.delete")).toBe(false);
     expect(() =>
-      missionClosureDigest({
+      closure({
         ...charter(),
         toolExposure: { ...charter().toolExposure, services: ["*"] },
       })
     ).toThrow(/Invalid/);
+    expect(() =>
+      closure({
+        ...charter(),
+        toolExposure: {
+          ...charter().toolExposure,
+          workspaceServiceDiscovery: "live-declarations",
+          userlandServices: [
+            {
+              name: "notes",
+              provider: "workers/notes",
+              providerEv: "b".repeat(64),
+              upgradePolicy: "pinned",
+            },
+          ],
+        },
+      })
+    ).toThrow(/cannot be combined/);
   });
 
   it("uses the same canonical repo identity as sealed harness code", () => {
     expect(() =>
-      missionClosureDigest({
+      closure({
         ...charter(),
         harness: { ...charter().harness, unit: "workspace/workers/system-agent" },
       })
@@ -55,7 +95,7 @@ describe("mission closure", () => {
 
   it("uses a closed data-only event filter grammar", () => {
     expect(() =>
-      missionClosureDigest({
+      closure({
         ...charter(),
         trigger: {
           kind: "event",
@@ -67,7 +107,7 @@ describe("mission closure", () => {
       })
     ).not.toThrow();
     expect(() =>
-      missionClosureDigest({
+      closure({
         ...charter(),
         trigger: {
           kind: "event",

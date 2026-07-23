@@ -21,6 +21,7 @@ const definition = (): MissionSeedDefinition => ({
     toolExposure: {
       services: [],
       userlandServices: [],
+      workspaceServiceDiscovery: "bound",
       evalNetwork: "none",
       declaredOrigins: [],
     },

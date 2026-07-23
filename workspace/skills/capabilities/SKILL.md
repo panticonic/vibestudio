@@ -407,6 +407,11 @@ session is allowed only while that exact closure is active.
 - Resolve pinned userland providers to exact EVs before approval. A `follow-head`
   provider is an explicit closure policy, not permission to silently widen its methods
   or capabilities.
+- Use `workspaceServiceDiscovery: "live-declarations"` only for a reviewed mission
+  whose purpose genuinely spans services created after approval. It admits live
+  declaration selection into the closure; it grants no service capability. The exact
+  provider EV, manifest eval ceiling, session grant/acquisition, receiver policy, and
+  context integrity still intersect at each call.
 - Keep event triggers inside the closed filter grammar. Do not evaluate workspace
   expressions as trigger policy.
 

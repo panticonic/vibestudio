@@ -14,6 +14,7 @@ const charter = (): MissionCharter => ({
   toolExposure: {
     services: ["notification.post"],
     userlandServices: [],
+    workspaceServiceDiscovery: "bound",
     evalNetwork: "none",
     declaredOrigins: [],
   },

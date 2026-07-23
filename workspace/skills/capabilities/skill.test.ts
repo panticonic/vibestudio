@@ -72,6 +72,8 @@ describe("capabilities skill", () => {
     const markdown = readFileSync(new URL("./SKILL.md", import.meta.url), "utf8");
     expect(markdown).toContain("immutable, content-addressed authority closure");
     expect(markdown).toContain("standing restrictions as durable deny grants");
+    expect(markdown).toContain('workspaceServiceDiscovery: "live-declarations"');
+    expect(markdown).toContain("it grants no service capability");
     expect(markdown).toContain("event triggers inside the closed filter grammar");
     expect(markdown).toContain("reconciled from immutable product snapshot outputs");
     expect(markdown).toContain("makes an old closure inert before replacing its");

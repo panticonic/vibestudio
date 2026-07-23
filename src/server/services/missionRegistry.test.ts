@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
-import type { MissionCharter } from "@vibestudio/shared/authority/mission";
+import { missionClosureDigest, type MissionCharter } from "@vibestudio/shared/authority/mission";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { MissionRegistry } from "./missionRegistry.js";
 import { MISSION_MIGRATION_PLAN } from "./missionSchema.js";
@@ -16,6 +16,7 @@ const charter = (): MissionCharter => ({
   toolExposure: {
     services: ["notification.post"],
     userlandServices: [],
+    workspaceServiceDiscovery: "bound",
     evalNetwork: "none",
     declaredOrigins: [],
   },
@@ -24,18 +25,19 @@ const charter = (): MissionCharter => ({
 });
 
 describe("MissionRegistry", () => {
-  it("migrates the mission registry forward without rewriting mission rows", () => {
+  it("migrates authority into the closure and fails active legacy rows closed", () => {
     const migration = MISSION_MIGRATION_PLAN.migrations?.[0];
     if (!migration) throw new Error("Expected the v1 mission migration");
     const db = new DatabaseSync(":memory:");
     for (const object of migration.from.objects) db.exec(object.sql);
     db.exec(`PRAGMA user_version = ${migration.from.version}`);
+    const legacyCharter = charter();
     db.prepare(
       `INSERT INTO missions
        (mission_id,name,revision,charter_json,owner_user_id,owner_device_id,state,
         closure_digest,standing_restrictions_json,seeded,created_at,updated_at)
-       VALUES ('msn_preserved','Preserved',1,'{}','u','d','draft','digest','[]',0,1,1)`
-    ).run();
+       VALUES ('msn_preserved','Preserved',1,?,'u','d','active',?,'[]',0,1,1)`
+    ).run(JSON.stringify(legacyCharter), missionClosureDigest(legacyCharter, [], []));
 
     expect(
       openCanonicalSqliteDatabase(db, MISSION_MIGRATION_PLAN, {
@@ -44,12 +46,18 @@ describe("MissionRegistry", () => {
     ).toEqual({
       kind: "migrated",
       fromVersion: 1,
-      version: 2,
-      migrations: ["bind-seeded-missions-to-product-snapshot"],
+      version: 3,
+      migrations: ["bind-seeded-missions-to-product-snapshot", "bind-mission-authority-to-closure"],
     });
-    expect(db.prepare("SELECT mission_id, seed_snapshot_state FROM missions").get()).toEqual({
+    expect(
+      db
+        .prepare("SELECT mission_id, seed_snapshot_state, permissions_json, state FROM missions")
+        .get()
+    ).toEqual({
       mission_id: "msn_preserved",
       seed_snapshot_state: null,
+      permissions_json: "[]",
+      state: "needs-reapproval",
     });
     db.close();
   });
@@ -100,7 +108,7 @@ describe("MissionRegistry", () => {
         contextIntegrityReady: false,
       })
     ).toThrow(/trust update/);
-    registry.approve({
+    const approved = registry.approve({
       missionId: draft.missionId,
       permissions: [
         {
@@ -119,7 +127,24 @@ describe("MissionRegistry", () => {
         runId: "run",
       }).missionId
     ).toBe(draft.missionId);
-    expect(registry.factForSession("chat")?.closureDigest).toBe(draft.closureDigest);
+    expect(registry.factForSession("chat")?.closureDigest).toBe(approved.closureDigest);
+    expect(approved.closureDigest).not.toBe(draft.closureDigest);
+    expect(
+      registry.startSession({
+        missionId: draft.missionId,
+        sessionId: "chat",
+        taskRef: "task",
+        runId: "run",
+      })
+    ).toEqual(registry.factForSession("chat"));
+    expect(() =>
+      registry.startSession({
+        missionId: draft.missionId,
+        sessionId: "chat",
+        taskRef: "different-task",
+        runId: "run",
+      })
+    ).toThrow(/different lifecycle/);
     registry.finishSession({ sessionId: "chat", runId: "run", outcome: "complete", now: 100 });
     expect(registry.factForSession("chat")).toBeNull();
     expect(() =>
@@ -461,6 +486,43 @@ describe("MissionRegistry", () => {
         providerEv: "c".repeat(64),
       })
     ).toThrow(/does not expose/);
+
+    const dynamicCharter: MissionCharter = {
+      ...charter(),
+      toolExposure: {
+        ...charter().toolExposure,
+        services: ["workers.resolveService", "workers.resolveDurableObject"],
+        workspaceServiceDiscovery: "live-declarations",
+      },
+    };
+    const dynamic = registry.createDraft({
+      name: "Live workspace operator",
+      charter: dynamicCharter,
+      owner: { userId: "u", deviceId: "d" },
+    });
+    registry.approve({
+      missionId: dynamic.missionId,
+      permissions: [],
+      decidedBy: "user:u",
+      contextIntegrityReady: true,
+    });
+    registry.startSession({
+      missionId: dynamic.missionId,
+      sessionId: "dynamic-run",
+      taskRef: "task",
+      runId: "dynamic-run",
+    });
+    expect(() =>
+      registry.assertUserlandServiceExposure({
+        sessionId: "dynamic-run",
+        name: "created-after-approval",
+        provider: "workers/later-provider",
+        providerEv: "c".repeat(64),
+      })
+    ).not.toThrow();
+    expect(() =>
+      registry.assertServiceExposure("dynamic-run", "workers.resolveService")
+    ).not.toThrow();
     registry.close();
     grants.close();
   });

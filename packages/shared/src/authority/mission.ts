@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { SessionMissionFact } from "@vibestudio/rpc";
+import type { ResourceScope, SessionMissionFact } from "@vibestudio/rpc";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { canonicalJson } from "../canonicalJson.js";
 import { normalizeWorkspaceRepoPath } from "../runtime/entitySpec.js";
@@ -26,6 +26,7 @@ export interface MissionCharter {
       providerEv: string;
       upgradePolicy: "pinned" | "follow-head";
     }[];
+    workspaceServiceDiscovery: "bound" | "live-declarations";
     evalNetwork: "none" | "declared-origins" | "unrestricted";
     declaredOrigins: readonly string[];
   };
@@ -47,7 +48,13 @@ export interface MissionRecord {
   createdAt: number;
   updatedAt: number;
   seeded?: boolean;
-  standingRestrictions?: readonly MissionStandingRestriction[];
+  permissions: readonly MissionPermission[];
+  standingRestrictions: readonly MissionStandingRestriction[];
+}
+
+export interface MissionPermission {
+  capability: string;
+  resource: ResourceScope;
 }
 
 export interface MissionStandingRestriction {
@@ -93,6 +100,14 @@ export function validateMissionCharter(charter: MissionCharter): void {
     }
   }
   if (
+    charter.toolExposure.workspaceServiceDiscovery === "live-declarations" &&
+    charter.toolExposure.userlandServices.length > 0
+  ) {
+    throw new Error(
+      "Live workspace-service discovery cannot be combined with pinned mission bindings"
+    );
+  }
+  if (
     charter.toolExposure.evalNetwork === "declared-origins" &&
     charter.toolExposure.declaredOrigins.length === 0
   ) {
@@ -124,8 +139,15 @@ export function validateMissionCharter(charter: MissionCharter): void {
   }
 }
 
-/** Content address of behavior only; identity, owner, display, state and time are excluded. */
-export function missionClosureDigest(charter: MissionCharter): string {
+/**
+ * Content address of the complete approved authority closure. Identity, owner,
+ * display, lifecycle state, and time are deliberately excluded.
+ */
+export function missionClosureDigest(
+  charter: MissionCharter,
+  permissions: readonly MissionPermission[],
+  standingRestrictions: readonly MissionStandingRestriction[]
+): string {
   validateMissionCharter(charter);
   const hash = createHash("sha256");
   const part = (value: string) => hash.update(value, "utf8").update("\0", "utf8");
@@ -134,9 +156,7 @@ export function missionClosureDigest(charter: MissionCharter): string {
   part("harness");
   part(charter.harness.unit);
   part(charter.harness.ev);
-  for (const skill of [...charter.skills].sort((a, b) =>
-    compareUtf16CodeUnits(a.path, b.path)
-  )) {
+  for (const skill of [...charter.skills].sort((a, b) => compareUtf16CodeUnits(a.path, b.path))) {
     part("skill");
     part(skill.path);
     part(skill.contentHash);
@@ -144,6 +164,9 @@ export function missionClosureDigest(charter: MissionCharter): string {
   part(sha256(canonicalJson(charter.toolExposure)));
   part(sha256(canonicalJson(charter.model)));
   part(sha256(canonicalJson(charter.trigger)));
+  part("authority");
+  part(sha256(canonicalJson(permissions)));
+  part(sha256(canonicalJson(standingRestrictions)));
   return hash.digest("hex");
 }
 
@@ -158,7 +181,10 @@ export function missionSubject(
 
 export function missionFact(record: MissionRecord): SessionMissionFact {
   if (record.state !== "active") throw new Error(`Mission ${record.missionId} is not active`);
-  if (missionClosureDigest(record.charter) !== record.closureDigest) {
+  if (
+    missionClosureDigest(record.charter, record.permissions, record.standingRestrictions) !==
+    record.closureDigest
+  ) {
     throw new Error(`Mission ${record.missionId} closure has drifted`);
   }
   return {

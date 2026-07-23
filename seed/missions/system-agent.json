@@ -12,6 +12,7 @@
     "toolExposure": {
       "services": [],
       "userlandServices": [],
+      "workspaceServiceDiscovery": "live-declarations",
       "evalNetwork": "none",
       "declaredOrigins": []
     },
