@@ -12,7 +12,7 @@
  * per-document DocControllers.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Box, Button, Callout, Flex, Heading, IconButton, Text } from "@radix-ui/themes";
 import {
   DotsHorizontalIcon,
@@ -25,7 +25,6 @@ import {
 } from "@radix-ui/react-icons";
 import { useIsMobile, usePaletteCommands } from "@workspace/react";
 import { useApp, useAppState } from "../app/context";
-import { spectroliteE2EHooksEnabled } from "../app/e2eHooks";
 import { WikilinkContext } from "../mdx/components";
 import { resolveWikilinkTarget } from "../mdx/wikilink";
 import { EditorPane } from "./EditorPane";
@@ -40,18 +39,6 @@ import { MobileSidebar } from "./mobile/MobileSidebar";
 import { BacklinksPanel } from "./BacklinksPanel";
 import { FileTree } from "./FileTree";
 import { QuickOpenDialog } from "./QuickOpen";
-
-type SpectroliteViewE2EGlobal = typeof globalThis & {
-  __spectroliteE2EView__?: {
-    openBacklinks(): void;
-    openFiles(): void;
-    openSettings(): void;
-    isBacklinksOpen?: () => boolean;
-    isFilesOpen?: () => boolean;
-    isSidebarOpen?: () => boolean;
-    isSettingsOpen?: () => boolean;
-  };
-};
 
 function pathToTitle(relPath: string): string {
   const name = relPath.split("/").pop() ?? relPath;
@@ -244,32 +231,6 @@ function DesktopWorkspace({
   const [filesOpen, setFilesOpen] = useState(false);
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const filesOpenRef = useRef(false);
-  const backlinksOpenRef = useRef(false);
-  const settingsOpenRef = useRef(false);
-
-  filesOpenRef.current = filesOpen;
-  backlinksOpenRef.current = backlinksOpen;
-  settingsOpenRef.current = settingsOpen;
-
-  useEffect(() => {
-    if (!spectroliteE2EHooksEnabled()) return;
-    const hook = {
-      openBacklinks: () => setBacklinksOpen(true),
-      openFiles: () => setFilesOpen(true),
-      openSettings: () => setSettingsOpen(true),
-      isBacklinksOpen: () => backlinksOpenRef.current,
-      isFilesOpen: () => filesOpenRef.current,
-      isSettingsOpen: () => settingsOpenRef.current,
-    };
-    const g = globalThis as SpectroliteViewE2EGlobal;
-    g.__spectroliteE2EView__ = hook;
-    return () => {
-      if (g.__spectroliteE2EView__ === hook) {
-        delete g.__spectroliteE2EView__;
-      }
-    };
-  }, []);
 
   return (
     <Flex direction="column" style={{ height: "100%", minHeight: 0 }}>
@@ -371,29 +332,6 @@ function MobileWorkspace({
   const activePath = useAppState((s) => s.activePath);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
-  const sidebarOpenRef = useRef(false);
-  const settingsSheetOpenRef = useRef(false);
-
-  sidebarOpenRef.current = sidebarOpen;
-  settingsSheetOpenRef.current = settingsSheetOpen;
-
-  useEffect(() => {
-    if (!spectroliteE2EHooksEnabled()) return;
-    const hook = {
-      openBacklinks: () => setSidebarOpen(true),
-      openFiles: () => setSidebarOpen(true),
-      openSettings: () => setSettingsSheetOpen(true),
-      isSidebarOpen: () => sidebarOpenRef.current,
-      isSettingsOpen: () => settingsSheetOpenRef.current,
-    };
-    const g = globalThis as SpectroliteViewE2EGlobal;
-    g.__spectroliteE2EView__ = hook;
-    return () => {
-      if (g.__spectroliteE2EView__ === hook) {
-        delete g.__spectroliteE2EView__;
-      }
-    };
-  }, []);
 
   return (
     <Flex direction="column" style={{ height: "100%", minHeight: 0 }}>
