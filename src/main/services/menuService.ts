@@ -9,7 +9,11 @@ import type { ViewManager } from "../viewManager.js";
 import type { ServerClient } from "../serverClient.js";
 import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import { buildPanelChromeState } from "@vibestudio/shared/panelChrome";
-import { getAvailablePanelCommands, type PanelCommandId } from "@vibestudio/shared/panelCommands";
+import {
+  getAvailablePanelCommands,
+  PANEL_CONTEXT_MENU_SECTIONS,
+  type PanelCommandId,
+} from "@vibestudio/shared/panelCommands";
 import { getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { buildHamburgerMenuTemplate } from "../menu.js";
 import { requireAppCapability } from "./appCapabilities.js";
@@ -106,7 +110,7 @@ export function createMenuService(deps: {
           });
         });
       },
-      showPanelContext: (ctx, [panelId, position]) => {
+      showPanelContext: (ctx, [panelId, position, presentation]) => {
         const vm = deps.getViewManager();
         requireAppCapability(ctx, vm, "native-menus", "menu.showPanelContext");
         const lifecycle = deps.panelOrchestrator;
@@ -114,24 +118,13 @@ export function createMenuService(deps: {
         const panel = registry.getPanel(panelId);
         const chrome = panel ? buildPanelChromeState({ panel }) : null;
         const commands = getAvailablePanelCommands(
-          { chrome, isPinned: lifecycle.isPanelPinned(panelId) },
-          [
-            "back",
-            "forward",
-            "reload-panel",
-            "reload-view",
-            "force-reload-view",
-            "rebuild-panel",
-            "stop",
-            "copy-address",
-            "copy-panel-id",
-            "open-external",
-            "duplicate",
-            "add-child",
-            "toggle-pin",
-            "unload",
-            "archive",
-          ]
+          {
+            chrome,
+            isPinned: lifecycle.isPanelPinned(panelId),
+            childCount: panel?.children.length ?? 0,
+            presentation,
+          },
+          PANEL_CONTEXT_MENU_SECTIONS.flat()
         );
 
         return new Promise<PanelContextMenuAction | null>((resolve) => {
@@ -140,27 +133,16 @@ export function createMenuService(deps: {
             if (!command) return null;
             return { label: command.label, click: () => resolve(id as PanelContextMenuAction) };
           };
-          const template: MenuItemConstructorOptions[] = [
-            addCommand("back"),
-            addCommand("forward"),
-            { type: "separator" },
-            addCommand("reload-panel"),
-            addCommand("reload-view"),
-            addCommand("force-reload-view"),
-            addCommand("rebuild-panel"),
-            addCommand("stop"),
-            { type: "separator" },
-            addCommand("copy-address"),
-            addCommand("copy-panel-id"),
-            addCommand("open-external"),
-            addCommand("duplicate"),
-            addCommand("add-child"),
-            { type: "separator" },
-            addCommand("toggle-pin"),
-            addCommand("unload"),
-            { type: "separator" },
-            addCommand("archive"),
-          ].filter(Boolean) as MenuItemConstructorOptions[];
+          const sections = PANEL_CONTEXT_MENU_SECTIONS.map((ids) =>
+            ids
+              .map((id) => addCommand(id))
+              .filter((item): item is MenuItemConstructorOptions => item !== null)
+          );
+          const template = sections
+            .filter((section) => section.length > 0)
+            .flatMap((section, index) =>
+              index === 0 ? section : [{ type: "separator" } as const, ...section]
+            );
           const menu = Menu.buildFromTemplate(template);
           menu.popup({
             window: vm.getWindow(),

@@ -26,7 +26,13 @@ export const MenuItemSchema = z.object({
 });
 export type MenuItem = z.infer<typeof MenuItemSchema>;
 
-const PanelContextMenuActionSchema = z.enum([
+export const PanelContextPresentationSchema = z.object({
+  kind: z.enum(["solo", "stacked"]),
+  canSplitBelow: z.boolean(),
+});
+export type PanelContextPresentation = z.infer<typeof PanelContextPresentationSchema>;
+
+export const PanelContextMenuActionSchema = z.enum([
   "reload",
   "reload-panel",
   "reload-view",
@@ -40,7 +46,11 @@ const PanelContextMenuActionSchema = z.enum([
   "copy-panel-id",
   "open-external",
   "duplicate",
+  "open-child-beside",
   "add-child",
+  "add-child-below",
+  "open-in-new-column",
+  "close-pane",
   "toggle-pin",
   "unload",
   "archive",
@@ -75,9 +85,13 @@ export const menuMethods = defineServiceMethods({
   showPanelContext: {
     description:
       "Pop up the per-panel context menu (back/reload/duplicate/archive/etc.) for the given panel; resolves with the chosen panel action, or null if dismissed.",
-    args: z.tuple([z.string(), MenuPositionSchema]),
+    args: z.tuple([z.string(), MenuPositionSchema, PanelContextPresentationSchema.optional()]),
     returns: PanelContextMenuActionSchema.nullable(),
     access: SHOW_MENU_ACCESS,
-    examples: [{ args: ["panel-abc123", { x: 100, y: 200 }] }],
+    examples: [
+      {
+        args: ["panel-abc123", { x: 100, y: 200 }, { kind: "stacked", canSplitBelow: true }],
+      },
+    ],
   },
 });

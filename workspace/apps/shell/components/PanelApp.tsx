@@ -14,8 +14,8 @@ import { TitleBar } from "./TitleBar";
 import { NotificationBar } from "./NotificationBar";
 import { UserNotificationBar } from "./UserNotificationBar";
 import { ConsentApprovalBar, APPROVAL_OVERLAY_HOST_ID } from "./ConsentApprovalBar";
-import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import type { PanelChromeState } from "@vibestudio/shared/panelChrome";
+import type { FocusedPaneChromeState, PaneChromeCommand } from "./paneChrome";
 
 export function PanelApp() {
   return (
@@ -33,6 +33,7 @@ function PanelAppContent() {
   const effectiveTheme = useThemeSynchronizer();
   const [currentTitle, setCurrentTitle] = useState("Vibestudio");
   const [chromeState, setChromeState] = useState<PanelChromeState | null>(null);
+  const [paneChromeState, setPaneChromeState] = useState<FocusedPaneChromeState | null>(null);
 
   // Convert panel initialization errors into notifications
   useShellEvent(
@@ -52,23 +53,28 @@ function PanelAppContent() {
 
   // Use refs for callback handlers to avoid complex state patterns
   const openPanelDevToolsRef = useRef<() => void>(() => {});
-  const handlePanelActionRef = useRef<(panelId: string, action: PanelContextMenuAction) => void>(
-    () => {}
-  );
+  const showPanelContextMenuRef = useRef<
+    (panelId: string, position: { x: number; y: number }) => Promise<void>
+  >(async () => {});
   const handleChromeCommandRef = useRef<(command: ChromeCommand) => void>(() => {});
+  const handlePaneChromeCommandRef = useRef<(command: PaneChromeCommand) => void>(() => {});
 
   const { navigateToId, registerNavigateToId, addressBarVisible, setAddressBarVisible } =
     useNavigation();
 
   // Stable callbacks that delegate to refs
   const openPanelDevTools = useCallback(() => openPanelDevToolsRef.current(), []);
-  const handlePanelAction = useCallback(
-    (panelId: string, action: PanelContextMenuAction) =>
-      handlePanelActionRef.current(panelId, action),
+  const showPanelContextMenu = useCallback(
+    (panelId: string, position: { x: number; y: number }) =>
+      showPanelContextMenuRef.current(panelId, position),
     []
   );
   const handleChromeCommand = useCallback(
     (command: ChromeCommand) => handleChromeCommandRef.current(command),
+    []
+  );
+  const handlePaneChromeCommand = useCallback(
+    (command: PaneChromeCommand) => handlePaneChromeCommandRef.current(command),
     []
   );
 
@@ -160,6 +166,7 @@ function PanelAppContent() {
         ref: location.ref,
         contextId: location.contextId,
         stateArgs: location.stateArgs,
+        placement: location.placement,
       };
       const disposition = location.disposition ?? "root";
       const result =
@@ -177,7 +184,18 @@ function PanelAppContent() {
                 isRoot: true,
                 focus: location.focus ?? true,
               });
-      if (active && result && location.focus !== false) navigateToId(result.id);
+      if (active && result && location.focus !== false) {
+        navigateToId(
+          result.id,
+          disposition === "child" && focusedPanelId
+            ? {
+                parentId: focusedPanelId,
+                hint: location.placement,
+                intentId: `create:${result.id}`,
+              }
+            : undefined
+        );
+      }
     };
     const handle = (location: PanelLocation) => {
       void openLocation(location).catch((error: unknown) => {
@@ -204,8 +222,10 @@ function PanelAppContent() {
         title={currentTitle}
         chromeState={chromeState}
         onChromeCommand={handleChromeCommand}
-        onNavigateToId={navigateToId}
-        onPanelAction={handlePanelAction}
+        onNavigateToId={(panelId) => navigateToId(panelId, { target: "focused-pane" })}
+        onPanelContextMenu={showPanelContextMenu}
+        paneChromeState={paneChromeState}
+        onPaneChromeCommand={handlePaneChromeCommand}
       />
       <NotificationBar />
       <UserNotificationBar />
@@ -231,11 +251,15 @@ function PanelAppContent() {
             openPanelDevToolsRef.current = handler;
           }}
           onRegisterNavigateToId={registerNavigateToId}
-          onRegisterPanelAction={(handler) => {
-            handlePanelActionRef.current = handler;
+          onRegisterPanelContextMenu={(handler) => {
+            showPanelContextMenuRef.current = handler;
           }}
           onRegisterChromeCommand={(handler) => {
             handleChromeCommandRef.current = handler;
+          }}
+          onPaneChromeStateChange={setPaneChromeState}
+          onRegisterPaneChromeCommand={(handler) => {
+            handlePaneChromeCommandRef.current = handler;
           }}
         />
       </Box>

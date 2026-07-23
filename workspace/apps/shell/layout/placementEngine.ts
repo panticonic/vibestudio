@@ -12,17 +12,34 @@ import {
   mintColumnId,
   mintPaneId,
 } from "./types";
-import type { LayoutColumn, LayoutPane, PanelLayout, PanelPlacementHint, PersistedLayout } from "./types";
+import type {
+  LayoutColumn,
+  LayoutPane,
+  PanelLayout,
+  PanelPlacementHint,
+  PersistedLayout,
+} from "./types";
 
 export type TreeRelation = "self" | "ancestor" | "descendant" | "sibling" | "none";
+type ShowPanelOrigin = "tree-click" | "navigation-click" | "navigate-event";
 
 export type LayoutAction =
-  | { type: "show-panel"; panelId: string; origin: "tree-click" | "navigate-event" }
+  | {
+      type: "show-panel";
+      panelId: string;
+      origin: ShowPanelOrigin;
+    }
   | { type: "open-child"; panelId: string; parentId: string; hint?: PanelPlacementHint }
+  | {
+      type: "present-panel";
+      panelId: string;
+      anchorPanelId?: string;
+      hint: PanelPlacementHint;
+    }
   | { type: "open-beside"; panelId: string; anchorPaneId: string }
   | { type: "move-pane-to-new-column"; paneId: string }
   | { type: "split-below"; panelId: string; anchorPaneId: string }
-  | { type: "place-in-pane"; panelId: string; paneId: string } // explicit drop on a pane header (D8)
+  | { type: "place-in-pane"; panelId: string; paneId: string } // explicit drop on a pane handle (D8)
   | { type: "close-pane"; paneId: string }
   | { type: "tree-reconcile"; removed: Array<{ panelId: string; fallbackCandidates: string[] }> }
   | { type: "focus-pane"; paneId: string }
@@ -32,7 +49,7 @@ export type LayoutAction =
 export interface LayoutEnv {
   viewportWidth: number;
   viewportHeight: number; // vertical fit tests (rule 2c/3) need it
-  paneChromeHeight: number; // micro-header + divider per pane
+  paneChromeHeight: number; // thin drop handle + divider per pane
   firstRootPanelId(): string | null; // seed after closing the last pane; null = empty workspace
   minWidthOf(panelId: string): number; // from placement hints / defaults
   treeRelation(a: string, b: string): TreeRelation;
@@ -49,7 +66,10 @@ export interface PaneLocation {
 // ---------------------------------------------------------------------------
 // Helpers
 
-function findLocation(layout: PanelLayout, match: (pane: LayoutPane) => boolean): PaneLocation | null {
+function findLocation(
+  layout: PanelLayout,
+  match: (pane: LayoutPane) => boolean
+): PaneLocation | null {
   let columnIndex = 0;
   for (const column of layout.columns) {
     let paneIndex = 0;
@@ -84,7 +104,11 @@ function sanitizeFr(fr: number): number {
   return Number.isFinite(fr) && fr > 0 ? fr : 1;
 }
 
-function renormalizeFrs<T>(items: T[], get: (item: T) => number, set: (item: T, fr: number) => void): void {
+function renormalizeFrs<T>(
+  items: T[],
+  get: (item: T) => number,
+  set: (item: T, fr: number) => void
+): void {
   if (items.length === 0) return;
   const frs = items.map((item) => sanitizeFr(get(item)));
   const total = frs.reduce((sum, fr) => sum + fr, 0);
@@ -96,9 +120,17 @@ function renormalizeFrs<T>(items: T[], get: (item: T) => number, set: (item: T, 
 export function normalizeLayout(layout: PanelLayout): PanelLayout {
   const next = cloneLayout(layout);
   next.columns = next.columns.filter((column) => column.panes.length > 0);
-  renormalizeFrs(next.columns, (c) => c.widthFr, (c, fr) => (c.widthFr = fr));
+  renormalizeFrs(
+    next.columns,
+    (c) => c.widthFr,
+    (c, fr) => (c.widthFr = fr)
+  );
   for (const column of next.columns) {
-    renormalizeFrs(column.panes, (p) => p.heightFr, (p, fr) => (p.heightFr = fr));
+    renormalizeFrs(
+      column.panes,
+      (p) => p.heightFr,
+      (p, fr) => (p.heightFr = fr)
+    );
   }
   const firstPane = next.columns[0]?.panes[0];
   if (firstPane === undefined) {
@@ -112,13 +144,32 @@ export function normalizeLayout(layout: PanelLayout): PanelLayout {
 export function columnMinWidth(column: LayoutColumn, env: LayoutEnv): number {
   let min = MIN_COLUMN_WIDTH;
   for (const pane of column.panes) {
-    min = Math.max(min, env.minWidthOf(pane.panelId));
+    min = Math.max(min, env.minWidthOf(pane.panelId), pane.minWidthOverride ?? 0);
   }
   return min;
 }
 
-function newPane(panelId: string, heightFr = 1): LayoutPane {
-  return { id: mintPaneId(), heightFr, panelId };
+function setPaneMinWidth(pane: LayoutPane, minWidth: number | undefined): void {
+  if (minWidth === undefined) delete pane.minWidthOverride;
+  else pane.minWidthOverride = minWidth;
+}
+
+function setPanePanel(
+  pane: LayoutPane,
+  panelId: string,
+  hint?: Pick<PanelPlacementHint, "minWidth">
+): void {
+  pane.panelId = panelId;
+  setPaneMinWidth(pane, hint?.minWidth);
+}
+
+function newPane(panelId: string, heightFr = 1, minWidth?: number): LayoutPane {
+  return {
+    id: mintPaneId(),
+    heightFr,
+    panelId,
+    ...(minWidth !== undefined ? { minWidthOverride: minWidth } : {}),
+  };
 }
 
 function newColumn(panelId: string, widthFr = 1): LayoutColumn {
@@ -163,10 +214,7 @@ export function computeViewport(
     if (candidateEnd < columns.length - 1) width += PARKED_EDGE_TAB_WIDTH;
     return width;
   };
-  while (
-    end + 1 < columns.length &&
-    requiredWidth(start, end + 1) <= env.viewportWidth
-  ) {
+  while (end + 1 < columns.length && requiredWidth(start, end + 1) <= env.viewportWidth) {
     end += 1;
   }
   while (start > 0 && requiredWidth(start - 1, end) <= env.viewportWidth) {
@@ -211,14 +259,26 @@ export function validateRestoredLayout(
     for (const rawPane of panes) {
       if (typeof rawPane !== "object" || rawPane === null) return null;
       const pane = rawPane as LayoutPane;
-      if (typeof pane.id !== "string" || pane.id.length === 0 || seenPaneIds.has(pane.id)) return null;
+      if (typeof pane.id !== "string" || pane.id.length === 0 || seenPaneIds.has(pane.id))
+        return null;
       if (typeof pane.panelId !== "string" || pane.panelId.length === 0) return null;
       if (!Number.isFinite(pane.heightFr) || pane.heightFr <= 0) return null;
+      if (
+        pane.minWidthOverride !== undefined &&
+        (!Number.isFinite(pane.minWidthOverride) || pane.minWidthOverride <= 0)
+      ) {
+        return null;
+      }
       seenPaneIds.add(pane.id);
       // Prune panes whose panel no longer exists, and duplicate panelIds (D3).
       if (!existingPanelIds.has(pane.panelId) || seenPanelIds.has(pane.panelId)) continue;
       seenPanelIds.add(pane.panelId);
-      keptPanes.push({ id: pane.id, heightFr: pane.heightFr, panelId: pane.panelId });
+      keptPanes.push({
+        id: pane.id,
+        heightFr: pane.heightFr,
+        panelId: pane.panelId,
+        ...(pane.minWidthOverride !== undefined ? { minWidthOverride: pane.minWidthOverride } : {}),
+      });
     }
     if (keptPanes.length > 0) {
       columns.push({ id, widthFr, panes: keptPanes });
@@ -231,14 +291,32 @@ export function validateRestoredLayout(
 // ---------------------------------------------------------------------------
 // Action application
 
-export function applyLayoutAction(layout: PanelLayout, action: LayoutAction, env: LayoutEnv): PanelLayout {
+export function applyLayoutAction(
+  layout: PanelLayout,
+  action: LayoutAction,
+  env: LayoutEnv
+): PanelLayout {
   switch (action.type) {
     case "focus-pane":
       return applyFocusPane(layout, action.paneId);
     case "show-panel":
-      return applyShowPanel(cloneLayout(layout), action.panelId, env);
+      return applyShowPanel(cloneLayout(layout), action.panelId, action.origin, env);
     case "open-child":
-      return applyOpenChild(cloneLayout(layout), action, env);
+      return applyHintedPlacement(
+        cloneLayout(layout),
+        action.panelId,
+        action.parentId,
+        action.hint,
+        env
+      );
+    case "present-panel":
+      return applyHintedPlacement(
+        cloneLayout(layout),
+        action.panelId,
+        action.anchorPanelId,
+        action.hint,
+        env
+      );
     case "open-beside":
       return applyOpenBeside(cloneLayout(layout), action.panelId, action.anchorPaneId, env);
     case "move-pane-to-new-column":
@@ -266,8 +344,17 @@ function applyFocusPane(layout: PanelLayout, paneId: string): PanelLayout {
   return next;
 }
 
-/** Rule 1: show-panel — focus if visible, else replace in the nearest-relative pane. */
-function applyShowPanel(next: PanelLayout, panelId: string, env: LayoutEnv): PanelLayout {
+/**
+ * Rule 1: show-panel — focus if visible. Direct tree/breadcrumb navigation
+ * replaces the focused slot; programmatic navigation may use the nearest
+ * visible relative when no slot was explicitly chosen.
+ */
+function applyShowPanel(
+  next: PanelLayout,
+  panelId: string,
+  origin: ShowPanelOrigin,
+  env: LayoutEnv
+): PanelLayout {
   const existing = paneForPanel(next, panelId);
   if (existing) {
     next.focusedPaneId = existing.pane.id; // 1a (D3)
@@ -278,30 +365,46 @@ function applyShowPanel(next: PanelLayout, panelId: string, env: LayoutEnv): Pan
     next.columns = [newColumn(panelId)];
     return normalizeLayout(next);
   }
-  // 1b: nearest visible tree relative, falling back to the focused pane.
-  const relativePaneId = env.nearestVisibleRelative(panelId, next);
-  const targetPaneId = relativePaneId ?? next.focusedPaneId;
+  // User navigation is how a slot is retargeted. Do not let tree proximity
+  // override the pane the user deliberately focused.
+  const targetPaneId =
+    origin === "tree-click" || origin === "navigation-click"
+      ? next.focusedPaneId
+      : (env.nearestVisibleRelative(panelId, next) ?? next.focusedPaneId);
   const targetPane =
     (targetPaneId !== null ? findPane(next, targetPaneId)?.pane : undefined) ?? firstPane;
   // 1c: replace in place; the pane id (position) survives.
-  targetPane.panelId = panelId;
+  setPanePanel(targetPane, panelId);
   next.focusedPaneId = targetPane.id;
   return next;
 }
 
-function horizontalFits(next: PanelLayout, childPanelId: string, env: LayoutEnv): boolean {
+function horizontalFits(
+  next: PanelLayout,
+  childPanelId: string,
+  env: LayoutEnv,
+  hint?: PanelPlacementHint
+): boolean {
   if (env.viewportWidth < SINGLE_COLUMN_BREAKPOINT) return false; // rule 7
   const columnsMin = next.columns.reduce((sum, column) => sum + columnMinWidth(column, env), 0);
   return (
     columnsMin +
-      Math.max(MIN_COLUMN_WIDTH, env.minWidthOf(childPanelId)) +
+      Math.max(MIN_COLUMN_WIDTH, env.minWidthOf(childPanelId), hint?.minWidth ?? 0) +
       next.columns.length * COLUMN_DIVIDER_WIDTH <=
     env.viewportWidth
   );
 }
 
+export function canSplitColumnVertically(
+  column: LayoutColumn,
+  viewportHeight: number,
+  paneChromeHeight: number
+): boolean {
+  return (column.panes.length + 1) * (MIN_PANE_HEIGHT + paneChromeHeight) <= viewportHeight;
+}
+
 function verticalFits(column: LayoutColumn, env: LayoutEnv): boolean {
-  return (column.panes.length + 1) * (MIN_PANE_HEIGHT + env.paneChromeHeight) <= env.viewportHeight;
+  return canSplitColumnVertically(column, env.viewportHeight, env.paneChromeHeight);
 }
 
 function insertColumnAfter(
@@ -312,7 +415,7 @@ function insertColumnAfter(
   hint?: PanelPlacementHint
 ): PanelLayout {
   const preferred = hint?.preferredWidth ?? PREFERRED_COLUMN_WIDTH;
-  const pane = newPane(panelId);
+  const pane = newPane(panelId, 1, hint?.minWidth);
   const column: LayoutColumn = {
     id: mintColumnId(),
     widthFr: preferred / PREFERRED_COLUMN_WIDTH,
@@ -323,60 +426,78 @@ function insertColumnAfter(
   return normalizeLayout(next);
 }
 
-function insertPaneBelow(next: PanelLayout, location: PaneLocation, panelId: string): PanelLayout {
-  const pane = newPane(panelId);
+function insertPaneBelow(
+  next: PanelLayout,
+  location: PaneLocation,
+  panelId: string,
+  hint?: PanelPlacementHint
+): PanelLayout {
+  const pane = newPane(panelId, 1, hint?.minWidth);
   location.column.panes.splice(location.paneIndex + 1, 0, pane);
   next.focusedPaneId = pane.id;
   return normalizeLayout(next);
 }
 
-/** Rule 2: open-child — hint-driven placement with fit tests. */
-function applyOpenChild(
+/** Rule 2: hint-driven placement relative to a semantic parent or presentation anchor. */
+function applyHintedPlacement(
   next: PanelLayout,
-  action: { panelId: string; parentId: string; hint?: PanelPlacementHint },
+  panelId: string,
+  anchorPanelId: string | undefined,
+  hint: PanelPlacementHint | undefined,
   env: LayoutEnv
 ): PanelLayout {
-  const existing = paneForPanel(next, action.panelId);
+  const existing = paneForPanel(next, panelId);
   if (existing) {
+    if (hint !== undefined) setPaneMinWidth(existing.pane, hint.minWidth);
     next.focusedPaneId = existing.pane.id; // D3 / rule 9
     return next;
   }
-  const parent = paneForPanel(next, action.parentId);
-  const disposition = action.hint?.disposition ?? "side";
+  const focused = next.focusedPaneId ? findPane(next, next.focusedPaneId) : null;
+  const semanticAnchor = anchorPanelId ? paneForPanel(next, anchorPanelId) : focused;
+  const anchor = semanticAnchor ?? focused;
+  const disposition = hint?.disposition ?? "side";
 
-  // 2b: replace — in the parent's pane, or show-panel rules if parent invisible.
+  // 2b: replace is semantic: use the requested anchor, or ordinary show rules
+  // when that panel is not visible.
   if (disposition === "replace") {
-    if (!parent) return applyShowPanel(next, action.panelId, env);
-    parent.pane.panelId = action.panelId;
-    next.focusedPaneId = parent.pane.id;
+    if (!semanticAnchor) return applyShowPanel(next, panelId, "navigate-event", env);
+    setPanePanel(semanticAnchor.pane, panelId, hint);
+    next.focusedPaneId = semanticAnchor.pane.id;
     return next;
   }
 
-  if (!parent) return applyShowPanel(next, action.panelId, env);
+  // Visual placements fall back to the focused pane when their semantic parent
+  // is hidden, preserving an explicit beside/below request from a tree menu.
+  if (!anchor) return applyShowPanel(next, panelId, "navigate-event", env);
 
   // 2c: split-below — only if the column has vertical room; else fall through.
-  if (disposition === "split-below" && verticalFits(parent.column, env)) {
-    return insertPaneBelow(next, parent, action.panelId);
+  if (disposition === "split-below" && verticalFits(anchor.column, env)) {
+    return insertPaneBelow(next, anchor, panelId, hint);
   }
 
   // 2d: side (default, and split-below fallthrough) — beside if it fits, else replace (D4).
-  if (horizontalFits(next, action.panelId, env)) {
-    return insertColumnAfter(next, parent.columnIndex, action.panelId, env, action.hint);
+  if (horizontalFits(next, panelId, env, hint)) {
+    return insertColumnAfter(next, anchor.columnIndex, panelId, env, hint);
   }
-  parent.pane.panelId = action.panelId;
-  next.focusedPaneId = parent.pane.id;
+  setPanePanel(anchor.pane, panelId, hint);
+  next.focusedPaneId = anchor.pane.id;
   return next;
 }
 
 /** Rule 3: explicit open-beside — always honored (may exceed the fit limit). */
-function applyOpenBeside(next: PanelLayout, panelId: string, anchorPaneId: string, env: LayoutEnv): PanelLayout {
+function applyOpenBeside(
+  next: PanelLayout,
+  panelId: string,
+  anchorPaneId: string,
+  env: LayoutEnv
+): PanelLayout {
   const existing = paneForPanel(next, panelId);
   if (existing) {
     next.focusedPaneId = existing.pane.id;
     return next;
   }
   const anchor = findPane(next, anchorPaneId);
-  if (!anchor) return applyShowPanel(next, panelId, env);
+  if (!anchor) return applyShowPanel(next, panelId, "navigate-event", env);
   return insertColumnAfter(next, anchor.columnIndex, panelId, env);
 }
 
@@ -403,21 +524,26 @@ function applyMovePaneToNewColumn(layout: PanelLayout, paneId: string): PanelLay
 }
 
 /** Rule 3: explicit split-below — honored iff the vertical fit test passes; else open-beside. */
-function applySplitBelow(next: PanelLayout, panelId: string, anchorPaneId: string, env: LayoutEnv): PanelLayout {
+function applySplitBelow(
+  next: PanelLayout,
+  panelId: string,
+  anchorPaneId: string,
+  env: LayoutEnv
+): PanelLayout {
   const existing = paneForPanel(next, panelId);
   if (existing) {
     next.focusedPaneId = existing.pane.id;
     return next;
   }
   const anchor = findPane(next, anchorPaneId);
-  if (!anchor) return applyShowPanel(next, panelId, env);
+  if (!anchor) return applyShowPanel(next, panelId, "navigate-event", env);
   if (!verticalFits(anchor.column, env)) {
     return applyOpenBeside(next, panelId, anchorPaneId, env);
   }
   return insertPaneBelow(next, anchor, panelId);
 }
 
-/** Explicit drop on a pane header: show the panel in exactly that pane (D8/D3). */
+/** Explicit drop on a pane handle: show the panel in exactly that pane (D8/D3). */
 function applyPlaceInPane(next: PanelLayout, panelId: string, paneId: string): PanelLayout {
   const target = findPane(next, paneId);
   if (!target) return next;
@@ -427,7 +553,7 @@ function applyPlaceInPane(next: PanelLayout, panelId: string, paneId: string): P
     next.focusedPaneId = existing.pane.id;
     return next;
   }
-  target.pane.panelId = panelId;
+  setPanePanel(target.pane, panelId);
   next.focusedPaneId = target.pane.id;
   return next;
 }
@@ -479,7 +605,7 @@ function applyTreeReconcile(
       (candidateId) => !removedIds.has(candidateId) && paneForPanel(next, candidateId) === null
     );
     if (candidate !== undefined) {
-      location.pane.panelId = candidate;
+      setPanePanel(location.pane, candidate);
     } else {
       panesToClose.push(location.pane.id);
     }
@@ -497,7 +623,11 @@ function applyResizeColumns(next: PanelLayout, columnFrs: number[]): PanelLayout
   next.columns.forEach((column, i) => {
     column.widthFr = sanitizeFr(columnFrs[i] ?? 1);
   });
-  renormalizeFrs(next.columns, (c) => c.widthFr, (c, fr) => (c.widthFr = fr));
+  renormalizeFrs(
+    next.columns,
+    (c) => c.widthFr,
+    (c, fr) => (c.widthFr = fr)
+  );
   return next;
 }
 
@@ -507,6 +637,10 @@ function applyResizePanes(next: PanelLayout, columnId: string, paneFrs: number[]
   column.panes.forEach((pane, i) => {
     pane.heightFr = sanitizeFr(paneFrs[i] ?? 1);
   });
-  renormalizeFrs(column.panes, (p) => p.heightFr, (p, fr) => (p.heightFr = fr));
+  renormalizeFrs(
+    column.panes,
+    (p) => p.heightFr,
+    (p, fr) => (p.heightFr = fr)
+  );
   return next;
 }

@@ -18,7 +18,7 @@ import {
 } from "@vibestudio/service-schemas/account";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
-import { menuMethods } from "@vibestudio/service-schemas/menu";
+import { menuMethods, type PanelContextPresentation } from "@vibestudio/service-schemas/menu";
 import { notificationMethods } from "@vibestudio/service-schemas/notification";
 import { panelMethods } from "@vibestudio/service-schemas/panel";
 import { panelTreeMethods } from "@vibestudio/service-schemas/panelTree";
@@ -247,11 +247,8 @@ export const panel = {
   reload: (panelId: string) => panelTreeClient.reload(panelId),
   reloadView: (panelId: string) => panelClient.reloadView(panelId),
   forceReloadView: (panelId: string) => panelClient.forceReloadView(panelId),
-  findInPage: (
-    panelId: string,
-    text: string,
-    options: { forward: boolean; findNext: boolean }
-  ) => panelClient.findInPage(panelId, text, options),
+  findInPage: (panelId: string, text: string, options: { forward: boolean; findNext: boolean }) =>
+    panelClient.findInPage(panelId, text, options),
   stopFindInPage: (panelId: string) => panelClient.stopFindInPage(panelId),
   getBrowserSiteState: (panelId: string) => panelClient.getBrowserSiteState(panelId),
   toggleBrowserBookmark: (panelId: string) => panelClient.toggleBrowserBookmark(panelId),
@@ -520,8 +517,11 @@ export const menu = {
   showHamburger: (position: Position) => menuClient.showHamburger(position),
   showContext: (items: Array<{ id: string; label: string }>, position: Position) =>
     menuClient.showContext(items, position),
-  showPanelContext: (panelId: string, position: Position) =>
-    menuClient.showPanelContext(panelId, position),
+  showPanelContext: (
+    panelId: string,
+    position: Position,
+    presentation?: PanelContextPresentation
+  ) => menuClient.showPanelContext(panelId, position, presentation),
 };
 // =============================================================================
 // Workspace Service

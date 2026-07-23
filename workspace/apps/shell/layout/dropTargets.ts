@@ -1,4 +1,4 @@
-// Tree→layout drag placement (W5, D8/D9): droppable ids for pane headers and
+// Tree→layout drag placement (W5, D8/D9): droppable ids for pane handles and
 // column gutters, and the window event the dnd context uses to hand a drop to
 // the layout engine host (PanelStack).
 
@@ -13,7 +13,7 @@ export interface LayoutDropDetail {
 }
 
 export type LayoutDropTarget =
-  | { kind: "pane"; paneId: string } // drop on a pane header → show in that pane
+  | { kind: "pane"; paneId: string } // drop on a pane handle → show in that pane
   | { kind: "gutter"; columnId: string }; // drop on a gutter → new column after it
 
 export function paneDropId(paneId: string): string {

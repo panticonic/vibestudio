@@ -1,57 +1,37 @@
 import { useDroppable } from "@dnd-kit/core";
-import { Cross2Icon, DotsHorizontalIcon, ViewHorizontalIcon } from "@radix-ui/react-icons";
-import { DropdownMenu, Flex, IconButton, Text } from "@radix-ui/themes";
+import { Box, Flex } from "@radix-ui/themes";
 
-import type { PanelContextMenuAction } from "@vibestudio/shared/types";
-import { useFullPanel } from "../shell/hooks/PanelTreeContext";
 import { PaneContent } from "./PaneContent";
 import { paneDropId } from "../layout/dropTargets";
-import type { LayoutPane } from "../layout/types";
-
-export const PANE_CHROME_HEIGHT = 28;
+import { PANE_DROP_HANDLE_HEIGHT, type LayoutPane } from "../layout/types";
 
 interface PaneViewProps {
   pane: LayoutPane;
   focused: boolean;
   resident: boolean;
   layoutEpoch: number;
-  /** Vertical fit test result for this pane's column (§4.3): full column disables split. */
-  canSplitBelow: boolean;
   unresponsive: boolean;
   onDismissUnresponsive: (panelId: string) => void;
   onFocusPane: (paneId: string) => void;
-  onClosePane: (paneId: string) => void;
-  onSplitBelow: (paneId: string) => void;
-  onOpenBeside: (paneId: string) => void;
-  onShowAddressBar: () => void;
-  onPanelAction: (panelId: string, action: PanelContextMenuAction) => void;
 }
 
 /**
- * One pane: slim micro-header (title, split/close controls, overflow menu) over
- * the pane's content state machine. The header is DOM, so it is also the drop
- * target and context-menu host (D9); the ✕ is layout-only and never archives
- * the panel (D2).
+ * One pane: a native-view content state machine with only a six-pixel shell
+ * handle above it. The handle preserves an unobscured tree-drop target (D9)
+ * without duplicating the titlebar for every vertically stacked pane. Actions
+ * for the focused pane live in the global titlebar, outside native-view bounds.
  */
 export function PaneView({
   pane,
   focused,
   resident,
   layoutEpoch,
-  canSplitBelow,
   unresponsive,
   onDismissUnresponsive,
   onFocusPane,
-  onClosePane,
-  onSplitBelow,
-  onOpenBeside,
-  onShowAddressBar,
-  onPanelAction,
 }: PaneViewProps) {
-  const { panel: fullPanel } = useFullPanel(pane.panelId);
-  const title = fullPanel?.title ?? "Loading…";
-  // The header is the pane's drop target for tree drags (D9: chrome only in
-  // gutters and headers); the drop shows the dragged panel in this pane.
+  // Native WebContentsViews always composite above renderer DOM. Keep the drop
+  // target in reserved shell chrome rather than attempting a hover overlay.
   const { setNodeRef: setDropRef, isOver: isDropOver } = useDroppable({
     id: paneDropId(pane.id),
   });
@@ -71,80 +51,31 @@ export function PaneView({
         overflow: "hidden",
       }}
     >
-      <Flex
+      <Box
         ref={setDropRef}
-        align="center"
-        gap="1"
-        px="2"
         onPointerDown={() => onFocusPane(pane.id)}
+        role="button"
+        tabIndex={0}
+        aria-label="Focus pane; drop a panel here to replace its contents"
+        title="Drop a panel here"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onFocusPane(pane.id);
+          }
+        }}
         style={{
-          height: PANE_CHROME_HEIGHT,
+          height: PANE_DROP_HANDLE_HEIGHT,
           flexShrink: 0,
           backgroundColor: isDropOver
-            ? "var(--accent-a5)"
+            ? "var(--accent-8)"
             : focused
-              ? "var(--accent-a3)"
-              : "var(--gray-a2)",
-          userSelect: "none",
+              ? "var(--accent-a6)"
+              : "var(--gray-a4)",
+          cursor: "default",
+          transition: "background-color 120ms ease-out",
         }}
-      >
-        <Text
-          size="1"
-          weight={focused ? "medium" : "regular"}
-          truncate
-          style={{ flex: "1 1 0", minWidth: 0, cursor: "default" }}
-          onDoubleClick={onShowAddressBar}
-        >
-          {title}
-        </Text>
-        <IconButton
-          size="1"
-          variant="ghost"
-          color="gray"
-          aria-label="Split below"
-          disabled={!canSplitBelow}
-          title={canSplitBelow ? "Split below" : "Column is full"}
-          onClick={() => onSplitBelow(pane.id)}
-        >
-          <ViewHorizontalIcon />
-        </IconButton>
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger>
-            <IconButton size="1" variant="ghost" color="gray" aria-label="Pane menu">
-              <DotsHorizontalIcon />
-            </IconButton>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Content size="1">
-            <DropdownMenu.Item onSelect={() => onPanelAction(pane.panelId, "reload-panel")}>
-              Reload
-            </DropdownMenu.Item>
-            <DropdownMenu.Item onSelect={() => onPanelAction(pane.panelId, "toggle-pin")}>
-              Pin / Unpin
-            </DropdownMenu.Item>
-            <DropdownMenu.Item onSelect={() => onOpenBeside(pane.id)}>
-              Open in new column
-            </DropdownMenu.Item>
-            <DropdownMenu.Item disabled={!canSplitBelow} onSelect={() => onSplitBelow(pane.id)}>
-              Split below
-            </DropdownMenu.Item>
-            <DropdownMenu.Separator />
-            {/* Destructive tree operation, visually separated from layout ops (D2). */}
-            <DropdownMenu.Item color="red" onSelect={() => onPanelAction(pane.panelId, "archive")}>
-              Archive panel
-            </DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Root>
-        <IconButton
-          size="1"
-          variant="ghost"
-          color="gray"
-          aria-label="Close pane"
-          title="Close pane (panel stays in the tree)"
-          onClick={() => onClosePane(pane.id)}
-        >
-          <Cross2Icon />
-        </IconButton>
-      </Flex>
+      />
       <Flex direction="column" style={{ flex: "1 1 0", minHeight: 0, minWidth: 0 }}>
         <PaneContent
           paneId={pane.id}

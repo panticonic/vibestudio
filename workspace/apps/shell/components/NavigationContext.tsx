@@ -12,6 +12,17 @@ import type {
   LazyTitleNavigationData,
   LazyStatusNavigationData,
 } from "./navigationTypes";
+import type { PanelPlacementHint } from "../layout/types";
+
+export interface PanelNavigationOptions {
+  parentId?: string;
+  hint?: PanelPlacementHint;
+  intentId?: string;
+  /** Explicit user navigation replaces the pane the user most recently focused. */
+  target?: "focused-pane";
+}
+
+export type NavigateToPanelId = (panelId: string, options?: PanelNavigationOptions) => void;
 
 interface NavigationContextValue {
   mode: NavigationMode;
@@ -23,8 +34,8 @@ interface NavigationContextValue {
   setLazyTitleNavigation: (data: LazyTitleNavigationData | null) => void;
   lazyStatusNavigation: LazyStatusNavigationData | null;
   setLazyStatusNavigation: (data: LazyStatusNavigationData | null) => void;
-  navigateToId: (panelId: string) => void;
-  registerNavigateToId: (fn: (panelId: string) => void) => void;
+  navigateToId: NavigateToPanelId;
+  registerNavigateToId: (fn: NavigateToPanelId) => void;
 }
 
 const NavigationContext = createContext<NavigationContextValue | null>(null);
@@ -69,16 +80,16 @@ export function NavigationProvider({ children }: NavigationProviderProps) {
   );
 
   // Use ref for stable navigateToId callback (prevents listener cycling)
-  const navigateToIdFnRef = useRef<(panelId: string) => void>(() => {});
+  const navigateToIdFnRef = useRef<NavigateToPanelId>(() => {});
 
   const navigateToId = useCallback(
-    (panelId: string) => {
-      navigateToIdFnRef.current(panelId);
+    (panelId: string, options?: PanelNavigationOptions) => {
+      navigateToIdFnRef.current(panelId, options);
     },
     [] // Stable forever - no dependencies
   );
 
-  const registerNavigateToId = useCallback((fn: (panelId: string) => void) => {
+  const registerNavigateToId = useCallback((fn: NavigateToPanelId) => {
     navigateToIdFnRef.current = fn;
   }, []);
 

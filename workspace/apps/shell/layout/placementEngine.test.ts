@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyLayoutAction,
+  columnMinWidth,
   computeViewport,
   findPane,
   normalizeLayout,
@@ -63,7 +64,10 @@ function ancestors(id: string): string[] {
   return out;
 }
 
-function treeRelation(a: string, b: string): "self" | "ancestor" | "descendant" | "sibling" | "none" {
+function treeRelation(
+  a: string,
+  b: string
+): "self" | "ancestor" | "descendant" | "sibling" | "none" {
   if (!(a in PARENTS) || !(b in PARENTS)) return "none";
   if (OWNERS[a] !== OWNERS[b]) return "none"; // rule 8: owner boundaries
   if (a === b) return "self";
@@ -189,11 +193,7 @@ describe("atomic pane moves", () => {
   it("moves a stacked pane into an adjacent column without losing its panel", () => {
     const layout = layoutOf(["A", "B"], ["C"]);
     const paneId = paneAt(layout, 0, 1).id;
-    const next = applyLayoutAction(
-      layout,
-      { type: "move-pane-to-new-column", paneId },
-      makeEnv()
-    );
+    const next = applyLayoutAction(layout, { type: "move-pane-to-new-column", paneId }, makeEnv());
 
     expect(next.columns.map((column) => column.panes.map((pane) => pane.panelId))).toEqual([
       ["A"],
@@ -255,13 +255,13 @@ describe("show-panel (rule 1)", () => {
     assertInvariants(again);
   });
 
-  it("replaces in the nearest tree relative's pane and focuses it", () => {
+  it("uses the nearest tree relative for programmatic navigation without an explicit slot", () => {
     // B visible; showing C (child of B) should replace in B's pane, not A's.
     const layout = layoutOf(["A"], ["B"]);
     layout.focusedPaneId = "pane-0-0";
     const next = applyLayoutAction(
       layout,
-      { type: "show-panel", panelId: "C", origin: "tree-click" },
+      { type: "show-panel", panelId: "C", origin: "navigate-event" },
       makeEnv()
     );
     expect(paneAt(next, 1, 0).panelId).toBe("C");
@@ -269,6 +269,24 @@ describe("show-panel (rule 1)", () => {
     expect(next.focusedPaneId).toBe("pane-1-0");
     assertInvariants(next);
   });
+
+  it.each(["tree-click", "navigation-click"] as const)(
+    "%s replaces the focused child slot so tree and breadcrumbs can retarget it",
+    (origin) => {
+      const layout = layoutOf(["A"], ["B"]);
+      layout.focusedPaneId = "pane-1-0";
+      const next = applyLayoutAction(
+        layout,
+        { type: "show-panel", panelId: "B2", origin },
+        makeEnv()
+      );
+
+      expect(paneAt(next, 0, 0).panelId).toBe("A");
+      expect(paneAt(next, 1, 0).panelId).toBe("B2");
+      expect(next.focusedPaneId).toBe("pane-1-0");
+      assertInvariants(next);
+    }
+  );
 
   it("falls back to the focused pane when no relative is visible (owner boundary, rule 8)", () => {
     const layout = layoutOf(["A"], ["B"]);
@@ -340,7 +358,11 @@ describe("open-child (rule 2)", () => {
     const layout = layoutOf(["A"]);
     const env = makeEnv({ viewportWidth: 1000, minWidths: { B: 700 } });
     // 420 + 700 > 1000 → replace.
-    const next = applyLayoutAction(layout, { type: "open-child", panelId: "B", parentId: "A" }, env);
+    const next = applyLayoutAction(
+      layout,
+      { type: "open-child", panelId: "B", parentId: "A" },
+      env
+    );
     expect(next.columns).toHaveLength(1);
     expect(paneAt(next, 0, 0).panelId).toBe("B");
   });
@@ -378,6 +400,21 @@ describe("open-child (rule 2)", () => {
     );
     expect(next.columns).toHaveLength(1);
     expect(paneAt(next, 0, 0).panelId).toBe("C");
+  });
+
+  it("uses the focused pane as the visual anchor for a hidden parent's child", () => {
+    const layout = layoutOf(["D"]);
+    layout.focusedPaneId = "pane-0-0";
+    const next = applyLayoutAction(
+      layout,
+      { type: "open-child", panelId: "C", parentId: "B", hint: { disposition: "side" } },
+      makeEnv()
+    );
+
+    expect(next.columns.map((column) => column.panes.map((pane) => pane.panelId))).toEqual([
+      ["D"],
+      ["C"],
+    ]);
   });
 
   it("split-below stacks under the parent when the column has vertical room (rule 2c)", () => {
@@ -426,6 +463,96 @@ describe("open-child (rule 2)", () => {
     expect(twice.columns).toHaveLength(2);
     expect(findPane(twice, twice.focusedPaneId as string)?.pane.panelId).toBe("B");
     assertInvariants(twice);
+  });
+});
+
+describe("present-panel", () => {
+  it("lets an agent place an existing tree panel beside an explicit anchor when it fits", () => {
+    const layout = layoutOf(["A"]);
+    const next = applyLayoutAction(
+      layout,
+      {
+        type: "present-panel",
+        panelId: "B",
+        anchorPanelId: "A",
+        hint: { disposition: "side", preferredWidth: 640 },
+      },
+      makeEnv({ viewportWidth: 1400 })
+    );
+
+    expect(next.columns.map((column) => column.panes.map((pane) => pane.panelId))).toEqual([
+      ["A"],
+      ["B"],
+    ]);
+    expect(next.columns[1]?.widthFr).toBeGreaterThan(next.columns[0]?.widthFr ?? 0);
+  });
+
+  it("uses the focused pane as the anchor and replaces when side placement does not fit", () => {
+    const layout = layoutOf(["A"]);
+    const next = applyLayoutAction(
+      layout,
+      { type: "present-panel", panelId: "B", hint: { disposition: "side" } },
+      makeEnv({ viewportWidth: 700 })
+    );
+
+    expect(next.columns).toHaveLength(1);
+    expect(next.columns[0]?.panes[0]?.panelId).toBe("B");
+  });
+
+  it("uses and retains a focus-time minimum width override", () => {
+    const layout = layoutOf(["A"]);
+    const env = makeEnv({ viewportWidth: 1400 });
+    const next = applyLayoutAction(
+      layout,
+      {
+        type: "present-panel",
+        panelId: "B",
+        anchorPanelId: "A",
+        hint: { disposition: "side", minWidth: 700 },
+      },
+      env
+    );
+
+    expect(next.columns).toHaveLength(2);
+    expect(next.columns[1]?.panes[0]?.minWidthOverride).toBe(700);
+    expect(columnMinWidth(next.columns[1]!, env)).toBe(700);
+  });
+
+  it("uses a focus-time minimum width override in the side-placement fit test", () => {
+    const layout = layoutOf(["A"]);
+    const next = applyLayoutAction(
+      layout,
+      {
+        type: "present-panel",
+        panelId: "B",
+        anchorPanelId: "A",
+        hint: { disposition: "side", minWidth: 700 },
+      },
+      makeEnv({ viewportWidth: 1000 })
+    );
+
+    expect(next.columns).toHaveLength(1);
+    expect(next.columns[0]?.panes[0]).toMatchObject({
+      panelId: "B",
+      minWidthOverride: 700,
+    });
+  });
+
+  it("clears a presentation override when ordinary navigation replaces the pane", () => {
+    const layout = layoutOf(["A"]);
+    layout.columns[0]!.panes[0]!.minWidthOverride = 700;
+
+    const next = applyLayoutAction(
+      layout,
+      { type: "show-panel", panelId: "B", origin: "navigate-event" },
+      makeEnv()
+    );
+
+    expect(next.columns[0]?.panes[0]).toEqual({
+      id: "pane-0-0",
+      heightFr: 1,
+      panelId: "B",
+    });
   });
 });
 
@@ -659,14 +786,22 @@ describe("focus-pane and resize (rule 6)", () => {
 
   it("resize-columns writes normalized fractions, preserving proportions", () => {
     const layout = layoutOf(["A"], ["B"]);
-    const next = applyLayoutAction(layout, { type: "resize-columns", columnFrs: [3, 1] }, makeEnv());
+    const next = applyLayoutAction(
+      layout,
+      { type: "resize-columns", columnFrs: [3, 1] },
+      makeEnv()
+    );
     expect(colAt(next, 0).widthFr / colAt(next, 1).widthFr).toBeCloseTo(3);
     expect(colAt(next, 0).widthFr + colAt(next, 1).widthFr).toBeCloseTo(2);
   });
 
   it("resize-columns rejects mismatched lengths and sanitizes bad fractions", () => {
     const layout = layoutOf(["A"], ["B"]);
-    const rejected = applyLayoutAction(layout, { type: "resize-columns", columnFrs: [1] }, makeEnv());
+    const rejected = applyLayoutAction(
+      layout,
+      { type: "resize-columns", columnFrs: [1] },
+      makeEnv()
+    );
     expect(rejected.columns.map((c) => c.widthFr)).toEqual([1, 1]);
     const sanitized = applyLayoutAction(
       layout,
@@ -794,8 +929,12 @@ describe("validateRestoredLayout (§7)", () => {
       )
     ).toBeNull();
     expect(validateRestoredLayout(persisted(null), allPanels)).toBeNull();
-    expect(validateRestoredLayout(persisted({ columns: "nope", focusedPaneId: null }), allPanels)).toBeNull();
-    expect(validateRestoredLayout(persisted({ columns: [], focusedPaneId: 42 }), allPanels)).toBeNull();
+    expect(
+      validateRestoredLayout(persisted({ columns: "nope", focusedPaneId: null }), allPanels)
+    ).toBeNull();
+    expect(
+      validateRestoredLayout(persisted({ columns: [], focusedPaneId: 42 }), allPanels)
+    ).toBeNull();
   });
 
   it("rejects NaN / non-positive / missing fractions", () => {
@@ -806,6 +945,20 @@ describe("validateRestoredLayout (§7)", () => {
       const layout2 = goodLayout();
       (paneAt(layout2, 1, 0) as { heightFr: unknown }).heightFr = badFr;
       expect(validateRestoredLayout(persisted(layout2), allPanels)).toBeNull();
+    }
+  });
+
+  it("round-trips valid pane minimum-width overrides and rejects invalid ones", () => {
+    const layout = goodLayout();
+    paneAt(layout, 1, 0).minWidthOverride = 720;
+    expect(validateRestoredLayout(persisted(layout), allPanels)).toMatchObject({
+      columns: [{}, { panes: [{ minWidthOverride: 720 }] }],
+    });
+
+    for (const invalid of [NaN, 0, -1, Infinity, "720"]) {
+      const invalidLayout = goodLayout();
+      (paneAt(invalidLayout, 1, 0) as { minWidthOverride?: unknown }).minWidthOverride = invalid;
+      expect(validateRestoredLayout(persisted(invalidLayout), allPanels)).toBeNull();
     }
   });
 
@@ -872,7 +1025,11 @@ describe("property: random action sequences preserve invariants", () => {
     const kind = Math.floor(rand() * 8);
     switch (kind) {
       case 0:
-        return { type: "show-panel", panelId, origin: rand() < 0.5 ? "tree-click" : "navigate-event" };
+        return {
+          type: "show-panel",
+          panelId,
+          origin: rand() < 0.5 ? "tree-click" : "navigate-event",
+        };
       case 1:
         return {
           type: "open-child",
@@ -908,9 +1065,7 @@ describe("property: random action sequences preserve invariants", () => {
               type: "resize-panes",
               columnId: layout.columns.length > 0 ? pick(layout.columns).id : "missing",
               paneFrs:
-                layout.columns.length > 0
-                  ? pick(layout.columns).panes.map(() => rand() * 4)
-                  : [],
+                layout.columns.length > 0 ? pick(layout.columns).panes.map(() => rand() * 4) : [],
             };
     }
   }

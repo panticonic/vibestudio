@@ -1,11 +1,9 @@
 import { Fragment, useRef, useState } from "react";
 import { Flex } from "@radix-ui/themes";
 
-import type { PanelContextMenuAction } from "@vibestudio/shared/types";
-import type { LayoutColumn } from "../layout/types";
-import { PaneView, PANE_CHROME_HEIGHT } from "./PaneView";
+import { MIN_PANE_HEIGHT, type LayoutColumn } from "../layout/types";
+import { PaneView } from "./PaneView";
 import { ResizableDivider } from "./ResizableDivider";
-import { MIN_PANE_HEIGHT } from "../layout/types";
 
 interface PaneColumnProps {
   column: LayoutColumn;
@@ -13,19 +11,11 @@ interface PaneColumnProps {
   focusedPaneId: string | null;
   resident: boolean;
   layoutEpoch: number;
-  viewportHeight: number;
   unresponsivePanels: Set<string>;
   onDismissUnresponsive: (panelId: string) => void;
   onFocusPane: (paneId: string) => void;
-  onClosePane: (paneId: string) => void;
-  onSplitBelow: (paneId: string) => void;
-  onOpenBeside: (paneId: string) => void;
-  onShowAddressBar: () => void;
-  onPanelAction: (panelId: string, action: PanelContextMenuAction) => void;
   onResizePanes: (columnId: string, paneFrs: number[]) => void;
 }
-
-const PANE_DIVIDER_HEIGHT = 7;
 
 /** One column: a vertical stack of panes with draggable height dividers. */
 export function PaneColumn({
@@ -34,15 +24,9 @@ export function PaneColumn({
   focusedPaneId,
   resident,
   layoutEpoch,
-  viewportHeight,
   unresponsivePanels,
   onDismissUnresponsive,
   onFocusPane,
-  onClosePane,
-  onSplitBelow,
-  onOpenBeside,
-  onShowAddressBar,
-  onPanelAction,
   onResizePanes,
 }: PaneColumnProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -53,10 +37,6 @@ export function PaneColumn({
 
   const frs = liveFrs ?? column.panes.map((pane) => pane.heightFr);
   const totalFr = frs.reduce((sum, fr) => sum + fr, 0);
-  const canSplitBelow =
-    (column.panes.length + 1) * (MIN_PANE_HEIGHT + PANE_CHROME_HEIGHT + PANE_DIVIDER_HEIGHT) <=
-    viewportHeight;
-
   const dragBetween = (index: number, deltaPx: number) => {
     const height = containerRef.current?.getBoundingClientRect().height ?? 0;
     if (height <= 0) return;
@@ -122,15 +102,9 @@ export function PaneColumn({
             focused={focusedPaneId === pane.id}
             resident={resident}
             layoutEpoch={layoutEpoch}
-            canSplitBelow={canSplitBelow}
             unresponsive={unresponsivePanels.has(pane.panelId)}
             onDismissUnresponsive={onDismissUnresponsive}
             onFocusPane={onFocusPane}
-            onClosePane={onClosePane}
-            onSplitBelow={onSplitBelow}
-            onOpenBeside={onOpenBeside}
-            onShowAddressBar={onShowAddressBar}
-            onPanelAction={onPanelAction}
           />
         </Fragment>
       ))}

@@ -7,6 +7,7 @@ import {
   getBrowserNavigationIntentForAddressAction,
   getBrowserNavigationIntentForCommand,
   isPanelClosePointerButton,
+  PANEL_CONTEXT_MENU_SECTIONS,
   PANEL_KEYBOARD_ACCELERATORS,
 } from "./panelCommands.js";
 
@@ -104,5 +105,38 @@ describe("panelCommands", () => {
     expect(commands.map((command) => command.id)).not.toContain("back");
     expect(commands.map((command) => command.id)).not.toContain("open-external");
     expect(commands.find((command) => command.id === "archive")?.shortcut).toBe("Cmd/Ctrl+W");
+  });
+
+  it("exposes a single friendly reload and capability-aware pane actions", () => {
+    const commands = getAvailablePanelCommands({
+      chrome: {
+        panelId: "panel-1",
+        title: "Panel",
+        kind: "panel",
+        source: "panels/app",
+        contextId: "ctx",
+        displayAddress: "panels/app",
+        editableAddress: "panels/app",
+        isLoading: false,
+        canGoBack: false,
+        canGoForward: false,
+        mediaPlaying: false,
+      },
+      childCount: 2,
+      presentation: { kind: "stacked", canSplitBelow: true },
+    });
+
+    expect(commands.find((command) => command.id === "reload-panel")?.label).toBe("Reload");
+    expect(commands.find((command) => command.id === "open-child-beside")?.enabled).toBe(true);
+    expect(commands.find((command) => command.id === "add-child-below")?.enabled).toBe(true);
+    expect(commands.find((command) => command.id === "open-in-new-column")?.label).toBe(
+      "Move Pane to New Column"
+    );
+    expect(commands.find((command) => command.id === "close-pane")?.enabled).toBe(true);
+
+    const contextIds = PANEL_CONTEXT_MENU_SECTIONS.flat();
+    expect(contextIds.filter((id) => id.includes("reload"))).toEqual(["reload-panel"]);
+    expect(contextIds).not.toContain("rebuild-panel");
+    expect(contextIds).not.toContain("unload");
   });
 });

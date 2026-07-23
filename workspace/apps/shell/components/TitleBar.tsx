@@ -5,6 +5,7 @@ import {
   BoxIcon,
   ViewVerticalIcon,
   ChevronRightIcon,
+  ColumnsIcon,
   DividerVerticalIcon,
   PlusIcon,
   ArrowLeftIcon,
@@ -53,7 +54,6 @@ import type {
   PanelAncestor,
   DescendantSiblingGroup,
 } from "./navigationTypes";
-import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import {
   buildAddressAutocompleteItems,
   type AddressAutocompleteItem,
@@ -77,6 +77,11 @@ import {
 } from "../shell/client";
 import { useNativeShellOverlay } from "../shell/useNativeShellOverlay";
 import { BrowserFavicon } from "./BrowserFavicon";
+import {
+  preferredPaneChild,
+  type FocusedPaneChromeState,
+  type PaneChromeCommand,
+} from "./paneChrome";
 
 const isMac = /Mac|iPhone|iPad|iPod/i.test(
   (globalThis.navigator as { userAgentData?: { platform?: string } } | undefined)?.userAgentData
@@ -92,7 +97,9 @@ interface TitleBarProps {
   chromeState?: PanelChromeState | null;
   onChromeCommand?: (command: ChromeCommand) => void;
   onNavigateToId?: (panelId: string) => void;
-  onPanelAction?: (panelId: string, action: PanelContextMenuAction) => void;
+  onPanelContextMenu?: (panelId: string, position: { x: number; y: number }) => Promise<void>;
+  paneChromeState?: FocusedPaneChromeState | null;
+  onPaneChromeCommand?: (command: PaneChromeCommand) => void;
 }
 
 export function TitleBar({
@@ -100,7 +107,9 @@ export function TitleBar({
   chromeState,
   onChromeCommand,
   onNavigateToId,
-  onPanelAction,
+  onPanelContextMenu,
+  paneChromeState,
+  onPaneChromeCommand,
 }: TitleBarProps) {
   const {
     mode: navigationMode,
@@ -136,6 +145,35 @@ export function TitleBar({
   const handleHamburgerClick = (e: MouseEvent<HTMLButtonElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     void menu.showHamburger(getWindowPositionFromRect(rect));
+  };
+
+  const handleNewPanel = async () => {
+    if (paneChromeState && onPaneChromeCommand) {
+      onPaneChromeCommand({ type: "new-child" });
+      return;
+    }
+    try {
+      const result = await panel.createAboutPanel("new");
+      window.dispatchEvent(
+        new CustomEvent("shell-panel-created", {
+          detail: { panelId: result.id },
+        })
+      );
+    } catch (error) {
+      void notification.show({
+        type: "error",
+        title: "Couldn't create panel",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const handleOpenChildBeside = () => {
+    if (!paneChromeState) return;
+    const child = preferredPaneChild(paneChromeState);
+    if (child) {
+      onPaneChromeCommand?.({ type: "open-child-beside", panelId: child.panelId });
+    }
   };
 
   if (isMobile) {
@@ -212,28 +250,13 @@ export function TitleBar({
             gap="1"
             style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
           >
-            <Tooltip content="New panel">
+            <Tooltip content="New child panel">
               <IconButton
                 variant="ghost"
                 size="2"
                 className="app-touch-target"
-                onClick={async () => {
-                  try {
-                    const result = await panel.createAboutPanel("new");
-                    window.dispatchEvent(
-                      new CustomEvent("shell-panel-created", {
-                        detail: { panelId: result.id },
-                      })
-                    );
-                  } catch (error) {
-                    void notification.show({
-                      type: "error",
-                      title: "Couldn't create panel",
-                      message: error instanceof Error ? error.message : String(error),
-                    });
-                  }
-                }}
-                aria-label="New panel"
+                onClick={handleNewPanel}
+                aria-label="New child panel"
               >
                 <PlusIcon />
               </IconButton>
@@ -327,27 +350,30 @@ export function TitleBar({
             </IconButton>
           </Tooltip>
 
-          <Tooltip content="New panel (⌘/Ctrl+T)">
+          <Tooltip
+            content={
+              paneChromeState?.children.length
+                ? "Open an existing child panel beside"
+                : "No child panels to open beside"
+            }
+          >
             <IconButton
               variant="ghost"
               size="1"
-              onClick={async () => {
-                try {
-                  const result = await panel.createAboutPanel("new");
-                  window.dispatchEvent(
-                    new CustomEvent("shell-panel-created", {
-                      detail: { panelId: result.id },
-                    })
-                  );
-                } catch (error) {
-                  void notification.show({
-                    type: "error",
-                    title: "Couldn't create panel",
-                    message: error instanceof Error ? error.message : String(error),
-                  });
-                }
-              }}
-              aria-label="New panel"
+              disabled={!paneChromeState?.children.length}
+              onClick={handleOpenChildBeside}
+              aria-label="Open child panel beside"
+            >
+              <ColumnsIcon />
+            </IconButton>
+          </Tooltip>
+
+          <Tooltip content="New child panel beside (⌘/Ctrl+T)">
+            <IconButton
+              variant="ghost"
+              size="1"
+              onClick={handleNewPanel}
+              aria-label="New child panel beside"
             >
               <PlusIcon />
             </IconButton>
@@ -405,7 +431,7 @@ export function TitleBar({
               navigationData={navigationData}
               statusNavigation={statusNavigation}
               onNavigateToId={onNavigateToId}
-              onPanelAction={onPanelAction}
+              onPanelContextMenu={onPanelContextMenu}
               onEditAddress={() => setAddressBarVisible(true)}
             />
           )}
@@ -417,6 +443,18 @@ export function TitleBar({
           gap="1"
           style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
         >
+          {paneChromeState && (
+            <Tooltip content="Close pane (panel stays in the tree)">
+              <IconButton
+                variant="ghost"
+                size="1"
+                aria-label="Close pane"
+                onClick={() => onPaneChromeCommand?.({ type: "close-pane" })}
+              >
+                <Cross2Icon />
+              </IconButton>
+            </Tooltip>
+          )}
           <ThemeSettings />
           <ConnectionStatusBadge onOpenSettings={() => setConnectionSettingsOpen(true)} />
           {!isMac && <Box style={{ width: "138px" }} />}
@@ -436,7 +474,7 @@ interface BreadcrumbBarProps {
   navigationData?: LazyTitleNavigationData | null;
   statusNavigation?: LazyStatusNavigationData | null;
   onNavigateToId?: (panelId: string) => void;
-  onPanelAction?: (panelId: string, action: PanelContextMenuAction) => void;
+  onPanelContextMenu?: (panelId: string, position: { x: number; y: number }) => Promise<void>;
   /** Clicking the already-active breadcrumb switches to the address/controls view. */
   onEditAddress?: () => void;
 }
@@ -1392,7 +1430,7 @@ function BreadcrumbBar({
   navigationData,
   statusNavigation,
   onNavigateToId,
-  onPanelAction,
+  onPanelContextMenu,
   onEditAddress,
 }: BreadcrumbBarProps) {
   const ancestors = navigationData?.ancestors ?? [];
@@ -1446,27 +1484,21 @@ function BreadcrumbBar({
     refreshScrollState,
   ]);
 
-  const handlePanelContextMenu = async (
+  const handlePanelContextMenu = (
     e: MouseEvent<HTMLSpanElement>,
     panel: PanelSummary | PanelAncestor
   ) => {
     e.preventDefault();
     const rect = e.currentTarget.getBoundingClientRect();
-    const action = await menu.showPanelContext(panel.id, getWindowPositionFromRect(rect));
-    if (action) {
-      onPanelAction?.(panel.id, action);
-    }
+    void onPanelContextMenu?.(panel.id, getWindowPositionFromRect(rect));
   };
 
-  const handleCurrentPanelContextMenu = async (e: MouseEvent<HTMLSpanElement>) => {
+  const handleCurrentPanelContextMenu = (e: MouseEvent<HTMLSpanElement>) => {
     e.preventDefault();
     const currentId = navigationData?.currentId;
     if (!currentId) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const action = await menu.showPanelContext(currentId, getWindowPositionFromRect(rect));
-    if (action) {
-      onPanelAction?.(currentId, action);
-    }
+    void onPanelContextMenu?.(currentId, getWindowPositionFromRect(rect));
   };
 
   const showSiblingMenu = async (e: MouseEvent<HTMLButtonElement>, siblings: PanelSummary[]) => {

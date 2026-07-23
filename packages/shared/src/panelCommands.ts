@@ -49,16 +49,36 @@ export type PanelCommandId =
   | "copy-panel-id"
   | "open-external"
   | "duplicate"
+  | "open-child-beside"
   | "add-child"
+  | "add-child-below"
+  | "open-in-new-column"
+  | "close-pane"
   | "toggle-pin"
   | "unload"
   | "archive";
+
+/** Canonical desktop tree/breadcrumb context-menu grouping. */
+export const PANEL_CONTEXT_MENU_SECTIONS = [
+  ["back", "forward", "stop"],
+  ["reload-panel"],
+  ["open-child-beside", "add-child", "add-child-below", "open-in-new-column", "duplicate"],
+  ["copy-address", "open-external", "copy-panel-id"],
+  ["toggle-pin", "close-pane", "archive"],
+] as const satisfies ReadonlyArray<ReadonlyArray<PanelCommandId>>;
 
 export interface PanelCommandContext {
   chrome?: PanelChromeState | null;
   addressBarVisible?: boolean;
   /** Client-local pin state of the panel the command targets. */
   isPinned?: boolean;
+  /** Number of direct children available for one-click child presentation. */
+  childCount?: number;
+  /** Per-device presentation state; absent when the panel is not in a pane. */
+  presentation?: {
+    kind: "solo" | "stacked";
+    canSplitBelow: boolean;
+  };
 }
 
 export interface PanelCommandDefinition {
@@ -157,7 +177,7 @@ export function getPanelCommandDefinitions(
     },
     {
       id: "reload-panel",
-      label: "Reload Panel",
+      label: "Reload",
       shortcut: "Cmd/Ctrl+R",
       visible: true,
       enabled: Boolean(chrome),
@@ -220,10 +240,35 @@ export function getPanelCommandDefinitions(
       enabled: Boolean(chrome),
     },
     {
+      id: "open-child-beside",
+      label: "Open Child Panel Beside",
+      visible: (context.childCount ?? 0) > 0,
+      enabled: (context.childCount ?? 0) > 0,
+    },
+    {
       id: "add-child",
-      label: "Add Child",
+      label: "Create New Child Panel Beside",
       visible: true,
       enabled: Boolean(chrome),
+    },
+    {
+      id: "add-child-below",
+      label: "Create New Child Panel Below",
+      visible: Boolean(context.presentation?.canSplitBelow),
+      enabled: Boolean(chrome && context.presentation?.canSplitBelow),
+    },
+    {
+      id: "open-in-new-column",
+      label:
+        context.presentation?.kind === "stacked" ? "Move Pane to New Column" : "Open in New Column",
+      visible: context.presentation?.kind !== "solo",
+      enabled: Boolean(chrome),
+    },
+    {
+      id: "close-pane",
+      label: "Close Pane",
+      visible: Boolean(context.presentation),
+      enabled: Boolean(context.presentation),
     },
     {
       id: "toggle-pin",
@@ -241,7 +286,7 @@ export function getPanelCommandDefinitions(
     },
     {
       id: "archive",
-      label: "Archive",
+      label: "Archive Panel",
       shortcut: "Cmd/Ctrl+W",
       visible: true,
       enabled: Boolean(chrome),

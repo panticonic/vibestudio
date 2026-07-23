@@ -16,6 +16,11 @@ export interface LayoutPane {
   id: string; // stable, e.g. "pane-9c1d" — is the *position* id
   heightFr: number; // proportional height within the column
   panelId: string; // content currently shown here
+  /**
+   * Per-device minimum width override for the current panel presentation.
+   * Cleared whenever ordinary navigation replaces the pane's content.
+   */
+  minWidthOverride?: number;
 }
 
 // Local copy of the placement hint (§3.2) until the shared type lands in
@@ -39,6 +44,12 @@ export const PREFERRED_COLUMN_WIDTH = 560;
 export const MIN_PANE_HEIGHT = 160;
 export const SINGLE_COLUMN_BREAKPOINT = 900;
 export const COLUMN_DIVIDER_WIDTH = 7;
+/** Reserved shell chrome above each native pane; kept thin for drop targeting. */
+export const PANE_DROP_HANDLE_HEIGHT = 6;
+/** A horizontal pane divider uses the same hit-target thickness as column dividers. */
+export const PANE_DIVIDER_HEIGHT = COLUMN_DIVIDER_WIDTH;
+/** Per-pane vertical overhead used by the placement engine's fit calculation. */
+export const PANE_VERTICAL_CHROME_HEIGHT = PANE_DROP_HANDLE_HEIGHT + PANE_DIVIDER_HEIGHT;
 export const PARKED_EDGE_TAB_WIDTH = 32;
 
 function mintId(prefix: string): string {

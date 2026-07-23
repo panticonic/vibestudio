@@ -44,9 +44,8 @@ import {
   type ShellAccountProfile,
   type WorkspacePresenceEntry,
 } from "../shell/hooks/index.js";
-import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import { isPanelClosePointerButton } from "@vibestudio/shared/panelCommands";
-import { menu, notification, panel } from "../shell/client.js";
+import { notification, panel } from "../shell/client.js";
 import {
   activeWorkspaceNameAtom,
   pinnedPanelIdsAtom,
@@ -332,7 +331,7 @@ interface SortableTreeItemProps {
   isTouch: boolean;
   onSelect: (panelId: string, options?: { openBeside?: boolean }) => void;
   onToggleCollapse: (panelId: string) => void;
-  onPanelAction?: (panelId: string, action: PanelContextMenuAction) => void;
+  onPanelContextMenu?: (panelId: string, position: { x: number; y: number }) => Promise<void>;
   onArchive?: (panelId: string) => void;
   onAddChild?: (panelId: string) => void;
   onIndent: (panelId: string) => void;
@@ -352,7 +351,7 @@ const SortableTreeItem = memo(
     isTouch,
     onSelect,
     onToggleCollapse,
-    onPanelAction,
+    onPanelContextMenu,
     onArchive,
     onAddChild,
     onIndent,
@@ -389,15 +388,12 @@ const SortableTreeItem = memo(
     const showCount = hasChildren && collapsed && !showActions;
 
     const handleContextMenu = useCallback(
-      async (e: React.MouseEvent) => {
+      (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        const action = await menu.showPanelContext(panel.id, getWindowPositionFromMouseEvent(e));
-        if (action) {
-          onPanelAction?.(panel.id, action);
-        }
+        void onPanelContextMenu?.(panel.id, getWindowPositionFromMouseEvent(e));
       },
-      [panel.id, onPanelAction]
+      [panel.id, onPanelContextMenu]
     );
 
     const handleToggleExpand = useCallback(
@@ -695,7 +691,7 @@ const SortableTreeItem = memo(
       prev.isTouch === next.isTouch &&
       prev.onSelect === next.onSelect &&
       prev.onToggleCollapse === next.onToggleCollapse &&
-      prev.onPanelAction === next.onPanelAction &&
+      prev.onPanelContextMenu === next.onPanelContextMenu &&
       prev.onArchive === next.onArchive &&
       prev.onAddChild === next.onAddChild &&
       prev.onIndent === next.onIndent &&
@@ -964,7 +960,7 @@ interface LazyPanelTreeSidebarProps {
   visibleIds?: ReadonlySet<string>;
   ancestorIds: string[];
   onSelect: (panelId: string, options?: { openBeside?: boolean }) => void;
-  onPanelAction?: (panelId: string, action: PanelContextMenuAction) => void;
+  onPanelContextMenu?: (panelId: string, position: { x: number; y: number }) => Promise<void>;
   onArchive?: (panelId: string) => void;
 }
 
@@ -973,7 +969,7 @@ export function LazyPanelTreeSidebar({
   visibleIds,
   ancestorIds,
   onSelect,
-  onPanelAction,
+  onPanelContextMenu,
   onArchive,
 }: LazyPanelTreeSidebarProps) {
   const activeWorkspaceName = useAtomValue(activeWorkspaceNameAtom);
@@ -1242,7 +1238,7 @@ export function LazyPanelTreeSidebar({
                   isTouch={isTouch}
                   onSelect={onSelect}
                   onToggleCollapse={toggleCollapse}
-                  onPanelAction={onPanelAction}
+                  onPanelContextMenu={onPanelContextMenu}
                   onArchive={onArchive}
                   onAddChild={handleAddChild}
                   onIndent={indentPanel}

@@ -12,11 +12,8 @@ import {
   type LayoutEnv,
 } from "./placementEngine";
 import { fallbackCandidatesFor, minWidthOfPanel, nearestVisibleRelativePane } from "./treeEnv";
-import { mintColumnId, mintPaneId } from "./types";
+import { mintColumnId, mintPaneId, PANE_VERTICAL_CHROME_HEIGHT } from "./types";
 import type { PanelLayout, PersistedLayout } from "./types";
-
-/** Micro-header + divider chrome per pane, for the vertical fit tests (§4.2c). */
-export const PANE_CHROME_HEIGHT_FOR_FIT = 35;
 
 const PERSIST_DEBOUNCE_MS = 500;
 const DELETED_PANEL_DEBOUNCE_MS = 50;
@@ -55,7 +52,10 @@ export interface UsePanelLayoutResult {
  * restore (§7), intent dedup (§4.9), and tree-reconcile on panel deletion
  * (§4.5). The engine is the single writer of layout state.
  */
-export function usePanelLayout(viewportWidth: number, viewportHeight: number): UsePanelLayoutResult {
+export function usePanelLayout(
+  viewportWidth: number,
+  viewportHeight: number
+): UsePanelLayoutResult {
   const { panelMap, parentMap, initialized } = usePanelTree();
   const { panels: rootPanels, loading: rootLoading } = useRootPanels();
 
@@ -73,7 +73,7 @@ export function usePanelLayout(viewportWidth: number, viewportHeight: number): U
     () => ({
       viewportWidth,
       viewportHeight,
-      paneChromeHeight: PANE_CHROME_HEIGHT_FOR_FIT,
+      paneChromeHeight: PANE_VERTICAL_CHROME_HEIGHT,
       firstRootPanelId: () => rootPanelsRef.current[0]?.id ?? null,
       minWidthOf: (panelId) => minWidthOfPanel(mapsRef.current, panelId),
       treeRelation: () => "none",

@@ -2,7 +2,6 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { Box, Flex, Text } from "@radix-ui/themes";
 
-import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import {
   MIN_COLUMN_WIDTH,
   PARKED_EDGE_TAB_WIDTH,
@@ -22,16 +21,10 @@ interface ColumnRowProps {
   parkedLeft: string[];
   parkedRight: string[];
   layoutEpoch: number;
-  viewportHeight: number;
   unresponsivePanels: Set<string>;
   onDismissUnresponsive: (panelId: string) => void;
   onFocusPane: (paneId: string) => void;
   onFocusColumn: (columnId: string) => void;
-  onClosePane: (paneId: string) => void;
-  onSplitBelow: (paneId: string) => void;
-  onOpenBeside: (paneId: string) => void;
-  onShowAddressBar: () => void;
-  onPanelAction: (panelId: string, action: PanelContextMenuAction) => void;
   onResizeColumns: (columnFrs: number[]) => void;
   onResizePanes: (columnId: string, paneFrs: number[]) => void;
   /** Called when a residency transition settles, to force a surface resync (§5.4). */
@@ -156,16 +149,10 @@ export function ColumnRow({
   parkedLeft,
   parkedRight,
   layoutEpoch,
-  viewportHeight,
   unresponsivePanels,
   onDismissUnresponsive,
   onFocusPane,
   onFocusColumn,
-  onClosePane,
-  onSplitBelow,
-  onOpenBeside,
-  onShowAddressBar,
-  onPanelAction,
   onResizeColumns,
   onResizePanes,
   onTransitionSettled,
@@ -177,7 +164,11 @@ export function ColumnRow({
   const columnMinWidths = residentColumns.map((column) =>
     column.panes.reduce(
       (minimum, pane) =>
-        Math.max(minimum, minWidthOfPanel({ panelMap, parentMap }, pane.panelId)),
+        Math.max(
+          minimum,
+          minWidthOfPanel({ panelMap, parentMap }, pane.panelId),
+          pane.minWidthOverride ?? 0
+        ),
       MIN_COLUMN_WIDTH
     )
   );
@@ -282,15 +273,9 @@ export function ColumnRow({
             focusedPaneId={layout.focusedPaneId}
             resident={!transitioning}
             layoutEpoch={layoutEpoch}
-            viewportHeight={viewportHeight}
             unresponsivePanels={unresponsivePanels}
             onDismissUnresponsive={onDismissUnresponsive}
             onFocusPane={onFocusPane}
-            onClosePane={onClosePane}
-            onSplitBelow={onSplitBelow}
-            onOpenBeside={onOpenBeside}
-            onShowAddressBar={onShowAddressBar}
-            onPanelAction={onPanelAction}
             onResizePanes={onResizePanes}
           />
           {treeDragActiveId !== null && <GutterDropZone columnId={column.id} />}

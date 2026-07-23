@@ -436,7 +436,11 @@ export type PanelContextMenuAction =
   | "copy-panel-id"
   | "open-external"
   | "duplicate"
+  | "open-child-beside"
   | "add-child"
+  | "add-child-below"
+  | "open-in-new-column"
+  | "close-pane"
   | "toggle-pin"
   | "unload"
   | "archive";
