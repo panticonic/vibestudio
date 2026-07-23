@@ -883,7 +883,8 @@ export class ShellClient {
         });
         const observed = await this.waitForHostTargetLaunchSession(
           session.sessionId,
-          Math.max(1, deadline - Date.now())
+          Math.max(1, deadline - Date.now()),
+          session.updatedAt
         );
         if (observed) {
           session = observed;
@@ -902,31 +903,41 @@ export class ShellClient {
 
   private async waitForHostTargetLaunchSession(
     sessionId: string,
-    timeoutMs: number
+    timeoutMs: number,
+    observedUpdatedAt: number
   ): Promise<HostTargetLaunchSessionSnapshot | null> {
     const eventNames = [HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT] as const;
     const needsSubscribe = !this.hostTargetReadinessEventsSubscribed;
     if (needsSubscribe) this.hostTargetReadinessEventsSubscribed = true;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let unsubs: Array<() => void> = [];
+    let resolvePending!: (value: HostTargetLaunchSessionSnapshot | null) => void;
     const pending = new Promise<HostTargetLaunchSessionSnapshot | null>((resolve) => {
-      let settled = false;
-      let timer: ReturnType<typeof setTimeout> | null = null;
-      let unsubs: Array<() => void> = [];
-      const finish = (value: HostTargetLaunchSessionSnapshot | null) => {
-        if (settled) return;
-        settled = true;
-        if (timer) clearTimeout(timer);
-        for (const unsub of unsubs) unsub();
-        resolve(value);
-      };
-      timer = setTimeout(() => finish(null), timeoutMs);
-      unsubs = eventNames.map((name) =>
-        this.events.on(name, (event) => {
-          if (isLaunchSessionEventFor(sessionId, name, event)) finish(event);
-        })
-      );
+      resolvePending = resolve;
     });
+    const finish = (value: HostTargetLaunchSessionSnapshot | null) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      for (const unsub of unsubs) unsub();
+      resolvePending(value);
+    };
+    timer = setTimeout(() => finish(null), timeoutMs);
+    unsubs = eventNames.map((name) =>
+      this.events.on(name, (event) => {
+        if (isLaunchSessionEventFor(sessionId, name, event)) finish(event);
+      })
+    );
     if (needsSubscribe) {
       await Promise.all(eventNames.map((name) => this.events.subscribe(name).catch(() => {})));
+    }
+    // The launch may settle between beginHostTargetLaunch() returning and the
+    // server acknowledging our event subscription. Read once after subscribing
+    // to close that gap; subsequent changes are covered by the live event.
+    const current = await this.workspaces.getHostTargetLaunchSession(sessionId);
+    if (current && current.updatedAt !== observedUpdatedAt) {
+      finish(current);
     }
     return await pending;
   }
