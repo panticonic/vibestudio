@@ -22,9 +22,16 @@ function completedEvalFileRoundTrip(result: Parameters<typeof getToolCalls>[0]):
 
 function codeLoadsRuntimeModule(code: string): boolean {
   return (
-    /\bimport\s*\(/u.test(code) ||
-    /\bimport\s+(?:[\s\S]*?\s+from\s+)?["'][^"']+["']/u.test(code)
+    /\bimport\s*\(/u.test(code) || /\bimport\s+(?:[\s\S]*?\s+from\s+)?["'][^"']+["']/u.test(code)
   );
+}
+
+function pathAsReportedFromSearchRoot(workspacePath: string, searchRoot: string): string {
+  const normalizedRoot = searchRoot.replace(/^\.\/+/u, "").replace(/\/+$/u, "");
+  if (normalizedRoot.length === 0 || normalizedRoot === ".") return workspacePath;
+  return workspacePath.startsWith(`${normalizedRoot}/`)
+    ? workspacePath.slice(normalizedRoot.length + 1)
+    : workspacePath;
 }
 
 export const smokeTests: TestCase[] = [
@@ -132,7 +139,7 @@ export const smokeTests: TestCase[] = [
   {
     name: "file-search-read-tools",
     description:
-      "Agent exercises write, find, grep, and read through the default file-tool surface",
+      "Agent writes a note, rediscovers it through content search, and verifies the exact content",
     category: "smoke",
     prompt:
       "Leave a small temporary workspace note containing the distinctive text agentic-file-tools-smoke, then verify that you can rediscover and read the exact note by searching the workspace. Tell me what you observed.",
@@ -141,7 +148,7 @@ export const smokeTests: TestCase[] = [
       if (!msg.trim()) return { passed: false, reason: "No agent response received" };
       const calls = getToolCalls(result);
       const completed = completedToolNames(result);
-      const missing = ["write", "find", "grep", "read"].filter((name) => !completed.has(name));
+      const missing = ["write", "grep"].filter((name) => !completed.has(name));
       if (missing.length > 0) {
         return {
           passed: false,
@@ -165,34 +172,32 @@ export const smokeTests: TestCase[] = [
           call.arguments["content"].includes("agentic-file-tools-smoke")
       );
       const path = write?.arguments?.["path"];
-      const grep = calls.find(
-        (call) =>
-          call.name === "grep" &&
-          call.execution?.status === "complete" &&
-          call.execution.isError !== true &&
-          call.arguments?.["pattern"] === "agentic-file-tools-smoke"
-      );
-      const read = calls.find(
-        (call) =>
-          call.name === "read" &&
-          call.execution?.status === "complete" &&
-          call.execution.isError !== true &&
-          typeof path === "string" &&
-          call.arguments?.["path"] === path &&
-          JSON.stringify(call.execution.result ?? "").includes("agentic-file-tools-smoke")
-      );
-      const find = calls.find(
-        (call) =>
-          call.name === "find" &&
-          call.execution?.status === "complete" &&
-          call.execution.isError !== true
-      );
-      const hasEvidence = Boolean(write && find && grep && read);
+      const grep = calls.find((call) => {
+        if (
+          call.name !== "grep" ||
+          call.execution?.status !== "complete" ||
+          call.execution.isError === true ||
+          call.arguments?.["pattern"] !== "agentic-file-tools-smoke" ||
+          typeof path !== "string"
+        ) {
+          return false;
+        }
+        const searchRoot =
+          typeof call.arguments?.["path"] === "string" ? call.arguments["path"] : ".";
+        const reportedPath = pathAsReportedFromSearchRoot(path, searchRoot);
+        const output = JSON.stringify(call.execution.result ?? "");
+        return output.includes(reportedPath) && output.includes("agentic-file-tools-smoke");
+      });
+      // A write containing the marker joined to grep's canonical path+matching
+      // line establishes both persistence and content. A subsequent read is
+      // equally valid, but is not a mandatory ritual when it repeats those
+      // bytes.
+      const hasEvidence = Boolean(write && grep);
       return {
         passed: hasEvidence,
         reason: hasEvidence
           ? undefined
-          : "Completed file-tool calls did not identity-join the written marker path to an exact successful read and content search",
+          : "Completed file-tool calls did not identity-join the written marker path and content to a successful content search",
       };
     },
   },

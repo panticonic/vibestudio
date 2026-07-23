@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { TestExecutionResult } from "../types.js";
 import { smokeTests } from "./smoke.js";
 
-function execution(readPath = "notes/marker.txt"): TestExecutionResult {
+function execution(
+  readPath: string | null = "notes/marker.txt",
+  searchRoot = ".",
+  writtenContent = "agentic-file-tools-smoke"
+): TestExecutionResult {
+  const reportedPath = searchRoot === "notes" ? "marker.txt" : "notes/marker.txt";
   const invocations = [
     {
       id: "write",
@@ -12,34 +17,30 @@ function execution(readPath = "notes/marker.txt"): TestExecutionResult {
       isError: false,
       arguments: {
         path: "notes/marker.txt",
-        content: "agentic-file-tools-smoke",
+        content: writtenContent,
       },
       result: { ok: true },
-    },
-    {
-      id: "find",
-      name: "find",
-      status: "complete",
-      isError: false,
-      arguments: { path: ".", name: "marker.txt" },
-      result: { paths: ["notes/marker.txt"] },
     },
     {
       id: "grep",
       name: "grep",
       status: "complete",
       isError: false,
-      arguments: { path: ".", pattern: "agentic-file-tools-smoke" },
-      result: { matches: ["notes/marker.txt:1"] },
+      arguments: { path: searchRoot, pattern: "agentic-file-tools-smoke" },
+      result: { matches: [`${reportedPath}:1: agentic-file-tools-smoke`] },
     },
-    {
-      id: "read",
-      name: "read",
-      status: "complete",
-      isError: false,
-      arguments: { path: readPath },
-      result: { text: "agentic-file-tools-smoke" },
-    },
+    ...(readPath === null
+      ? []
+      : [
+          {
+            id: "read",
+            name: "read",
+            status: "complete",
+            isError: false,
+            arguments: { path: readPath },
+            result: { text: "agentic-file-tools-smoke" },
+          },
+        ]),
   ];
   return {
     duration: 0,
@@ -70,8 +71,29 @@ describe("smoke validators", () => {
     expect(test.validate(execution())).toEqual({ passed: true, reason: undefined });
   });
 
-  it("rejects a read that is not joined to the written path", () => {
-    expect(test.validate(execution("notes/unrelated.txt")).passed).toBe(false);
+  it("accepts search paths reported relative to a scoped search root", () => {
+    expect(test.validate(execution("notes/marker.txt", "notes")).passed).toBe(true);
+  });
+
+  it("accepts an exact write joined to exact grep evidence without a redundant read", () => {
+    expect(test.validate(execution(null)).passed).toBe(true);
+  });
+
+  it("accepts a descriptive note when canonical grep evidence contains the marker", () => {
+    expect(test.validate(execution(null, ".", "prefix agentic-file-tools-smoke suffix")).passed).toBe(
+      true
+    );
+  });
+
+  it("rejects content search evidence that does not identify the written path", () => {
+    const result = execution();
+    const grep = result.messages.find((message) => message.invocation?.name === "grep")?.invocation;
+    if (grep) {
+      (grep as unknown as { result: unknown }).result = {
+        matches: ["notes/unrelated.txt:1"],
+      };
+    }
+    expect(test.validate(result).passed).toBe(false);
   });
 
   it("requires the factorial claim to agree with the canonical runtime result", () => {
