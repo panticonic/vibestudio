@@ -9875,47 +9875,6 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
-      "id": "direct:workspace/workers/news-agent/news-agent-worker.ts:startDeepDive",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/workers/news-agent/news-agent-worker.ts",
-      "source": "workers/news-agent",
-      "method": "startDeepDive",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/workers/news-agent/news-agent-worker.ts"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "write",
-      "tier": "open",
-      "capability": "rpc:startDeepDive",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "allOf(capability(code,rpc:startDeepDive),workspace-member)",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
-    },
-    {
       "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:acknowledgeInvite",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/pubsub-channel/channel-do.ts",
