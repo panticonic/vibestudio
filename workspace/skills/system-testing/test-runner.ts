@@ -6,6 +6,7 @@ import type {
   TestSuiteResultEntry,
   ToolFailureSummary,
 } from "./types.js";
+import { isPreExecutionArgumentRejection } from "./tool-failure-classification.js";
 import type { HeadlessRunner } from "./runner.js";
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
@@ -20,7 +21,6 @@ const NON_INTERACTIVE_TERMINAL_WAIT_REASONS = [
 type MaybePromise<T> = T | Promise<T>;
 type RunSuiteFilter = { category?: string; name?: string; concurrency?: number };
 const DEFAULT_PARALLEL_CONCURRENCY = 4;
-const INTERRUPT_TIMEOUT_MS = 10_000;
 
 export class TestRunner {
   private cancellationError: Error | null = null;
@@ -359,19 +359,17 @@ export class TestRunner {
     } finally {
       try {
         if (session) {
-          // A failed/timed-out test may still own an active eval or model call.
-          // Await retirement before releasing its resource lock so subsequent
-          // tests cannot race background mutations from the failed trajectory.
-          const awaitRemoteCleanup = Boolean(outcome?.execution.error);
-          await session.close({
-            waitForRemoteCleanup: awaitRemoteCleanup,
-          });
+          // Remote retirement is part of a test's terminal state. Passing turns
+          // can still own channel delivery, eval, model, and runtime resources;
+          // releasing the fixture/lock before their acknowledged teardown makes
+          // later tests race work from an earlier trajectory.
+          await session.close();
           if (outcome) {
             outcome.execution.diagnostics = {
               ...(outcome.execution.diagnostics ?? {}),
               headlessCleanup: {
-                mode: awaitRemoteCleanup ? "awaited" : "detached",
-                remoteCleanupAwaited: awaitRemoteCleanup,
+                mode: "awaited",
+                remoteCleanupAwaited: true,
               },
             };
           }
@@ -488,16 +486,11 @@ export class TestRunner {
   private async interruptActiveTurn(session: HeadlessSession): Promise<void> {
     const agentId = session.agentTargetId ?? session.snapshot().agentTargetId;
     if (!agentId) return;
-    const controller = new AbortController();
-    await this.withTimeout(
-      session.interrupt(agentId, {
-        timeoutMs: INTERRUPT_TIMEOUT_MS,
-        signal: controller.signal,
-      }),
-      INTERRUPT_TIMEOUT_MS,
-      `Timed out interrupting agent ${agentId}`,
-      controller
-    );
+    // Cancellation owns this terminal barrier. Applying the test deadline (or
+    // a second hidden deadline) here can delete the agent context while its
+    // model executor and pub/sub delivery are still unwinding. The model
+    // executor is abortable; await its actual terminal before teardown.
+    await session.interrupt(agentId);
   }
 
   private async captureAndAssertModelExecution(
@@ -764,8 +757,11 @@ function classifyExpectedToolFailures(
   failures: ToolFailureSummary[],
   expected: TestCase["expectedToolFailures"]
 ): ToolFailureSummary[] {
-  if (!expected?.length) return failures;
   return failures.map((failure) => {
+    if (isPreExecutionArgumentRejection(failure.error, failure.resultSummary)) {
+      return { ...failure, expected: true, classification: "argument-rejection" };
+    }
+    if (!expected?.length) return failure;
     const text = `${failure.error ?? ""}\n${failure.resultSummary ?? ""}`.toLowerCase();
     const matched = expected.some(
       (candidate) =>

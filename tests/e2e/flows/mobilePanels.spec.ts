@@ -15,10 +15,12 @@ import YAML from "yaml";
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   ensureHostedShellReady,
+  callTerminalPanel,
   clickPanelSelector,
   clickPanelText,
   createManagedTestWorkspace,
   getPanelLayoutAudit,
+  getPanelDiagnostics,
   getPanelText,
   createPanel,
   getPanelTree,
@@ -27,6 +29,7 @@ import {
   isPanelReady,
   launchTestApp,
   removeManagedTestWorkspace,
+  startPanelDiagnostics,
   type TestApp,
 } from "../../setup/electronSetup";
 
@@ -542,11 +545,12 @@ async function ensurePanelSource(
     .catch(() => null);
 
   if (existingPanelId) {
-    await app.evaluate((_electron, panelId) => {
-      const testApi = (globalThis as { __testApi?: { focusPanel: (id: string) => void } })
-        .__testApi;
+    await app.evaluate(async (_electron, panelId) => {
+      const testApi = (
+        globalThis as { __testApi?: { focusPanel: (id: string) => Promise<unknown> } }
+      ).__testApi;
       if (!testApi) throw new Error("Test API not available");
-      testApi.focusPanel(panelId);
+      await testApi.focusPanel(panelId);
     }, existingPanelId);
     await approveShellPrompts(app);
     await expect
@@ -746,6 +750,45 @@ async function approveShellPrompts(app: ElectronApplication): Promise<void> {
   );
 }
 
+async function diagnosePendingApprovalResolution(
+  app: ElectronApplication
+): Promise<
+  Array<{ approvalId: string; before: string[]; choice?: string; outcome: string; after: string[] }>
+> {
+  const pending = await listPendingApprovals(app);
+  const attempts: Array<{
+    approvalId: string;
+    before: string[];
+    choice?: string;
+    outcome: string;
+    after: string[];
+  }> = [];
+  for (const approval of pending) {
+    const before = pending.map((item) => item.approvalId);
+    const choice =
+      approval.kind === "userland"
+        ? (approval.options?.find((option) => option.tone === "primary")?.value ??
+          approval.options?.find((option) => option.tone !== "danger")?.value ??
+          approval.options?.[0]?.value)
+        : undefined;
+    let outcome = "resolved";
+    try {
+      await resolveApproval(app, approval);
+    } catch (reason) {
+      outcome = reason instanceof Error ? reason.message : String(reason);
+    }
+    const after = (await listPendingApprovals(app).catch(() => [])).map((item) => item.approvalId);
+    attempts.push({
+      approvalId: approval.approvalId,
+      before,
+      ...(choice ? { choice } : {}),
+      outcome,
+      after,
+    });
+  }
+  return attempts;
+}
+
 test.describe("Mobile Panels", () => {
   test.describe.configure({ mode: "serial", timeout: 600_000 });
 
@@ -894,24 +937,67 @@ test.describe("Mobile Panels", () => {
     await setMobileWindow(testApp!.app);
     await ensureShellStackMode(testApp!.app);
     const panelId = await ensurePanelSource(testApp!.app, "panels/terminal");
+    await startPanelDiagnostics(testApp!.app, panelId);
     await approveShellPrompts(testApp!.app);
 
-    await expect
-      .poll(
-        async () => {
-          await approveShellPrompts(testApp!.app);
-          // The panel can mount before the newly approved native shell
-          // extension finishes its first build. Exercise its user-facing
-          // recovery path once the approval/build race settles.
-          await clickPanelText(testApp!.app, panelId, "button", "Retry").catch(() => false);
-          return getPanelText(testApp!.app, panelId);
-        },
-        {
-          timeout: 60_000,
-          intervals: [500, 1000, 2000],
-        }
-      )
-      .toMatch(/(?:\$|#|>\s*)|(?:\d+x\d+)/);
+    try {
+      await expect
+        .poll(
+          async () => {
+            await approveShellPrompts(testApp!.app);
+            // The panel can mount before the newly approved native shell
+            // extension finishes its first build. Exercise its user-facing
+            // recovery path once the approval/build race settles.
+            await clickPanelText(testApp!.app, panelId, "button", "Retry").catch(() => false);
+            return getPanelText(testApp!.app, panelId);
+          },
+          {
+            timeout: 60_000,
+            intervals: [500, 1000, 2000],
+          }
+        )
+        .toMatch(/(?:\$|#|>\s*)|(?:\d+x\d+)/);
+    } catch (error) {
+      const units = (await rpcCall(testApp!.app, "workspace", "units.list").catch((reason) => ({
+        error: reason instanceof Error ? reason.message : String(reason),
+      }))) as unknown;
+      const shellUnits = Array.isArray(units)
+        ? units.filter((unit) => {
+            const row = unit as { name?: unknown; source?: unknown };
+            return String(row.name ?? row.source ?? "").includes("shell");
+          })
+        : units;
+      console.log(
+        "MOBILE_TERMINAL_STARTUP_DIAGNOSTICS",
+        JSON.stringify(
+          {
+            text: await getPanelText(testApp!.app, panelId).catch(() => ""),
+            pendingApprovals: await listPendingApprovals(testApp!.app).catch(() => []),
+            approvalResolutionAttempts: await diagnosePendingApprovalResolution(testApp!.app).catch(
+              (reason) => [
+                {
+                  outcome: reason instanceof Error ? reason.message : String(reason),
+                },
+              ]
+            ),
+            shellUnits,
+            shellLogs: await rpcCall(testApp!.app, "workspace", "units.logs", [
+              "@workspace-extensions/shell",
+              { limit: 200 },
+            ]).catch((reason) => ({
+              error: reason instanceof Error ? reason.message : String(reason),
+            })),
+            sessions: await callTerminalPanel(testApp!.app, panelId, "listSessions").catch(
+              (reason) => ({ error: reason instanceof Error ? reason.message : String(reason) })
+            ),
+            panelDiagnostics: await getPanelDiagnostics(testApp!.app, panelId).catch(() => []),
+          },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
     await expectPanelFitsMobileViewport(testApp!.app, panelId);
   });
 

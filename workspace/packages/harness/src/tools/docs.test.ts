@@ -108,4 +108,28 @@ describe("renderEntry (readable docs_open text)", () => {
     expect(text).toContain("await webhooks.createSubscription(...)");
     expect(text).not.toContain("rpc.call");
   });
+
+  it("puts live protocol resolution and installed authority on workspace service roots", () => {
+    const entry: CatalogEntry = {
+      id: "workspace:notes",
+      surface: "workspace",
+      qualifiedName: "notes",
+      title: "Notes",
+      members: ["get"],
+      access: {
+        protocols: ["example.notes.v1"],
+        capability: "workspace-service:notes",
+        source: "workers/notes",
+      },
+    };
+
+    const text = renderEntry(entry);
+    expect(text).toContain("Protocol: example.notes.v1");
+    expect(text).toContain('"workspace-service:notes"');
+    expect(text).toContain('tier "gated"');
+    expect(text).toContain('RPC tier "open" is a separate receiver policy');
+    expect(text).toContain('workers.resolveService("example.notes.v1")');
+    expect(text).toContain('import { workers, rpc } from "@workspace/runtime"');
+    expect(text).toContain('runtime.workers.resolveService("example.notes.v1")');
+  });
 });

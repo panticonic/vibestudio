@@ -29,6 +29,11 @@ export const BUILDABLE_WORKER_WORKSPACE_REPO_FIXTURE = {
   section: "workers",
 } as const satisfies WorkspaceRepoFixtureSpec;
 
+export const BUILDABLE_REGULAR_WORKER_WORKSPACE_REPO_FIXTURE = {
+  kind: "buildable-regular-worker",
+  section: "workers",
+} as const satisfies WorkspaceRepoFixtureSpec;
+
 export const CREATED_PANEL_WORKSPACE_REPO_FIXTURE = {
   kind: "created-repository",
   section: "panels",
@@ -54,6 +59,8 @@ export interface ToolFailureSummary {
   resultSummary?: string;
   /** True when the test explicitly exercises this failure mode. */
   expected?: boolean;
+  /** Why a recorded failure is diagnostic-only rather than a failed platform effect. */
+  classification?: "argument-rejection";
   source: "message" | "snapshot";
 }
 

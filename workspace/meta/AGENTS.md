@@ -7,6 +7,7 @@ Your file root IS the workspace root. Top-level directories: `about/`, `apps/`, 
 ## Tool guidance
 
 - **read / ls / grep / find / edit / write** are native file tools over your workspace root — prefer them for reading docs and editing source; use **eval** when you need to run code.
+- **Before authoring or consuming a workspace service, read `skills/capabilities/SKILL.md`.** Service declarations and generated API docs are live, context-relative facts; a build or static catalog is never the discovery or approval path.
 - **eval** is available for workspace actions — files, databases, APIs, panels, browsers. Use static imports (not dynamic await import()). `chat`, `scope`, `scopes`, and `help` are pre-injected; use them directly and do not import them from `@workspace/runtime`. Import `contextId` from `@workspace/runtime`. Every eval result includes a `[scope]` summary showing current keys.
 - Quick patterns: `fs.readFile(path)` / `fs.writeFile(path, data)` for files. `this.sql.exec("SELECT ...")` inside a Durable Object for databases (db is a client — call `.open()` first). Load the **sandbox** skill for the full API reference.
 - Workspace source uses one semantic, provenance-aware VCS over the whole workspace. Before any VCS task, read `skills/vibestudio-vcs/SKILL.md`. A context has one committed event and one exact working head; each edit or integration step creates an ordinary local application. In an agent session, use the compact `vcs({ operation: ... })` tool for status, compare, incremental integration, revert, blame, and push; use the dedicated `edit`, `write`, `move_file`, `copy_file`, and `commit` tools for authoring. These tools derive the exact context, expected working head, and command identity from the live invocation—do not pass lower-level service fields to them. Direct runtime clients use the typed `vcs.*` service and must provide those service fields themselves. Run typechecks, tests, or `services.build.getBuildReport(unit, "ctx:<contextId>")` explicitly while work is local; these checks are advisory and do not authorize publication. Commit the complete local application chain; use another context when work needs a separate commit boundary. Push only an already committed event. For managed source, use the explicit move/copy tools or canonical service operations so file identity and copy provenance remain explicit. Do not use shell commands, raw `isomorphic-git`, or manually constructed clients for workspace source edits. For external Git remotes, use `@vibestudio/git` with `credentials.gitHttp()`.
@@ -38,6 +39,7 @@ Before using eval, read the **sandbox** skill — it has the complete API refere
 
 - **sandbox** — **read this first** — eval patterns, complete runtime API reference, inline_ui, feedback forms, browser automation
 - **architecture** — the theory of the whole system: trust boundary, unit kinds, log-first storage, semantic workspace state, permissions/credentials (`skills/architecture/SKILL.md`) — load before designing anything cross-cutting
+- **capabilities** — explicit authority requests, live caller-context service discovery, dynamic intra-workspace protocols, host grants, userland approvals, and content-integrity rules (`skills/capabilities/SKILL.md`)
 - **vibestudio-vcs** — canonical semantic VCS protocol: committed events and exact working heads, comparison and integration, whole-chain commits, move/copy identity, counteractions, provenance, typed recovery (`skills/vibestudio-vcs/SKILL.md`)
 - **workspace-dev** — building panels, workers, Durable Objects; exports `createProject`, `forkProject`
 - **browser-import** — importing cookies, passwords, bookmarks, history from installed browsers
@@ -95,6 +97,16 @@ You have three tools for reaching the open web:
 Typical flow: `web_search` to find URLs → `web_fetch` on the most promising one → if the head doesn't answer the question, `web_read` further into the cached content. Always cite source URLs.
 
 For grepping a cached page, targeted searches (GitHub / npm / Stack Overflow), PDF handling, or aux-model summarization, **read the `web-research` skill** — those live as eval recipes, not top-level tools.
+
+## Live capability docs
+
+Use `docs_search({ query: "keywords", surface?, limit? })`, then
+`docs_open({ id: "<catalog-id>" })`. These tools accept exactly those object
+fields: `docs_search` does not take `path`, and `docs_open` does not take
+`query`, `surface`, or `limit`. The `workspace` surface is generated from the
+exact context-relative provider build and includes its `@rpc` method roster;
+do not source-scan a provider or consult a generated product catalog when that
+live contract is available.
 
 ## Style
 

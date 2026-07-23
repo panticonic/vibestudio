@@ -71,6 +71,13 @@ export type { EvalToolInput } from "./eval.js";
 export { createDocsSearchTool, createDocsOpenTool } from "./docs.js";
 export type { DocsSearchInput, DocsOpenInput, CatalogHit, CatalogEntry } from "./docs.js";
 
+export { createWorkspaceServiceTool } from "./workspace-service.js";
+export type {
+  WorkspaceServiceToolInput,
+  WorkspaceServiceToolDetails,
+  WorkspaceServiceToolDeps,
+} from "./workspace-service.js";
+
 // Pure helpers
 export { resolveToCwd, expandPath } from "./path-utils.js";
 export {

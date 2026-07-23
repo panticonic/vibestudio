@@ -33,6 +33,10 @@ function fixture(options: { missing?: boolean; failure?: Error } = {}) {
       repoPath,
       path: input.file.path,
       contentHash: "blob:1",
+      authoredChangeId: "change:1",
+      authoredByWorkUnitId: "work:1",
+      contentClass: "internal" as const,
+      externalKeys: [],
       mode: 0o644,
       content: { kind: "text" as const, text: "content" },
     };

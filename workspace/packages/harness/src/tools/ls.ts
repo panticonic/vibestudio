@@ -42,7 +42,7 @@ export function createLsTool(
     name: "ls",
     label: "ls",
     executionMode: "parallel",
-    description: `List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to ${DEFAULT_LIMIT} entries or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
+    description: `List directory contents. Returns source-tree entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. A directory listing proves only that source exists; it does not prove that a panel, worker, service, or other unit is built, registered, launchable, or currently running. Use the documented live runtime API for those questions. Output is truncated to ${DEFAULT_LIMIT} entries or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
     parameters: lsSchema,
     execute: async (_toolCallId, { path: rawPath, limit }, signal) => {
       if (signal?.aborted) {

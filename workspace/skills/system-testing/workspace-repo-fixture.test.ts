@@ -515,7 +515,7 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(state).toMatchObject({
       repositoryId: "repository:fixture",
       repoPath: "panels/system-test-panel-source",
-      seedFilePaths: ["package.json", "index.ts"],
+      seedFilePaths: ["index.ts", "package.json"],
     });
     const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
     expect(seededText).toContain('"@workspace-panels/system-test-panel-source"');
@@ -609,7 +609,7 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
       contextId: "context:1",
       repositoryId: "repository:fixture",
       repoPath: "workers/system-test-worker",
-      seedFilePaths: ["package.json", "index.ts"],
+      seedFilePaths: ["index.ts", "package.json"],
     });
     const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
     expect(seededText).toContain('"kind": "worker"');
@@ -622,8 +622,8 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
           expect.objectContaining({
             repoPath: "workers/system-test-worker",
             files: [
-              expect.objectContaining({ path: "package.json" }),
               expect.objectContaining({ path: "index.ts" }),
+              expect.objectContaining({ path: "package.json" }),
             ],
           }),
         ],

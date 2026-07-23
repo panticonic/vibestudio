@@ -38,6 +38,9 @@ export interface ChannelEvent {
   contentType?: string;
   ts: number;
   attachments?: Attachment[];
+  /** Host-attested content provenance from the durable channel envelope. */
+  contentClass?: "internal" | "external";
+  externalKeys?: string[];
   /** Durable envelope annotations (policy folds — e.g. agentHops). */
   annotations?: Record<string, unknown>;
 }

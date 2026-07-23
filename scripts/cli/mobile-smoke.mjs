@@ -31,7 +31,6 @@ const defaultPackage = "app.vibestudio.mobile.internal";
 const defaultActivity = "app.vibestudio.mobile.MainActivity";
 const smokePrefix = "[VibestudioMobileSmoke]";
 const screenshotDir = path.join(repoRoot, "test-results", "mobile-smoke");
-const defaultVisualFallbackAgentProbeMs = 45_000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -613,8 +612,12 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     } else if (
       line.includes("ReactNativeJS") ||
       line.includes("VibestudioMobileHost") ||
+      line.includes("[InlineUiMessage]") ||
       (line.includes("AndroidRuntime") && /FATAL EXCEPTION|Process:/.test(line))
     ) {
+      if (line.includes("[InlineUiMessage]")) {
+        console.error(`[smoke-log] ${line}`);
+      }
       recentLines.push(line);
       if (recentLines.length > 200) recentLines.shift();
     }
@@ -987,16 +990,11 @@ function sqlString(value) {
 }
 
 async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options = {}) {
-  const startedAt = Date.now();
-  const visualFallbackAfterMs =
-    typeof options.visualFallbackAfterMs === "number" ? options.visualFallbackAfterMs : null;
   let lastLabels = [];
   let lastAgentState = "not checked";
   let nextProbeAt = 0;
   let stableVisualAgentFingerprint = "";
   let stableVisualAgentPolls = 0;
-  let durableProbeUnavailable = false;
-  let agentRunNotStarted = false;
   while (Date.now() < deadlineMs) {
     const xml = await dumpWindowXml(device);
     const labels = collectWindowLabels(xml);
@@ -1019,6 +1017,16 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
       /Runner (?:prompt|continue) completed without/i.test(text) ||
       /Agent turn failed|Cannot continue|DO RPC relay failed|Connection error/i.test(text)
     ) {
+      if (/Component error:/i.test(text)) {
+        await tapVisibleNode(device, xml, "Technical details");
+        await sleep(250);
+        const diagnosticLabels = collectWindowLabels(await dumpWindowXml(device));
+        throw new Error(
+          `Initial agent turn surfaced a visible component error. Visible labels: ${summarizeLabels(
+            diagnosticLabels
+          )}`
+        );
+      }
       throw new Error(
         `Initial agent turn surfaced a visible error. Visible labels: ${summarizeLabels(labels)}`
       );
@@ -1076,9 +1084,6 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
         console.log(`[mobile-smoke] Initial agent turn: ${nextAgentState}`);
       }
       lastAgentState = nextAgentState;
-      agentRunNotStarted =
-        agentState.kind === "pending" &&
-        /no agent turn run has started yet/i.test(agentState.summary);
       if (agentState.kind === "failed") {
         throw new Error(`Initial agent turn failed in durable state: ${agentState.summary}`);
       }
@@ -1094,18 +1099,9 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
           /trajectory_turns table not found yet/i.test(agentState.summary)) &&
         !agentProbe.warned
       ) {
-        durableProbeUnavailable = true;
         agentProbe.warned = true;
         console.warn(`[mobile-smoke] Durable agent-state probe unavailable: ${agentState.summary}`);
       }
-    }
-
-    if (
-      (durableProbeUnavailable || agentRunNotStarted) &&
-      visualFallbackAfterMs != null &&
-      Date.now() - startedAt >= visualFallbackAfterMs
-    ) {
-      break;
     }
 
     await sleep(1_000);
@@ -1187,7 +1183,6 @@ function summarizeLabels(labels) {
 
 async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, options = {}) {
   const agentProbe = createAgentTurnProbe(readyInfo);
-  const visualFallbackAgentProbeMs = Math.min(defaultVisualFallbackAgentProbeMs, agentTimeoutMs);
   await ensureDeviceInteractive(device);
   await sleep(2_000);
   if (await tapOptionalButtonByText(device, "Approve all", 2_000)) {
@@ -1198,29 +1193,16 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
   }
   let agentTurnCompleted = false;
   if (options.checkAgentTurn !== false) {
+    const waitOptions = options.realModel
+      ? {
+          requireVisibleAgentOutput: true,
+          rejectTestModelResponse: true,
+          failOnCredentialSetup: true,
+          requireNoUnresolvedApproval: true,
+        }
+      : {};
+    await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, waitOptions);
     agentTurnCompleted = true;
-    try {
-      const waitOptions = options.realModel
-        ? {
-            requireVisibleAgentOutput: true,
-            rejectTestModelResponse: true,
-            failOnCredentialSetup: true,
-            requireNoUnresolvedApproval: true,
-          }
-        : {
-            visualFallbackAfterMs: visualFallbackAgentProbeMs,
-          };
-      await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, waitOptions);
-    } catch (error) {
-      if (!isInitialAgentProbeTimeout(error)) throw error;
-      if (options.realModel) throw error;
-      agentTurnCompleted = false;
-      console.warn(
-        `[mobile-smoke] Initial agent turn probe did not produce an observable completion within ` +
-          `${visualFallbackAgentProbeMs}ms; continuing with visual panel assertion. ` +
-          `${error instanceof Error ? error.message : String(error)}`
-      );
-    }
   }
   await ensureDeviceInteractive(device);
   assertNoBlockingPermissionDialog(await dumpWindowXml(device));
@@ -1276,13 +1258,6 @@ function assertNoBlockingPermissionDialog(xml) {
       "Panel rendered an error banner instead of healthy content; expected the panel content to be usable"
     );
   }
-}
-
-function isInitialAgentProbeTimeout(error) {
-  return (
-    error instanceof Error &&
-    /Timed out waiting for the initial onboarding agent turn to finish/i.test(error.message)
-  );
 }
 
 function decodePng(buffer) {
@@ -1707,13 +1682,19 @@ async function main() {
         .catch(() => {});
     }
 
-    // The clean workspace build belongs to the launch budget. Once its bundle
-    // is activated, give the independently reloaded managed app a fresh budget
-    // for WebRTC authentication, facade startup, and panel materialization.
-    // Otherwise a slow-but-successful first build can expire the connection
-    // deadline just as the managed client starts its handshake.
+    // Pairing, host-target launch, and the independently reloaded managed app
+    // are separate lifecycle boundaries. Give each the configured phase budget
+    // so ICE negotiation cannot silently consume the clean workspace build's
+    // budget (and a build cannot consume the managed client's connection
+    // budget). A stuck phase still fails within the configured timeout.
+    const hostTargetLaunchDeadlineMs = Date.now() + options.pairingTimeoutMs;
     for (const phase of ["embedded-bundle-activate-start", "embedded-bundle-activate-complete"]) {
-      await waitForPhaseTappingApprovals(options.device, logcat, phase, pairingDeadlineMs);
+      await waitForPhaseTappingApprovals(
+        options.device,
+        logcat,
+        phase,
+        hostTargetLaunchDeadlineMs
+      );
     }
     const managedLaunchDeadlineMs = Date.now() + options.pairingTimeoutMs;
     await waitForPhaseTappingApprovals(

@@ -13,6 +13,8 @@ describe("canonical tool VCS adapter", () => {
       contextId: "context:1",
       workUnitId: "work:1",
       applicationId: "application:1",
+      commandId: "command:1",
+      decisionIds: [],
       changeCount: 1,
       changeIds: ["change:1"],
       incorporatedChangeCount: 0,

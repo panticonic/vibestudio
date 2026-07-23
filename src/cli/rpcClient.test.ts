@@ -21,6 +21,13 @@ const webRtcMocks = vi.hoisted(() => ({
   close: vi.fn(async () => undefined),
 }));
 
+const credentialStoreMocks = vi.hoisted(() => ({ save: vi.fn() }));
+
+vi.mock("./credentialStore.js", async (loadOriginal) => {
+  const original = await loadOriginal<typeof import("./credentialStore.js")>();
+  return { ...original, saveCliCredentials: credentialStoreMocks.save };
+});
+
 vi.mock("./localHubTransport.js", () => ({
   resolveLocalHubControlTransport: localTransportMocks.resolve,
 }));
@@ -127,6 +134,7 @@ describe("rpcClient", () => {
     webRtcMocks.ctor.mockClear();
     webRtcMocks.call.mockReset();
     webRtcMocks.close.mockClear();
+    credentialStoreMocks.save.mockClear();
   });
 
   afterEach(() => {

@@ -26,10 +26,11 @@ export interface CatalogEntry extends CatalogHit {
   returnsSchema?: Record<string, unknown>;
   members?: string[];
   examples?: unknown[];
+  signature?: string;
 }
 
 const surfaceParam = Type.Optional(
-  Type.Union([Type.Literal("service"), Type.Literal("runtime")], {
+  Type.Union([Type.Literal("service"), Type.Literal("runtime"), Type.Literal("workspace")], {
     description: "Restrict results to one surface.",
   })
 );
@@ -78,7 +79,7 @@ export function createDocsSearchTool(
     label: "docs_search",
     executionMode: "parallel",
     description:
-      "Search the capability catalog — server services and runtime APIs — by keyword. Returns compact hits filtered to what you may call; use docs_open(id) for the full typed schema, access rules, and examples.",
+      'Agent tool only (not an eval global/export). Call as docs_search({ query: "keywords", surface?, limit? }). Search the capability catalog — host services, runtime APIs, and live workspace services — by keyword. Returns compact hits filtered to what you may call; use docs_open({ id: "<result-id>" }) for the full contract before starting eval.',
     parameters: searchSchema,
     execute: async (_toolCallId, params): Promise<AgentToolResult<CatalogHit[]>> => {
       const limit = Math.min(params.limit ?? 20, 100);
@@ -175,10 +176,11 @@ function typeString(schema: unknown): string {
  *  `(string /^[0-9a-f]{64}$/, number?)`. */
 function describeArgs(argsSchema: unknown): string {
   const s = argsSchema as JsonSchema | undefined;
-  if (!s || s["type"] !== "array" || !Array.isArray(s["items"])) {
+  const tuple = s?.["prefixItems"] ?? s?.["items"];
+  if (!s || s["type"] !== "array" || !Array.isArray(tuple)) {
     return s ? `(${typeString(s)})` : "()";
   }
-  const items = s["items"] as unknown[];
+  const items = tuple as unknown[];
   const min = typeof s["minItems"] === "number" ? (s["minItems"] as number) : items.length;
   return `(${items.map((item, i) => `${typeString(item)}${i >= min ? "?" : ""}`).join(", ")})`;
 }
@@ -187,8 +189,8 @@ function describeArgs(argsSchema: unknown): string {
  *  "Parameters:" block (only the ones that actually carry a description). */
 function argBreakdown(argsSchema: unknown): string {
   const s = argsSchema as JsonSchema | undefined;
-  const items =
-    s && s["type"] === "array" && Array.isArray(s["items"]) ? (s["items"] as unknown[]) : [];
+  const tuple = s?.["prefixItems"] ?? s?.["items"];
+  const items = s && s["type"] === "array" && Array.isArray(tuple) ? (tuple as unknown[]) : [];
   const lines: string[] = [];
   items.forEach((item, i) => {
     const arg = item as JsonSchema;
@@ -225,8 +227,9 @@ function formatExamples(qualifiedName: string, examples: unknown[]): string {
 
 function serviceRpcExample(qualifiedName: string, argsSchema: unknown): string | null {
   const s = argsSchema as JsonSchema | undefined;
-  if (!s || s["type"] !== "array" || !Array.isArray(s["items"])) return null;
-  const items = s["items"] as unknown[];
+  const tuple = s?.["prefixItems"] ?? s?.["items"];
+  if (!s || s["type"] !== "array" || !Array.isArray(tuple)) return null;
+  const items = tuple as unknown[];
   const args = items.map((item, index) => {
     const type = typeString(item);
     if (type.startsWith("{ ")) return "{ ... }";
@@ -242,6 +245,7 @@ function serviceRpcExample(qualifiedName: string, argsSchema: unknown): string |
 export function renderEntry(entry: CatalogEntry): string {
   const parts: string[] = [`# ${entry.qualifiedName}  (${entry.surface})`];
   if (entry.description) parts.push(entry.description);
+  if (entry.signature) parts.push(entry.signature);
   if (entry.access) {
     const a = entry.access as {
       callers?: string[];
@@ -250,19 +254,22 @@ export function renderEntry(entry: CatalogEntry): string {
       approval?: Array<{ when?: string; capability?: string; reason: string }>;
       requires?: Array<{ kind: string; description: string }>;
     };
-    if (a.callers) parts.push(`Callers: ${a.callers.join(", ")}`);
+    if (Array.isArray(a.callers)) parts.push(`Callers: ${a.callers.join(", ")}`);
     if (a.sensitivity) parts.push(`Sensitivity: ${a.sensitivity}`);
-    for (const r of a.restrictedTo ?? []) {
+    for (const r of Array.isArray(a.restrictedTo) ? a.restrictedTo : []) {
+      if (!r || !Array.isArray(r.callers)) continue;
       parts.push(`Restricted: ${r.reason} — when ${r.when}, only [${r.callers.join(", ")}]`);
     }
-    for (const ap of a.approval ?? []) {
+    for (const ap of Array.isArray(a.approval) ? a.approval : []) {
       parts.push(
         `Approval: ${ap.reason}${ap.capability ? ` (capability: ${ap.capability})` : ""}${ap.when ? ` — when ${ap.when}` : ""}`
       );
     }
-    for (const req of a.requires ?? []) parts.push(`Requires ${req.kind}: ${req.description}`);
+    for (const req of Array.isArray(a.requires) ? a.requires : []) {
+      parts.push(`Requires ${req.kind}: ${req.description}`);
+    }
   }
-  if (entry.members) parts.push(`Members: ${entry.members.join(", ")}`);
+  if (Array.isArray(entry.members)) parts.push(`Members: ${entry.members.join(", ")}`);
   // Readable signature + parameter docs instead of raw JSON-schema dumps (the full
   // typed schema is still available via docs.getSchema / the panel's schema view).
   if (entry.argsSchema || entry.returnsSchema) {
@@ -285,7 +292,7 @@ export function renderEntry(entry: CatalogEntry): string {
             "the service name also exists in `@workspace/runtime`."
         );
       }
-    } else {
+    } else if (entry.surface === "runtime") {
       const [namespace] = entry.qualifiedName.split(".");
       if (namespace && entry.qualifiedName.includes(".")) {
         parts.push(
@@ -293,6 +300,43 @@ export function renderEntry(entry: CatalogEntry): string {
             `await ${entry.qualifiedName}(...);`
         );
       }
+    }
+  }
+  if (entry.surface === "workspace") {
+    const access = entry.access as
+      | {
+          protocols?: string[];
+          target?: { kind?: string };
+          source?: string;
+          capability?: string;
+        }
+      | undefined;
+    const protocol = access?.protocols?.[0];
+    if (protocol) {
+      parts.push(`Protocol: ${protocol}`);
+      if (!entry.parent && access?.capability) {
+        parts.push(
+          `Installed-unit authority: declare an exact ${JSON.stringify(
+            access.capability
+          )} request in the caller's package.json with resource { "kind": "prefix", "prefix": "" }, tier "gated", and evidence "bounded-dynamic". Manifest tiers are only "gated" or "critical"; the provider method's RPC tier "open" is a separate receiver policy. This request may exist before the provider; the live declaration, provider version, context visibility, and grant are still checked at runtime.`
+        );
+      }
+      const callExample = entry.parent
+        ? 'if (service.kind !== "durable-object") throw new Error("Expected a Durable Object service");\n' +
+          `await rpc.call(service.targetId, ${JSON.stringify(
+            entry.qualifiedName.split(".").at(-1)
+          )}, [/* args */]);`
+        : "// Open the method docs listed above, then call its exact method through rpc.call(...).";
+      parts.push(
+        "Finish docs_search/docs_open as agent tools before eval; `docs`, `docs.search`, and `docs.open` are not eval globals or runtime exports.\n\n" +
+          "Eval-side service resolution and proof (public exports only):\n" +
+          'import { workers, rpc } from "@workspace/runtime";\n' +
+          `const service = await workers.resolveService(${JSON.stringify(protocol)});\n` +
+          callExample +
+          "\n\nInstalled worker code uses the runtime created inside fetch():\n" +
+          `const service = await runtime.workers.resolveService(${JSON.stringify(protocol)});\n` +
+          callExample.replaceAll("rpc.call", "runtime.rpc.call")
+      );
     }
   }
   if (entry.examples?.length) {
@@ -311,7 +355,7 @@ export function createDocsOpenTool(
     label: "docs_open",
     executionMode: "parallel",
     description:
-      "Open a catalog entry by id (from docs_search): full description, typed args/returns JSON Schema, access & restrictedness (allowed callers, approval/grant gates, sensitivity), and examples.",
+      'Agent tool only (not an eval global/export). Call exactly as docs_open({ id: "<catalog-id>" }). Open one result from docs_search before starting eval: source signature or typed schema, access rules, examples, and live workspace-provider identity.',
     parameters: openSchema,
     execute: async (_toolCallId, params): Promise<AgentToolResult<CatalogEntry | null>> => {
       const entry = await callMain<CatalogEntry | null>("docs.describe", [params.id]);

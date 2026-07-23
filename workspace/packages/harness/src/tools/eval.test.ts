@@ -16,6 +16,13 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     expect(schema).toContain("only for plain JavaScript with no type annotations");
   });
 
+  it("directs API discovery through the live self-describing runtime", () => {
+    const tool = createEvalTool(async () => ({ success: true, console: "" }) as never);
+    expect(tool.description).toContain("await help()");
+    expect(tool.description).toContain('await help("workers")');
+    expect(tool.description).toContain("before guessing an API or return shape");
+  });
+
   it("accepts only a positive integer timeout and forwards the explicit deadline", async () => {
     const calls: unknown[][] = [];
     const tool = createEvalTool(async (_method, args) => {

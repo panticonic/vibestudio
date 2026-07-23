@@ -9,12 +9,14 @@ export interface InvocationCardPayloadLike {
   result?: unknown;
   error?: unknown;
   isError?: boolean;
+  description?: string;
   execution?: {
     status?: string;
     terminalOutcome?: string;
     result?: unknown;
     error?: unknown;
     isError?: boolean;
+    description?: string;
   };
 }
 
@@ -276,8 +278,10 @@ function normalizeInvocationCard(call: InvocationCardPayloadLike): InvocationCar
     execution: {
       status: nested?.status ?? call.status,
       terminalOutcome: nested?.terminalOutcome ?? call.terminalOutcome,
-      result: nested?.result ?? nested?.error ?? call.result ?? call.error,
+      result: nested?.result ?? call.result,
+      error: nested?.error ?? call.error,
       isError: nested?.isError ?? call.isError,
+      description: nested?.description ?? call.description,
     },
   };
 }

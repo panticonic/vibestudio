@@ -264,6 +264,7 @@ describe("createWebTools", () => {
 
   it("web_fetch caches markdown in the blobstore and returns digest + head", async () => {
     const { rpc, store } = makeBlobstore();
+    const recordIngestion = vi.fn(async () => undefined);
     const fetcher = vi.fn(async () =>
       mockResponse(SAMPLE_PAGE_HTML, {
         contentType: "text/html",
@@ -271,7 +272,7 @@ describe("createWebTools", () => {
       }),
     ) as unknown as typeof fetch;
     // headLength of 600 means a page that produces ~700+ bytes of markdown will truncate.
-    const registered = registeredTools(createWebTools({ rpc: rpc as never, fetcher, headLength: 600 }));
+    const registered = registeredTools(createWebTools({ rpc: rpc as never, fetcher, headLength: 600, recordIngestion }));
 
     const tool = registered.get("web_fetch")!;
     const result = await tool.execute(
@@ -292,6 +293,11 @@ describe("createWebTools", () => {
     expect(details.head_length).toBeLessThanOrEqual(details.size);
     expect(store.has(details.digest)).toBe(true);
     expect(store.get(details.digest)).toContain("Section");
+    expect(recordIngestion).toHaveBeenCalledWith({
+      key: "web:example.com",
+      via: "web-fetch",
+      classification: "external",
+    });
   });
 
   it("web_read returns a slice of the cached page", async () => {

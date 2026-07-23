@@ -247,8 +247,8 @@ test.describe("Content overlay", () => {
     expect(probe?.card?.height ?? 0).toBeGreaterThan(120);
     // The full severe-capability action set rendered.
     expect(probe?.text).toContain("Allow once");
-    expect(probe?.text).toContain("Allow this session");
-    expect(probe?.text).toContain("Trust version");
+    expect(probe?.text).toContain("Allow for now");
+    expect(probe?.text).toContain("Trust this version");
     expect(probe?.text).toContain("Deny");
 
     // Panels were NOT blanked — at least one panel remains in the live tree.

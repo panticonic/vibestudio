@@ -39,6 +39,8 @@ describe("provenance formatting", () => {
             snapshotDigest: "snapshot:derived",
             targetRepositoryIds: ["repository:one", "repository:two"],
           },
+          contentClass: "external",
+          externalKeys: ["repo:https://example.test/owner/project.git@0123456789abcdef"],
           normalizationProtocol: "normalization:test",
           createdAt: "2026-07-15T10:00:00.000Z",
         },

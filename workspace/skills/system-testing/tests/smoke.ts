@@ -20,6 +20,13 @@ function completedEvalFileRoundTrip(result: Parameters<typeof getToolCalls>[0]):
   });
 }
 
+function codeLoadsRuntimeModule(code: string): boolean {
+  return (
+    /\bimport\s*\(/u.test(code) ||
+    /\bimport\s+(?:[\s\S]*?\s+from\s+)?["'][^"']+["']/u.test(code)
+  );
+}
+
 export const smokeTests: TestCase[] = [
   {
     name: "eval-return-value",
@@ -108,7 +115,7 @@ export const smokeTests: TestCase[] = [
           call.execution?.status === "complete" &&
           call.execution.isError !== true &&
           typeof call.arguments?.["code"] === "string" &&
-          /\bimport\s*\(/.test(call.arguments["code"])
+          codeLoadsRuntimeModule(call.arguments["code"])
       );
       const hasExports =
         loadedPackage &&

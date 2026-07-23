@@ -7,6 +7,7 @@ import {
   successfulEvalReturnValues,
   type InvocationCardPayloadLike,
 } from "./_helpers.js";
+import { isPreExecutionArgumentRejection } from "../tool-failure-classification.js";
 
 export interface ScenarioEvidence {
   calls: InvocationCardPayloadLike[];
@@ -26,6 +27,15 @@ export function invocationReturnValue(
     : { present: false };
 }
 
+export function invocationConsoleOutput(call: InvocationCardPayloadLike): string | null {
+  const result = call.execution?.result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  const details = (result as Record<string, unknown>)["details"];
+  if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+  const consoleOutput = (details as Record<string, unknown>)["console"];
+  return typeof consoleOutput === "string" ? consoleOutput : null;
+}
+
 export function completedScenarioEvidence(
   result: TestExecutionResult,
   requiredTools: readonly string[] = ["eval"],
@@ -40,13 +50,18 @@ export function completedScenarioEvidence(
   const calls = getToolCalls(result);
   const failed = calls.filter(
     (call) =>
-      call.execution?.isError === true ||
-      call.execution?.status === "error" ||
-      call.execution?.status === "failed" ||
-      call.execution?.status === "cancelled" ||
-      call.execution?.status === "abandoned" ||
-      call.execution?.terminalOutcome === "cancelled" ||
-      call.execution?.terminalOutcome === "abandoned"
+      !isPreExecutionArgumentRejection(
+        call.execution?.error,
+        call.execution?.result,
+        call.execution?.description
+      ) &&
+      (call.execution?.isError === true ||
+        call.execution?.status === "error" ||
+        call.execution?.status === "failed" ||
+        call.execution?.status === "cancelled" ||
+        call.execution?.status === "abandoned" ||
+        call.execution?.terminalOutcome === "cancelled" ||
+        call.execution?.terminalOutcome === "abandoned")
   );
   const unexpected = failed.filter((call) => !options.allowFailed?.(call));
   if (unexpected.length > 0) {

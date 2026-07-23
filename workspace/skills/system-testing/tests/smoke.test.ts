@@ -103,4 +103,38 @@ describe("smoke validators", () => {
     result.messages.at(-1)!.content = "The result is 24.";
     expect(factorial.validate(result).passed).toBe(false);
   });
+
+  it("accepts static runtime imports as package-load evidence", () => {
+    const buildService = smokeTests.find((candidate) => candidate.name === "build-service")!;
+    const result = {
+      duration: 0,
+      messages: [
+        { kind: "message", senderId: "user", complete: true, content: "prompt" },
+        {
+          kind: "message",
+          senderId: "agent",
+          complete: true,
+          contentType: "invocation",
+          invocation: {
+            id: "eval",
+            name: "eval",
+            status: "complete",
+            isError: false,
+            arguments: {
+              code: 'import * as runtime from "@workspace/runtime"; return Object.keys(runtime)',
+            },
+            result: { details: { success: true, returnValue: ["workers", "rpc"] } },
+          },
+        },
+        {
+          kind: "message",
+          senderId: "agent",
+          complete: true,
+          content: "The module exports workers and rpc at runtime.",
+        },
+      ],
+    } as TestExecutionResult;
+
+    expect(buildService.validate(result)).toEqual({ passed: true, reason: undefined });
+  });
 });

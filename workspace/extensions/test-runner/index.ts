@@ -164,16 +164,15 @@ async function requestApproval(ctx: ExtensionContextLike, req: TestRunRequest): 
       id: `workspace-test:${subjectHash}`,
       label: `Run tests: ${target}`,
     },
-    title: "Run workspace tests",
-    summary:
-      "Vitest will execute test files from the selected workspace unit in the test-runner extension process.",
+    title: "Run tests",
+    summary: `Run the test files for ${target}.`,
     warning:
-      "Tests are code execution. Only run tests from workspace code you trust or are actively reviewing.",
+      "Tests run code on your computer. Only run tests from code you trust.",
     details: [
-      { label: "target", value: req.target },
-      ...(req.contextId ? [{ label: "context", value: req.contextId }] : []),
-      ...(req.fileFilter ? [{ label: "file filter", value: req.fileFilter }] : []),
-      ...(req.testName ? [{ label: "test name", value: req.testName }] : []),
+      { label: "Target", value: req.target },
+      ...(req.contextId ? [{ label: "Context", value: req.contextId }] : []),
+      ...(req.fileFilter ? [{ label: "File filter", value: req.fileFilter }] : []),
+      ...(req.testName ? [{ label: "Test name", value: req.testName }] : []),
     ],
   });
   if (decision?.kind === "uncallable") {

@@ -144,11 +144,8 @@ describe("TestRunner", () => {
       "model_credential_reconnect_required",
     ]);
     expect(runner.collectDiagnostics).toHaveBeenCalledWith({ channelId: "chat-timeout" });
-    expect(session.close).toHaveBeenCalledWith({ waitForRemoteCleanup: true });
-    expect(session.interrupt).toHaveBeenCalledWith("agent-target-timeout", {
-      timeoutMs: 10_000,
-      signal: expect.any(AbortSignal),
-    });
+    expect(session.close).toHaveBeenCalledWith();
+    expect(session.interrupt).toHaveBeenCalledWith("agent-target-timeout");
     expect(cleanupOrder).toEqual(["interrupt", "close"]);
     expect(session.captureModelExecutionEvidence).toHaveBeenCalledOnce();
     expect(execution.modelExecutionEvidence).toEqual(modelEvidence());

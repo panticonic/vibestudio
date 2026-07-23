@@ -266,7 +266,14 @@ describe("edge and harness semantic validators", () => {
                   text: "[eval] Return value: x… output truncated; recover with scope.$lastReturn",
                 },
               ],
-              details: { returnValue: "x".repeat(120_000) },
+              details: {
+                returnValue: {
+                  truncated: true,
+                  originalChars: 120_002,
+                  scopeKey: "$lastReturn",
+                  preview: "x".repeat(200),
+                },
+              },
             },
           },
         ])

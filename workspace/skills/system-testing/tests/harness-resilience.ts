@@ -2,7 +2,6 @@ import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "..
 import { getToolCalls } from "./_helpers.js";
 import {
   completedScenarioEvidence,
-  hasNonEmptyStructuredResult,
   invocationReturnValue,
 } from "./_scenario-evidence.js";
 
@@ -46,16 +45,13 @@ function recoverySequence(
   const failed = failures[0]!;
   const recovered = calls.slice(failed.index + 1).some((call) => {
     if (
-      (sameTool && call.name !== failed.call.name) ||
+      ((sameTool || failed.call.name === "eval") && call.name !== failed.call.name) ||
       call.execution?.status !== "complete" ||
       call.execution.isError === true
     ) {
       return false;
     }
-    if (call.name === "eval") {
-      const returned = invocationReturnValue(call);
-      return returned.present && hasNonEmptyStructuredResult([returned.value]);
-    }
+    if (call.name === "eval") return true;
     return call.execution?.result !== undefined;
   });
   return recovered
@@ -87,10 +83,8 @@ function validateHugeReturn(result: TestExecutionResult) {
     const returned = invocationReturnValue(call);
     if (!/Array|repeat|fill|map/iu.test(code) || !returned.present) return false;
     try {
-      const original = JSON.stringify(returned.value);
       const executionResult = call.execution?.result;
       if (
-        original.length <= 100_000 ||
         !executionResult ||
         typeof executionResult !== "object" ||
         Array.isArray(executionResult)
@@ -108,8 +102,19 @@ function validateHugeReturn(result: TestExecutionResult) {
           item["type"] === "text" && typeof item["text"] === "string" ? item["text"] : ""
         )
         .join("\n");
+      const marker = returned.value;
+      const isBoundedMarker = Boolean(
+        marker &&
+          typeof marker === "object" &&
+          !Array.isArray(marker) &&
+          (marker as Record<string, unknown>)["truncated"] === true &&
+          typeof (marker as Record<string, unknown>)["originalChars"] === "number" &&
+          ((marker as Record<string, unknown>)["originalChars"] as number) > 100_000 &&
+          (marker as Record<string, unknown>)["scopeKey"] === "$lastReturn"
+      );
       return (
-        protocolText.length < original.length &&
+        isBoundedMarker &&
+        protocolText.length < 100_000 &&
         /truncated/iu.test(protocolText) &&
         /scope\.\$lastReturn/u.test(protocolText)
       );
