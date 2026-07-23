@@ -53,6 +53,7 @@ import {
 } from "@workspace/agentic-protocol";
 import { z } from "zod";
 import {
+  createHeadlessAgentContext,
   destroyHeadlessAgentContext,
   getRecommendedChannelConfig,
   retireHeadlessAgent,
@@ -110,7 +111,7 @@ export interface HeadlessWithAgentConfig extends HeadlessSessionConfig {
   source: string;
   className: string;
   objectKey?: string;
-  /** Omit to let runtime.createEntity mint a fresh isolated agent context. */
+  /** Omit to allocate a fresh isolated agent context explicitly. */
   contextId?: string;
   channelId?: string;
   channelConfig?: ChannelConfig;
@@ -127,18 +128,6 @@ export interface HeadlessWithAgentConfig extends HeadlessSessionConfig {
    * integration without a browser renderer.
    */
   includeSyntheticPanelUiMethods?: boolean;
-}
-
-export interface HeadlessSessionCloseOptions {
-  /**
-   * Await remote agent unsubscribe/lifecycle cleanup. Isolated sessions destroy
-   * their complete context tree; sessions attached to a caller-owned context
-   * first unsubscribe their agent and then retire only that entity. Disable
-   * awaiting for harnesses that must release local waiters even when the remote
-   * agent/channel is wedged. The same ordered cleanup is still started and
-   * records asynchronous failures on this session when they arrive.
-   */
-  waitForRemoteCleanup?: boolean;
 }
 
 export interface HeadlessWaitOptions {
@@ -227,9 +216,10 @@ export class HeadlessSession {
   /**
    * The session/report title set by the agent's `set_title` tool. A headless
    * session has no chat panel, so the title lives HERE (on the report wrapper),
-   * not on the channel config — the channel's `updateConfig` is panel/server-only
-   * and a headless client is a `do` caller, so routing `set_title` through the
-   * channel would fail the caller-kind gate. Surfaced via `title` + `snapshot()`.
+   * not on a runtime entity or the channel config. The headless transport DO is
+   * infrastructure, not the titled conversation, and must not borrow code
+   * authority merely to mirror report metadata. Surfaced via `title` +
+   * `snapshot()`.
    */
   private _title: string | null = null;
 
@@ -271,6 +261,8 @@ export class HeadlessSession {
       },
       payload: wire.payload,
       payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      contentClass: "external",
+      externalKeys: [`msg:${this._channelId ?? "headless"}/${wire.pubsubId ?? "unattributed"}`],
       publishedAt: new Date(wire.ts ?? Date.now()).toISOString(),
     };
   }
@@ -309,29 +301,44 @@ export class HeadlessSession {
       ...config.channelConfig,
     } as ChannelConfig;
 
-    await session.connect(channelId, {
-      channelConfig,
-      ...(config.contextId ? { contextId: config.contextId } : {}),
-      methods,
-    });
-
+    const ownsAgentContext = !config.contextId;
+    const agentContextId =
+      config.contextId ?? (await createHeadlessAgentContext({ rpcCall: config.rpcCall }));
     try {
+      await session.connect(channelId, {
+        channelConfig,
+        contextId: agentContextId,
+        methods,
+      });
       const subscription = await subscribeHeadlessAgent({
         rpcCall: config.rpcCall,
         source: config.source,
         className: config.className,
         objectKey,
         channelId,
-        contextId: config.contextId,
+        contextId: agentContextId,
         extraConfig: config.extraConfig,
       });
       session._agentEntityId = subscription.entityId;
       session._agentTargetId = subscription.targetId;
       session._agentContextId = subscription.contextId;
-      session._ownsAgentContext = !config.contextId;
+      session._ownsAgentContext = ownsAgentContext;
       session._agentRpcCall = config.rpcCall;
     } catch (err) {
-      session.disconnect();
+      await session.disconnect();
+      if (ownsAgentContext) {
+        try {
+          await destroyHeadlessAgentContext({
+            rpcCall: config.rpcCall,
+            contextId: agentContextId,
+          });
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [err, cleanupError],
+            "Headless agent setup failed and its isolated context could not be reclaimed"
+          );
+        }
+      }
       throw err;
     }
 
@@ -351,29 +358,12 @@ export class HeadlessSession {
       execute: async (args: unknown) => {
         const { title } = args as { title: string };
         if (!title) return { ok: false, error: "Missing title" };
-        // Headless context: there is no chat panel. Store the title on the
-        // session/report itself (the `do`-permitted path) instead of routing it
-        // through the channel's `updateConfig`, which is panel/server-only — a
-        // headless client is a `do` caller and would hit the caller-kind gate
-        // (`updateConfig: caller kind "do" is not permitted (allowed: panel,
-        // server)`). The channel title stays untouched.
+        // Headless context: there is no chat panel or user-facing runtime
+        // entity. The title is report metadata, so keep it on the report
+        // wrapper. Renaming the transport EvalDO would be the wrong identity;
+        // updating channel config would also require panel/server authority.
         this._title = title;
-        const warnings: string[] = [];
-        // Best-effort: also publish the title as this client's server-side
-        // entity display title. `runtime.setTitle` admits `do` callers (unlike
-        // `updateConfig`), so this surfaces in approval/registry UIs without
-        // touching channel config. A failure is non-fatal — the report title is
-        // already recorded above.
-        try {
-          await this._config.config.rpc.call("main", "runtime.setTitle", [
-            title,
-            { explicit: true },
-          ]);
-        } catch (err) {
-          warnings.push(err instanceof Error ? err.message : String(err));
-          console.warn("[HeadlessSession] runtime.setTitle failed:", err);
-        }
-        return warnings.length > 0 ? { ok: true, warnings } : { ok: true };
+        return { ok: true };
       },
     };
 
@@ -671,6 +661,10 @@ export class HeadlessSession {
     agentId: string,
     options?: { timeoutMs?: number; signal?: AbortSignal }
   ): Promise<void> {
+    if (this._agentRpcCall && this._channelId) {
+      await this._agentRpcCall(agentId, "interruptChannel", [this._channelId]);
+      return;
+    }
     if (!this._client) return;
     const handle = this._client.callMethod(agentId, "pause", {}, options);
     unwrapChatMethodResult(await handle.result);
@@ -720,13 +714,13 @@ export class HeadlessSession {
     /* no-op: channel replay delivers full persisted history */
   }
 
-  disconnect(): void {
+  async disconnect(): Promise<void> {
     if (this._consumeAbort) {
       this._consumeAbort.abort();
       this._consumeAbort = null;
     }
     try {
-      this._connection.disconnect();
+      await this._connection.disconnect();
     } catch (err) {
       this.recordCleanupError("disconnect", err);
     }
@@ -740,14 +734,14 @@ export class HeadlessSession {
     this._cleanupErrors.push({ phase, message, at: Date.now() });
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     if (this._disposed) return;
     this._disposed = true;
-    this.disconnect();
+    await this.disconnect();
     this._messageListeners.clear();
   }
 
-  async close(opts: HeadlessSessionCloseOptions = {}): Promise<void> {
+  async close(): Promise<void> {
     if (this._agentTargetId && this._client && this._modelExecutionEvidence === undefined) {
       await this.captureModelExecutionEvidence().catch((error) => {
         console.warn("[HeadlessSession] model execution evidence capture failed:", error);
@@ -773,8 +767,12 @@ export class HeadlessSession {
       if (!rpcCall) return;
       // A context minted for this launch is the lifecycle unit. Destroying it
       // recursively retires the root and descendants, so it has one owner and
-      // no entity-level fallback path.
+      // no entity-level fallback path. The channel subscription is a separate
+      // delivery relationship, however: close it and await the agent's
+      // interruption/unsubscribe terminal before deleting the membership that
+      // late delivery is authorized against.
       if (ownsContext && contextId) {
+        await unsubscribe();
         await destroyHeadlessAgentContext({ rpcCall, contextId }).catch((err) => {
           this.recordCleanupError("destroyHeadlessAgentContext", err);
         });
@@ -790,11 +788,9 @@ export class HeadlessSession {
         this.recordCleanupError("retireHeadlessAgent", err);
       });
     };
-    this.dispose();
-    if (opts.waitForRemoteCleanup === false) {
-      void cleanupRemote();
-      return;
-    }
+    // The headless participant and agent are peers in one channel lifecycle.
+    // Await both acknowledged leaves before retiring the runtime context.
+    await this.dispose();
     await cleanupRemote();
   }
 

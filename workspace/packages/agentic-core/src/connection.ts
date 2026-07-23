@@ -56,6 +56,7 @@ export class ConnectionManager {
   private _clientId: string | null = null;
   private unsubscribers: Array<() => void> = [];
   private connectAbortController: AbortController | null = null;
+  private disconnectPromise: Promise<void> | null = null;
 
   constructor(opts: {
     config: ConnectionConfig;
@@ -98,7 +99,13 @@ export class ConnectionManager {
     }
 
     // Close existing connection if any
-    this.disconnect();
+    try {
+      await this.disconnect();
+    } catch (error) {
+      // A failed graceful leave is a transport failure. Surface it, then let
+      // the new subscription replace the old transport generation.
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
     this.setStatus("connecting");
     const readyAbort = new AbortController();
     this.connectAbortController = readyAbort;
@@ -130,7 +137,7 @@ export class ConnectionManager {
       // Wait for the initial replay to complete
       await newClient.ready(readyAbort.signal);
       if (this.connectAbortController !== readyAbort) {
-        newClient.close();
+        await newClient.close();
         throw new Error("Connection attempt was superseded");
       }
       this.connectAbortController = null;
@@ -208,7 +215,7 @@ export class ConnectionManager {
       return newClient;
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      newClient?.close();
+      await newClient?.close().catch(() => undefined);
       if (readyAbort.signal.aborted && this.connectAbortController !== readyAbort) {
         throw error;
       }
@@ -217,12 +224,13 @@ export class ConnectionManager {
       }
       this.callbacks.onError?.(error);
       this.setStatus("error");
-      this.disconnect();
+      await this.disconnect().catch(() => undefined);
       throw error;
     }
   }
 
-  disconnect(): void {
+  disconnect(): Promise<void> {
+    if (this.disconnectPromise) return this.disconnectPromise;
     this.connectAbortController?.abort();
     this.connectAbortController = null;
 
@@ -231,12 +239,18 @@ export class ConnectionManager {
     }
     this.unsubscribers = [];
 
-    if (this._client) {
-      this._client.close();
-    }
+    const client = this._client;
     this._client = null;
     this._clientId = null;
     this.setStatus("disconnected");
+
+    if (!client) return Promise.resolve();
+    const closing = client.close();
+    const tracked = closing.finally(() => {
+      if (this.disconnectPromise === tracked) this.disconnectPromise = null;
+    });
+    this.disconnectPromise = tracked;
+    return tracked;
   }
 
   private setStatus(status: ConnectionStatus): void {

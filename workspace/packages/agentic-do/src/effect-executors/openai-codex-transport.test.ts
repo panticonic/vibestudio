@@ -179,6 +179,34 @@ describe("OpenAI Codex transport liveness", () => {
     expect(getOpenAICodexWebSocketDebugStats(sessionId)).toBeUndefined();
   });
 
+  it("uses the attributed fetch-upgrade route in a Workers runtime even when WebSocket exists", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("WebSocketPair", class WebSocketPair {});
+    const routedSocket = new FakeWebSocket("wss://routed.invalid");
+    FakeWebSocket.instances = [];
+    FakeWebSocket.onSend = (socket) => queueMicrotask(() => socket.receive(terminalResponse));
+    const fetchMock = vi.fn(async () => {
+      // Fetch's web platform Response constructor rejects 101 even though the
+      // Workers runtime returns an upgrade response carrying `webSocket`.
+      const response = new Response(null, { status: 200 });
+      Object.defineProperty(response, "webSocket", { value: routedSocket });
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await collect(
+      stream(model, context, {
+        apiKey,
+        sessionId: "workers-routed-upgrade-test",
+        transport: "websocket",
+      })
+    );
+
+    expect(response.result.stopReason).toBe("stop");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   it("expires an SSE response body that stops delivering chunks", async () => {
     vi.stubGlobal(
       "fetch",

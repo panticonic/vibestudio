@@ -7,6 +7,7 @@ export type ModelFailureClass =
   | "request_invalid_terminal"
   | "circuit_breaker_open_terminal"
   | "context_overflow_terminal"
+  | "infrastructure_terminal"
   | "unknown_retryable";
 
 export interface ModelFailureInfo {
@@ -125,6 +126,17 @@ const REQUEST_INVALID_CODES = new Set([
   "unsupported_model",
 ]);
 
+// These are Vibestudio control-plane failures, not provider failures. If one
+// reaches model classification, an upstream RPC/eval boundary failed to settle
+// or acquire authority correctly. Retrying the model can never repair that
+// invocation and, with the durable model retry policy, would otherwise leave
+// the owning turn spinning forever.
+const INFRASTRUCTURE_TERMINAL_CODES = new Set([
+  "eacquire",
+  "eacces",
+  "respond_timeout",
+]);
+
 export function classifyModelFailure(
   input: ModelFailureInputArg,
   opts: { now?: string } = {}
@@ -144,6 +156,10 @@ export function classifyModelFailure(
     return terminal("usage_limit_terminal", codexUsage.reason, {
       resetAt: codexUsage.resetAt,
     });
+  }
+
+  if (isInfrastructureTerminal(codeKey, readable)) {
+    return terminal("infrastructure_terminal", readable);
   }
 
   if (isAuthOrCredentialError(codeKey, status, readable)) {
@@ -285,8 +301,11 @@ function collectFields(
       numberValue(details["status"]),
     code:
       input.code ??
+      stringValue(bodyRecord["errorCode"]) ??
       stringValue(bodyRecord["code"]) ??
+      stringValue(error["errorCode"]) ??
       stringValue(error["code"]) ??
+      stringValue(details["errorCode"]) ??
       stringValue(details["code"]) ??
       stringValue(bodyRecord["reason"]) ??
       stringValue(error["reason"]),
@@ -308,6 +327,13 @@ function collectFields(
       stringValue(error["message"]) ??
       stringValue(details["message"]),
   };
+}
+
+function isInfrastructureTerminal(codeKey: string, message: string): boolean {
+  if (INFRASTRUCTURE_TERMINAL_CODES.has(codeKey)) return true;
+  return /\b(?:caller has no sealed execution authority|has no sealed execution authority for)\b/i.test(
+    message
+  );
 }
 
 function codexUsageLimitMessage(

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { encodeChannelSubscriptionRecord } from "@workspace/pubsub";
 import { ChannelClient } from "./channel-client.js";
 
 interface Captured {
@@ -70,5 +71,66 @@ describe("ChannelClient.send attachments", () => {
     });
     expect(captured.publishOpts?.attachments).toBeUndefined();
     expect(captured.event?.payload?.blocks).toHaveLength(1);
+  });
+});
+
+describe("ChannelClient subscription lifetime", () => {
+  it("does not report a graceful close until the channel acknowledges self-leave", async () => {
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    let acknowledgeLeave!: () => void;
+    const leaveAcknowledged = new Promise<void>((resolve) => {
+      acknowledgeLeave = resolve;
+    });
+    const calls: string[] = [];
+    const rpc = {
+      call: vi.fn(async (_target: string, method: string) => {
+        calls.push(method);
+        if (method === "workers.resolveService") {
+          return { kind: "durable-object", targetId: "chan-do" };
+        }
+        if (method === "unsubscribe") {
+          await leaveAcknowledged;
+          streamController.close();
+          return undefined;
+        }
+        return undefined;
+      }),
+      stream: vi.fn(async () => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(
+              encodeChannelSubscriptionRecord({
+                kind: "subscribed",
+                result: {
+                  ok: true,
+                  participantId: "agent-1",
+                  envelope: { mode: "none" },
+                },
+              })
+            );
+          },
+        });
+        return new Response(body);
+      }),
+    };
+    const client = new ChannelClient(rpc as never, "chan-1");
+    const subscription = await client.openSubscription("agent-1", {
+      contextId: "ctx-1",
+    });
+
+    let settled = false;
+    const closing = subscription.close().then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(calls).toContain("unsubscribe"));
+
+    expect(calls).toEqual(["workers.resolveService", "unsubscribe"]);
+    expect(settled).toBe(false);
+
+    acknowledgeLeave();
+    await closing;
+    await subscription.closed;
+    expect(settled).toBe(true);
   });
 });

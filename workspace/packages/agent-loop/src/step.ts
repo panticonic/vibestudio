@@ -75,6 +75,16 @@ function isProviderLevelFailureCode(code: unknown): code is ModelFailureInfo["co
   );
 }
 
+function channelToolOwnersFor(roster: AgentLoopConfig["roster"]): Record<string, ParticipantRef> {
+  const owners: Record<string, ParticipantRef> = {};
+  for (const participant of roster.participants) {
+    for (const method of participant.methods) {
+      owners[method.name] ??= participant.ref;
+    }
+  }
+  return owners;
+}
+
 /** Build the next assistant message.started + its model_call effect.
  *  `itemsBefore` = number of append items that precede the message.started in
  *  the same batch (their seqs are part of the context snapshot). */
@@ -110,6 +120,7 @@ function modelStartItems(
     ...(config.skillIndexHash ? { skillIndexHash: config.skillIndexHash } : {}),
     ...(config.toolSchemasHash ? { toolSchemasHash: config.toolSchemasHash } : {}),
     activeToolNames: config.activeToolNames,
+    channelToolOwners: channelToolOwnersFor(config.roster),
     contextThroughSeq: state.lastSeq + itemsBefore,
     attemptId,
     ...(state.openTurn?.metadata ? { turnMetadata: state.openTurn.metadata } : {}),
@@ -136,7 +147,7 @@ function modelStartItems(
 }
 
 function turnMetadata(
-  command: Extract<Command, { kind: "prompt" | "steer" }>
+  command: Extract<Command, { kind: "prompt" | "prompt-failed" | "steer" }>
 ): AgentTurnMetadata | undefined {
   return command.metadata;
 }
@@ -145,7 +156,9 @@ function shouldPublishTurnLifecycle(metadata?: AgentTurnMetadata): boolean {
   return metadata?.delivery !== "none";
 }
 
-function recvItem(command: Extract<Command, { kind: "prompt" | "steer" }>): AppendItem {
+function recvItem(
+  command: Extract<Command, { kind: "prompt" | "prompt-failed" | "steer" }>
+): AppendItem {
   return {
     envelopeId: ids.recvUserMessage(command.channelId, command.source.envelopeId),
     payloadKind: "message.completed",
@@ -549,6 +562,7 @@ function interruptCleanupItems(state: AgentState, reason: string): AppendItem[] 
  *  names stay local so the local executor reports "unknown tool". */
 function transportForToolCall(
   state: AgentState,
+  channelToolOwners: Record<string, ParticipantRef>,
   name: string,
   invocationId: string
 ):
@@ -557,15 +571,14 @@ function transportForToolCall(
   if (state.config.activeToolNames.includes(name)) {
     return { kind: "local", awaiterId: invocationId };
   }
-  for (const participant of state.config.roster.participants) {
-    if (participant.methods.some((method) => method.name === name)) {
-      return {
-        kind: "channel",
-        channelId: state.channelId,
-        target: participant.ref,
-        transportCallId: ids.transportCallId(invocationId),
-      };
-    }
+  const owner = channelToolOwners[name];
+  if (owner) {
+    return {
+      kind: "channel",
+      channelId: state.channelId,
+      target: owner,
+      transportCallId: ids.transportCallId(invocationId),
+    };
   }
   return { kind: "local", awaiterId: invocationId };
 }
@@ -580,6 +593,9 @@ function expandToolCalls(
   const append: AppendItem[] = [];
   const effects: EffectDescriptor[] = [];
   const attemptId = messageId ? ids.attemptId(messageId) : "";
+  const channelToolOwners =
+    state.openTurn?.activeModelRequest?.channelToolOwners ??
+    channelToolOwnersFor(state.config.roster);
   let projected = state;
   for (const block of toolCalls) {
     const invocationId = block.id;
@@ -591,7 +607,7 @@ function expandToolCalls(
         name: block.name,
         invocationType: "tool",
         request: block.arguments,
-        transport: transportForToolCall(state, block.name, invocationId),
+        transport: transportForToolCall(state, channelToolOwners, block.name, invocationId),
         executionMode:
           state.config.localToolExecutionModes?.[block.name] === "parallel"
             ? "parallel"
@@ -978,6 +994,44 @@ function alreadyIngested(state: AgentState, recvEnvelopeId: string): boolean {
 
 function commandStep(state: AgentState, command: Command, ctx: StepContext): StepOutput {
   switch (command.kind) {
+    case "prompt-failed": {
+      const recvEnvelopeId = ids.recvUserMessage(command.channelId, command.source.envelopeId);
+      if (alreadyIngested(state, recvEnvelopeId)) return EMPTY;
+      const recv = recvItem(command);
+      const turnId = ids.turnId(command.channelId, command.source.envelopeId, ctx.selfRef.id);
+      const messageId = `m:${turnId}:prompt-infrastructure-failure`;
+      return {
+        append: [
+          recv,
+          turnOpenedItem(turnId, turnMetadata(command), recv.envelopeId),
+          {
+            envelopeId: ids.messageTerminal(messageId),
+            payloadKind: "message.failed",
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              reason: command.reason,
+              recoverable: false,
+              code: command.code,
+            },
+            causality: { messageId: messageId as never, turnId },
+            publish: true,
+          },
+          {
+            envelopeId: ids.turnClosed(turnId),
+            payloadKind: "turn.closed",
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              reason: "work_failed",
+              summary: "Agent prompt infrastructure failed before model execution.",
+            },
+            causality: { turnId },
+            publish: shouldPublishTurnLifecycle(turnMetadata(command)),
+          },
+        ],
+        effects: [],
+      };
+    }
+
     case "prompt": {
       if (
         alreadyIngested(state, ids.recvUserMessage(command.channelId, command.source.envelopeId))
@@ -1396,6 +1450,14 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
           effects: [],
         };
       }
+    }
+    // Infrastructure cannot be repaired by another model continuation inside
+    // this turn. Continuing here makes the agent wander after the invocation
+    // has already reached a terminal failure and can create an unbounded loop
+    // of unrelated tool attempts. The failed invocation remains in the log as
+    // the concrete diagnostic; closing the turn is the durable settlement.
+    if (kind === "invocation.failed" && payload["terminalOutcome"] === "infrastructure_error") {
+      return { append: [turnClosedItem(turn.turnId, { reason: "work_failed" })], effects: [] };
     }
     return nextModelCall(state, 0, ctx);
   }

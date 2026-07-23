@@ -270,6 +270,11 @@ describe("AgentLoopDriver", () => {
         baseUrl: "https://chatgpt.com/backend-api/codex",
         auth: "url-bound",
         startedAt,
+        transportRuntime: {
+          workersFetchUpgradeAvailable: true,
+          ambientWebSocketAvailable: true,
+          vibestudioWebSocketRouteInstalled: true,
+        },
       });
       record({
         phase: "finished",
@@ -286,7 +291,12 @@ describe("AgentLoopDriver", () => {
       totalCalls: 2,
       truncated: false,
       calls: [
-        { attemptId: "attempt-a", messageId: "same-message", outcome: "failed" },
+        {
+          attemptId: "attempt-a",
+          messageId: "same-message",
+          outcome: "failed",
+          transportRuntime: { vibestudioWebSocketRouteInstalled: true },
+        },
         {
           attemptId: "attempt-b",
           messageId: "same-message",

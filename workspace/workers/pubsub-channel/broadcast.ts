@@ -24,6 +24,7 @@ export interface BroadcastDeps {
 /** Delivery chains for ordered DO delivery. Resets on hibernation — safe because
  *  agent DOs handle ordering via their own checkpoints. */
 const deliveryChains = new Map<string, Promise<void>>();
+const closingDeliveryChains = new Set<string>();
 
 function deliveryKey(channelId: string, participantId: string): string {
   return `${channelId}\u0000${participantId}`;
@@ -44,10 +45,26 @@ function participantReceivesChannelEnvelopes(metadataJson: unknown): boolean {
   }
 }
 
-/** Clean up delivery chain for a participant that unsubscribed. */
+/**
+ * Stop accepting new deliveries and await the participant's ordered lane.
+ * Membership/context teardown must not race an already accepted envelope.
+ */
+export async function closeDeliveryChain(
+  channelId: string,
+  participantId: string
+): Promise<void> {
+  const key = deliveryKey(channelId, participantId);
+  closingDeliveryChains.add(key);
+  const pending = deliveryChains.get(key);
+  if (pending) await pending;
+  if (deliveryChains.get(key) === pending) deliveryChains.delete(key);
+}
+
+/** Clean up delivery state after the participant row has been deleted. */
 export function cleanupDeliveryChain(channelId: string, participantId: string): void {
   const key = deliveryKey(channelId, participantId);
   deliveryChains.delete(key);
+  closingDeliveryChains.delete(key);
 }
 
 /** Queue an ordered structured envelope delivery to a DO participant. */
@@ -58,6 +75,7 @@ export function queueDoEnvelope(
   onFatalDelivery?: (err: { code?: string }) => boolean | void
 ): Promise<void> {
   const key = deliveryKey(deps.objectKey, participantId);
+  if (closingDeliveryChains.has(key)) return Promise.resolve();
   return serializeByKey(deliveryChains, key, () =>
     deps.rpc
       .call(participantId, "onChannelEnvelope", [deps.objectKey, envelope])
@@ -109,7 +127,11 @@ export function broadcast(
         envelope.kind === "log"
           ? { kind: "log", phase: envelope.phase ?? "live", event }
           : channelEventToRpcSignal(event),
-        () => true
+        // A retired entity is ordinary roster lag and is reconciled elsewhere.
+        // Every other delivery failure is actionable: swallowing EACCES or an
+        // infrastructure error leaves the recipient's durable turn unopened
+        // while the sender believes the message was delivered.
+        (err) => err.code === "DO_NOT_CREATED"
       );
     } else {
       void deps.deliverParticipant(pid, data);
@@ -132,7 +154,11 @@ export function buildChannelEvent(
   senderMetadata: Record<string, unknown> | undefined,
   ts: number,
   attachments?: Array<{ id: string; data: string; mimeType: string; name?: string; size: number }>,
-  annotations?: Record<string, unknown>
+  annotations?: Record<string, unknown>,
+  contentIntegrity: {
+    contentClass: "internal" | "external";
+    externalKeys: string[];
+  } = { contentClass: "internal", externalKeys: [] }
 ): ChannelEvent {
   let parsedPayload: unknown;
   try {
@@ -163,6 +189,8 @@ export function buildChannelEvent(
     payload: parsedPayload,
     senderId,
     senderMetadata,
+    contentClass: contentIntegrity.contentClass,
+    externalKeys: [...contentIntegrity.externalKeys],
     ...(contentType ? { contentType } : {}),
     ts,
     ...(mappedAttachments && mappedAttachments.length > 0

@@ -11,6 +11,10 @@ export interface ChannelEnvelope<Payload = unknown> {
   payloadKind?: string;
   metadata?: Record<string, unknown>;
   attachments?: unknown[];
+  /** Host-attested content provenance at the instant the sender published. */
+  contentClass: "internal" | "external";
+  /** Exact outside-content lineage folded into the sender session at publish time. */
+  externalKeys: string[];
   /** Durable envelope annotations (policy folds — e.g. agentHops). */
   annotations?: Record<string, unknown>;
   publishedAt: string;

@@ -71,8 +71,12 @@ export interface ChannelSubscription {
   };
   /** Settles when the routed response body reaches its terminal state. */
   closed: Promise<void>;
-  /** Cancel the response body; this is the exact channel leave operation. */
-  close(): void;
+  /**
+   * Perform an acknowledged graceful leave, then close the response body.
+   * Resolving this promise proves that the channel has removed membership and
+   * drained every structured delivery it accepted for this participant.
+   */
+  close(): Promise<void>;
 }
 
 export class ChannelClient {
@@ -243,12 +247,18 @@ export class ChannelClient {
       if (!explicitlyClosed) throw new Error("Channel subscription closed unexpectedly");
     })();
     closed.catch(() => {});
+    let closePromise: Promise<void> | null = null;
     return {
       result: first.value.result,
       closed,
       close: () => {
         explicitlyClosed = true;
-        controller.abort();
+        if (!closePromise) {
+          closePromise = this.call<void>("unsubscribe", participantId).finally(() => {
+            controller.abort();
+          });
+        }
+        return closePromise;
       },
     };
   }

@@ -168,6 +168,11 @@ export type ModelExecutionAttemptEvent =
       baseUrl: string;
       auth: string;
       startedAt: string;
+      transportRuntime: {
+        workersFetchUpgradeAvailable: boolean;
+        ambientWebSocketAvailable: boolean;
+        vibestudioWebSocketRouteInstalled: boolean;
+      };
     }
   | {
       phase: "finished";
@@ -186,6 +191,8 @@ export interface EffectExecutor<D extends EffectDescriptor = EffectDescriptor> {
     signal: AbortSignal;
     deps: ExecutorDeps;
     onEphemeral(emit: EphemeralEmit): void;
+    /** Activation-local, payload-free stage marker for live stall diagnostics. */
+    onExecutionProgress?(stage: string): void;
     /** Synchronous local durability hook. A thrown `started` write prevents
      * the provider call; a thrown terminal write surfaces as a system error. */
     onModelExecutionAttempt?(event: ModelExecutionAttemptEvent): void;

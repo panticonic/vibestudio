@@ -32,6 +32,19 @@ export type Command =
       metadata?: AgentTurnMetadata;
     }
   | {
+      /** Terminal infrastructure rejection before a model effect can be created. */
+      kind: "prompt-failed";
+      channelId: string;
+      source: { envelopeId: string };
+      sourceMessageId?: string;
+      content: UserContent;
+      senderRef: ParticipantRef;
+      agentHops?: number;
+      metadata?: AgentTurnMetadata;
+      reason: string;
+      code: string;
+    }
+  | {
       kind: "steer";
       channelId: string;
       source: { envelopeId: string };

@@ -18,6 +18,34 @@ describe("classifyModelFailure", () => {
     });
   });
 
+  it("settles structured authority failures instead of retrying the model forever", () => {
+    const failure = classifyModelFailure({
+      provider: "openai-codex",
+      rawReason:
+        'RPC streaming endpoint returned HTTP 403: {"error":"missing grant","errorCode":"EACQUIRE"}',
+      now,
+    });
+
+    expect(failure).toMatchObject({
+      code: "infrastructure_terminal",
+      recoverable: false,
+      reason: expect.stringContaining("EACQUIRE"),
+    });
+  });
+
+  it("settles missing sealed execution authority as a local infrastructure failure", () => {
+    expect(
+      classifyModelFailure({
+        provider: "local",
+        rawReason: "Caller has no sealed execution authority for AiChatWorker",
+        now,
+      })
+    ).toMatchObject({
+      code: "infrastructure_terminal",
+      recoverable: false,
+    });
+  });
+
   it("treats Codex usage limits as terminal and readable", () => {
     const failure = classifyModelFailure({
       provider: "openai-codex",

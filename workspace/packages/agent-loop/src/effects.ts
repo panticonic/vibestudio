@@ -319,7 +319,19 @@ export type EffectOutcome =
       diagnosticReason?: string;
       failureCode?: string;
     }
-  | { kind: "tool"; result: unknown; summary?: string; isError: boolean; reason?: string }
+  | {
+      kind: "tool";
+      result: unknown;
+      summary?: string;
+      isError: boolean;
+      reason?: string;
+      /**
+       * Distinguishes an ordinary tool-domain failure (which the model may
+       * correct) from a terminal failure of the execution infrastructure.
+       * Successful outcomes ignore this field.
+       */
+      terminalOutcome?: "tool_error" | "infrastructure_error";
+    }
   | { kind: "approval"; granted: boolean; resolvedBy: ParticipantRef; reason?: string }
   | { kind: "credential"; resolved: boolean; reason?: string };
 
@@ -454,9 +466,13 @@ export function outcomeEvents(
         envelopeId: ids.invocationTerminal(descriptor.invocationId),
         payloadKind: outcome.isError ? "invocation.failed" : "invocation.completed",
         payload: outcome.isError
-          ? invocationFailedPayload("tool_error", outcome.reason ?? "tool failed", {
+          ? invocationFailedPayload(
+              outcome.terminalOutcome ?? "tool_error",
+              outcome.reason ?? "tool failed",
+              {
               error: outcome.result,
-            })
+              }
+            )
           : invocationCompletedPayload({
               result: outcome.result,
               ...(outcome.summary ? { summary: outcome.summary } : {}),

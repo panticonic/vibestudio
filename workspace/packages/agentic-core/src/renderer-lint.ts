@@ -22,7 +22,6 @@ export const DEFAULT_HOST_MODULES: readonly string[] = [
   "react/jsx-dev-runtime",
   "@radix-ui/themes",
   "@radix-ui/react-icons",
-  "isomorphic-git",
   "@workspace/runtime",
   "@vibestudio/browser-data/client",
 ];

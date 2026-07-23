@@ -5,7 +5,6 @@
 // --- HeadlessSession ---
 export { HeadlessSession } from "./headless-session.js";
 export type {
-  HeadlessSessionCloseOptions,
   HeadlessSessionConfig,
   HeadlessWithAgentConfig,
   SessionSnapshot,

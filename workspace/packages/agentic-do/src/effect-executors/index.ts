@@ -21,7 +21,11 @@ import { modelCallExecutor } from "./model-call.js";
 import type { EffectExecutor } from "./types.js";
 
 export * from "./types.js";
-export { modelCallExecutor, toProtocolBlocks } from "./model-call.js";
+export {
+  modelCallExecutor,
+  modelTransportRuntimeEvidence,
+  toProtocolBlocks,
+} from "./model-call.js";
 
 /** local_tool (§2.4.2): registry execution with the mutation-replay guard. */
 export const localToolExecutor: EffectExecutor<LocalToolEffect> = {

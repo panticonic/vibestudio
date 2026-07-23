@@ -185,6 +185,10 @@ export interface ModelRequestDescriptor {
   skillIndexHash?: string;
   toolSchemasHash?: string;
   activeToolNames: string[];
+  /** Exact channel-method routing represented by `toolSchemasHash` for this
+   * model call. Dispatch must use this map rather than a later live roster,
+   * which may change while the model request is in flight. */
+  channelToolOwners?: Record<string, ParticipantRef>;
   /** entries snapshot boundary; executor rebuilds context through this seq. */
   contextThroughSeq: number;
   attemptId: string;

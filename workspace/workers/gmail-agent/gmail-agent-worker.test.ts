@@ -1675,6 +1675,15 @@ describe("GmailAgentWorker", () => {
     await worker.onMethodCall("ch-1", "call-1", "checkNow", {});
     worker.sync.mockClear();
 
+    (
+      worker as unknown as {
+        _currentVerifiedCaller: { callerId: string; callerKind: string } | null;
+      }
+    )._currentVerifiedCaller = {
+      callerId: "do:workers/gmail-agent:GmailAgentWorker:gmail-push-router",
+      callerKind: "do",
+    };
+
     const result = await worker.onGmailPushNotification({
       emailAddress: "ME@example.com",
       historyId: "h9",
@@ -1700,7 +1709,10 @@ describe("GmailAgentWorker", () => {
       worker as unknown as {
         _currentVerifiedCaller: { callerId: string; callerKind: string } | null;
       }
-    )._currentVerifiedCaller = null;
+    )._currentVerifiedCaller = {
+      callerId: "do:workers/gmail-agent:GmailAgentWorker:gmail-push-router",
+      callerKind: "do",
+    };
   });
 
   it("routes generic Cloud Pub/Sub webhook deliveries to registered Gmail workers", async () => {

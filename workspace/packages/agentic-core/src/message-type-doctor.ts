@@ -188,6 +188,8 @@ function registrationEnvelope(spec: MessageTypeDoctorSpec, seq: number): Channel
     channelId: "doctor-channel",
     seq,
     from: { kind: "agent", id: "doctor-agent", participantId: "doctor-agent" },
+    contentClass: "internal",
+    externalKeys: [],
     payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
     payload: {
       kind: "messageType.registered",

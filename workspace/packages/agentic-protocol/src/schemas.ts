@@ -1043,6 +1043,8 @@ export const channelEnvelopeSchema = z
     payloadKind: z.string().optional(),
     metadata: z.record(z.unknown()).optional(),
     attachments: z.array(z.unknown()).optional(),
+    contentClass: z.enum(["internal", "external"]),
+    externalKeys: z.array(z.string()),
     annotations: z.record(z.unknown()).optional(),
     publishedAt: isoDateSchema,
   })

@@ -38,8 +38,12 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
   /** Wait for the ready signal (replay complete). */
   ready(signal?: AbortSignal): Promise<void>;
 
-  /** Close the connection */
-  close(): void;
+  /**
+   * Cooperatively leave the channel and close the connection. The promise
+   * settles only after the channel has drained accepted delivery for this
+   * participant and acknowledged the leave.
+   */
+  close(): Promise<void>;
 
   /** Send a raw message to the server (for protocol-level messages like "close") */
   sendRaw(message: Record<string, unknown>): Promise<void>;

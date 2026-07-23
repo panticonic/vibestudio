@@ -69,13 +69,13 @@ describe("ConnectionManager", () => {
         { signal: expect.any(AbortSignal) }
       );
     });
-    manager.disconnect();
+    await manager.disconnect();
 
     await expect(connectPromise).rejects.toThrow("ready aborted");
-    expect(config.rpc!.call).not.toHaveBeenCalledWith(
+    expect(config.rpc!.call).toHaveBeenCalledWith(
       CHANNEL_TARGET,
       "unsubscribe",
-      expect.any(Array)
+      ["panel:panel-1"]
     );
   });
 
@@ -97,7 +97,7 @@ describe("ConnectionManager", () => {
         { signal: expect.any(AbortSignal) }
       );
     });
-    manager.disconnect();
+    await manager.disconnect();
 
     await expect(connectPromise).rejects.toThrow("ready aborted");
   });

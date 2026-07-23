@@ -57,6 +57,9 @@ export interface ChannelAppendInput {
   /** Policy annotations (agentHops, ...). */
   annotations?: Record<string, unknown>;
   attachments?: StoredAttachment[];
+  /** Derived only from the host-sealed caller attestation by PubSubChannel. */
+  contentClass: "internal" | "external";
+  externalKeys: string[];
 }
 
 export interface MessageTypeDefinition {
@@ -108,6 +111,8 @@ interface GadChannelEnvelopeView {
   payloadKind?: string;
   metadata?: Record<string, unknown>;
   attachments?: unknown[];
+  contentClass: "internal" | "external";
+  externalKeys: string[];
   publishedAt: string;
 }
 
@@ -122,8 +127,31 @@ function policyAnnotations(
   annotations: Record<string, unknown> | undefined
 ): Record<string, unknown> | undefined {
   if (!annotations) return undefined;
-  const { metadata: _metadata, attachments: _attachments, ...rest } = annotations;
+  const {
+    metadata: _metadata,
+    attachments: _attachments,
+    contentClass: _contentClass,
+    externalKeys: _externalKeys,
+    ...rest
+  } = annotations;
   return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+function contentIntegrityFromAnnotations(annotations: Record<string, unknown>): {
+  contentClass: "internal" | "external";
+  externalKeys: string[];
+} {
+  const contentClass = annotations["contentClass"];
+  const externalKeys = annotations["externalKeys"];
+  if (
+    (contentClass !== "internal" && contentClass !== "external") ||
+    !Array.isArray(externalKeys) ||
+    !externalKeys.every((key) => typeof key === "string") ||
+    (contentClass === "internal" && externalKeys.length > 0)
+  ) {
+    throw new Error("Durable channel envelope is missing valid content-integrity provenance");
+  }
+  return { contentClass, externalKeys: [...externalKeys] };
 }
 
 export class ChannelLog {
@@ -141,6 +169,8 @@ export class ChannelLog {
     const publicMetadata = publicParticipantMetadata(input.senderMetadata);
     if (publicMetadata !== undefined) annotations["metadata"] = publicMetadata;
     if (input.attachments !== undefined) annotations["attachments"] = input.attachments;
+    annotations["contentClass"] = input.contentClass;
+    annotations["externalKeys"] = [...input.externalKeys];
     // Idempotency intent is the STORE's contract now (no error-string
     // matching here): "idempotent-by-id" callers get the journaled original
     // back as a replayed envelope; everyone else gets hard typed errors.
@@ -331,6 +361,7 @@ export class ChannelLog {
       envelopeId,
     });
     if (!envelope) return [];
+    const contentIntegrity = contentIntegrityFromAnnotations(envelope.annotations ?? {});
     return [
       this.inspectionRow({
         envelopeId: String(envelope.envelopeId),
@@ -341,6 +372,7 @@ export class ChannelLog {
         payloadKind: envelope.payloadKind,
         metadata: envelope.annotations?.["metadata"] as Record<string, unknown> | undefined,
         attachments: envelope.annotations?.["attachments"] as unknown[] | undefined,
+        ...contentIntegrity,
         publishedAt: envelope.appendedAt,
       }),
     ];
@@ -395,7 +427,8 @@ export class ChannelLog {
       envelope.metadata ?? envelope.from.metadata,
       Date.parse(envelope.publishedAt),
       envelope.attachments as StoredAttachment[] | undefined,
-      policyAnnotations((envelope as { annotations?: Record<string, unknown> }).annotations)
+      policyAnnotations((envelope as { annotations?: Record<string, unknown> }).annotations),
+      { contentClass: envelope.contentClass, externalKeys: envelope.externalKeys }
     );
   }
 
@@ -411,7 +444,8 @@ export class ChannelLog {
         (envelope.actor as { metadata?: Record<string, unknown> }).metadata,
       Date.parse(envelope.appendedAt),
       annotations["attachments"] as StoredAttachment[] | undefined,
-      policyAnnotations(envelope.annotations)
+      policyAnnotations(envelope.annotations),
+      contentIntegrityFromAnnotations(annotations)
     );
   }
 

@@ -931,7 +931,7 @@ describe("modelCallExecutor", () => {
     expect(mocks.stream).not.toHaveBeenCalled();
   });
 
-  it("does not inject onboarding instructions or tool calls in deterministic test mode", async () => {
+  it("follows an explicit first read action through the real tool loop in deterministic test mode", async () => {
     const previous = process.env["VIBESTUDIO_TEST_MODE"];
     delete process.env["VIBESTUDIO_TEST_MODE"];
     try {
@@ -940,6 +940,10 @@ describe("modelCallExecutor", () => {
       const inputDeps = deps();
       inputDeps.credentials.getApiKey = getApiKey;
       inputDeps.env = { VIBESTUDIO_TEST_MODE: "1" };
+      inputDeps.blobstore.getText = async (digest) =>
+        digest === "sys"
+          ? 'BASE SYSTEM\n\n## Your first action\n\nRun `read("skills/onboarding/SKILL.md")`.\n\n## Next'
+          : "";
       const inputDescriptor = descriptor();
       inputDescriptor.request.provider = "openai-codex";
       inputDescriptor.request.model = "gpt-5.3-codex-spark";
@@ -960,12 +964,50 @@ describe("modelCallExecutor", () => {
         stopReason: "completed",
         blocks: [
           {
-            type: "text",
-            content: "E2E model response: initial agent turn completed.",
+            type: "toolCall",
+            name: "read",
+            arguments: { path: "skills/onboarding/SKILL.md" },
           },
         ],
       });
-      expect(JSON.stringify(outcome)).not.toContain("skills/onboarding/SKILL.md");
+
+      const continuedState = initialAgentState({ channelId: "channel-1", config });
+      continuedState.entries = [
+        {
+          kind: "assistant",
+          seq: 1,
+          messageId: "msg-tool",
+          blocks: [
+            {
+              type: "toolCall",
+              id: "msg-tool:test-read",
+              name: "read",
+              arguments: { path: "skills/onboarding/SKILL.md" },
+            },
+          ],
+        },
+        {
+          kind: "tool-result",
+          seq: 2,
+          invocationId: "msg-tool:test-read",
+          name: "read",
+          result: "---\nname: onboarding\n---",
+          isError: false,
+        },
+      ];
+      const continued = await modelCallExecutor.execute({
+        descriptor: { ...inputDescriptor, messageId: "msg-continued" },
+        state: continuedState,
+        signal: new AbortController().signal,
+        deps: inputDeps,
+        onEphemeral: () => {},
+      });
+      expect(continued).toMatchObject({
+        kind: "model",
+        blocks: [
+          { type: "text", content: "E2E model response: initial agent turn completed." },
+        ],
+      });
     } finally {
       if (previous === undefined) {
         delete process.env["VIBESTUDIO_TEST_MODE"];
@@ -973,6 +1015,44 @@ describe("modelCallExecutor", () => {
         process.env["VIBESTUDIO_TEST_MODE"] = previous;
       }
     }
+  });
+
+  it("substitutes inference for a credential-free local fallback in deterministic test mode", async () => {
+    const inputDeps = deps();
+    const ensureLoaded = vi.fn();
+    inputDeps.localModels = {
+      ensureLoaded,
+      getLoopbackAuth: vi.fn(),
+    };
+    inputDeps.credentials.getApiKey = vi.fn();
+    inputDeps.env = { VIBESTUDIO_TEST_MODE: "1" };
+
+    const outcome = await modelCallExecutor.execute({
+      descriptor: descriptor({
+        provider: "local",
+        model: "lfm2.5-1.2b",
+        auth: "loopback",
+        modelSpec: {
+          ...modelSpec,
+          id: "lfm2.5-1.2b",
+          name: "LFM2.5",
+          provider: "local",
+          baseUrl: "http://127.0.0.1:43117/v1",
+        },
+      }),
+      state: initialAgentState({ channelId: "channel-1", config }),
+      signal: new AbortController().signal,
+      deps: inputDeps,
+      onEphemeral: () => {},
+    });
+
+    expect(outcome).toMatchObject({
+      kind: "model",
+      blocks: [{ type: "text", content: "E2E model response: initial agent turn completed." }],
+    });
+    expect(ensureLoaded).not.toHaveBeenCalled();
+    expect(inputDeps.credentials.getApiKey).not.toHaveBeenCalled();
+    expect(mocks.stream).not.toHaveBeenCalled();
   });
 
   it("round-trips pi replay signatures through protocol block metadata", () => {
