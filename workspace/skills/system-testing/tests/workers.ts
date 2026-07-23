@@ -80,9 +80,7 @@ function explicitCleanupProof(values: readonly unknown[]): CleanupObservation {
     const before = record["before"];
     const after = record["after"];
     const inventoryRestored =
-      Array.isArray(before) &&
-      Array.isArray(after) &&
-      inventoriesMatch(before, after);
+      Array.isArray(before) && Array.isArray(after) && inventoriesMatch(before, after);
     if (Array.isArray(before) && Array.isArray(after) && !inventoryRestored) {
       contradicted = true;
     }
@@ -149,10 +147,9 @@ function completedLifecycleCodeProvesCleanup(evidence: ScenarioEvidence): boolea
       const suffix = code.slice((match.index ?? 0) + match[0].length);
       const escaped = handle.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
       return (
-        new RegExp(
-          `\\bawait\\s+workers\\.destroy\\s*\\(\\s*${escaped}(?:\\.(?:id|targetId))?\\s*\\)`,
-          "u"
-        ).test(suffix) ||
+        new RegExp(`\\bawait\\s+workers\\.destroy\\s*\\([^)]*\\b${escaped}\\b[^)]*\\)`, "u").test(
+          suffix
+        ) ||
         new RegExp(
           `\\bawait\\s+rpc\\.call\\s*\\(\\s*["']main["']\\s*,\\s*["']runtime\\.retireEntity["'][\\s\\S]*?\\b${escaped}\\.(?:id|targetId)\\b`,
           "u"
@@ -171,9 +168,7 @@ function completedLifecycleCodeProvesCleanup(evidence: ScenarioEvidence): boolea
     const suffix = code.slice(resolvedAt);
     return (
       /\bawait\s+workers\.destroy\s*\(/u.test(suffix) ||
-      /\bawait\s+rpc\.call\s*\(\s*["']main["']\s*,\s*["']runtime\.retireEntity["']/u.test(
-        suffix
-      )
+      /\bawait\s+rpc\.call\s*\(\s*["']main["']\s*,\s*["']runtime\.retireEntity["']/u.test(suffix)
     );
   });
 }
@@ -231,14 +226,12 @@ function requireSqlPersistenceEvidence(result: TestExecutionResult) {
         value.length >= 2 &&
         value.every((row) => row !== null && typeof row === "object" && !Array.isArray(row))
     );
-    // `rows` is the compact documented shape. Natural implementations usually
-    // name the two observations after their role (`afterWrite`, `afterReopen`,
-    // `first`, `reopened`, …), so an explicit equality result is equally strong
-    // evidence and avoids coupling the test to one return-property spelling.
-    return (
-      (Array.isArray(record["rows"]) && record["rows"].length >= 2) ||
-      (record["persisted"] === true && rowCollections.length >= 1)
-    );
+    // The proof is semantic: the completed scenario made separate object calls,
+    // authored INSERT/SELECT code, and returned a non-empty row collection.
+    // Do not couple that proof to a preferred property spelling such as `rows`,
+    // `afterReopen`, or `persistedRows`. An explicit false persistence result is
+    // contradictory evidence and must still fail closed.
+    return record["persisted"] !== false && rowCollections.length >= 1;
   });
   const loggedRows = base.evidence.calls.some((call) => {
     if (call.name !== "eval" || call.execution?.status !== "complete") return false;
@@ -411,10 +404,7 @@ export const workerTests: TestCase[] = [
     category: "workers",
     prompt: "Which workers can I start here?",
     validate: (result) => {
-      const base = lifecycleEvidence(result, [
-        ["workers.listSources"],
-        ["workspace.units.list"],
-      ]);
+      const base = lifecycleEvidence(result, [["workers.listSources"], ["workspace.units.list"]]);
       if (!base.passed) return base;
       const returnedRows = walkArrays(base.evidence.evalValues).some((value) => value.length > 0);
       const loggedRows = base.evidence.calls.some((call) => {
@@ -427,7 +417,9 @@ export const workerTests: TestCase[] = [
           return false;
         }
         const output = invocationConsoleOutput(call) ?? "";
-        return /\bsourcesCount\s+[1-9]\d*\b/u.test(output) || /"source"\s*:\s*"workers\//u.test(output);
+        return (
+          /\bsourcesCount\s+[1-9]\d*\b/u.test(output) || /"source"\s*:\s*"workers\//u.test(output)
+        );
       });
       return returnedRows || loggedRows
         ? { passed: true, reason: undefined }
@@ -547,10 +539,9 @@ export const workerTests: TestCase[] = [
               const expression = declaration[2]!;
               if (observedValues.has(name)) continue;
               const dependsOnObservedValue = [...observedValues].some((candidate) =>
-                new RegExp(
-                  `\\b${candidate.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`,
-                  "u"
-                ).test(expression)
+                new RegExp(`\\b${candidate.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`, "u").test(
+                  expression
+                )
               );
               if (dependsOnObservedValue) {
                 observedValues.add(name);

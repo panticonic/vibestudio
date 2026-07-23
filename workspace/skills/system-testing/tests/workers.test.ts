@@ -129,9 +129,7 @@ describe("worker test validators", () => {
           "const units = await workspace.units.list(); return { runningWorkers: units.filter((unit) => unit.kind === 'worker' && unit.status === 'running').length, workers: units.filter((unit) => unit.kind === 'worker') };",
           {
             runningWorkers: 0,
-            workers: [
-              { name: "@workspace-workers/example", kind: "worker", status: "available" },
-            ],
+            workers: [{ name: "@workspace-workers/example", kind: "worker", status: "available" }],
           }
         )
       ).passed
@@ -188,6 +186,17 @@ describe("worker test validators", () => {
           afterWrite: [{ id: 1 }, { id: 2 }],
           afterReopen: [{ id: 1 }, { id: 2 }],
           persisted: true,
+          createdId: "worker-1",
+          retiredId: "worker-1",
+        })
+      ).passed
+    ).toBe(true);
+
+    expect(
+      test("worker-do-sql-persistence").validate(
+        execution("The later call returned both persisted rows and cleanup completed.", code, {
+          persistedRows: [{ id: 1 }, { id: 2 }],
+          sameHandleId: true,
           createdId: "worker-1",
           retiredId: "worker-1",
         })
@@ -324,23 +333,44 @@ describe("worker test validators", () => {
     ).toBe(false);
   });
 
+  it("recognizes cleanup when the created handle carries a TypeScript assertion", () => {
+    const code = [
+      'const started = await workers.create("workers/probe", { key: "probe" });',
+      "const afterCreate = await workers.list();",
+      "await workers.destroy(started as any);",
+      "const afterDestroy = await workers.list();",
+      "return {",
+      "  foundAfterCreate: afterCreate.some((entry) => entry.id === started.id),",
+      "  stillExists: afterDestroy.some((entry) => entry.id === started.id),",
+      "};",
+    ].join("\n");
+    expect(
+      test("create-worker").validate(
+        execution("The temporary worker was observed and removed.", code, {
+          foundAfterCreate: true,
+          stillExists: false,
+        })
+      ).passed
+    ).toBe(true);
+  });
+
   it("accepts a live-instance count returning to its exact baseline", () => {
     expect(
       test("create-destroy").validate(
-        execution(
-          "The temporary worker was observed and removed.",
-          lifecycleCode,
-          { beforeCount: 2, afterCreateCount: 3, afterDestroyCount: 2 }
-        )
+        execution("The temporary worker was observed and removed.", lifecycleCode, {
+          beforeCount: 2,
+          afterCreateCount: 3,
+          afterDestroyCount: 2,
+        })
       ).passed
     ).toBe(true);
     expect(
       test("create-destroy").validate(
-        execution(
-          "The temporary worker was not fully removed.",
-          lifecycleCode,
-          { beforeCount: 2, afterCreateCount: 3, afterDestroyCount: 3 }
-        )
+        execution("The temporary worker was not fully removed.", lifecycleCode, {
+          beforeCount: 2,
+          afterCreateCount: 3,
+          afterDestroyCount: 3,
+        })
       ).passed
     ).toBe(false);
   });
