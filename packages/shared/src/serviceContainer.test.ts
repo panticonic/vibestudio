@@ -91,6 +91,65 @@ describe("ServiceContainer", () => {
     expect(container.has("c")).toBe(true);
   });
 
+  it("starts a ready dependency chain while an unrelated root is still unresolved", async () => {
+    const container = new ServiceContainer();
+    const started: string[] = [];
+    let releaseSlow!: () => void;
+
+    container.registerManaged({
+      name: "slow-root",
+      start: vi.fn(async () => {
+        started.push("slow-root");
+        await new Promise<void>((resolve) => {
+          releaseSlow = resolve;
+        });
+        return "slow";
+      }),
+    });
+    container.registerManaged(
+      createService("fast-root", [], "fast", { onStart: () => started.push("fast-root") })
+    );
+    container.registerManaged(
+      createService("fast-dependent", ["fast-root"], "dependent", {
+        onStart: () => started.push("fast-dependent"),
+      })
+    );
+
+    const start = container.startAll();
+    await vi.waitFor(() => {
+      expect(started).toContain("fast-dependent");
+    });
+    expect(container.has("slow-root")).toBe(false);
+
+    releaseSlow();
+    await start;
+  });
+
+  it("exposes a complete structured startup report with the realized critical path", async () => {
+    const container = new ServiceContainer();
+    container.registerManaged(createService("root"));
+    container.registerManaged(createService("dependent", ["root"]));
+    container.registerManaged(createService("independent"));
+
+    await container.startAll();
+
+    const report = container.getStartupReport();
+    expect(report).not.toBeNull();
+    expect(report?.services.map((service) => service.name)).toEqual([
+      "root",
+      "dependent",
+      "independent",
+    ]);
+    expect(report?.services.find((service) => service.name === "dependent")).toMatchObject({
+      dependencies: ["root"],
+      criticalPredecessor: "root",
+    });
+    expect(report?.services.every((service) => service.durationMs >= 0)).toBe(true);
+    expect(report?.services.every((service) => service.queueDelayMs >= 0)).toBe(true);
+    expect(report?.criticalPath.length).toBeGreaterThan(0);
+    expect(report?.totalDurationMs).toBeGreaterThanOrEqual(0);
+  });
+
   it("resolves dependency instances in start()", async () => {
     const container = new ServiceContainer();
 

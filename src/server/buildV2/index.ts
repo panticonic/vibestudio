@@ -178,6 +178,11 @@ export interface BuildUnitIdentityResolution extends BuildUnitResolution {
   externalDeps: Record<string, string>;
 }
 
+interface GraphView {
+  graph: PackageGraph;
+  evMap: EffectiveVersionMap;
+}
+
 /** Exact-state discovery row for dynamic runtime and documentation catalogs. */
 export interface BuildUnitCatalogEntry extends BuildUnitResolution {
   manifest: GraphNode["manifest"];
@@ -218,6 +223,15 @@ export interface BuildSystemV2 {
 
   /** Resolve a build unit at `main`, a `ctx:*` context selector, or `state:*`. */
   resolveBuildUnit(unitPath: string, ref?: string): Promise<BuildUnitResolution | null>;
+
+  /**
+   * Resolve several build units against one immutable graph/EV view.
+   * Results preserve input order and use null for paths absent from the view.
+   */
+  resolveBuildUnits(
+    unitPaths: readonly string[],
+    ref: string
+  ): Promise<Array<BuildUnitResolution | null>>;
 
   /** Resolve the complete version-bound trust identity without running a build. */
   resolveBuildUnitIdentity(
@@ -503,6 +517,49 @@ export async function initBuildSystemV2(
     return fresh;
   };
 
+  // Immutable state hashes make graph views safe to share across callers. The
+  // initialization pass is the first cache entry, so exact-state lookups for
+  // the shipped snapshot do not repeat discovery and EV computation. Pending
+  // work lives in a separate flight map so LRU eviction can never break
+  // single-flight behavior.
+  const MAX_GRAPH_VIEWS = 8;
+  const graphViewCache = new Map<string, GraphView>();
+  const graphViewFlights = new Map<string, Promise<GraphView>>();
+  const cacheGraphView = (viewStateHash: string, view: GraphView): GraphView => {
+    graphViewCache.delete(viewStateHash);
+    graphViewCache.set(viewStateHash, view);
+    while (graphViewCache.size > MAX_GRAPH_VIEWS) {
+      const oldest = graphViewCache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      graphViewCache.delete(oldest);
+    }
+    return view;
+  };
+  cacheGraphView(stateHash, { graph, evMap });
+
+  /** Discover + EV-compute over one immutable content view. */
+  const viewAt = (viewStateHash: string, knownGraph?: PackageGraph): Promise<GraphView> => {
+    const cached = graphViewCache.get(viewStateHash);
+    if (cached) {
+      return Promise.resolve(cacheGraphView(viewStateHash, cached));
+    }
+    const existing = graphViewFlights.get(viewStateHash);
+    if (existing) return existing;
+
+    const flight = (async () => {
+      const graphAtState = knownGraph ?? (await source.discoverGraph(viewStateHash));
+      const hashes = await contentHashesAt(graphAtState, viewStateHash);
+      return cacheGraphView(viewStateHash, {
+        graph: graphAtState,
+        evMap: computeEffectiveVersions(graphAtState, hashes).evMap,
+      });
+    })().finally(() => {
+      graphViewFlights.delete(viewStateHash);
+    });
+    graphViewFlights.set(viewStateHash, flight);
+    return flight;
+  };
+
   const rediscoverAt = (atStateHash: string): Promise<void> => trigger.rediscoverAt(atStateHash);
 
   // Runtime bindings are immutable facts. Cache them by the exact protected
@@ -560,9 +617,9 @@ export async function initBuildSystemV2(
       } else {
         throw new Error(`Invalid build ref after validation: ${ref}`);
       }
-      graphAtState = await source.discoverGraph(stateHash);
-      const hashes = await contentHashesAt(graphAtState, stateHash);
-      evMapAtState = computeEffectiveVersions(graphAtState, hashes).evMap;
+      const view = await viewAt(stateHash);
+      graphAtState = view.graph;
+      evMapAtState = view.evMap;
     }
 
     let node = resolveUnit(graphAtState, unitPath, workspaceRoot);
@@ -617,19 +674,6 @@ export async function initBuildSystemV2(
   // -------------------------------------------------------------------------
   // Exact-state unit build reports
   // -------------------------------------------------------------------------
-
-  interface GraphView {
-    graph: PackageGraph;
-    evMap: EffectiveVersionMap;
-  }
-
-  /** Discover + EV-compute over one immutable content view. */
-  const viewAt = async (viewStateHash: string, knownGraph?: PackageGraph): Promise<GraphView> => {
-    const graph = knownGraph ?? (await source.discoverGraph(viewStateHash));
-    const hashes = await contentHashesAt(graph, viewStateHash);
-    const evMap = computeEffectiveVersions(graph, hashes).evMap;
-    return { graph, evMap };
-  };
 
   /** Manifest-only artifacts (no byte content) for a report. */
   const artifactManifests = (build: BuildResult): UnitBuildTarget["artifacts"] =>
@@ -833,7 +877,8 @@ export async function initBuildSystemV2(
         throw new Error(`Invalid build ref after validation: ${ref}`);
       }
 
-      const graphAtState = await source.discoverGraph(buildState);
+      const view = await viewAt(buildState);
+      const graphAtState = view.graph;
       const resolvePinnedUnit = (): { node: GraphNode | null; libraryEntrySubpath?: string } => {
         if (options?.library) {
           const parsed = resolveLibraryUnit(graphAtState, unitPath);
@@ -856,9 +901,7 @@ export async function initBuildSystemV2(
       }
       assertNodeBuildable(node);
 
-      const hashes = await contentHashesAt(graphAtState, buildState);
-      const result = computeEffectiveVersions(graphAtState, hashes);
-      const ev = result.evMap[node.name];
+      const ev = view.evMap[node.name];
       if (!ev) {
         throw new Error(`No effective version for ${node.name} at ref ${ref}`);
       }
@@ -978,11 +1021,10 @@ export async function initBuildSystemV2(
         const stateHash = ref.startsWith("state:")
           ? ref
           : await source.resolveContextState(ref.slice("ctx:".length));
-        const graph = await source.discoverGraph(stateHash);
+        const { graph, evMap } = await viewAt(stateHash);
         const node = resolveUnit(graph, unitPath, workspaceRoot);
         if (!node) return null;
-        const hashes = await contentHashesAt(graph, stateHash);
-        const effectiveVersion = computeEffectiveVersions(graph, hashes).evMap[node.name];
+        const effectiveVersion = evMap[node.name];
         if (!effectiveVersion) {
           throw new Error(`No effective version for ${node.name} at ${stateHash}`);
         }
@@ -1012,6 +1054,51 @@ export async function initBuildSystemV2(
       return resolved;
     },
 
+    async resolveBuildUnits(
+      unitPaths: readonly string[],
+      requestedRef: string
+    ): Promise<Array<BuildUnitResolution | null>> {
+      const ref = validateBuildRef(requestedRef);
+      if (!ref || ref === MAIN_HEAD) {
+        const snapshot = currentState();
+        return unitPaths.map((unitPath) => {
+          const node = resolveUnit(snapshot.graph, unitPath, workspaceRoot);
+          if (!node) return null;
+          const effectiveVersion = snapshot.evMap[node.name];
+          if (!effectiveVersion) {
+            throw new Error(`No effective version for ${node.name} at ${snapshot.stateHash}`);
+          }
+          return {
+            unitPath: node.relativePath,
+            unitName: node.name,
+            kind: node.kind,
+            stateHash: snapshot.stateHash,
+            effectiveVersion,
+          };
+        });
+      }
+
+      const stateHash = ref.startsWith("state:")
+        ? ref
+        : await source.resolveContextState(ref.slice("ctx:".length));
+      const { graph, evMap } = await viewAt(stateHash);
+      return unitPaths.map((unitPath) => {
+        const node = resolveUnit(graph, unitPath, workspaceRoot);
+        if (!node) return null;
+        const effectiveVersion = evMap[node.name];
+        if (!effectiveVersion) {
+          throw new Error(`No effective version for ${node.name} at ${stateHash}`);
+        }
+        return {
+          unitPath: node.relativePath,
+          unitName: node.name,
+          kind: node.kind,
+          stateHash,
+          effectiveVersion,
+        };
+      });
+    },
+
     async resolveBuildUnitIdentity(
       unitPath: string,
       requestedRef?: string
@@ -1024,9 +1111,7 @@ export async function initBuildSystemV2(
         stateHash = ref.startsWith("state:")
           ? ref
           : await source.resolveContextState(ref.slice("ctx:".length));
-        graph = await source.discoverGraph(stateHash);
-        const hashes = await contentHashesAt(graph, stateHash);
-        evMap = computeEffectiveVersions(graph, hashes).evMap;
+        ({ graph, evMap } = await viewAt(stateHash));
       } else {
         const snapshot = currentState();
         stateHash = snapshot.stateHash;
@@ -1067,9 +1152,7 @@ export async function initBuildSystemV2(
         stateHash = ref.startsWith("state:")
           ? ref
           : await source.resolveContextState(ref.slice("ctx:".length));
-        graph = await source.discoverGraph(stateHash);
-        const hashes = await contentHashesAt(graph, stateHash);
-        evMap = computeEffectiveVersions(graph, hashes).evMap;
+        ({ graph, evMap } = await viewAt(stateHash));
       } else {
         const snapshot = currentState();
         stateHash = snapshot.stateHash;
@@ -1120,9 +1203,7 @@ export async function initBuildSystemV2(
         stateHash = ref.startsWith("state:")
           ? ref
           : await source.resolveContextState(ref.slice("ctx:".length));
-        graph = await source.discoverGraph(stateHash);
-        const hashes = await contentHashesAt(graph, stateHash);
-        evMap = computeEffectiveVersions(graph, hashes).evMap;
+        ({ graph, evMap } = await viewAt(stateHash));
       } else {
         const snapshot = currentState();
         stateHash = snapshot.stateHash;

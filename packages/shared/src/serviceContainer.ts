@@ -16,11 +16,29 @@ import { createDevLogger } from "@vibestudio/dev-log";
 
 const log = createDevLogger("ServiceContainer");
 
+export interface ServiceStartupTiming {
+  name: string;
+  dependencies: string[];
+  criticalPredecessor: string | null;
+  dependencyReadyMs: number;
+  actualStartMs: number;
+  completionMs: number;
+  queueDelayMs: number;
+  durationMs: number;
+}
+
+export interface ServiceStartupReport {
+  totalDurationMs: number;
+  criticalPath: string[];
+  services: ServiceStartupTiming[];
+}
+
 export class ServiceContainer {
   private services = new Map<string, ManagedService>();
   private instances = new Map<string, unknown>();
   private startOrder: string[] = [];
   private started = false;
+  private startupReport: ServiceStartupReport | null = null;
   private dispatcher: ServiceDispatcher | null;
 
   constructor(dispatcher?: ServiceDispatcher) {
@@ -73,6 +91,8 @@ export class ServiceContainer {
     }
 
     const order = this.topologicalSort();
+    const containerStartedAt = performance.now();
+    const timings = new Map<string, ServiceStartupTiming>();
     const started = new Set<string>();
     const activeWatchdogs = new Set<ReturnType<typeof setInterval>>();
     let startupAborted = false;
@@ -89,6 +109,22 @@ export class ServiceContainer {
 
     const startOne = async (name: string): Promise<void> => {
       const service = this.services.get(name)!;
+      const dependencies = [
+        ...(service.dependencies ?? []),
+        ...(service.optionalDependencies ?? []).filter((dep) => this.services.has(dep)),
+      ];
+      const criticalPredecessor =
+        dependencies.reduce<string | null>((latest, dependency) => {
+          if (latest === null) return dependency;
+          return (timings.get(dependency)?.completionMs ?? 0) >
+            (timings.get(latest)?.completionMs ?? 0)
+            ? dependency
+            : latest;
+        }, null) ?? null;
+      const dependencyReadyMs = criticalPredecessor
+        ? (timings.get(criticalPredecessor)?.completionMs ?? 0)
+        : 0;
+      const actualStartMs = performance.now() - containerStartedAt;
       const resolve = <D>(depName: string, optional?: boolean): D | undefined => {
         if (!this.instances.has(depName)) {
           if (optional) return undefined;
@@ -139,6 +175,18 @@ export class ServiceContainer {
           log.info(`[${name}] Registered RPC service "${def.name}"`);
         }
       }
+
+      const completionMs = performance.now() - containerStartedAt;
+      timings.set(name, {
+        name,
+        dependencies,
+        criticalPredecessor,
+        dependencyReadyMs,
+        actualStartMs,
+        completionMs,
+        queueDelayMs: Math.max(0, actualStartMs - dependencyReadyMs),
+        durationMs: Math.max(0, completionMs - actualStartMs),
+      });
     };
 
     // Per-node scheduling: each service starts the moment its own dependencies
@@ -180,9 +228,33 @@ export class ServiceContainer {
 
       this.startOrder = order;
       this.started = true;
+      const criticalLeaf = order.reduce<string | null>((latest, name) => {
+        if (latest === null) return name;
+        return (timings.get(name)?.completionMs ?? 0) > (timings.get(latest)?.completionMs ?? 0)
+          ? name
+          : latest;
+      }, null);
+      const criticalPath: string[] = [];
+      for (let cursor = criticalLeaf; cursor; ) {
+        criticalPath.unshift(cursor);
+        cursor = timings.get(cursor)?.criticalPredecessor ?? null;
+      }
+      this.startupReport = {
+        totalDurationMs: performance.now() - containerStartedAt,
+        criticalPath,
+        services: order.map((name) => {
+          const timing = timings.get(name);
+          if (!timing) {
+            throw new Error(`Missing startup timing for completed service "${name}"`);
+          }
+          return timing;
+        }),
+      };
       log.info(`All ${order.length} services started`);
+      log.info("Startup report", this.startupReport);
     } catch (error) {
       startupAborted = true;
+      this.startupReport = null;
       const thrown = firstError ?? error;
       for (const watchdog of activeWatchdogs) clearInterval(watchdog);
       activeWatchdogs.clear();
@@ -236,6 +308,14 @@ export class ServiceContainer {
    */
   has(name: string): boolean {
     return this.instances.has(name);
+  }
+
+  /**
+   * Complete monotonic timing report for the most recent successful startup.
+   * The returned value is immutable from the container's perspective.
+   */
+  getStartupReport(): ServiceStartupReport | null {
+    return this.startupReport;
   }
 
   /**

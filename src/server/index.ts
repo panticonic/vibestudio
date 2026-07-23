@@ -1379,20 +1379,22 @@ async function main() {
       const snapshotState = productSeedStateHash;
       if (snapshotState && !conduitBlessingStore.hasSeed()) {
         const { PRODUCT_CONDUIT_UNITS } = await import("./productConduitPolicy.js");
-        const identities = await Promise.all(
-          PRODUCT_CONDUIT_UNITS.map(async (repoPath) => {
-            const resolved = await buildSystem.resolveBuildUnit(repoPath, snapshotState);
-            if (!resolved || resolved.kind !== "worker") {
-              throw new Error(
-                `Product conduit policy entry ${repoPath} is absent or is not a worker in the shipped snapshot`
-              );
-            }
-            return {
-              repoPath: resolved.unitPath,
-              effectiveVersion: resolved.effectiveVersion,
-            };
-          })
+        const resolutions = await buildSystem.resolveBuildUnits(
+          PRODUCT_CONDUIT_UNITS,
+          snapshotState
         );
+        const identities = PRODUCT_CONDUIT_UNITS.map((repoPath, index) => {
+          const resolved = resolutions[index];
+          if (!resolved || resolved.kind !== "worker") {
+            throw new Error(
+              `Product conduit policy entry ${repoPath} is absent or is not a worker in the shipped snapshot`
+            );
+          }
+          return {
+            repoPath: resolved.unitPath,
+            effectiveVersion: resolved.effectiveVersion,
+          };
+        });
         conduitBlessingStore.seedProductSnapshot(snapshotState, identities);
       }
       return buildSystem;
@@ -3288,20 +3290,28 @@ async function main() {
       });
     },
     activateSemanticWorkspace: async (vcs) => {
-      const t0 = Date.now();
+      const activationStartedAt = performance.now();
+      let spanStartedAt = performance.now();
       const recovered = await vcs.recoverPendingSemanticEffects();
       if (recovered > 0) console.log(`[Vcs] Recovered ${recovered} pending semantic host effects`);
-      const t1 = Date.now();
+      const recoverPendingSemanticEffectsMs = performance.now() - spanStartedAt;
       const activated = await vcs.activateWorkspaceFromSource();
-      const t2 = Date.now();
       if (activated.initialized) productSeedStateHash = activated.stateHash;
       contextIntegrityStore.ensureCutover(activated.stateHash);
+      spanStartedAt = performance.now();
       const config = await readWorkspaceConfigFromState(vcs, workspaceId, activated.stateHash);
-      console.log(
-        `[Vcs] semantic activation timing: recover=${t1 - t0}ms activate=${t2 - t1}ms readConfig=${Date.now() - t2}ms`
-      );
+      const configReadMs = performance.now() - spanStartedAt;
+      spanStartedAt = performance.now();
       applyWorkspaceConfigReload(config, { warnRestartBoundChanges: false });
+      const configReloadMs = performance.now() - spanStartedAt;
       warnMissingWorkspaceTrust();
+      console.log("[Vcs] semantic activation report", {
+        recoverPendingSemanticEffectsMs,
+        ...activated.timings,
+        configReadMs,
+        configReloadMs,
+        lifecycleTotalMs: performance.now() - activationStartedAt,
+      });
       console.log(
         `[WorkspaceConfig] ${activated.initialized ? "Initialized" : "Loaded"} semantic main ${activated.stateHash}`
       );
@@ -4437,42 +4447,6 @@ async function main() {
   for (const record of entityCache.listActive()) {
     if (record.kind === "panel") void primePanelRuntimeImage(record.source.repoPath);
   }
-  // Warm every launchable panel after startup settles. Two workers keep this
-  // background work from monopolizing the builder, while ordering about/new
-  // first makes the universal launcher image available earliest. Runtime-image
-  // binding and HTTP serving share the same immutable build flight.
-  setTimeout(() => {
-    const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-    if (!buildSystem) return;
-    void buildSystem
-      .listBuildUnits(undefined, ["panel"])
-      .then(async (units) => {
-        const launcher = units.find((unit) => unit.unitPath === "about/new");
-        if (launcher) await primePanelRuntimeImage(launcher.unitPath);
-        const pending = units
-          .filter((unit) => unit !== launcher)
-          .sort((left, right) => left.unitPath.localeCompare(right.unitPath));
-        // Give the launcher and shell handoff the first CPU slice. Remaining
-        // panels then warm with bounded concurrency in the background.
-        await new Promise<void>((resolve) => setTimeout(resolve, 250));
-        let cursor = 0;
-        const warm = async () => {
-          while (cursor < pending.length) {
-            const unit = pending[cursor++];
-            if (unit) await primePanelRuntimeImage(unit.unitPath);
-            await new Promise<void>((resolve) => setImmediate(resolve));
-          }
-        };
-        await Promise.all([warm(), warm()]);
-      })
-      .catch((error: unknown) => {
-        console.warn(
-          `[BuildV2] Background panel prebinding failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      });
-  }, 0);
   // Admit server-driven alarms only after every persisted runtime incarnation
   // has reproduced its exact sealed class image and lifecycle recovery has run.
   try {

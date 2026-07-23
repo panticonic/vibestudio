@@ -368,24 +368,44 @@ export class ContentProjectionStore {
     files: ContentFileEntry[];
     manifest: WorktreeManifest;
     skipped: SkippedEntry[];
+    timings: {
+      scanMs: number;
+      hashAndBlobIngestMs: number;
+      treeMirrorMs: number;
+      sidecarWriteMs: number;
+      totalMs: number;
+    };
   }> {
+    const startedAt = performance.now();
     const sidecar = await this.readSidecar(dir);
+    const scanStartedAt = performance.now();
     const { files: scanned, skipped } = await this.scanDir(dir);
+    const scanCompletedAt = performance.now();
     const { files, entries } = await this.hashFiles(scanned, opts.exact ? emptySidecar() : sidecar);
+    const hashCompletedAt = performance.now();
     const manifest = buildWorktreeManifest(files);
     // Eager half of the mirroring invariant: the scan holds the full file list
     // in memory, so the content store gets the tree before the hash is handed
     // out. Cheap when already mirrored (one stat on the state node).
     await mirrorWorktreeTree(this.deps.blobsDir, files, { expectStateHash: manifest.stateHash });
+    const mirrorCompletedAt = performance.now();
     if (opts.updateSidecar) {
       await this.writeSidecar(dir, { version: 2, stateHash: manifest.stateHash, files: entries });
     }
+    const completedAt = performance.now();
     return {
       stateHash: manifest.stateHash,
       previousStateHash: sidecar.stateHash,
       files,
       manifest,
       skipped,
+      timings: {
+        scanMs: scanCompletedAt - scanStartedAt,
+        hashAndBlobIngestMs: hashCompletedAt - scanCompletedAt,
+        treeMirrorMs: mirrorCompletedAt - hashCompletedAt,
+        sidecarWriteMs: completedAt - mirrorCompletedAt,
+        totalMs: completedAt - startedAt,
+      },
     };
   }
 

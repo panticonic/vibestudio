@@ -102,6 +102,18 @@ export interface WorkspaceVcsDeps {
   refs: ProtectedRefStore;
 }
 
+export interface WorkspaceActivationTimings {
+  ensureContextAndMaterializationMs: number;
+  inspectMs: number;
+  sourceScanMs: number;
+  sourceHashAndBlobIngestMs: number;
+  casTreeMirrorMs: number;
+  importSnapshotMs: number;
+  initializationPushMs: number;
+  ensureFreshMs: number;
+  totalMs: number;
+}
+
 interface SemanticRequest {
   input: unknown;
   ingress: {
@@ -614,13 +626,33 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     await this.materializer.materialize(command);
   }
 
-  async activateWorkspaceFromSource(): Promise<{ stateHash: string; initialized: boolean }> {
+  async activateWorkspaceFromSource(): Promise<{
+    stateHash: string;
+    initialized: boolean;
+    timings: WorkspaceActivationTimings;
+  }> {
+    const activationStartedAt = performance.now();
+    const timings: WorkspaceActivationTimings = {
+      ensureContextAndMaterializationMs: 0,
+      inspectMs: 0,
+      sourceScanMs: 0,
+      sourceHashAndBlobIngestMs: 0,
+      casTreeMirrorMs: 0,
+      importSnapshotMs: 0,
+      initializationPushMs: 0,
+      ensureFreshMs: 0,
+      totalMs: 0,
+    };
     const contextId = `workspace-initialization:${this.deps.workspaceId}`;
+    let spanStartedAt = performance.now();
     const state = await this.ensureContext(contextId);
+    timings.ensureContextAndMaterializationMs = performance.now() - spanStartedAt;
+    spanStartedAt = performance.now();
     const inspected = await this.semanticDirectCall<VcsInspectResult>("vcsInspect", {
       node: state,
       edgeLimit: 1,
     });
+    timings.inspectMs = performance.now() - spanStartedAt;
     if (inspected.node.kind !== "event" || inspected.node.value.kind !== "genesis") {
       const existingRefs = this.deps.refs.listMains();
       if (existingRefs.length === 0) {
@@ -636,17 +668,26 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         // This code is the trusted workspace-initialization operation. Retrying
         // its exact first publication supplies lifecycle authority at the gate;
         // generic outbox recovery above intentionally cannot do so.
+        spanStartedAt = performance.now();
         await this.semanticWorkspaceInitializationPush<VcsPushResult>({
           contextId,
           commandId: `initial-push:${state.eventId}`,
           expectedCommittedEventId: state.eventId,
           expectedMainEventId: inspected.node.value.parentEventIds[0],
         });
+        timings.initializationPushMs = performance.now() - spanStartedAt;
       }
-      return { ...(await this.ensureFresh()), initialized: false };
+      spanStartedAt = performance.now();
+      const fresh = await this.ensureFresh();
+      timings.ensureFreshMs = performance.now() - spanStartedAt;
+      timings.totalMs = performance.now() - activationStartedAt;
+      return { ...fresh, initialized: false, timings };
     }
 
     const scanned = await this.contentProjection.localState(this.deps.workspaceRoot);
+    timings.sourceScanMs = scanned.timings.scanMs;
+    timings.sourceHashAndBlobIngestMs = scanned.timings.hashAndBlobIngestMs;
+    timings.casTreeMirrorMs = scanned.timings.treeMirrorMs;
     if (scanned.skipped.length > 0) {
       throw new Error(
         `workspace source contains unsupported entries: ${scanned.skipped
@@ -673,6 +714,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       });
     }
 
+    spanStartedAt = performance.now();
     const importResult = await this.semanticDirectCall<VcsImportSnapshotResult>(
       "vcsImportSnapshot",
       {
@@ -689,13 +731,20 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         message: "Import initial workspace snapshot",
       }
     );
+    timings.importSnapshotMs = performance.now() - spanStartedAt;
+    spanStartedAt = performance.now();
     await this.semanticWorkspaceInitializationPush<VcsPushResult>({
       contextId,
       commandId: `initial-push:${importResult.eventId}`,
       expectedCommittedEventId: importResult.eventId,
       expectedMainEventId: inspected.node.value.eventId,
     });
-    return { ...(await this.ensureFresh()), initialized: true };
+    timings.initializationPushMs = performance.now() - spanStartedAt;
+    spanStartedAt = performance.now();
+    const fresh = await this.ensureFresh();
+    timings.ensureFreshMs = performance.now() - spanStartedAt;
+    timings.totalMs = performance.now() - activationStartedAt;
+    return { ...fresh, initialized: true, timings };
   }
 
   async forkContext(sourceContextId: string, targetContextId: string): Promise<VcsStateNodeRef> {

@@ -145,4 +145,67 @@ describe("BuildSystemV2 startup", () => {
     expect(second).toEqual(first);
     expect(ensureFresh).toHaveBeenCalledTimes(callsAfterFirstBinding);
   });
+
+  it("seeds and batches immutable graph resolution from the initialization pass", async () => {
+    for (const name of ["first", "second"]) {
+      const panelDir = path.join(workspaceRoot, "panels", name);
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({
+          name: `@workspace-panels/${name}`,
+          version: "0.1.0",
+          type: "module",
+        })
+      );
+    }
+
+    const source = fakeWorkspaceSource(workspaceRoot);
+    const discoverGraph = vi.spyOn(source, "discoverGraph");
+    const unitHashes = vi.spyOn(source, "unitHashes");
+    const { initBuildSystemV2 } = await import("./index.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, []);
+
+    const resolutions = await buildSystem.resolveBuildUnits(
+      ["panels/first", "panels/second"],
+      "state:test"
+    );
+
+    expect(resolutions.map((resolution) => resolution?.unitName)).toEqual([
+      "@workspace-panels/first",
+      "@workspace-panels/second",
+    ]);
+    expect(discoverGraph).toHaveBeenCalledTimes(1);
+    expect(unitHashes).toHaveBeenCalledTimes(1);
+  });
+
+  it("single-flights concurrent resolution of the same non-current immutable state", async () => {
+    const panelDir = path.join(workspaceRoot, "panels", "context");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-panels/context",
+        version: "0.1.0",
+        type: "module",
+      })
+    );
+
+    const source = fakeWorkspaceSource(workspaceRoot);
+    source.resolveContextState = async () => "state:context";
+    const discoverGraph = vi.spyOn(source, "discoverGraph");
+    const unitHashes = vi.spyOn(source, "unitHashes");
+    const { initBuildSystemV2 } = await import("./index.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, []);
+
+    const [first, second] = await Promise.all([
+      buildSystem.resolveBuildUnit("panels/context", "ctx:first"),
+      buildSystem.resolveBuildUnitIdentity("panels/context", "ctx:second"),
+    ]);
+
+    expect(first?.stateHash).toBe("state:context");
+    expect(second?.stateHash).toBe("state:context");
+    expect(discoverGraph).toHaveBeenCalledTimes(2);
+    expect(unitHashes).toHaveBeenCalledTimes(2);
+  });
 });
