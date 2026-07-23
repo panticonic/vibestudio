@@ -5,6 +5,7 @@
  * class only through SEMANTIC_CONTROL_PLANE at `vibestudio/internal`.
  */
 import { rpc } from "@vibestudio/rpc";
+import type { DurableObjectSchemaMigration } from "@vibestudio/durable";
 import { channelIdFromTrajectoryLog, logIdForChannel } from "@vibestudio/trajectory-identity";
 import { DurableObjectBase } from "@workspace/runtime/worker/durable-base";
 import type {
@@ -15,6 +16,7 @@ import type {
   PutChannelMembershipInput,
 } from "@vibestudio/shared/channelInvites";
 import { withPrivateAccountSubject } from "@vibestudio/shared/actorIdentity";
+import { parseLineageKey } from "@vibestudio/shared/authority/contextIntegrity";
 import {
   channelEnvelopePageInfo,
   normalizeChannelEnvelopePageRequest,
@@ -127,6 +129,7 @@ type SqlBinding = null | string | number | boolean | Uint8Array;
 
 /** First supported production schema for the semantic workspace authority. */
 const GAD_WORKSPACE_SCHEMA_BASELINE = 56;
+const GAD_WORKSPACE_SCHEMA_VERSION = 57;
 
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
 
@@ -662,7 +665,7 @@ interface ProjectionKey {
 }
 
 export class GadWorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = GAD_WORKSPACE_SCHEMA_BASELINE;
+  static override schemaVersion = GAD_WORKSPACE_SCHEMA_VERSION;
   constructor(ctx: ConstructorParameters<typeof DurableObjectBase>[0], env: unknown) {
     super(ctx, env);
     this.ensureReady();
@@ -677,6 +680,94 @@ export class GadWorkspaceDO extends DurableObjectBase {
       version: GAD_WORKSPACE_SCHEMA_BASELINE,
       name: "gad-semantic-workspace-v56",
     } as const;
+  }
+
+  protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [
+      {
+        version: 57,
+        name: "persist-work-unit-content-classes",
+        validateSource: (sql) => {
+          const columns = sql
+            .exec(`PRAGMA table_info(gad_work_units)`)
+            .toArray()
+            .map((row) => String(row["name"]));
+          const expected = [
+            "work_unit_id",
+            "command_id",
+            "kind",
+            "intent_summary",
+            "external_snapshot_json",
+            "normalization_protocol",
+            "created_at",
+          ];
+          if (JSON.stringify(columns) !== JSON.stringify(expected)) {
+            throw new Error(
+              `GadWorkspaceDO v56 work-unit schema is unknown: ${JSON.stringify(columns)}`
+            );
+          }
+        },
+        migrate: (sql) => {
+          sql.exec(`ALTER TABLE gad_work_units RENAME TO gad_work_units_v56`);
+          sql.exec(`CREATE TABLE gad_work_units (
+            work_unit_id TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (
+              kind IN ('edit', 'file-transfer', 'lifecycle', 'integrate', 'revert', 'import')
+            ),
+            intent_summary TEXT,
+            external_snapshot_json TEXT,
+            content_class TEXT NOT NULL CHECK (content_class IN ('internal', 'external')),
+            external_lineage_json TEXT NOT NULL CHECK (
+              json_valid(external_lineage_json) = 1
+              AND json_type(external_lineage_json) IS 'array'
+              AND (content_class = 'external' OR json_array_length(external_lineage_json) = 0)
+            ),
+            normalization_protocol TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (
+              (kind = 'import'
+                AND external_snapshot_json IS NOT NULL
+                AND json_valid(external_snapshot_json) = 1
+                AND json_type(external_snapshot_json, '$.targetRepositoryIds') IS 'array'
+                AND json_array_length(external_snapshot_json, '$.targetRepositoryIds') >= 1)
+              OR (kind <> 'import' AND external_snapshot_json IS NULL)
+            )
+          )`);
+          sql.exec(`INSERT INTO gad_work_units
+            (work_unit_id, command_id, kind, intent_summary, external_snapshot_json,
+             content_class, external_lineage_json, normalization_protocol, created_at)
+            SELECT work_unit_id, command_id, kind, intent_summary, external_snapshot_json,
+                   'internal', '[]', normalization_protocol, created_at
+              FROM gad_work_units_v56`);
+          sql.exec(`DROP TABLE gad_work_units_v56`);
+          sql.exec(`CREATE INDEX idx_gad_work_units_command
+            ON gad_work_units(command_id, work_unit_id)`);
+        },
+      },
+    ];
+  }
+
+  protected override validateSchema(): void {
+    super.validateSchema();
+    const columns = this.sql
+      .exec(`PRAGMA table_info(gad_work_units)`)
+      .toArray()
+      .map((row) => String(row["name"]));
+    const expected = [
+      "work_unit_id",
+      "command_id",
+      "kind",
+      "intent_summary",
+      "external_snapshot_json",
+      "content_class",
+      "external_lineage_json",
+      "normalization_protocol",
+      "created_at",
+    ];
+    if (JSON.stringify(columns) !== JSON.stringify(expected)) {
+      throw new Error(`GadWorkspaceDO v57 work-unit schema drift: ${JSON.stringify(columns)}`);
+    }
   }
 
   protected override requiredTables(): readonly string[] {
@@ -997,19 +1088,19 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.ensureEmptyState();
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   rawSql(sql: string, bindings: SqlBinding[] = []): { rows: JsonRecord[] } {
     this.ensureReady();
     if (!readOnlySql(sql)) throw new Error("rawSql writes are disabled");
     return { rows: this.sql.exec(sql, ...bindings).toArray() as JsonRecord[] };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   query(sql: string, bindings: SqlBinding[] = []): { rows: JsonRecord[] } {
     return this.rawSql(sql, bindings);
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   ensureBlob(hash: string, size = 0, mimeType?: string | null): void {
     this.ensureReady();
     this.sql.exec(
@@ -1035,7 +1126,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  // Closure-internal host transport. The selected semantic command performs
+  // its own publication/relationship checks; classifying this multiplexing
+  // wrapper as a user-facing critical effect would require a fresh human
+  // confirmation even for workspace boot reads and make the authority model
+  // substitute transport identity for the operation being authorized.
+  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "admin" })
   vcsSemanticDispatch(input: {
     method: string;
     request: SemanticDispatchRequest;
@@ -1044,25 +1140,25 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.semanticWorkspace().dispatch(input.method, input.request);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   vcsSemanticEffectAck(input: { acknowledgement: SemanticEffectAcknowledgement }): unknown {
     this.ensureReady();
     return this.semanticWorkspace().acknowledgeEffect(input.acknowledgement);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   vcsPendingSemanticEffects(): unknown {
     this.ensureReady();
     return this.semanticWorkspace().pendingEffects();
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   vcsContentGcRoots(): unknown {
     this.ensureReady();
     return this.semanticWorkspace().contentGcRoots();
   }
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   vcsReferencesReachable(input: {
     contextIds: string[];
     references: Array<{ kind: string; value: unknown }>;
@@ -1071,7 +1167,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.semanticWorkspace().referencesReachable(input.contextIds, input.references);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   vcsEnsureContext(input: {
     contextId: string;
     commandId: string;
@@ -1081,7 +1177,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.semanticWorkspace().ensureContext(input, input.ingress);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   vcsContextMaterializationCommand(input: {
     contextId: string;
     materializedState:
@@ -1095,7 +1191,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   vcsForkContext(input: {
     sourceContextId: string;
     targetContextId: string;
@@ -1106,7 +1202,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.semanticWorkspace().forkContext(input, input.ingress);
   }
 
-  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  @rpc({ principals: ["host"], effect: { kind: "semantic", capability: "workspace.graph.delete" }, tier: "critical", sensitivity: "destructive" })
   vcsDropContext(input: { contextId: string }): { dropped: boolean } {
     this.ensureReady();
     return {
@@ -1118,7 +1214,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // Generic refs — tag-style mutable pointers. VCS heads do not live here.
   // -------------------------------------------------------------------------
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   resolveRef(input: { refName: string }): RefRecord | null {
     this.ensureReady();
     const row = this.sql
@@ -1133,7 +1229,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   updateRef(input: {
     refName: string;
     kind: string;
@@ -1183,7 +1279,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { refName: input.refName, kind: input.kind, target: input.target, updatedAt: now };
   }
 
-  @rpc({ principals: ["host", "code"], sensitivity: "destructive" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "semantic", capability: "workspace.graph.delete" }, tier: "critical", sensitivity: "destructive" })
   deleteRef(input: { refName: string }): { deleted: number } {
     this.ensureReady();
     const existed = this.resolveRef({ refName: input.refName }) != null;
@@ -1197,7 +1293,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * have an independent typed lifecycle and are never hidden in log refs.
    * Atomic and idempotent.
    */
-  @rpc({ principals: ["host", "code"], sensitivity: "destructive" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "semantic", capability: "workspace.graph.delete" }, tier: "critical", sensitivity: "destructive" })
   deleteLogHead(input: { logId: string; head: string }): { deleted: boolean } {
     this.ensureReady();
     return this.transaction(() => {
@@ -1224,25 +1320,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "code"], sensitivity: "destructive" })
-  deleteRefsByPrefix(input: { prefix: string }): { deleted: number } {
-    this.ensureReady();
-    const upper = stringPrefixUpperBound(input.prefix);
-    const rows = this.sql
-      .exec(
-        upper
-          ? `SELECT ref_name FROM refs WHERE ref_name >= ? AND ref_name < ?`
-          : `SELECT ref_name FROM refs WHERE ref_name >= ?`,
-        ...(upper ? [input.prefix, upper] : [input.prefix])
-      )
-      .toArray() as JsonRecord[];
-    for (const row of rows) {
-      this.sql.exec(`DELETE FROM refs WHERE ref_name = ?`, String(row["ref_name"]));
-    }
-    return { deleted: rows.length };
-  }
-
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   listRefs(input: { kind?: string | null; prefix?: string | null } = {}): RefRecord[] {
     this.ensureReady();
     const clauses: string[] = [];
@@ -1270,7 +1348,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   listRefLog(input: { refName: string; limit?: number | null }): JsonRecord[] {
     this.ensureReady();
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
@@ -1287,7 +1365,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // Unified log core (one code path for every log kind — P5)
   // -------------------------------------------------------------------------
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getLogHead(input: { logId: string; head: string }): LogHeadInfo | null {
     this.ensureReady();
     const row = this.logHeadRow(input.logId, input.head);
@@ -1315,7 +1393,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * from the state-DAG merge base a context fork shares. `head` defaults to the
    * log's primary head.
    */
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getLogLineage(input: { logId: string; head?: string }): {
     parentLogId: string | null;
     forkSeq: number | null;
@@ -1508,7 +1586,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   readLog(input: ReadLogInput): LogEnvelope[] {
     this.ensureReady();
     const limit = input.limit == null ? null : Math.max(Math.trunc(input.limit), 0);
@@ -1557,14 +1635,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return collected.reverse().map((row) => this.mapLogEnvelope(row));
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getLogEvent(input: { logId: string; head: string; envelopeId: string }): LogEnvelope | null {
     this.ensureReady();
     const row = this.lineageEventRow(input.logId, input.head, input.envelopeId);
     return row ? this.mapLogEnvelope(row) : null;
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   hasLogEvents(input: { logId: string; head: string; envelopeIds: string[] }): string[] {
     this.ensureReady();
     const requested = Array.from(
@@ -1652,7 +1730,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return count;
   }
 
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   async appendLogEvent(input: AppendLogEventInput): Promise<AppendLogEventResult> {
     this.ensureReady();
     return this.transaction(() => this.appendLogEventInTxn(input));
@@ -1672,7 +1750,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
     const logKind = existingHead ? String(existingHead["log_kind"]) : String(input.logKind);
 
-    const prepared = input.events.map((event) => this.prepareLogEvent(logKind, event));
+    const prepared = input.events.map((event) =>
+      this.prepareLogEvent(
+        logKind,
+        logKind === "channel" ? this.stampChannelContent(input.logId, event) : event
+      )
+    );
 
     // Lineage-scoped idempotent replay: skip the longest already-applied prefix.
     const replayed: LogEnvelope[] = [];
@@ -2035,7 +2118,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
   }
 
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   forkLog(input: ForkLogInput): ForkLogResult {
     this.ensureReady();
     return this.transaction(() => {
@@ -2131,7 +2214,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   async checkLogIntegrity(
     input: { logId?: string | null; head?: string | null } = {}
   ): Promise<{ ok: boolean; errors: JsonRecord[] }> {
@@ -2731,7 +2814,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   /** Batch file-text indexing (the server pushes changed file text — bytes
    *  live in the filesystem CAS, not in this DO). */
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   indexMemoryFiles(input: {
     files: Array<{ path: string; contentHash: string; text: string }>;
     removedPaths?: string[] | null;
@@ -2753,13 +2836,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Index marker (P1 cache pointer): which state the file index reflects. */
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getMemoryIndexMarker(input: { key: string }): { value: string | null } {
     this.ensureReady();
     return { value: this.getStateValue(`memidx:${input.key}`) };
   }
 
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   setMemoryIndexMarker(input: { key: string; value: string }): void {
     this.ensureReady();
     this.setStateValue(`memidx:${input.key}`, input.value);
@@ -2770,7 +2853,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * anchor plus (for event-anchored rows) the event's actor and timestamp,
    * and (for file rows) the current content hash.
    */
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   recallMemory(input: {
     query: string;
     kinds?: string[] | null;
@@ -3161,7 +3244,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.sql.exec(`DELETE FROM gad_memory_fts WHERE log_id = ? AND head = ?`, key.logId, key.head);
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   rebuildTrajectoryProjections(): Promise<{ replayed: number }> {
     return this.replayTrajectoryProjections();
   }
@@ -3216,8 +3299,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const {
       metadata: _viewMetadata,
       attachments: _viewAttachments,
+      contentClass: _viewContentClass,
+      externalKeys: _viewExternalKeys,
       ...policyAnnotations
     } = annotations;
+    const contentIntegrity = this.channelContentIntegrity(annotations);
     return {
       envelopeId: envelope.envelopeId,
       channelId: brandId<ChannelId>(channelId ?? envelope.logId),
@@ -3232,12 +3318,53 @@ export class GadWorkspaceDO extends DurableObjectBase {
       ...(annotations["attachments"] !== undefined
         ? { attachments: annotations["attachments"] as unknown[] }
         : {}),
+      ...contentIntegrity,
       ...(Object.keys(policyAnnotations).length > 0 ? { annotations: policyAnnotations } : {}),
       publishedAt: envelope.appendedAt,
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  private stampChannelContent(channelId: string, event: LogAppendEventInput): LogAppendEventInput {
+    const annotations = { ...(event.annotations ?? {}) };
+    const callerIsOwningChannel =
+      this.authorization?.authorizingOrigin.kind === "code" &&
+      this.caller?.callerId === `do:workers/pubsub-channel:PubSubChannel:${channelId}`;
+
+    if (callerIsOwningChannel) {
+      // PubSubChannel derives these fields from its inbound host-sealed
+      // attestation. The GAD receiver guard accepts the stamp only from the
+      // exact owning channel object, never from arbitrary workspace code.
+      this.channelContentIntegrity(annotations);
+    } else {
+      delete annotations["contentClass"];
+      delete annotations["externalKeys"];
+      const fact = this.authorization?.contextIntegrity;
+      annotations["contentClass"] = fact?.class === "external" ? "external" : "internal";
+      annotations["externalKeys"] =
+        fact?.class === "external" ? [...new Set(fact.externalKeys.map(String))] : [];
+    }
+    return { ...event, annotations };
+  }
+
+  private channelContentIntegrity(annotations: Record<string, unknown>): {
+    contentClass: "internal" | "external";
+    externalKeys: string[];
+  } {
+    const contentClass = annotations["contentClass"];
+    const keys = annotations["externalKeys"];
+    if (
+      (contentClass !== "internal" && contentClass !== "external") ||
+      !Array.isArray(keys) ||
+      !keys.every((key) => typeof key === "string") ||
+      (contentClass === "internal" && keys.length > 0)
+    ) {
+      throw new Error("Channel append requires a valid host-attested content class");
+    }
+    const externalKeys = keys.map((key) => parseLineageKey(key));
+    return { contentClass, externalKeys: [...new Set(externalKeys)] };
+  }
+
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   listTrajectoryEvents(input: {
     trajectoryId?: string | null;
     branchId: string;
@@ -3269,7 +3396,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return row ? String(row["log_id"]) : null;
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getTrajectoryEvent(input: { eventId: string }): TrajectoryEvent | null {
     this.ensureReady();
     const row = this.sql
@@ -3278,7 +3405,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return row ? this.trajectoryEventView(this.mapLogEnvelope(row)) : null;
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getTrajectoryBranchHead(input: { trajectoryId: string; branchId: string }): JsonRecord | null {
     this.ensureReady();
     const row = this.logHeadRow(input.trajectoryId, input.branchId);
@@ -3297,7 +3424,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   async forkTrajectoryBranch(
     input: ForkTrajectoryBranchInput
   ): Promise<ForkTrajectoryBranchResult> {
@@ -3355,9 +3482,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   // --- Channel projections ---------------------------------------------------
 
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   async appendChannelEnvelope(
-    input: Omit<ChannelEnvelope, "seq" | "envelopeId" | "publishedAt"> & {
+    input: Omit<
+      ChannelEnvelope,
+      "seq" | "envelopeId" | "publishedAt" | "contentClass" | "externalKeys"
+    > & {
       envelopeId?: string | null;
       publishedAt?: string | null;
     }
@@ -3374,7 +3504,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   private channelEnvelopeEventInput(
-    input: Omit<ChannelEnvelope, "seq" | "envelopeId" | "publishedAt"> & {
+    input: Omit<
+      ChannelEnvelope,
+      "seq" | "envelopeId" | "publishedAt" | "contentClass" | "externalKeys"
+    > & {
       envelopeId?: string | null;
       publishedAt?: string | null;
     }
@@ -3382,6 +3515,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const annotations: Record<string, unknown> = {};
     if (input.metadata !== undefined) annotations["metadata"] = input.metadata;
     if (input.attachments !== undefined) annotations["attachments"] = input.attachments;
+    const fact = this.authorization?.contextIntegrity;
+    annotations["contentClass"] = fact?.class === "external" ? "external" : "internal";
+    annotations["externalKeys"] =
+      fact?.class === "external" ? [...new Set(fact.externalKeys.map(String))] : [];
     return {
       envelopeId: input.envelopeId ?? null,
       actor: input.from,
@@ -3393,9 +3530,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   async appendChannelEnvelopeWithRegistryMutation(
-    input: Omit<ChannelEnvelope, "seq" | "envelopeId" | "publishedAt"> & {
+    input: Omit<
+      ChannelEnvelope,
+      "seq" | "envelopeId" | "publishedAt" | "contentClass" | "externalKeys"
+    > & {
       envelopeId?: string | null;
       publishedAt?: string | null;
       registryMutation: RegistryMutationInput;
@@ -3426,7 +3566,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getChannelEnvelope(input: {
     envelopeId: string;
     channelId?: string | null;
@@ -3446,7 +3586,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return row ? this.channelEnvelopeView(this.mapLogEnvelope(row)) : null;
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   readChannelEnvelopes(input: ChannelEnvelopePageRequest): ChannelEnvelopePage<ChannelEnvelope> {
     this.ensureReady();
     const request = normalizeChannelEnvelopePageRequest(input);
@@ -3495,7 +3635,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   inspectChannelEnvelopes(
     input: ChannelEnvelopePageRequest
   ): ChannelEnvelopePage<ChannelEnvelopeInspection> {
@@ -3540,7 +3680,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   listMessageTypes(input: { channelId: string }): ChannelMessageTypeDefinition[] {
     this.ensureReady();
     const rows = this.sql
@@ -3555,7 +3695,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return rows.map((row) => this.mapMessageType(row));
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getMessageType(input: {
     channelId: string;
     typeId: string;
@@ -3755,7 +3895,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getTrajectoryForEnvelope(input: { envelopeId: string }): EnvelopeLineage | null {
     this.ensureReady();
     const channelRow = this.sql
@@ -3768,7 +3908,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.lineageForChannelRow(channelRow);
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   listPublishedEnvelopesForTrajectory(input: {
     trajectoryId?: string | null;
     branchId?: string | null;
@@ -3817,7 +3957,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return lineages;
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getEnvelopesForTrajectory(input: {
     trajectoryId?: string | null;
     branchId?: string | null;
@@ -3829,7 +3969,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.listPublishedEnvelopesForTrajectory(input);
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getPublishedArtifactsForTurn(input: {
     branchId?: string | null;
     turnId: string;
@@ -3844,7 +3984,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }).map((lineage) => ({ lineage }));
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getPrivateLineageForPublishedEnvelope(input: {
     envelopeId: string;
   }): PrivateLineageForPublishedEnvelope | null {
@@ -3864,7 +4004,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getDownstreamConsumers(input: { envelopeId: string; limit?: number | null }): TrajectoryEvent[] {
     this.ensureReady();
     const needle = input.envelopeId;
@@ -3887,7 +4027,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   // --- Inspection / maintenance ----------------------------------------------
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   inspectPublicationIntegrity(
     input: InspectPublicationIntegrityInput = {}
   ): PublicationIntegrityInspection {
@@ -3952,7 +4092,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   inspectTurnState(input: InspectTurnStateInput = {}): TurnStateInspection {
     this.ensureReady();
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
@@ -4022,7 +4162,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   inspectInvocationState(input: InspectInvocationStateInput = {}): InvocationStateInspection {
     this.ensureReady();
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
@@ -4090,7 +4230,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   inspectChannelRoster(input: InspectChannelRosterInput): ChannelRosterInspection {
     this.ensureReady();
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
@@ -4126,7 +4266,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   async inspectAgentHealth(input: InspectAgentHealthInput): Promise<AgentHealthInspection> {
     this.ensureReady();
     // This API is the incident *summary*. Keep it compact even when a caller
@@ -4221,7 +4361,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   inspectStorageDiagnostics(input: InspectStorageDiagnosticsInput = {}): { rows: JsonRecord[] } {
     this.ensureReady();
     const rowByteLimit = input.rowByteLimit ?? 512 * 1024;
@@ -4303,7 +4443,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { rows: rows.slice(0, limit) };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   listStoredValueRefs(
     input: {
       eventId?: string | null;
@@ -4342,7 +4482,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { rows };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getStatus(): { metric: string; value: number }[] {
     const count = (sql: string, ...bindings: SqlBinding[]) =>
       asNumber(this.sql.exec(sql, ...bindings).one()["value"]);
@@ -4586,7 +4726,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * invite was acknowledged must not recreate that invite. Older revisions are
    * rejected without mutating either projection.
    */
-  @rpc({ principals: ["host", "code"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   putChannelMembership(input: PutChannelMembershipInput): {
     applied: boolean;
     currentRevision: number;
@@ -4656,7 +4796,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Versioned channel-DO removal from membership and invite indexes. */
-  @rpc({ principals: ["host", "code"], sensitivity: "destructive" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "semantic", capability: "workspace.graph.delete" }, tier: "critical", sensitivity: "destructive" })
   deleteChannelMembership(input: DeleteChannelMembershipInput): {
     applied: boolean;
     currentRevision: number;
@@ -4705,7 +4845,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Server-only durable plan used by the child revocation cascade. */
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   listChannelMembershipsForUser(input: { userId: string }): ChannelMembershipCleanupPlan {
     this.ensureReady();
     const userId = this.requireInviteUserId(input?.userId, "listChannelMembershipsForUser");
@@ -4721,7 +4861,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Final idempotent scrub after every indexed channel acknowledged removal. */
-  @rpc({ principals: ["host"], sensitivity: "destructive" })
+  @rpc({ principals: ["host"], effect: { kind: "semantic", capability: "workspace.graph.delete" }, tier: "critical", sensitivity: "destructive" })
   purgeRevokedUserChannelIndexes(input: { userId: string }): void {
     this.ensureReady();
     const userId = this.requireInviteUserId(input?.userId, "purgeRevokedUserChannelIndexes");
@@ -4733,7 +4873,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Idempotent channel-DO removal from the workspace inbox. */
-  @rpc({ principals: ["host", "code"], sensitivity: "destructive" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "semantic", capability: "workspace.graph.delete" }, tier: "critical", sensitivity: "destructive" })
   deleteChannelInvite(input: DeleteChannelInviteInput): { deleted: boolean } {
     this.ensureReady();
     const userId = this.requireInviteUserId(input?.userId, "deleteChannelInvite");
@@ -4759,7 +4899,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Trusted channel-DO lookup for its verified calling user and own channel. */
-  @rpc({ principals: ["host", "code"], sensitivity: "read" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   getChannelInvite(input: DeleteChannelInviteInput): ChannelInvite | null {
     this.ensureReady();
     const userId = this.requireInviteUserId(input?.userId, "getChannelInvite");
@@ -4786,7 +4926,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Generic durable publish surface for trusted workspace services. */
-  @rpc({ principals: ["host", "code", "entity"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   putUserNotification(input: PutUserNotificationInput): UserNotification {
     this.ensureReady();
     if (input?.kind === CHANNEL_INVITE_NOTIFICATION_KIND) {
@@ -4800,7 +4940,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Generic durable removal surface for a notification's trusted producer. */
-  @rpc({ principals: ["host", "code", "entity"], sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   deleteUserNotification(input: { userId: string; id: string }): { deleted: boolean } {
     this.ensureReady();
     const userId = this.requireInviteUserId(input?.userId, "deleteUserNotification");
@@ -4830,7 +4970,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Durable account inbox; never enumerates producer/channel DOs. */
-  @rpc({ principals: ["user", "code"], sensitivity: "read" })
+  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   listUserNotificationsForMe(): UserNotificationListResult {
     this.ensureReady();
     const userId = this.verifiedUserNotificationCallerUserId("listUserNotificationsForMe");
@@ -4846,7 +4986,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Acknowledge/dismiss one notification for the verified account caller. */
-  @rpc({ principals: ["user", "code"], sensitivity: "write" })
+  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   acknowledgeUserNotification(input: { id: string }): UserNotificationAcknowledgementResult {
     this.ensureReady();
     const userId = this.verifiedUserNotificationCallerUserId("acknowledgeUserNotification");
@@ -4882,7 +5022,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * row per channel log id (`branch:channel:<channelId>`), newest first. The CLI
    * annotates each with its bound context via the channel DO's `getContextId`.
    */
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   listChannelLogs(): { channelId: string; logId: string; createdAt: number | null }[] {
     this.ensureReady();
     const rows = this.sql
@@ -4903,7 +5043,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   async validateGadHashes(): Promise<{ ok: boolean; errors: string[] }> {
     const integrity = await this.checkGadIntegrity();
     return {
@@ -4914,12 +5054,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   clearDirtyAfterValidation(): Promise<{ ok: boolean; errors: string[] }> {
     return this.validateGadHashes();
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   async checkGadIntegrity(): Promise<{ ok: boolean; errors: Array<Record<string, unknown>> }> {
     this.ensureReady();
     const errors: Array<Record<string, unknown>> = [];

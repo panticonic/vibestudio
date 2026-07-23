@@ -121,6 +121,10 @@ export interface SemanticDispatchRequest {
       head: string;
       invocationId: string;
     } | null;
+    contextIntegrity: {
+      class: "internal" | "external";
+      externalKeys: readonly string[];
+    };
   };
 }
 
@@ -717,6 +721,35 @@ const causalCommandRef = (ingress: SemanticDispatchRequest["ingress"]): CausalCo
     : null,
 });
 
+const persistedEffectIntegrity = (
+  payload: Row
+): SemanticDispatchRequest["ingress"]["contextIntegrity"] => {
+  const value = payload["contextIntegrity"];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new SemanticVcsError(
+      "IntegrityFailure",
+      "Pending semantic content observation has no persisted context-integrity fact"
+    );
+  }
+  const record = value as Row;
+  const externalKeys = record["externalKeys"];
+  if (
+    (record["class"] !== "internal" && record["class"] !== "external") ||
+    !Array.isArray(externalKeys) ||
+    !externalKeys.every((key) => typeof key === "string" && key.length > 0) ||
+    (record["class"] === "internal" && externalKeys.length > 0)
+  ) {
+    throw new SemanticVcsError(
+      "IntegrityFailure",
+      "Pending semantic content observation has an invalid context-integrity fact"
+    );
+  }
+  return {
+    class: record["class"],
+    externalKeys: externalKeys as string[],
+  };
+};
+
 export class SemanticWorkspace {
   constructor(private readonly deps: SemanticWorkspaceDeps) {}
 
@@ -1107,7 +1140,8 @@ export class SemanticWorkspace {
           const working = this.persistWorkingMutation(
             importInput,
             planned.draft,
-            pending.commandId
+            pending.commandId,
+            persistedEffectIntegrity(pending.payload)
           );
           const committed = this.deps.store.commit({
             contextId: importInput.contextId,
@@ -1150,7 +1184,8 @@ export class SemanticWorkspace {
         const result = this.persistWorkingMutation(
           commandInput as unknown as VcsEditInput,
           draft,
-          pending.commandId
+          pending.commandId,
+          persistedEffectIntegrity(pending.payload)
         );
         const projection = this.queueMaterialization(
           commandInput["contextId"] as string,
@@ -1447,6 +1482,7 @@ export class SemanticWorkspace {
             method: "edit",
             representation: "bytes",
             input: input as unknown as Row,
+            contextIntegrity: request.ingress.contextIntegrity as unknown as Row,
             files: [...contentHashes]
               .sort(compareUtf16CodeUnits)
               .map((contentHash) => ({ contentHash })),
@@ -1463,7 +1499,12 @@ export class SemanticWorkspace {
         return { kind: "effects-pending", result, effects: [effect] };
       }
       const draft = this.planEdit(input, null);
-      const result = this.persistWorkingMutation(input, draft, input.commandId);
+      const result = this.persistWorkingMutation(
+        input,
+        draft,
+        input.commandId,
+        request.ingress.contextIntegrity
+      );
       const effect = this.queueMaterialization(
         input.contextId,
         input.commandId,
@@ -1869,7 +1910,12 @@ export class SemanticWorkspace {
         fileResults,
         repositoryResults,
       };
-      const result = this.persistWorkingMutation(input, draft, input.commandId);
+      const result = this.persistWorkingMutation(
+        input,
+        draft,
+        input.commandId,
+        request.ingress.contextIntegrity
+      );
       const effect = this.queueMaterialization(
         input.contextId,
         input.commandId,
@@ -1965,7 +2011,12 @@ export class SemanticWorkspace {
         fileResults,
         repositoryResults: [],
       };
-      const result = this.persistWorkingMutation(input, draft, input.commandId);
+      const result = this.persistWorkingMutation(
+        input,
+        draft,
+        input.commandId,
+        request.ingress.contextIntegrity
+      );
       const effect = this.queueMaterialization(
         input.contextId,
         input.commandId,
@@ -2182,7 +2233,12 @@ export class SemanticWorkspace {
         rationale: input.decision.kind === "adopted" ? null : input.decision.rationale,
       };
       draft.decisions = [placeholderDecision];
-      const result = this.persistWorkingMutation(input, draft, input.commandId);
+      const result = this.persistWorkingMutation(
+        input,
+        draft,
+        input.commandId,
+        request.ingress.contextIntegrity
+      );
       const decisionIdValue = result.decisionIds[0];
       if (!decisionIdValue) {
         throw new SemanticVcsError("IntegrityFailure", "Integration did not persist its decision");
@@ -2536,7 +2592,12 @@ export class SemanticWorkspace {
         fileResults,
         repositoryResults,
       };
-      const result = this.persistWorkingMutation(input, draft, input.commandId);
+      const result = this.persistWorkingMutation(
+        input,
+        draft,
+        input.commandId,
+        request.ingress.contextIntegrity
+      );
       const effect = this.queueMaterialization(
         input.contextId,
         input.commandId,
@@ -2689,6 +2750,7 @@ export class SemanticWorkspace {
           method: "importSnapshot",
           representation: "descriptor",
           input: input as unknown as Row,
+          contextIntegrity: request.ingress.contextIntegrity as unknown as Row,
           files: contentHashes.map((contentHash) => ({ contentHash })),
         },
       });
@@ -3295,6 +3357,35 @@ export class SemanticWorkspace {
     ) {
       return { kind: "complete", result: null };
     }
+    const provenance = this.latestAppliedChangeForFile(asState(input.state), point.state.fileId);
+    if (!provenance) {
+      throw new SemanticVcsError(
+        "IntegrityFailure",
+        `File ${point.state.fileId} has no authoring work unit`
+      );
+    }
+    const workUnit = this.deps.sql
+      .exec(
+        `SELECT content_class, external_lineage_json FROM gad_work_units WHERE work_unit_id = ?`,
+        provenance.workUnitId
+      )
+      .toArray()[0] as Row | undefined;
+    if (
+      !workUnit ||
+      (workUnit["content_class"] !== "internal" && workUnit["content_class"] !== "external")
+    ) {
+      throw new SemanticVcsError(
+        "IntegrityFailure",
+        `File ${point.state.fileId} has no valid persisted content class`
+      );
+    }
+    const externalKeys = JSON.parse(String(workUnit["external_lineage_json"]));
+    if (!Array.isArray(externalKeys) || !externalKeys.every((key) => typeof key === "string")) {
+      throw new SemanticVcsError(
+        "IntegrityFailure",
+        `File ${point.state.fileId} has invalid persisted external lineage`
+      );
+    }
     return {
       kind: "host-read",
       request: {
@@ -3305,6 +3396,10 @@ export class SemanticWorkspace {
         repoPath: point.repository.repoPath,
         path: point.state.path,
         contentHash: point.state.contentHash,
+        authoredChangeId: provenance.changeId,
+        authoredByWorkUnitId: provenance.workUnitId,
+        contentClass: workUnit["content_class"],
+        externalKeys,
         mode: point.state.mode,
       },
     };
@@ -3348,10 +3443,84 @@ export class SemanticWorkspace {
     };
   }
 
+  /** Fold the authoring session and every exact content input into one durable class. */
+  private contentIntegrityForMutation(
+    basis: StateNodeRef,
+    draft: MutationDraft,
+    ingress: SemanticDispatchRequest["ingress"]["contextIntegrity"]
+  ): { class: "internal" | "external"; externalKeys: string[] } {
+    const externalKeys = new Set<string>(ingress.class === "external" ? ingress.externalKeys : []);
+    const workUnitIds = new Set<string>();
+    const includeFile = (state: StateNodeRef, fileId: unknown): void => {
+      if (typeof fileId !== "string" || fileId.length === 0) return;
+      const source = this.latestAppliedChangeForFile(state, fileId);
+      if (source) workUnitIds.add(source.workUnitId);
+    };
+    for (const change of draft.changes) {
+      includeFile(basis, change.base?.["fileId"]);
+      if (change.source) includeFile(asState(change.source.state), change.source.fileId);
+    }
+    for (const changeId of draft.incorporatedChangeIds) {
+      const row = this.deps.sql
+        .exec(`SELECT work_unit_id FROM gad_changes WHERE change_id = ?`, changeId)
+        .toArray()[0] as Row | undefined;
+      if (!row) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Incorporated change ${changeId} has no authoring work unit`
+        );
+      }
+      workUnitIds.add(String(row["work_unit_id"]));
+    }
+    for (const workUnitId of workUnitIds) {
+      const row = this.deps.sql
+        .exec(
+          `SELECT content_class, external_lineage_json FROM gad_work_units WHERE work_unit_id = ?`,
+          workUnitId
+        )
+        .toArray()[0] as Row | undefined;
+      if (!row) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Input work unit ${workUnitId} has no persisted content class`
+        );
+      }
+      if (row["content_class"] === "external") {
+        const keys = JSON.parse(String(row["external_lineage_json"]));
+        if (!Array.isArray(keys) || !keys.every((key) => typeof key === "string")) {
+          throw new SemanticVcsError(
+            "IntegrityFailure",
+            `Input work unit ${workUnitId} has invalid external lineage`
+          );
+        }
+        for (const key of keys) externalKeys.add(key);
+      } else if (row["content_class"] !== "internal") {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Input work unit ${workUnitId} has an unknown content class`
+        );
+      }
+    }
+    if (draft.externalSnapshot) {
+      externalKeys.add(
+        `repo:${draft.externalSnapshot.sourceUri}@${draft.externalSnapshot.snapshotRevision}`
+      );
+    }
+    if (externalKeys.size > 256) {
+      throw new SemanticVcsError(
+        "ScopeTooLarge",
+        "A semantic mutation cannot persist more than 256 external lineage keys"
+      );
+    }
+    const sorted = [...externalKeys].sort(compareUtf16CodeUnits);
+    return { class: sorted.length > 0 ? "external" : "internal", externalKeys: sorted };
+  }
+
   private persistWorkingMutation(
     input: { contextId: string; expectedWorkingHead: VcsStateNodeRef; commandId: string },
     draft: MutationDraft,
-    commandId: string
+    commandId: string,
+    contextIntegrity: SemanticDispatchRequest["ingress"]["contextIntegrity"]
   ): {
     commandId: string;
     contextId: string;
@@ -3367,11 +3536,14 @@ export class SemanticWorkspace {
     const basis = asState(input.expectedWorkingHead);
     const basisRoot = this.deps.store.stateRoot(basis);
     const createdAt = this.deps.now();
+    const contentIntegrity = this.contentIntegrityForMutation(basis, draft, contextIntegrity);
     const workUnitIdValue = workUnitIdentity({
       commandId,
       kind: draft.kind,
       intentSummary: draft.intentSummary,
       externalSnapshot: draft.externalSnapshot ?? null,
+      contentClass: contentIntegrity.class,
+      externalKeys: contentIntegrity.externalKeys,
     });
     const changes: ChangeRecord[] = draft.changes.map((change) => {
       const withoutIdentity = {
@@ -3627,6 +3799,8 @@ export class SemanticWorkspace {
       authoredChangeIds: changes.map((value) => value.changeId),
       intentSummary: draft.intentSummary,
       externalSnapshot: draft.externalSnapshot ?? null,
+      contentClass: contentIntegrity.class,
+      externalKeys: contentIntegrity.externalKeys,
       normalizationProtocol: NORMALIZATION_PROTOCOL,
       createdAt,
     };
@@ -5009,6 +5183,8 @@ export class SemanticWorkspace {
                     snapshotDigest: storedExternalSnapshot["snapshotDigest"],
                     targetRepositoryIds,
                   },
+            contentClass: String(row["content_class"]),
+            externalKeys: JSON.parse(String(row["external_lineage_json"])),
             normalizationProtocol: String(row["normalization_protocol"]),
             createdAt: String(row["created_at"]),
           },

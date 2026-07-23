@@ -44,6 +44,10 @@ function vcs(overrides: Partial<DocVcs> = {}): DocVcs {
       path: "Note.mdx",
       content: { kind: "text", text: "# Base\n" },
       contentHash: "blob:base",
+      authoredChangeId: "change:base",
+      authoredByWorkUnitId: "work:base",
+      contentClass: "internal",
+      externalKeys: [],
       mode: 0o644,
     }),
     edit: async () => {

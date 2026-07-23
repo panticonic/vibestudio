@@ -120,6 +120,8 @@ export interface WorkUnitRecord {
   authoredChangeIds: readonly string[];
   intentSummary: string | null;
   externalSnapshot: ExternalSnapshotRecord | null;
+  contentClass: "internal" | "external";
+  externalKeys: readonly string[];
   normalizationProtocol: string;
   createdAt: string;
 }
@@ -251,6 +253,8 @@ export const workUnitIdentity = (input: {
   kind: WorkUnitRecord["kind"];
   intentSummary: string | null;
   externalSnapshot: WorkUnitRecord["externalSnapshot"];
+  contentClass: WorkUnitRecord["contentClass"];
+  externalKeys: WorkUnitRecord["externalKeys"];
 }): string => compactId("work-unit", input);
 
 export const changeIdentity = (input: Omit<ChangeRecord, "changeId" | "effectDigest">): string =>
@@ -1253,13 +1257,15 @@ export class SemanticVcsStore {
     this.sql.exec(
       `INSERT INTO gad_work_units
        (work_unit_id, command_id, kind, intent_summary, external_snapshot_json,
-        normalization_protocol, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        content_class, external_lineage_json, normalization_protocol, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       value.workUnitId,
       value.commandId,
       value.kind,
       value.intentSummary,
       value.externalSnapshot == null ? null : canonicalJson(value.externalSnapshot),
+      value.contentClass,
+      canonicalJson(value.externalKeys),
       value.normalizationProtocol,
       value.createdAt
     );

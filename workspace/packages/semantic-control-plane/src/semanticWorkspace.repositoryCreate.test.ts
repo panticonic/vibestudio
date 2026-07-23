@@ -12,6 +12,7 @@ const ingress: SemanticDispatchRequest["ingress"] = {
     head: "main",
     invocationId: "invocation:test",
   },
+  contextIntegrity: { class: "internal", externalKeys: [] },
 };
 
 describe("SemanticWorkspace repository creation", () => {

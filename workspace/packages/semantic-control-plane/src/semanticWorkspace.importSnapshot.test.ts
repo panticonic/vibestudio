@@ -214,7 +214,7 @@ describe("SemanticWorkspace snapshot import", () => {
         targetContextId: "context:subagent",
         commandId: "command:fork-subagent",
       },
-      { causalParent: null }
+      { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } }
     );
     expect(forked).toMatchObject({ kind: "effects-pending" });
     acknowledgeMaterialization(semantic, forked);
@@ -224,7 +224,7 @@ describe("SemanticWorkspace snapshot import", () => {
         contextId: "context:subagent",
         commandId: "command:attach-subagent-runtime",
       },
-      { causalParent: null }
+      { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } }
     );
 
     expect(attached).toEqual({
@@ -247,6 +247,7 @@ describe("SemanticWorkspace snapshot import", () => {
         head: "main",
         invocationId: "invocation:test",
       },
+      contextIntegrity: { class: "internal", externalKeys: [] },
     };
     const observationDispatch = await semantic.dispatch("importSnapshot", {
       ingress,
@@ -316,12 +317,16 @@ describe("SemanticWorkspace snapshot import", () => {
             authoredChangeCount: number;
             authoredChangeIds: string[];
             externalSnapshot: Record<string, unknown>;
+            contentClass: "internal" | "external";
+            externalKeys: string[];
           };
         };
       }
     ).node.value;
     expect(inspectedWork).toMatchObject({
       authoredChangeCount: 2,
+      contentClass: "external",
+      externalKeys: ["repo:https://example.test/project.git@commit:head"],
       externalSnapshot: {
         sourceKind: "git",
         sourceUri: "https://example.test/project.git",
@@ -338,6 +343,22 @@ describe("SemanticWorkspace snapshot import", () => {
           },
         ]),
         targetRepositoryIds: [repositoryId],
+      },
+    });
+    const read = await restarted.dispatch("readFile", {
+      ingress,
+      input: {
+        state,
+        repositoryId,
+        file: { kind: "id", fileId: file.fileId },
+      },
+    });
+    expect(read).toMatchObject({
+      kind: "host-read",
+      request: {
+        authoredByWorkUnitId: imported.workUnitId,
+        contentClass: "external",
+        externalKeys: ["repo:https://example.test/project.git@commit:head"],
       },
     });
     const authoredChangeIds = inspectedWork.authoredChangeIds;
@@ -431,6 +452,7 @@ describe("SemanticWorkspace snapshot import", () => {
             head: "main",
             invocationId: "invocation:test",
           },
+          contextIntegrity: { class: "internal", externalKeys: [] },
         },
         input: {
           contextId: "context:test",
@@ -486,6 +508,7 @@ describe("SemanticWorkspace snapshot import", () => {
         head: "main",
         invocationId: "invocation:test",
       },
+      contextIntegrity: { class: "internal", externalKeys: [] },
     };
     const unchanged = textFile("src/unchanged.ts", "same");
     const beforeChange = textFile("src/changed.ts", "old");
@@ -734,6 +757,7 @@ describe("SemanticWorkspace snapshot import", () => {
         head: "main",
         invocationId: "invocation:test",
       },
+      contextIntegrity: { class: "internal", externalKeys: [] },
     };
     const before = textFile("src/script.ts", "echo", 0o644);
     const after = textFile("src/script.ts", "echo", 0o755);
@@ -867,6 +891,7 @@ describe("SemanticWorkspace snapshot import", () => {
           head: "main",
           invocationId: "invocation:test",
         },
+        contextIntegrity: { class: "internal", externalKeys: [] },
       },
       input: {
         contextId: "context:test",
@@ -917,6 +942,7 @@ describe("SemanticWorkspace snapshot import", () => {
         head: "main",
         invocationId: "invocation:test",
       },
+      contextIntegrity: { class: "internal", externalKeys: [] },
     };
     const repositoryCount = 104;
     const imported = await completeImport(
@@ -975,7 +1001,7 @@ describe("SemanticWorkspace snapshot import", () => {
     const { semantic, store, initial } = await authorityFixture();
     const file = textFile("dist/index.js", "built\n");
     const requestFor = (commandId: string, filePath: string): SemanticDispatchRequest => ({
-      ingress: { causalParent: null },
+      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
       input: {
         contextId: "context:test",
         commandId,
@@ -1018,6 +1044,7 @@ describe("SemanticWorkspace snapshot import", () => {
         head: "main",
         invocationId: "invocation:test",
       },
+      contextIntegrity: { class: "internal", externalKeys: [] },
     };
     const observationDispatch = await semantic.dispatch("importSnapshot", {
       ingress,
@@ -1089,6 +1116,7 @@ describe("SemanticWorkspace snapshot import", () => {
         head: "main",
         invocationId: "invocation:test",
       },
+      contextIntegrity: { class: "internal", externalKeys: [] },
     };
     const sourceFile = textFile("src/index.ts", "hello");
     const source = await completeImport(
@@ -1280,6 +1308,7 @@ describe("SemanticWorkspace snapshot import", () => {
         head: "main",
         invocationId: "invocation:test",
       },
+      contextIntegrity: { class: "internal", externalKeys: [] },
     };
     const files = Array.from({ length: 1_658 }, (_, index) => ({
       path: `src/file-${String(index).padStart(4, "0")}.ts`,
@@ -1592,6 +1621,7 @@ describe("SemanticWorkspace snapshot import", () => {
         head: "main",
         invocationId: "invocation:test",
       },
+      contextIntegrity: { class: "internal", externalKeys: [] },
     };
     const repositoryCount = 520;
     const imported = await completeImport(
@@ -1689,6 +1719,7 @@ describe("SemanticWorkspace snapshot import", () => {
         head: "main",
         invocationId: "invocation:test",
       },
+      contextIntegrity: { class: "internal", externalKeys: [] },
     };
     const source = textFile("src/source.ts", "export const source = true;\n");
     const imported = await completeImport(

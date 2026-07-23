@@ -202,9 +202,9 @@ describe("SemanticWorkspace causal provenance reachability", () => {
     sql.exec(
       `INSERT INTO gad_work_units
        (work_unit_id, command_id, kind, intent_summary, external_snapshot_json,
-        normalization_protocol, created_at)
+        content_class, external_lineage_json, normalization_protocol, created_at)
        VALUES ('work-unit:causal', 'command:causal', 'edit', 'Apply the causal intent', NULL,
-               'normalization:test', ?)`,
+               'internal', '[]', 'normalization:test', ?)`,
       timestamp
     );
     sql.exec(
