@@ -17,7 +17,6 @@ import { semanticVcsPathAdmission } from "@vibestudio/shared/vcs/pathAdmission";
 import type { RuntimeFs } from "./runtime-fs.js";
 import {
   resolveToolFile,
-  resolveToolRepository,
   resolveToolWorkingState,
   toVcsPath,
   toolCommandId,
@@ -29,7 +28,7 @@ import {
 const writeSchema = Type.Object({
   path: Type.String({
     description:
-      "Workspace-relative path. Source-repo paths become uncommitted VCS edits; non-repo scratch paths are written to the caller's scoped runtime filesystem.",
+      "Workspace-relative path. Use .tmp/<name> for temporary/context-local files. Managed source paths must be inside an existing repository, for example projects/default/<file> or packages/<name>/<file>.",
   }),
   content: Type.String({ description: "Content to write to the file" }),
 });
@@ -41,7 +40,7 @@ export interface WriteToolDetails {
   path: string;
   storage: "vcs" | "scratch" | "none";
   /** A recoverable policy mismatch. No file was written. */
-  diagnostic?: "semantic-path-inadmissible";
+  diagnostic?: "semantic-path-inadmissible" | "repository-not-present";
   suggestedScratchPath?: string;
   /** Exact canonical semantic result for a managed write. */
   vcsResult?: VcsWorkingMutationResult;
@@ -57,7 +56,7 @@ export function createWriteTool(
     name: "write",
     label: "write",
     description:
-      "Write a text file. Workspace source paths become uncommitted VCS edits; ordinary non-repo paths are context-local scratch.",
+      "Write a text file. Use .tmp/<name> for temporary files. Managed source paths become uncommitted VCS edits and must be inside an existing repository (such as projects/default or packages/<name>).",
     parameters: writeSchema,
     execute: async (_toolCallId, input, signal) => {
       const { path, content } = input;
@@ -108,7 +107,31 @@ export function createWriteTool(
       // intentionally absent from this public semantic payload.
       if (!repo?.repoRelPath) throw new Error(`${relPath} is not a file in a workspace repository`);
       const workingHead = await resolveToolWorkingState(vcs, context);
-      const repository = await resolveToolRepository(vcs, workingHead, repo.repoPath);
+      const repository = await vcs.resolveRepository({
+        state: workingHead,
+        repoPath: repo.repoPath,
+      });
+      if (!repository) {
+        const basename = relPath.split("/").filter(Boolean).at(-1) ?? "output.txt";
+        const suggestedScratchPath = `.tmp/${basename}`;
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `No file written: ${repo.repoPath} is not an existing workspace repository. ` +
+                `Choose a path inside an existing repository, or retry temporary data at ${suggestedScratchPath}.`,
+            },
+          ],
+          details: {
+            bytesWritten: 0,
+            path: relPath,
+            storage: "none",
+            diagnostic: "repository-not-present",
+            suggestedScratchPath,
+          },
+        };
+      }
       const existing = await resolveToolFile(vcs, workingHead, relPath);
       const vcsResult = await vcs.edit({
         contextId: toolContextId(context),
