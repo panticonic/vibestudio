@@ -22,6 +22,7 @@ import type { DeferredResult } from "@vibestudio/shared/serviceDispatcher";
 import { isDeferredResult } from "@vibestudio/shared/serviceDispatcher";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 
 const IDENTIFIER_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
 
@@ -1108,10 +1109,17 @@ export const credentialsMethods = defineServiceMethods({
   },
   deleteClientConfig: {
     description:
-      "Disable a client config (marks it deleted so it is no longer used for new connections or refreshes); userland callers are prompted to confirm and only the config's owner may delete it.",
+      "Disable a client config (marks it deleted so it is no longer used for new connections or refreshes); requires critical account-provider deletion authority bound to the exact config id.",
     args: z.tuple([DeleteClientConfigParamsSchema]),
     returns: z.void(),
     access: DELETE_CLIENT_CONFIG_ACCESS,
+    authority: {
+      requirement: requirementForPrincipals(
+        ["code", "user", "host"],
+        "account-providers.delete"
+      ),
+      resource: { kind: "argument", index: 0, path: ["configId"] },
+    },
     examples: [{ args: [{ configId: "google-workspace" }] }],
   },
   forwardOAuthCallback: {
@@ -1144,10 +1152,14 @@ export const credentialsMethods = defineServiceMethods({
   },
   revokeCredential: {
     description:
-      "Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); only an authorized administrator of the credential may call it.",
+      "Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); requires critical account-disconnection authority bound to the exact credential id.",
     args: z.tuple([CredentialIdParamsSchema]),
     returns: z.void(),
     access: REVOKE_CREDENTIAL_ACCESS,
+    authority: {
+      requirement: requirementForPrincipals(["code", "user", "host"], "accounts.disconnect"),
+      resource: { kind: "argument", index: 0, path: ["credentialId"] },
+    },
     examples: [{ args: [{ credentialId: "cred-123" }] }],
   },
   resolveCredential: {

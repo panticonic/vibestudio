@@ -40,7 +40,7 @@ Authority principals: `code`, `host`, `user`
 
 Audit log query access
 
-Authority principals: `code`, `entity`, `host`, `user`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -56,6 +56,17 @@ Authority principals: `host`, `user`
 |--------|-------------|
 | `auth.grantConnection` | Mint a short-lived connection token for a panel/app caller (requires the panel-hosting capability), granting it access to the gateway. |
 | `auth.getConnectionInfo` | Report how clients should reach this gateway: server/connect URLs, protocol, server identity, and current workspace. |
+
+## `authority`
+
+Acquisition lifecycle and side-effect-free authority inspection
+
+Authority principals: `code`, `host`, `mission`, `session`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `authority.awaitDecision` | Wait without a deadline for one acquisition owned by this session. |
+| `authority.preflight` | Dry-run a service method's complete authority contract without prompting or consuming authority. |
 
 ## `blobstore`
 
@@ -94,7 +105,7 @@ Authority principals: `code`, `host`, `user`
 | `build.getBuild` | Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache. |
 | `build.getBuildNpm` | Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled. |
 | `build.getBuildMetadata` | Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. |
-| `build.getBuildReport` | Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return an agent-actionable unit build report with structured esbuild + tsc diagnostics. This advisory projection does not publish source, authorize publication, or advance any head. |
+| `build.getBuildReport` | Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return an agent-actionable unit build report. Read diagnostics from report.builds.flatMap((build) => build.diagnostics); diagnostics are per target, not a top-level report field. This advisory projection does not publish source, authorize publication, or advance any head. |
 | `build.getEffectiveVersion` | Effective version (content-derived identity) of a workspace unit, or null if unknown. |
 | `build.inspectBuildProvenance` | Resolve a workspace build unit (by name, relative path, or basename) and report its effective version, immutable build keys, and cached artifact metadata. Reports ambiguity when a basename matches multiple units. |
 | `build.listRecentBuildEvents` | List recent state-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path. |
@@ -105,6 +116,20 @@ Authority principals: `code`, `host`, `user`
 | `build.hasUnit` | Whether a build unit with this name exists in the workspace graph. |
 | `build.getPanelMetadata` | Launcher metadata (source path, title, description, launcher visibility) for a panel unit, or null if the name is absent or not a panel. |
 | `build.listSkills` | List available workspace skill packages that can be loaded via the eval imports parameter. |
+
+## `contentTrust`
+
+Human-owned exact content vouches and bounded trust policies
+
+Authority principals: `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `contentTrust.status` | Report whether the context-integrity cutover is active. |
+| `contentTrust.list` | List exact content vouches and future-content trust policies. |
+| `contentTrust.vouch` | Trust one exact content-addressed lineage key. |
+| `contentTrust.addPolicy` | Trust future versions from one exact package name or repository remote. |
+| `contentTrust.revoke` | Revoke an exact content vouch or trust policy for future resolutions. |
 
 ## `credentials`
 
@@ -119,12 +144,12 @@ Authority principals: `code`, `host`, `user`
 | `credentials.configureClient` | Store (versioned) OAuth client configuration — authorize/token URLs and client fields such as client id/secret; userland callers are prompted to submit the material, and secrets are never returned in the status. |
 | `credentials.requestCredentialInput` | Prompt the user to enter exactly one secret field, then store the resulting credential; the submitted secret is never returned in the summary. |
 | `credentials.getClientConfigStatus` | Return the configured status of an OAuth client config (which fields are set, URLs, status) without revealing secret values; rejects callers outside the config's trust scope. |
-| `credentials.deleteClientConfig` | Disable a client config (marks it deleted so it is no longer used for new connections or refreshes); userland callers are prompted to confirm and only the config's owner may delete it. |
+| `credentials.deleteClientConfig` | Disable a client config (marks it deleted so it is no longer used for new connections or refreshes); requires critical account-provider deletion authority bound to the exact config id. |
 | `credentials.forwardOAuthCallback` | Deliver an inbound OAuth provider callback (code/state, or a full callback URL) to its pending connection transaction, validating the caller against the transaction's redirect strategy. |
 | `credentials.cancelOAuth` | Cancel a pending interactive OAuth connection transaction. |
 | `credentials.listStoredCredentials` | List summaries of stored URL-bound credentials visible to the caller; secret material is never included. |
 | `credentials.inspectStoredCredentials` | List administrator-facing credential summaries with runtime usage metadata; secret material is never included. |
-| `credentials.revokeCredential` | Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); only an authorized administrator of the credential may call it. |
+| `credentials.revokeCredential` | Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); requires critical account-disconnection authority bound to the exact credential id. |
 | `credentials.resolveCredential` | Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary, null when nothing matches, or a DeferredResult while a use-approval prompt is awaited. |
 | `credentials.proxyFetch` | Forward an outbound HTTP request through the egress proxy, injecting the resolved credential; returns status, ordered header pairs, final URL, and a base64 body. |
 | `credentials.proxyGitHttp` | Forward a Git smart-HTTP request through the egress proxy with credential injection; the request/response bodies are base64-encoded. |
@@ -135,7 +160,7 @@ Authority principals: `code`, `host`, `user`
 
 Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).
 
-Authority principals: `code`, `entity`, `host`, `user`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -150,13 +175,13 @@ Authority principals: `code`, `entity`, `host`, `user`
 
 Owner-scoped sandbox eval backed by a per-owner internal EvalDO
 
-Authority principals: `code`, `entity`, `host`, `user`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
 | `eval.run` | Run TypeScript/JS in the caller's per-owner EvalDO sandbox (persistent REPL scope + synchronous in-DO SQLite `db`). Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context. |
 | `eval.reset` | Reset the eval context: wipe the persistent scope + the user `db` tables (a fresh scope), preserving the kernel's own state. The owner's existing data is cleared. |
-| `eval.startRun` | Start an eval run for a caller that cannot hold a connection (an agent DO): returns a runId at once; reset:true atomically clears scope/db before the idempotent run is first inserted. The eval runs server-held in the EvalDO and the result is delivered out-of-band (onEvalComplete) and/or polled via getRun. Connection-holding callers (panels/CLI) should use `run` for a one-request result. |
+| `eval.startRun` | Start an asynchronous eval for an agent DO: returns a runId after the EvalDO durably records and schedules the idempotent run; reset:true atomically clears scope/db before first insertion. The owning EvalDO delivers the result directly to its agent, while getRun reads the canonical durable result for recovery. Panels/CLI should use run for a one-request result. |
 | `eval.getRun` | Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result. |
 | `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
 | `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
@@ -186,7 +211,7 @@ Authority principals: `code`, `host`, `user`
 
 Filesystem operations. Context-bound callers are sandboxed to their context folder; the semantic workspace records managed reads and mutations before host projection, with structured move/copy preserving explicit provenance. Scratch-only adapters may access context-local paths outside reserved workspace source roots and fail closed for managed paths. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.
 
-Authority principals: `code`, `entity`, `host`, `user`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -281,12 +306,29 @@ Authority principals: `host`, `user`
 
 Read-side of the context projector: `targets` returns a context's per-repo content-addressed states, `objects` streams the CAS tree content for a state in size-bounded pages. Powers `vibestudio context mirror`.
 
-Authority principals: `code`, `entity`, `host`, `user`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
 | `mirror.targets` | Return repository content projections for a context's exact working head. Each {repoPath,stateHash} is a content-only projector target, never ancestry or a semantic revision. Stream its immutable tree through `objects`. |
 | `mirror.objects` | Stream one content-only repository tree as bounded pages of {path,mode,content,size}. Agent callers may read only states currently reachable from their host-bound context; no prior `targets` call is required. A stateHash never grants workspace history or provenance. Page with `next` until absent and optionally restrict to paths. |
+
+## `mission`
+
+Content-addressed charters for recurring and unattended agents
+
+Authority principals: `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `mission.list` | List durable automation charters and their approval state. |
+| `mission.get` | Read one durable automation charter. |
+| `mission.createDraft` | Create an inert mission draft; this grants and schedules nothing. |
+| `mission.edit` | Edit a mission; charter changes lapse its active authority. |
+| `mission.approve` | Approve the exact current mission closure and its exposed permission rows. |
+| `mission.pause` | Pause an active mission without changing its charter. |
+| `mission.resume` | Resume a paused mission only if its approved closure still matches. |
+| `mission.retire` | Retire a mission permanently and revoke its standing allows. |
 
 ## `notification`
 
@@ -304,7 +346,7 @@ Authority principals: `code`, `host`, `user`
 
 Approval-gated server CDP access for panel targets
 
-Authority principals: `code`, `entity`, `host`, `user`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -397,7 +439,7 @@ Authority principals: `code`, `host`, `user`
 
 Account-scoped proxy to phone capabilities on connected desktop clients
 
-Authority principals: `code`, `entity`, `user`
+Authority principals: `code`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -426,9 +468,9 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `runtime.createEntity` | Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Reuses/reactivates an existing row for the same canonical key. Returns the entity handle (id + runtime targetId). |
+| `runtime.createEntity` | Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Omitted contextId inherits the verified caller's context; root callers without one mint a fresh context. Reuses/reactivates an existing row for the same canonical key. Returns the entity handle (id + runtime targetId). |
 | `runtime.retireEntity` | Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context. |
-| `runtime.listEntities` | List live entities (id, kind, source, contextId, title, createdAt). |
+| `runtime.listEntities` | List exact live runtime instances (id, kind, source, key, contextId, title, createdAt). For running workers use kind='worker'; workspace.units.list provides aggregate status per source rather than instance ids. |
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |
 | `runtime.createContext` | Create a full logical semantic workspace context. When invoked by a context-scoped runtime, the new context is recorded as that exact runtime entity's lifecycle child, making ownership, initialization authority, and teardown walkable instead of leaving an ownerless context island. Root host callers create root contexts. The state machine initializes one exact committed event and event/application working head over the whole workspace; later semantic operations advance that working head atomically. Use vcs.status for compact ancestry and integration orientation, then page repository and work membership through focused VCS inspectors. |
 | `runtime.cloneContext` | Clone a context's durable state—every worker/DO store plus its exact committed event and event/application working head—into a fresh isolated context. Immutable semantic history and authored facts are shared by identity, not copied into a parallel snapshot history. Returns the new contextId and source-to-clone entity/context maps. With `recursive`, the whole lifecycle subtree is cloned (never following lineage edges); with `targetKey`, retry returns the same child. The caller performs per-entity rewiring such as fork-log re-rooting on the returned clones. |
@@ -441,7 +483,7 @@ Authority principals: `code`, `host`, `user`
 
 Server host log inspection and live tailing
 
-Authority principals: `code`, `entity`, `host`, `user`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -492,7 +534,7 @@ Authority principals: `code`, `host`, `user`
 
 One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.
 
-Authority principals: `code`, `entity`, `host`, `user`
+Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -558,9 +600,9 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `workers.listSources` | List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers) |
-| `workers.listServices` | List product-owned and workspace-authored services available here |
-| `workers.resolveService` | Resolve a workspace service by name or protocol |
-| `workers.resolveDurableObject` | Resolve a Durable Object RPC target by source/class/key |
+| `workers.listServices` | List product-owned and workspace-authored services visible in the caller's live context; workspace rows include the live docs catalog id. In eval import the top-level workers API from @workspace/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval. |
+| `workers.resolveService` | Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @workspace/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API. |
+| `workers.resolveDurableObject` | Resolve and activate a concrete Durable Object RPC target by source/class/key when no declared workspace service fits. The returned target is a lifecycle handle as well as an RPC address: when the caller owns a disposable object, clear any test data and pass that same target to workers.destroy(...) so its durable storage is retired. |
 
 ## `workspace`
 
@@ -573,6 +615,7 @@ Authority principals: `code`, `host`, `user`
 | `workspace.getInfo` | Filesystem paths (source, state, contexts) and resolved config for the active workspace. |
 | `workspace.getActive` | Name (id) of the currently active workspace. |
 | `workspace.getConfig` | The active workspace's resolved config (meta/vibestudio.yml). |
+| `workspace.validateConfig` | Validate complete meta/vibestudio.yml content against the current host schema without changing workspace state. |
 | `workspace.setInitPanels` | Replace the set of panels opened when this workspace starts; approval-gated for userland. |
 | `workspace.setConfigField` | Write an arbitrary field into the workspace config (meta/vibestudio.yml); approval-gated for userland. |
 | `workspace.getAgentsMd` | Read the workspace-level meta/AGENTS.md, returning an empty string if it is absent. |
@@ -581,7 +624,7 @@ Authority principals: `code`, `host`, `user`
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
 | `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
 | `workspace.findUnitForPath` | Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it. |
-| `workspace.units.list` | List operational status rows for all workspace units (panels, workers, extensions, apps), including build/health state. |
+| `workspace.units.list` | List installed unit definitions and their aggregate build/runtime health. A worker row can show whether that source has a running instance, but does not enumerate instance ids; use runtime.listEntities({ kind: 'worker' }) or workers.list() for the exact live-instance roster. |
 | `workspace.units.inspector` | Return the devtools inspector URL for a unit by name or source, or null if it has none. |
 | `workspace.units.restart` | Restart a workspace unit through its owning manager. |
 | `workspace.units.logs` | Query retained log records for a unit, optionally filtered by time/sequence cursor, level, and limit. |
@@ -618,6 +661,7 @@ Authority principals: `code`, `host`, `user`
 | `workspace-state.slot.get` | Get a single slot row by id. |
 | `workspace-state.slot.history` | Get the history for a slot. |
 | `workspace-state.entity.resolveActive` | Resolve a single active entity record by id. |
+| `workspace-state.entity.resolve` | Resolve an entity record by id, including a preparing reservation. |
 | `workspace-state.slot.resolveByEntity` | Resolve the OPEN slot id whose current entity is the given runtime-entity (nav) id, or null. Durable nav→slot mapping used to nest launches under the owning panel's tree slot. |
 | `workspace-state.slot.create` | Create a new slot row. |
 | `workspace-state.slot.commitPreparedNavigation` | Atomically append, replace, or select history and swap current to a prepared panel incarnation. |

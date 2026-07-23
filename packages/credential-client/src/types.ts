@@ -90,20 +90,36 @@ export interface CredentialOwner {
   label: string;
 }
 
-export type CredentialGrantScope = "version";
+export type CredentialGrantScope = "version" | "agent";
 export type CredentialGrantAction = "read" | "write" | "use";
 
-export interface CredentialUseGrant {
+interface CredentialUseGrantBase {
   bindingId: string;
   use: CredentialBindingUse;
   resource: string;
   action: CredentialGrantAction;
-  scope: CredentialGrantScope;
-  repoPath: string;
-  effectiveVersion: string;
   grantedAt: number;
   grantedBy: string;
 }
+
+/**
+ * Credential consent follows the principal the user actually reviewed.
+ * Installed code is exact-version scoped. Agent-owned eval is only a conduit,
+ * so its durable consent follows the host-verified agent identity and remains
+ * independently intersected with admission of the agent worker's exact code.
+ */
+export type CredentialUseGrant = CredentialUseGrantBase &
+  (
+    | {
+        scope: "version";
+        repoPath: string;
+        effectiveVersion: string;
+      }
+    | {
+        scope: "agent";
+        agentId: string;
+      }
+  );
 
 export type CredentialAccessSubjectKind = "panel" | "worker" | "do" | "app" | "unknown";
 
@@ -134,8 +150,9 @@ export interface CredentialAccessGrantSummary {
   resource: string;
   action: CredentialGrantAction;
   scope: CredentialGrantScope;
-  repoPath: string;
-  effectiveVersion: string;
+  repoPath?: string;
+  effectiveVersion?: string;
+  agentId?: string;
   grantedAt: number;
   grantedBy: string;
   subjects: CredentialAccessSubjectSummary[];

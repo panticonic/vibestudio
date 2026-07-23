@@ -40,6 +40,139 @@ export const WORKERS_MEMBERS = [
   "durableObjectService",
 ];
 
+/**
+ * Public helper methods owned by the runtime wrapper rather than a same-named
+ * RPC service method. Keeping their contracts beside the runtime surface makes
+ * `docs_search` and `help()` two projections of the same API instead of forcing
+ * agents to guess the lower-level runtime transport.
+ */
+const WORKERS_RUNTIME_METHOD_CATALOG = {
+  listSources: {
+    signature: "listSources(): Promise<WorkerSourceInfo[]>",
+    description:
+      "List every launchable worker source with its manifest entry point and Durable Object classes. Use this to inspect runnable units; do not guess index.ts or class names.",
+    argsSchema: { type: "array", maxItems: 0, prefixItems: [] },
+    examples: [{ args: [] }],
+  },
+  create: {
+    signature: "create(source: string, options?: WorkerCreateOptions): Promise<WorkerEntityHandle>",
+    description:
+      "Launch a regular worker through the canonical entity lifecycle in the caller's current semantic workspace context. Pass contextId only to deliberately target another context; key, env, stateArgs, and ref are optional.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        { type: "string", description: "Workspace-relative worker source." },
+        {
+          type: "object",
+          properties: {
+            key: { type: "string" },
+            contextId: { type: "string" },
+            env: { type: "object", additionalProperties: { type: "string" } },
+            stateArgs: {},
+            ref: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+      ],
+      minItems: 1,
+      maxItems: 2,
+    },
+    examples: [{ args: ["workers/my-worker", { key: "probe-1" }] }],
+  },
+  list: {
+    signature: "list(): Promise<WorkerEntityInfo[]>",
+    description: "List live regular-worker instances and their canonical entity handles.",
+    argsSchema: { type: "array", maxItems: 0 },
+    examples: [{ args: [] }],
+  },
+  destroy: {
+    signature: "destroy(entity: RuntimeEntityReference): Promise<void>",
+    description:
+      "Retire a runtime entity through the canonical lifecycle. Pass the handle from workers.create, a disposable target from workers.resolveDurableObject, or either canonical id. Resolving a shared service does not transfer ownership; retire only entities whose lifecycle you own.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        {
+          oneOf: [
+            { type: "string" },
+            {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                targetId: { type: "string" },
+              },
+              anyOf: [{ required: ["id"] }, { required: ["targetId"] }],
+              additionalProperties: true,
+            },
+          ],
+        },
+      ],
+      minItems: 1,
+      maxItems: 1,
+    },
+    examples: [{ args: [{ id: "worker:workers/my-worker:probe-1" }] }],
+  },
+  listServices: {
+    signature: "listServices(): Promise<WorkspaceServiceInfo[]>",
+    description:
+      "List product and live workspace services visible in this exact semantic context. Workspace rows include docsId; open it with the agent docs_open tool for the live method contract.",
+    argsSchema: { type: "array", maxItems: 0, prefixItems: [] },
+    examples: [{ args: [] }],
+  },
+  resolveService: {
+    signature:
+      "resolveService(query: string, objectKey?: string | null): Promise<ResolvedWorkspaceService>",
+    description:
+      "Resolve a manifest-declared service by name or protocol in the caller's exact semantic context. Installed callers must also declare the exact workspace-service:<name> capability in package.json; resolution never grants authority by itself.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        {
+          type: "string",
+          description: "Service name or protocol from workers.listServices()/docs_open.",
+        },
+        {
+          type: ["string", "null"],
+          description: "Object key override for a Durable Object service.",
+        },
+      ],
+      minItems: 1,
+      maxItems: 2,
+    },
+    examples: [{ args: ["example.notes.v1"] }],
+  },
+  resolveDurableObject: {
+    signature:
+      "resolveDurableObject(source: string, className: string, objectKey: string): Promise<ResolvedDurableObjectTarget>",
+    description:
+      "Resolve and activate a concrete Durable Object target when no workspace service declaration exists. Prefer resolveService whenever a declared service is available. For a disposable object whose lifecycle you own, pass the returned target directly to workers.destroy after clearing any test data.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        { type: "string", description: "Workspace-relative worker source." },
+        { type: "string", description: "Manifest-declared Durable Object class." },
+        { type: "string", description: "Concrete object key." },
+      ],
+      minItems: 3,
+      maxItems: 3,
+    },
+    examples: [{ args: ["workers/notes", "NotesDO", "main"] }],
+  },
+  durableObjectService: {
+    signature:
+      "durableObjectService(query: string, objectKey?: string | null): DurableObjectServiceClient",
+    description:
+      "Create a lazy client that resolves a manifest-declared Durable Object service and calls it through unified RPC.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [{ type: "string" }, { type: ["string", "null"] }],
+      minItems: 1,
+      maxItems: 2,
+    },
+    examples: [{ args: ["example.notes.v1", "main"] }],
+  },
+} satisfies Record<string, import("@vibestudio/shared/runtimeSurface").RuntimeSurfaceMethodDoc>;
+
 /** Top-level keys of the actual typed workspace client, plus its one ergonomic
  * project-discovery namespace. Deriving this prevents the portable help surface
  * from retaining deleted hub-catalog methods or missing new nested groups. */
@@ -185,9 +318,15 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   getPanelHandle: valueEntry("Get a handle to a panel by id."),
   workers: namespaceEntry(
     WORKERS_MEMBERS,
-    "Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes."
+    "Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes.",
+    undefined,
+    WORKERS_RUNTIME_METHOD_CATALOG
   ),
-  workspace: namespaceEntry(WORKSPACE_MEMBERS),
+  workspace: namespaceEntry(
+    WORKSPACE_MEMBERS,
+    "Workspace configuration, registered-unit/build-health, projects, and semantic source operations. workspace.units.list() reports registered units and their build state; it is not the catalog of launchable worker types. Use workers.listSources() for launchable workers and workers.list() for running worker instances.",
+    "workspace"
+  ),
   credentials: namespaceEntry(
     CREDENTIALS_MEMBERS,
     "Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal."

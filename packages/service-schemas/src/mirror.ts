@@ -17,7 +17,7 @@ import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority
 /** shell + agent are the remote-mirror drivers; `do` keeps the agent⊆do
  *  invariant; server/panel for host-side tooling and tests. */
 export const MIRROR_POLICY: ServiceAuthorityPolicy = {
-  principals: ["user", "entity", "code", "host"],
+  principals: ["user", "code", "host"],
 };
 
 export const mirrorTargetSchema = z

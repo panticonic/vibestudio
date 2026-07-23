@@ -42,7 +42,7 @@ const WorkspaceSourceRefSchema = z
   .object({ source: z.string(), ref: z.string().optional() })
   .strict();
 
-const WorkspaceServicePrincipalSchema = z.enum(["host", "user", "device", "code", "entity"]);
+const WorkspaceServicePrincipalSchema = z.enum(["host", "user", "code", "session", "mission"]);
 
 const WorkspaceServiceSchema = z.union([
   z
@@ -50,6 +50,7 @@ const WorkspaceServiceSchema = z.union([
       source: z.string(),
       name: z.string(),
       title: z.string().optional(),
+      action: z.string().optional(),
       description: z.string().optional(),
       protocols: z.array(z.string()).optional(),
       authority: z
@@ -65,6 +66,7 @@ const WorkspaceServiceSchema = z.union([
       source: z.string(),
       name: z.string(),
       title: z.string().optional(),
+      action: z.string().optional(),
       description: z.string().optional(),
       protocols: z.array(z.string()).optional(),
       authority: z

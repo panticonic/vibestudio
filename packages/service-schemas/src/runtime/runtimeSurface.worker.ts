@@ -17,7 +17,8 @@ export const workerRuntimeSurface: RuntimeSurface = {
     // Entries whose description is worker-specific (member arrays shared with core).
     workspace: namespaceEntry(
       WORKSPACE_MEMBERS,
-      "Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles."
+      "Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles.",
+      "workspace"
     ),
     openPanel: valueEntry("Open a workspace or browser panel and return a PanelHandle."),
     listPanels: valueEntry("Alias for runtime.panelTree.list()."),

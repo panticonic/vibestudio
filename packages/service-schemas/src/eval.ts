@@ -79,6 +79,10 @@ export const evalRunResultSchema = z
     returnValue: z.unknown().optional(),
     /** Error message (present on failure). */
     error: z.string().optional(),
+    /** Failure domain controls whether an agent may recover in-turn. */
+    failureKind: z.enum(["user-code", "infrastructure", "cancelled"]).optional(),
+    /** Stable machine-readable diagnostic, independent of displayed copy. */
+    failureCode: z.string().optional(),
     /** Keys currently held in the persistent REPL scope (for the agent's awareness). */
     scopeKeys: z.array(z.string()).optional(),
   })
@@ -207,7 +211,7 @@ export const evalMethods = defineServiceMethods({
     args: z.tuple([evalRunArgsSchema]),
     returns: z.object({ runId: z.string() }).strict(),
     description:
-      "Start an eval run for a caller that cannot hold a connection (an agent DO): returns a runId at once; reset:true atomically clears scope/db before the idempotent run is first inserted. The eval runs server-held in the EvalDO and the result is delivered out-of-band (onEvalComplete) and/or polled via getRun. Connection-holding callers (panels/CLI) should use `run` for a one-request result.",
+      "Start an asynchronous eval for an agent DO: returns a runId after the EvalDO durably records and schedules the idempotent run; reset:true atomically clears scope/db before first insertion. The owning EvalDO delivers the result directly to its agent, while getRun reads the canonical durable result for recovery. Panels/CLI should use run for a one-request result.",
     access: { sensitivity: "write" },
   },
   getRun: {

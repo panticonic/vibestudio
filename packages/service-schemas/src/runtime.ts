@@ -8,7 +8,8 @@ import type {
   ServiceAuthorityPolicy,
 } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import { CapabilityScopeSchema, EvalAuthorityDelegationSchema } from "./build.js";
+import { UnitAuthorityRequestSchema, EvalAuthorityCeilingSchema } from "./build.js";
+import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
 
 // Access descriptors carry sensitivity metadata; caller-kind authorization
 // belongs exclusively to the service/method `authority`.
@@ -28,7 +29,23 @@ const TITLE_ACCESS: MethodAccessDescriptor = {
 // retireEntity, cloneContext, destroyContext, …) stay agent-denied — so the
 // agent grant is opted into per read method here (still a subset of `do`).
 const RUNTIME_AGENT_READ_POLICY: ServiceAuthorityPolicy = {
-  principals: ["code", "host", "user", "entity"],
+  principals: ["code", "host", "user"],
+};
+
+const runtimeContextBoundaryAuthority = (method: string, tier: "gated" | "critical" = "gated") => {
+  const primaryCapability =
+    method === "cloneContext"
+      ? "context.clone"
+      : method === "createSubagentContext"
+        ? "subagents.create"
+        : "context.boundary";
+  return contextBoundaryAuthority({
+    service: "runtime",
+    method,
+    primaryCapability,
+    principals: ["code", "user", "host"],
+    tier,
+  });
 };
 
 export const RuntimeEntityHandleSchema = z
@@ -56,13 +73,13 @@ export const RuntimeEntityHandleSchema = z
       .optional()
       .describe("Immutable execution artifact digest selected for this incarnation."),
     authorityRequests: z
-      .array(CapabilityScopeSchema)
+      .array(UnitAuthorityRequestSchema)
       .optional()
       .describe("Reviewed capability requests embedded in the selected execution artifact."),
-    authorityDelegations: z
-      .array(EvalAuthorityDelegationSchema)
+    authorityEvalCeilings: z
+      .array(EvalAuthorityCeilingSchema)
       .optional()
-      .describe("Reviewed eval delegations embedded in the selected execution artifact."),
+      .describe("Reviewed eval evalCeilings embedded in the selected execution artifact."),
     contextId: z.string().describe("Semantic workspace context this entity belongs to."),
     targetId: z
       .string()
@@ -88,8 +105,8 @@ const RuntimeAgentBindingSchema = z
     "Host-verified binding input for runtimes that relay an external agent/session. The host derives context from the bound entity."
   );
 
-export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
-  z.object({
+export const PanelEntityCreateSpecSchema = z
+  .object({
     kind: z.literal("panel"),
     source: z.string().describe("Workspace-relative panel source repo path."),
     ref: BuildRefSchema.optional(),
@@ -97,10 +114,16 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .string()
       .nullable()
       .optional()
-      .describe("Target context; omit/null to mint a fresh one in the caller's context."),
+      .describe(
+        "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
+      ),
     key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
     stateArgs: z.unknown().optional().describe("Opaque initial state passed to the panel runtime."),
-  }),
+  })
+  .strict();
+
+export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
+  PanelEntityCreateSpecSchema,
   z.object({
     kind: z.literal("app"),
     source: z.string().describe("Workspace-relative app source repo path."),
@@ -109,7 +132,9 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .string()
       .nullable()
       .optional()
-      .describe("Target context; omit/null to mint a fresh one in the caller's context."),
+      .describe(
+        "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
+      ),
     key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
     stateArgs: z.unknown().optional().describe("Opaque initial state passed to the app runtime."),
   }),
@@ -121,7 +146,9 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .string()
       .nullable()
       .optional()
-      .describe("Target context; omit/null to mint a fresh one in the caller's context."),
+      .describe(
+        "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
+      ),
     key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
     stateArgs: z
       .unknown()
@@ -148,7 +175,9 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .string()
       .nullable()
       .optional()
-      .describe("Target context; omit/null to mint a fresh one in the caller's context."),
+      .describe(
+        "Target context; omit/null to inherit the verified caller's context, or derive it from agentBinding. Root callers mint a fresh context."
+      ),
     stateArgs: z.unknown().optional().describe("Opaque initial state passed to the DO runtime."),
     agentBinding: RuntimeAgentBindingSchema.optional(),
     agentChannelId: z
@@ -265,9 +294,10 @@ export type CloneContextResult = z.infer<typeof CloneContextResultSchema>;
 export const runtimeMethods = defineServiceMethods({
   createEntity: {
     description:
-      "Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Reuses/reactivates an existing row for the same canonical key. Returns the entity handle (id + runtime targetId).",
+      "Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Omitted contextId inherits the verified caller's context; root callers without one mint a fresh context. Reuses/reactivates an existing row for the same canonical key. Returns the entity handle (id + runtime targetId).",
     args: z.tuple([CreateEntitySpecSchema]),
     returns: RuntimeEntityHandleSchema,
+    authority: runtimeContextBoundaryAuthority("createEntity"),
     access: {
       sensitivity: "write",
       // Declares the handler's gate (createEntity rejects app for
@@ -286,8 +316,7 @@ export const runtimeMethods = defineServiceMethods({
             "session entities are host-managed, except a launch-orchestrator extension may create a source-tagged session",
         },
       ],
-      // Declares the handler's context-boundary approval gate
-      // (resolveContextPolicy → requireContextBoundaryPermission). Fires only
+      // Declares the dispatcher's prepared context-boundary leaf. It fires only
       // when the target context is BOTH foreign to the caller AND already exists;
       // same-context and fresh-context launches are free, as is trusted chrome.
       approval: [
@@ -304,6 +333,22 @@ export const runtimeMethods = defineServiceMethods({
       { args: [{ kind: "session", source: "agent-cli", key: "s1", title: "My agent session" }] },
     ],
   },
+  reservePanelEntity: {
+    description:
+      "Reserve a panel's stable durable identity and context without waiting for its immutable runtime image. Reserved entities are non-executable until activatePanelEntity completes.",
+    args: z.tuple([PanelEntityCreateSpecSchema]),
+    returns: RuntimeEntityHandleSchema,
+    authority: { principals: ["host"] },
+    access: { sensitivity: "write" },
+  },
+  activatePanelEntity: {
+    description:
+      "Prepare and atomically activate the immutable runtime image for a previously reserved panel entity.",
+    args: z.tuple([PanelEntityCreateSpecSchema]),
+    returns: RuntimeEntityHandleSchema,
+    authority: { principals: ["host"] },
+    access: { sensitivity: "write" },
+  },
   retireEntity: {
     description:
       "Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context.",
@@ -317,11 +362,13 @@ export const runtimeMethods = defineServiceMethods({
       }),
     ]),
     returns: z.void(),
+    authority: runtimeContextBoundaryAuthority("retireEntity", "critical"),
     access: RETIRE_ACCESS,
     examples: [{ args: [{ id: "do:workers/agent:AgentDO:agent-1", removeContext: true }] }],
   },
   listEntities: {
-    description: "List live entities (id, kind, source, contextId, title, createdAt).",
+    description:
+      "List exact live runtime instances (id, kind, source, key, contextId, title, createdAt). For running workers use kind='worker'; workspace.units.list provides aggregate status per source rather than instance ids.",
     args: z.tuple([
       z
         .object({
@@ -337,6 +384,7 @@ export const runtimeMethods = defineServiceMethods({
         id: z.string().describe("Canonical entity id."),
         kind: z.string().describe("Entity kind."),
         source: z.string().describe("Source repo path."),
+        key: z.string().describe("Caller-selected instance key encoded in the canonical id."),
         contextId: z.string().describe("Owning context id."),
         title: z.string().optional().describe("Display title, when one has been set."),
         createdAt: z.number().describe("Creation timestamp (epoch ms)."),
@@ -388,6 +436,7 @@ export const runtimeMethods = defineServiceMethods({
       }),
     ]),
     returns: WorkspaceContextSchema,
+    authority: runtimeContextBoundaryAuthority("createContext"),
     access: { sensitivity: "write" },
     examples: [{ args: [{}] }, { args: [{ contextId: "agent-branch-1" }] }],
   },
@@ -418,6 +467,7 @@ export const runtimeMethods = defineServiceMethods({
       }),
     ]),
     returns: CloneContextResultSchema,
+    authority: runtimeContextBoundaryAuthority("cloneContext"),
     access: {
       sensitivity: "write",
       // Reading + duplicating another context's durable state is gated by the
@@ -450,6 +500,7 @@ export const runtimeMethods = defineServiceMethods({
       }),
     ]),
     returns: z.void(),
+    authority: runtimeContextBoundaryAuthority("destroyContext", "critical"),
     access: {
       sensitivity: "destructive",
       // Gated by context-boundary, with an ownership bypass: destroying a context
@@ -533,6 +584,7 @@ export const runtimeMethods = defineServiceMethods({
       }),
     ]),
     returns: z.object({ contextId: z.string() }).strict(),
+    authority: runtimeContextBoundaryAuthority("createSubagentContext"),
     access: { sensitivity: "write" },
     examples: [
       {

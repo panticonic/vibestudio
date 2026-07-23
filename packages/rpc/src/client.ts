@@ -41,6 +41,23 @@ const FRAME_ERROR = 0x04;
 /** Human-readable reason attached to CONNECTION_LOST rejections (§3.4). */
 const CONNECTION_LOST_MESSAGE = "Connection lost before the response arrived";
 
+function acquisitionIdOf(error: unknown, selfId: string): string | null {
+  if (!error || typeof error !== "object" || (error as { code?: unknown }).code !== "EACQUIRE") {
+    return null;
+  }
+  const data = rpcErrorDataOf(error);
+  if (!data || typeof data !== "object") return null;
+  const acquisition = (data as { acquisition?: unknown }).acquisition;
+  if (!acquisition || typeof acquisition !== "object") return null;
+  const acquisitionRecord = acquisition as {
+    acquisitionId?: unknown;
+    ownerRuntimeId?: unknown;
+  };
+  if (acquisitionRecord.ownerRuntimeId !== selfId) return null;
+  const acquisitionId = acquisitionRecord.acquisitionId;
+  return typeof acquisitionId === "string" && acquisitionId.length > 0 ? acquisitionId : null;
+}
+
 /**
  * The server principal is addressed as `"main"` (SESSION_SERVER_RESPONDER) or
  * `"server"`. A direct client→server call's response is never inboxed, so it is
@@ -159,7 +176,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
   >();
   const activeStreamingHandlers = new Map<string, AbortController>();
   const activeRequestHandlers = new Map<string, AbortController>();
-  const streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? 90_000;
+  const streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? null;
 
   function makeEnvelope(
     targetId: string,
@@ -242,10 +259,14 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
     pendingStreams.delete(requestId);
   }
 
-  function armStreamHeadTimer(requestId: string, timeoutMs = streamIdleTimeoutMs): void {
+  function armStreamHeadTimer(
+    requestId: string,
+    timeoutMs: number | null = streamIdleTimeoutMs
+  ): void {
     const entry = pendingStreams.get(requestId);
     if (!entry) return;
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    if (timeoutMs === null || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return;
     entry.idleTimer = setTimeout(() => {
       const current = pendingStreams.get(requestId);
       if (!current || current.bodyClosed) return;
@@ -536,7 +557,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
     }
   }
 
-  function callWithProvenance<T = unknown>(
+  function callOnceWithProvenance<T = unknown>(
     provenance: AuthenticatedCaller[],
     targetId: string,
     method: string,
@@ -601,6 +622,39 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
         reject(error);
       });
     });
+  }
+
+  async function callWithProvenance<T = unknown>(
+    provenance: AuthenticatedCaller[],
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: RpcCallOptions
+  ): Promise<T> {
+    for (;;) {
+      try {
+        return await callOnceWithProvenance<T>(provenance, targetId, method, args, options);
+      } catch (error) {
+        const acquisitionId =
+          config.authorityAcquisition === "wait" ? acquisitionIdOf(error, config.selfId) : null;
+        if (!acquisitionId || (isServerTarget(targetId) && method === "authority.awaitDecision")) {
+          throw error;
+        }
+
+        // A human decision has no protocol deadline. The caller retains
+        // lifecycle control through its AbortSignal; an explicit timeout on
+        // the protected operation starts anew only when that operation is
+        // retried after approval.
+        const outcome = await callOnceWithProvenance<{ state: "decided" | "closed" }>(
+          provenance,
+          "main",
+          "authority.awaitDecision",
+          [{ acquisitionId }],
+          options?.signal ? { signal: options.signal } : undefined
+        );
+        if (outcome.state !== "decided") throw error;
+      }
+    }
   }
 
   function emitWithProvenance(

@@ -13,7 +13,7 @@
 
 import type { AppCapability } from "./unitManifest.js";
 import type { CapabilityScope } from "@vibestudio/rpc";
-import type { EvalAuthorityDelegation } from "./authorityManifest.js";
+import type { EvalAuthorityCeiling } from "./authorityManifest.js";
 
 export interface HostedCodeIdentity {
   source?: string;
@@ -21,7 +21,7 @@ export interface HostedCodeIdentity {
   buildKey?: string | null;
   executionDigest?: string | null;
   requested?: readonly CapabilityScope[];
-  delegations?: readonly EvalAuthorityDelegation[];
+  evalCeilings?: readonly EvalAuthorityCeiling[];
 }
 import type { PanelLifecycleResult } from "./types.js";
 

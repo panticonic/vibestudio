@@ -33,7 +33,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on`, `list`, `reload` |  |
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
-| `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles. |
+| `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles. |
 | `openPanel` | value |  | Open a workspace or browser panel and return a PanelHandle. |
 | `listPanels` | value |  | Alias for runtime.panelTree.list(). |
 | `getPanelHandle` | value |  | Alias for runtime.panelTree.get(id, kind?). |
@@ -139,11 +139,30 @@ secrets. Do not add env fields to `runtime.listEntities` or entity handles.
 
 ## Userland Services
 
+Read [`skills/capabilities/SKILL.md`](../capabilities/SKILL.md) before exposing or
+consuming a service. Workspace service declarations are resolved from the exact
+caller's live semantic `meta/vibestudio.yml`; the same declaration set feeds live
+service/API docs. They are deliberately not compiled into a static product census.
+
 Worker package.json only carries `vibestudio.durable.classes` (workerd binding).
 Workspace-level singletons, services, and HTTP routes live in
-`workspace/meta/vibestudio.yml`. Resolve services by name/protocol through
+`meta/vibestudio.yml`. Resolve services by name/protocol through
 `workers.resolveService(...)`; do not hardcode `workers/foo`, DO class names,
-or `/_r/w/...` paths in callers.
+or `/_r/w/...` paths in callers. Before starting an eval, use the agent tools
+`docs_search`/`docs_open` when the live contract is not already known. They are not
+exports from `@workspace/runtime`; inside eval, use the documented `workers.*` and
+`rpc.*` runtime APIs. `workers.listServices()` rows for workspace-owned services
+include a `docsId` for that same live catalog; pass that id to the agent's
+`docs_open` tool instead of scanning the provider source for methods. A declaration
+in another context is neither visible nor callable here.
+
+If installed code consumes the service, declare an exact
+`workspace-service:<name>` request in its authority manifest. The request may precede
+the provider's presence in this checkout; build-time service enumeration is not the
+authority boundary. Runtime resolution still requires a matching live declaration,
+exact provider EV, caller-context visibility, and grant. Never use
+`workspace-service:*` in an installed-unit request or add the service to a generated
+product authority catalog.
 
 Worker packages may declare simple string overrides in top-level `overrides`.
 BuildV2 forwards those overrides, plus overrides from transitive workspace
@@ -163,8 +182,8 @@ services:
   - source: workers/my-store
     name: my-store
     protocols: [example.my-store.v1]
-    policy:
-      allowed: [panel, app, do, worker, server]
+    authority:
+      principals: [user, code]
     durableObject: { className: MyStore } # key joined from singletonObjects
 ```
 
@@ -176,7 +195,7 @@ if (svc.kind !== "durable-object") throw new Error("Expected DO service");
 await rpc.call(svc.targetId, "methodName", [arg]);
 ```
 
-**Stateless worker service** — add to `workspace/meta/vibestudio.yml`:
+**Stateless worker service** — add to `meta/vibestudio.yml`:
 
 ```yaml
 routes:
@@ -188,8 +207,8 @@ services:
   - source: workers/my-api
     name: my-api
     protocols: [example.my-api.v1]
-    policy:
-      allowed: [panel, app, do, worker, server]
+    authority:
+      principals: [user, code]
     worker: { routePath: /api }
 ```
 
@@ -218,10 +237,13 @@ Canonical shape:
 
 1. Create `workers/<store>` with a `DurableObjectBase` subclass.
 2. Store durable rows in the DO's SQLite database through `this.sql`.
-3. Expose narrow app methods with `@rpc({ callers: [...] })`; do not expose a
+3. Expose narrow app methods with explicit
+   `@rpc({ principals, effect: { kind: "workspace-service" }, tier, sensitivity })`
+   contracts; the effect must be a literal object so the exact build can document it
+   without executing provider code. Do not expose a
    raw SQL console to normal UI callers.
-4. Declare a `services:` entry in `workspace/meta/vibestudio.yml` with
-   `policy.allowed` for the caller kinds that may resolve the service.
+4. Declare a `services:` entry in `meta/vibestudio.yml` with the principal
+   families that may resolve the service.
 5. Call it from eval, panels, inline UI, apps, workers, or other DOs with
    `workers.resolveService(protocol, objectKey?)` and `rpc.call(...)`.
 
@@ -255,7 +277,12 @@ export class TodoStore extends DurableObjectBase {
     return ["todos"];
   }
 
-  @rpc({ callers: ["panel", "app", "do", "worker"] })
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   upsertTodo(input: { id?: string; title: string; done?: boolean }): { id: string } {
     this.ensureReady();
     const id = input.id ?? crypto.randomUUID();
@@ -274,7 +301,12 @@ export class TodoStore extends DurableObjectBase {
     return { id };
   }
 
-  @rpc({ callers: ["panel", "app", "do", "worker"] })
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   listTodos(): Array<{ id: string; title: string; done: boolean; updatedAt: string }> {
     this.ensureReady();
     return (
@@ -304,8 +336,8 @@ services:
     name: todo-store
     title: Todo Store
     protocols: [example.todos.v1]
-    policy:
-      allowed: [panel, app, do, worker]
+    authority:
+      principals: [user, code]
     durableObject:
       className: TodoStore
 ```
@@ -334,10 +366,13 @@ separate SQLite database for that object key. Use stable, user-meaningful keys
 such as workspace id, project id, document id, or account id. Do not use a
 random key unless the app really wants a new isolated database.
 
-Two gates must both admit the caller:
+The declaration and receiver must both admit the caller:
 
-- `services[].policy.allowed` controls who may resolve the service at all.
-- `@rpc({ callers: [...] })` controls who may invoke each exposed DO method.
+- `services[].authority` controls which authenticated principal families may
+  resolve the service in this exact context.
+- Each method's `@rpc` contract independently enforces principals, tier,
+  receiver relationships, and the concrete resource. Gated and critical
+  methods additionally require a sealed unit request; a request still grants nothing.
 
 For sensitive shared resources, add a user decision inside the DO method with
 `approvals.request(...)`; do not use approvals for ordinary private app rows.
@@ -345,14 +380,15 @@ For sensitive shared resources, add a user decision inside the DO method with
 For a running Vibestudio system—including agent eval—exercise the real object
 through `workers.resolveService(...)` / `workers.resolveDurableObject(...)` and
 separate `rpc.call(...)` calls as shown above. This is the integration path: it
-uses workerd, the declared service policy, the method's `@rpc` caller policy,
+uses workerd, the live declaration, the method's `@rpc` authority contract,
 and the object's persistent SQLite database.
 
 Prefer `resolveService(...)` whenever a service exists. Raw
 `resolveDurableObject(...)` may address workspace worker DO classes, but
-product-internal DOs are closed unless the exact source/class/object-key target
-is present in the reviewed product catalog. An exported internal class is not a
-class-wide grant, and a different key is a different, unauthorized target.
+product-internal DOs remain closed behind their reviewed static host catalog.
+Workspace-built DOs are admitted dynamically from the caller's live semantic
+declarations and still require exact source/class/object-key receiver authority.
+An exported class is not a class-wide grant, and another key is another resource.
 
 For fast Vitest-only unit coverage, keep storage logic in methods like the above
 and use `createTestDO(...)` in a co-located worker test. That helper is
@@ -414,32 +450,34 @@ A method with no `@rpc` is private to the DO and cannot be invoked over the
 relay; forgetting `@rpc` fails loud ("not exposed"). Mark every method a caller
 should reach.
 
-### Layer 2 — `@rpc({ callers })` caller policy (who may call it)
+### Layer 2 — `@rpc({ principals, effect, tier, sensitivity })` receiver policy
 
 The RPC relay is open between authenticated participants, so the recipient must
-gate. **In the workspace realm, every relay-reachable method MUST declare an
-`@rpc({ callers: [...] })` policy** — a method with no policy, or a call from a
-caller kind not listed, is refused (default-deny). `callers` is a coarse
-caller-KIND floor; values: `"panel" | "do" | "server" | "worker" | "shell" |
-"app" | "extension"`.
+gate. Every relay-reachable workspace method declares the authenticated principal
+families it accepts (`"host" | "user" | "code"`), its effect, reviewed tier, and
+sensitivity. Missing policy is default-deny. A workspace service method normally
+uses the literal `effect: { kind: "workspace-service" }`; do not hide it behind a
+constant or factory because live docs are extracted from the exact source build
+without executing that source.
 
 ```ts
 import { rpc } from "@workspace/runtime/worker";
 
 export class MyStoreDO extends DurableObjectBase {
-  @rpc({ callers: ["panel", "do"] })       // a panel or an agent DO may call it
+  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "gated", sensitivity: "write" })
   async addItem(label: string): Promise<{ id: string }> { ... }
 
-  @rpc({ callers: ["server"] })            // server-dispatched only (webhook/alarm)
+  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async onWebhookDelivery(event: WebhookEvent): Promise<void> { ... }
 
   private bumpCounter(): void { ... }       // no @rpc — unreachable over RPC
 }
 ```
 
-Typical floors: panel-driven → `["panel"]`/`["panel","do"]`; channel/agent-internal
-→ `["do"]`; server-dispatched (webhooks/alarms/lifecycle) → `["server"]`;
-broad reads → `["do","panel","server"]`; admin/destructive → `["server","shell"]`.
+Use `user` for direct user/session actions, `code` for installed workspace code and
+agents, and `host` only for trusted host lifecycle traffic. Listing a principal is
+only the receiver floor: the caller's sealed manifest, live grant, mission/context
+constraints, and service admission still have to agree.
 
 ### Identity-level tightening (inline)
 
@@ -449,7 +487,7 @@ class), add an inline check ON TOP of the floor using the server-authenticated
 caller, which cannot be forged:
 
 ```ts
-@rpc({ callers: ["do"] })
+@rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "gated", sensitivity: "write" })
 async onChannelOp(channelId: string): Promise<void> {
   await this.assertOwnEvalCaller(channelId); // only THIS agent's own EvalDO
   ...

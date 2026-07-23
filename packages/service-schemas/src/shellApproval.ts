@@ -12,9 +12,11 @@ import type {
   PendingUnitBatchApproval,
   UnitBatchEntry,
 } from "@vibestudio/shared/approvals";
+import type { AuthorityRequirement, InvocationSnapshot } from "@vibestudio/rpc";
 import { APPROVAL_DECISIONS } from "@vibestudio/shared/approvalContract";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { EvalAuthorityCeilingSchema, UnitAuthorityRequestSchema } from "./build.js";
 
 export const shellApprovalValuesSchema = z
   .record(z.string().min(1).max(128), z.string().max(4096))
@@ -159,9 +161,29 @@ const pendingApprovalBaseShape = {
   diffReview: z.array(diffReviewSchema).optional(),
 };
 
+const authorityGroupSchema = z
+  .object({
+    id: z.string(),
+    label: z.string(),
+    description: z.string(),
+    requestCount: z.number().int().nonnegative(),
+    addedCount: z.number().int().nonnegative(),
+    items: z.array(
+      z
+        .object({
+          capability: z.string(),
+          title: z.string(),
+          description: z.string(),
+          added: z.boolean(),
+        })
+        .strict()
+    ),
+  })
+  .strict();
+
 const unitBatchEntrySchema = z
   .object({
-    unitKind: z.enum(["extension", "app", "scheduled-job", "agent-heartbeat"]),
+    unitKind: z.enum(["extension", "app", "panel", "worker", "scheduled-job", "agent-heartbeat"]),
     unitName: z.string(),
     displayName: z.string(),
     version: z.string().nullable().optional(),
@@ -171,6 +193,25 @@ const unitBatchEntrySchema = z
       .strict(),
     ev: z.string().nullable().optional(),
     capabilities: z.array(z.string()),
+    authority: z
+      .object({
+        requests: z.array(UnitAuthorityRequestSchema).readonly(),
+        evalCeilings: z.array(EvalAuthorityCeilingSchema).readonly(),
+        groups: z.array(authorityGroupSchema),
+        removedCount: z.number().int().nonnegative(),
+        eval: z.array(
+          z
+            .object({
+              purpose: z.enum(["agentic-code-execution", "tool-eval", "test-eval"]),
+              label: z.string(),
+              groups: z.array(authorityGroupSchema),
+              removedCount: z.number().int().nonnegative(),
+            })
+            .strict()
+        ),
+      })
+      .strict()
+      .optional(),
     dependencyEvs: z.record(z.string()).optional(),
     externalDeps: z.record(z.string()).optional(),
     integrity: z.string().nullable().optional(),
@@ -254,6 +295,80 @@ const approvalDetailSchema = z
     format: z.enum(["plain", "markdown", "code"]).optional(),
   })
   .strict();
+const authorityRequirementSchema: z.ZodType<AuthorityRequirement> = z.lazy(() =>
+  z.discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("capability"),
+        principal: z.enum(["host", "user", "code", "session", "mission"]),
+        capability: z.string(),
+        codeOnly: z.literal(true).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("relationship"),
+        name: z.enum([
+          "workspace-member",
+          "workspace-role",
+          "entity-self",
+          "entity-owner",
+          "agent-binding",
+          "code-source",
+          "context-integrity",
+          "closure-internal",
+        ]),
+        value: z.string().optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("session"),
+        audience: z.string().optional(),
+        minVersion: z.string().optional(),
+      })
+      .strict(),
+    z
+      .object({ kind: z.literal("all"), requirements: z.array(authorityRequirementSchema) })
+      .strict(),
+    z
+      .object({ kind: z.literal("any"), requirements: z.array(authorityRequirementSchema) })
+      .strict(),
+  ])
+);
+const invocationSnapshotSchema = z
+  .object({
+    v: z.literal(1),
+    service: z.string(),
+    method: z.string(),
+    capability: z.string(),
+    targetRequirement: authorityRequirementSchema.optional(),
+    targetCapability: z.string().optional(),
+    resourceKey: z.string(),
+    argsDigest: z.string(),
+    preparedStateDigest: z.string(),
+    callerPrincipal: z.string() as z.ZodType<InvocationSnapshot["callerPrincipal"]>,
+    sessionId: z.string(),
+    mission: z.string() as z.ZodType<InvocationSnapshot["mission"]>,
+    snippetDigest: z.string(),
+    codeLineage: z
+      .object({
+        class: z.enum(["internal", "external", "unknown"]),
+        chain: z.array(z.string()).readonly(),
+      })
+      .strict(),
+    contextLineage: z
+      .object({
+        class: z.enum(["internal", "external", "not-applicable"]),
+        latchEpoch: z.number(),
+        externalKeys: z.array(z.string()).readonly(),
+      })
+      .strict()
+      .nullable(),
+    initiatorChain: z.array(z.string()).readonly(),
+    at: z.number(),
+  })
+  .strict() satisfies z.ZodType<InvocationSnapshot>;
 const approvalInputFieldSchema = z
   .object({
     name: z.string(),
@@ -333,6 +448,9 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
         ])
         .optional(),
       details: z.array(approvalDetailSchema).optional(),
+      snapshot: invocationSnapshotSchema.optional(),
+      cardType: z.enum(["permission.gated", "permission.outside", "confirm.critical"]).optional(),
+      allowedDecisions: z.array(z.enum(APPROVAL_DECISIONS)).optional(),
     })
     .strict(),
   pendingUnitBatchApprovalSchema,

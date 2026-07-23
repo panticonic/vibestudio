@@ -16,6 +16,7 @@ const PANEL_MEMBERS = [
   "slotId",
   "parentId",
   "env",
+  "setTitle",
   "getInfo",
   "focusPanel",
   "getTheme",
@@ -35,7 +36,8 @@ export const panelRuntimeSurface: RuntimeSurface = {
     // Entries whose description is panel-specific (member arrays shared with core).
     workspace: namespaceEntry(
       WORKSPACE_MEMBERS,
-      "Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles."
+      "Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles.",
+      "workspace"
     ),
     openPanel: valueEntry(),
     listPanels: valueEntry(),
@@ -60,7 +62,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
     // Panel-only namespaces.
     panel: namespaceEntry(
       PANEL_MEMBERS,
-      "Panel-only affordances: identity (entityId/slotId/parentId/env), introspection (getInfo/getTheme/onThemeChange/onFocus/onConnectionError), lifecycle (focusPanel/onChildCreated/reopen), and stateArgs (get/set/setForPanel)."
+      "Panel-only affordances: identity (entityId/slotId/parentId/env), semantic display title (setTitle(title, { explicit? })), introspection (getInfo/getTheme/onThemeChange/onFocus/onConnectionError), lifecycle (focusPanel/onChildCreated/reopen), and stateArgs (get/set/setForPanel)."
     ),
     journal: namespaceEntry(
       ["Journal", "with", "current"],

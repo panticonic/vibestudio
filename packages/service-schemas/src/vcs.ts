@@ -425,6 +425,8 @@ export const vcsWorkUnitSchema = z
     decisionIds: z.array(id("Bounded preview of integration decisions made here.")).max(200),
     intentSummary: nonEmptyText.nullable(),
     externalSnapshot: vcsExternalSnapshotSchema.nullable(),
+    contentClass: z.enum(["internal", "external"]),
+    externalKeys: z.array(z.string().min(1)).max(256),
     normalizationProtocol: id("Normalization protocol."),
     createdAt: timestamp,
   })
@@ -1482,6 +1484,10 @@ export const vcsReadFileResultSchema = z
     repoPath: canonicalRepoPath,
     path: canonicalFilePath,
     contentHash: id("Exact content blob."),
+    authoredChangeId: id("Exact semantic change that authored this file version."),
+    authoredByWorkUnitId: id("Work unit carrying this file version's persisted content class."),
+    contentClass: z.enum(["internal", "external"]),
+    externalKeys: z.array(z.string().min(1)).max(256),
     mode: z.number().int().nonnegative().max(0o777),
     content: vcsFileReadContentSchema,
   })

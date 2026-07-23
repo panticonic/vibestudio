@@ -1,44 +1,79 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  EXTENSION_RUNTIME_BASE_CAPABILITIES,
-  parseUnitAuthorityManifest,
-  withExtensionRuntimeAuthority,
-} from "./authorityManifest.js";
+import { parseUnitAuthorityManifest } from "./authorityManifest.js";
 
-describe("extension runtime authority", () => {
-  it("seals runtime-owned lifecycle calls into an otherwise empty extension envelope", () => {
-    const authority = withExtensionRuntimeAuthority(
-      parseUnitAuthorityManifest({ requests: [], delegations: [] })
-    );
-
-    expect(authority.requests.map((request) => request.capability)).toEqual(
-      EXTENSION_RUNTIME_BASE_CAPABILITIES
-    );
-    expect(authority.requests.every((request) => request.resource.kind === "prefix")).toBe(true);
+describe("unit authority manifest", () => {
+  it("does not charge runtime-intrinsic extension lifecycle calls to authors", () => {
+    const authority = parseUnitAuthorityManifest({ requests: [], evalCeilings: [] });
+    expect(authority.requests).toEqual([]);
   });
 
-  it("preserves declared authority without duplicating an explicit lifecycle request", () => {
-    const authority = withExtensionRuntimeAuthority(
+  it("defaults omitted orthogonal sections to an empty, fail-closed envelope", () => {
+    expect(parseUnitAuthorityManifest({ requests: [] })).toEqual({
+      requests: [],
+      evalCeilings: [],
+    });
+    expect(parseUnitAuthorityManifest({ evalCeilings: [] })).toEqual({
+      requests: [],
+      evalCeilings: [],
+    });
+    expect(() => parseUnitAuthorityManifest({})).toThrow(/requests or evalCeilings/);
+    expect(() =>
+      parseUnitAuthorityManifest({ requests: [], futureAuthority: [] })
+    ).toThrow(/unknown field.*futureAuthority/);
+  });
+
+  it("allows dynamic wildcard ceilings but requires exact installed requests", () => {
+    expect(() =>
       parseUnitAuthorityManifest({
         requests: [
           {
-            capability: "service:extensions.ready",
+            capability: "workspace-service:*",
             resource: { kind: "prefix", prefix: "" },
+            tier: "gated",
+            evidence: "intentional-broad",
           },
-          { capability: "service:fs.read", resource: { kind: "prefix", prefix: "projects/" } },
         ],
-        delegations: [],
+        evalCeilings: [],
       })
-    );
+    ).toThrow(/Invalid capability pattern/);
 
     expect(
-      authority.requests.filter((request) => request.capability === "service:extensions.ready")
-    ).toHaveLength(1);
-    expect(authority.requests.map((request) => request.capability)).toEqual([
-      "service:extensions.health",
-      "service:extensions.ready",
-      "service:fs.read",
-    ]);
+      parseUnitAuthorityManifest({
+        requests: [],
+        evalCeilings: [
+          {
+            audience: "eval",
+            purpose: "agentic-code-execution",
+            capabilities: [
+              {
+                capability: "workspace-service:*",
+                resource: { kind: "prefix", prefix: "" },
+                tier: "gated",
+                evidence: "intentional-broad",
+              },
+            ],
+          },
+        ],
+      }).evalCeilings[0]?.capabilities[0]?.capability
+    ).toBe("workspace-service:*");
+  });
+
+  it("reports the exact malformed manifest field", () => {
+    expect(() =>
+      parseUnitAuthorityManifest({
+        requests: [
+          {
+            capability: "workspace-service:notes",
+            resource: { kind: "prefix", prefix: "" },
+            tier: "open",
+            evidence: "bounded-dynamic",
+          },
+        ],
+        evalCeilings: [],
+      })
+    ).toThrow(
+      'vibestudio.authority.requests[0].tier must be "gated" or "critical"; RPC receiver tier "open" is not a manifest request tier'
+    );
   });
 });

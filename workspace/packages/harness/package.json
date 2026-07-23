@@ -20,7 +20,8 @@
     "@workspace/pi-core": "workspace:*",
     "diff": "^7.0.0",
     "linkedom": "^0.18.5",
-    "unpdf": "^1.6.2"
+    "unpdf": "^1.6.2",
+    "yaml": "^2.8.1"
   },
   "optionalDependencies": {
     "re2": "1.24.0"

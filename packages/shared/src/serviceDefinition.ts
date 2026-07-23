@@ -15,14 +15,14 @@ export interface PreparedAuthoritySelection {
   requirement?: AuthorityRequirement;
   authorizingCaller?: VerifiedCaller;
   challenge?: AuthorityChallengePresentation;
+  /** Host-selected tier, allowed only when the schema declares its closed set. */
+  tier?: "gated" | "critical";
 }
 
 export type AuthorityPreparationResolver = (
   ctx: ServiceContext,
   args: unknown[]
-) =>
-  | readonly PreparedAuthoritySelection[]
-  | Promise<readonly PreparedAuthoritySelection[]>;
+) => readonly PreparedAuthoritySelection[] | Promise<readonly PreparedAuthoritySelection[]>;
 
 export interface ServiceDefinition {
   name: string;

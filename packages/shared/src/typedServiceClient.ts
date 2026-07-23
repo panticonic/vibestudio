@@ -19,7 +19,11 @@
  */
 
 import type { z } from "zod";
-import type { MethodAccessDescriptor, ServiceAuthorityPolicy } from "./serviceAuthority.js";
+import type {
+  MethodAccessDescriptor,
+  MethodTierPolicy,
+  ServiceAuthorityPolicy,
+} from "./serviceAuthority.js";
 import type { AuthorityRequirement, PrincipalKind } from "./authorization.js";
 
 export type AuthorityResourceDerivation =
@@ -32,18 +36,6 @@ export type AuthorityResourceDerivation =
       transform?: "url-origin" | "external-url-scope";
     };
 
-export type EvalCapabilityAcquisition =
-  | { kind: "baseline" }
-  | {
-      kind: "approval";
-      title: string;
-      description: string;
-      operation: { kind: string; verb: string };
-      severity?: "standard" | "severe";
-      grantScopes: readonly ("run" | "session" | "version")[];
-    }
-  | { kind: "closed"; reason: string };
-
 export type PreparedAuthorityRequirement =
   | AuthorityRequirement
   | { kind: "selected"; principals: readonly PrincipalKind[] };
@@ -55,18 +47,19 @@ export interface MethodAuthorityDescriptor {
     capability: string;
     requirement: AuthorityRequirement;
     resource: AuthorityResourceDerivation;
-    when?: { origins: readonly ("code" | "user" | "host" | "device" | "entity")[] };
-    evalAcquisition: EvalCapabilityAcquisition;
+    /** Override the method tier for this independent authority leaf. */
+    tier?: "open" | "gated" | "critical";
+    when?: { origins: readonly ("code" | "user" | "host" | "session")[] };
   }[];
   prepared?: {
     resolver: string;
     leaves: readonly {
       capability: string;
       requirement: PreparedAuthorityRequirement;
-      evalAcquisition: EvalCapabilityAcquisition;
+      /** Dynamic leaves may be stricter than the discovery method that selects them. */
+      tier?: "open" | "gated" | "critical" | { selectedFrom: readonly ("gated" | "critical")[] };
     }[];
   };
-  evalAcquisition?: EvalCapabilityAcquisition;
 }
 
 /** A worked example for a method. Realistic values allowed (hand-authored or
@@ -96,12 +89,23 @@ export interface MethodSchema {
   description?: string;
   args: z.ZodType;
   returns?: z.ZodType;
+  /**
+   * Stable manifest-facing effect for a promptable method outside the static
+   * host census. Colocate it with `tier`; transport method names are not
+   * user authority. Static host methods may use the reviewed host mapping.
+   */
+  capability?: string;
   /** Whether this wire method belongs in agent-facing capability discovery.
    *  Defaults to true. Set false for implementation transports that remain
    *  callable by typed runtime clients but have a higher-level public API. */
   agentFacing?: boolean;
   /** Complete compositional authority contract for this method. */
   authority?: ServiceAuthorityPolicy | MethodAuthorityDescriptor;
+  /**
+   * Colocated reviewed tier. Required for services outside the static host
+   * census and preferred for dynamically discovered/userland services.
+   */
+  tier?: MethodTierPolicy;
   /** Unified access & restrictedness descriptor (caller kinds, conditional
    *  restrictions, sensitivity, side-effects, approval/grant gates). */
   access?: MethodAccessDescriptor;

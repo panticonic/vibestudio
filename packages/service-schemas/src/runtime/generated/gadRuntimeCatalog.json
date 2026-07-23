@@ -798,6 +798,19 @@
           "type": "array",
           "items": {}
         },
+        "contentClass": {
+          "type": "string",
+          "enum": [
+            "internal",
+            "external"
+          ]
+        },
+        "externalKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "annotations": {
           "type": "object",
           "additionalProperties": {}
@@ -812,6 +825,8 @@
         "channelId",
         "seq",
         "from",
+        "contentClass",
+        "externalKeys",
         "publishedAt"
       ],
       "additionalProperties": false
@@ -1228,6 +1243,19 @@
           "type": "array",
           "items": {}
         },
+        "contentClass": {
+          "type": "string",
+          "enum": [
+            "internal",
+            "external"
+          ]
+        },
+        "externalKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "annotations": {
           "type": "object",
           "additionalProperties": {}
@@ -1242,6 +1270,8 @@
         "channelId",
         "seq",
         "from",
+        "contentClass",
+        "externalKeys",
         "publishedAt"
       ],
       "additionalProperties": false
@@ -1643,6 +1673,19 @@
           "type": "array",
           "items": {}
         },
+        "contentClass": {
+          "type": "string",
+          "enum": [
+            "internal",
+            "external"
+          ]
+        },
+        "externalKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "annotations": {
           "type": "object",
           "additionalProperties": {}
@@ -1657,6 +1700,8 @@
         "channelId",
         "seq",
         "from",
+        "contentClass",
+        "externalKeys",
         "publishedAt"
       ],
       "additionalProperties": false,
@@ -1861,6 +1906,19 @@
               "type": "array",
               "items": {}
             },
+            "contentClass": {
+              "type": "string",
+              "enum": [
+                "internal",
+                "external"
+              ]
+            },
+            "externalKeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "annotations": {
               "type": "object",
               "additionalProperties": {}
@@ -1875,6 +1933,8 @@
             "channelId",
             "seq",
             "from",
+            "contentClass",
+            "externalKeys",
             "publishedAt"
           ],
           "additionalProperties": false
@@ -2105,6 +2165,19 @@
                 "type": "array",
                 "items": {}
               },
+              "contentClass": {
+                "type": "string",
+                "enum": [
+                  "internal",
+                  "external"
+                ]
+              },
+              "externalKeys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "annotations": {
                 "type": "object",
                 "additionalProperties": {}
@@ -2119,6 +2192,8 @@
               "channelId",
               "seq",
               "from",
+              "contentClass",
+              "externalKeys",
               "publishedAt"
             ],
             "additionalProperties": false
@@ -2349,6 +2424,19 @@
                 "type": "array",
                 "items": {}
               },
+              "contentClass": {
+                "type": "string",
+                "enum": [
+                  "internal",
+                  "external"
+                ]
+              },
+              "externalKeys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "annotations": {
                 "type": "object",
                 "additionalProperties": {}
@@ -2363,6 +2451,8 @@
               "channelId",
               "seq",
               "from",
+              "contentClass",
+              "externalKeys",
               "publishedAt"
             ],
             "additionalProperties": false
@@ -2593,6 +2683,19 @@
                     "type": "array",
                     "items": {}
                   },
+                  "contentClass": {
+                    "type": "string",
+                    "enum": [
+                      "internal",
+                      "external"
+                    ]
+                  },
+                  "externalKeys": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
                   "annotations": {
                     "type": "object",
                     "additionalProperties": {}
@@ -2607,6 +2710,8 @@
                   "channelId",
                   "seq",
                   "from",
+                  "contentClass",
+                  "externalKeys",
                   "publishedAt"
                 ],
                 "additionalProperties": false
@@ -2829,6 +2934,19 @@
                   "type": "array",
                   "items": {}
                 },
+                "contentClass": {
+                  "type": "string",
+                  "enum": [
+                    "internal",
+                    "external"
+                  ]
+                },
+                "externalKeys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "annotations": {
                   "type": "object",
                   "additionalProperties": {}
@@ -2843,6 +2961,8 @@
                 "channelId",
                 "seq",
                 "from",
+                "contentClass",
+                "externalKeys",
                 "publishedAt"
               ],
               "additionalProperties": false
@@ -3143,6 +3263,19 @@
                 "type": "array",
                 "items": {}
               },
+              "contentClass": {
+                "type": "string",
+                "enum": [
+                  "internal",
+                  "external"
+                ]
+              },
+              "externalKeys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "annotations": {
                 "type": "object",
                 "additionalProperties": {}
@@ -3157,6 +3290,8 @@
               "channelId",
               "seq",
               "from",
+              "contentClass",
+              "externalKeys",
               "publishedAt"
             ],
             "additionalProperties": false

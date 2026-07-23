@@ -1,4 +1,4 @@
-import { buildMethods, type LibraryBuildTarget } from "../build.js";
+import { buildMethods, type BuildBundleResult, type LibraryBuildTarget } from "../build.js";
 import {
   createTypedServiceClient,
   type ServiceCallFn,
@@ -7,7 +7,7 @@ import {
 
 export type BuildServiceClient = TypedServiceClient<typeof buildMethods>;
 export interface EvalImportLoader {
-  (specifier: string, ref: string | undefined, externals: string[]): Promise<string>;
+  (specifier: string, ref: string | undefined, externals: string[]): Promise<BuildBundleResult>;
   /**
    * Report whether a bare specifier belongs to a manifest-declared workspace
    * unit. Sandboxes use this to auto-load unscoped units (for example a worker
@@ -31,14 +31,16 @@ export function createBuildServiceClient(call: ServiceCallFn): BuildServiceClien
   return createTypedServiceClient("build", buildMethods, call);
 }
 
-export function requireBuildBundleResult(result: unknown, message: string): string {
+export function requireBuildBundleResult(result: unknown, message: string): BuildBundleResult {
   if (
     typeof result === "object" &&
     result !== null &&
     "bundle" in result &&
-    typeof result.bundle === "string"
+    typeof result.bundle === "string" &&
+    "format" in result &&
+    (result.format === "cjs" || result.format === "async-cjs")
   ) {
-    return result.bundle;
+    return { bundle: result.bundle, format: result.format };
   }
   throw new Error(message);
 }
@@ -98,7 +100,7 @@ export function createEvalImportLoader(
     if (ref?.startsWith("npm:")) {
       const version = npmRefToVersion(specifier, ref);
       const result = await build.getBuildNpm(specifier, version, externals);
-      return result.bundle;
+      return requireBuildBundleResult(result, `Build service returned an invalid npm library build: ${specifier}`);
     }
 
     const result = await build.getBuild(specifier, workspaceRef(ref), {

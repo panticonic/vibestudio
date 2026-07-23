@@ -21,18 +21,35 @@ import {
   type RpcCausalParent,
 } from "@vibestudio/rpc";
 import type { AgentBinding, UserSubject } from "@vibestudio/identity/types";
+import type { RuntimeAgentBinding } from "./runtime/entitySpec.js";
 import type { AuthorizationContext, AuthorityGrant } from "./authorization.js";
 import type {
   ApprovalDecision,
   ApprovalDetailFormat,
   ApprovalOperationDescriptor,
+  DiffReviewEntry,
 } from "./approvals.js";
+import type {
+  AcquisitionInfo,
+  AuthorityPreflightLeaf,
+  AuthorityPreflightResult,
+  InvocationSnapshot,
+  ResourceScope,
+} from "@vibestudio/rpc";
+import {
+  createInvocationSnapshot,
+  invocationSnapshotDigest,
+  sha256Canonical,
+} from "./authority/invocationSnapshot.js";
 import { capabilityPatternCovers } from "./authorityManifest.js";
 import {
   bindMethodCapability,
   evaluateAuthority,
   requirementForPrincipals,
 } from "./authorization.js";
+import { methodTier, type MethodTierDecision } from "./authority/tierTable.js";
+import { hostMethodCapability } from "./authority/hostMethodCapabilities.js";
+import { describeCapability } from "./authorityPresentation.js";
 export type { CallerKind } from "./principalKinds.js";
 
 /**
@@ -192,16 +209,23 @@ export interface VerifiedCodeIdentity {
   executionDigest?: string;
   /** Immutable requests sealed into the exact execution recipe. */
   requested?: readonly import("@vibestudio/rpc").CapabilityScope[];
-  /** Immutable eval-delegation ceiling sealed into the exact execution recipe. */
-  delegations?: readonly import("./authorityManifest.js").EvalAuthorityDelegation[];
+  /** Immutable eval ceiling sealed into the exact execution recipe. */
+  evalCeilings?: readonly import("./authorityManifest.js").EvalAuthorityCeiling[];
+  /**
+   * Host-verified owner projection for a concrete EvalDO. Presence proves the
+   * parent link, exact owner build, and selected reviewed ceiling purpose were
+   * resolved from durable entity state rather than caller input.
+   */
+  evalOrigin?: {
+    ownerId: string;
+    purpose: import("./authorityManifest.js").EvalCeilingPurpose;
+  };
 }
 
 /**
- * The entity/context/channel scope an `agent`-kind connection is bound to,
- * resolved from its agent credential at auth time. HOST-VERIFIED — stamped in
- * `handleAuth` from the redeemer result only, NEVER from client input (modelled
- * after the host-verified `callerContextId` precedent). Services read
- * `ctx.caller.agentBinding` to enforce scope without trusting client-supplied ids.
+ * The entity/context/channel relationship carried by a caller. It is always
+ * host-derived: directly from an authenticated agent credential, or from the
+ * active runtime entity when installed worker/DO code relays that agent's work.
  */
 export interface VerifiedCaller {
   runtime: {
@@ -217,8 +241,22 @@ export interface VerifiedCaller {
   hostOriginated?: true;
   /** Code/build identity verified at the trust boundary, when applicable. */
   code?: VerifiedCodeIdentity;
-  /** Entity/context binding for `agent`-kind callers (host-verified; §3.2). */
-  agentBinding?: AgentBinding;
+  /**
+   * The exact code incarnation is currently active only because its workspace
+   * unit passed the canonical unit-approval lifecycle. This is stamped by the
+   * host after live-registry verification and is never accepted from RPC.
+   */
+  codeApproved?: true;
+  /** Host-verified relationship fact; never selects the authorizing origin. */
+  agentBinding?: RuntimeAgentBinding;
+  /** Credential id exists only when the transport authenticated as an agent. */
+  agentCredentialId?: string;
+  /**
+   * This invocation is authored by an eval/session rather than by the sealed
+   * runtime code transporting it. Agent binding alone is only a relationship
+   * fact and never selects the authorizing origin.
+   */
+  sessionOrigin?: true;
   /**
    * Host-verified account subject (WP0 §3.4) — derived and stamped by the
    * host at auth time, never accepted from the wire. Absent only for the
@@ -231,13 +269,26 @@ export function createVerifiedCaller(
   callerId: string,
   callerKind: CallerKind,
   code?: VerifiedCodeIdentity | null,
-  agentBinding?: AgentBinding | null,
-  subject?: UserSubject | null
+  agentBinding?: AgentBinding | RuntimeAgentBinding | null,
+  subject?: UserSubject | null,
+  sessionOrigin = false
 ): VerifiedCaller {
   return {
     runtime: { id: callerId, kind: callerKind },
     ...(code ? { code } : {}),
-    ...(agentBinding ? { agentBinding } : {}),
+    ...(agentBinding
+      ? {
+          agentBinding: {
+            entityId: agentBinding.entityId,
+            contextId: agentBinding.contextId,
+            channelId: agentBinding.channelId,
+          },
+          ...(callerKind === "agent" && "agentId" in agentBinding
+            ? { agentCredentialId: agentBinding.agentId }
+            : {}),
+        }
+      : {}),
+    ...(sessionOrigin ? { sessionOrigin: true as const } : {}),
     ...(subject ? { subject } : {}),
   };
 }
@@ -350,6 +401,14 @@ export type ServiceContext = {
   /** Cancellation owned by the authenticated inbound RPC request. Service
    * handlers pass this through to nested work rather than inventing deadlines. */
   signal?: AbortSignal;
+  /**
+   * Host-owned continuation policy for authority acquisition. The dispatcher
+   * sets this only inside work parked by the authenticated deferral registry;
+   * callers cannot opt an ordinary installed-code request into an inline
+   * human wait. After the decision, the complete live authority contract is
+   * resolved again before any handler effect runs.
+   */
+  authorityAcquisition?: "wait";
   /** Immutable verified runtime that transported a live eval call. The
    * dispatcher snapshots this before replacing `caller` with evaluated code,
    * so methods with multiple authority leaves revalidate the same deputy. */
@@ -363,12 +422,6 @@ export type ServiceContext = {
     /** Set only after the host coordinator authenticates the opaque lease. */
     contextId?: string;
   };
-  /** Authority-only preparation of a canonical call shape. No handler may run,
-   * and exact-dispatch (`once`) permits are intentionally unavailable. */
-  evalPreauthorization?: boolean;
-  /** Cancellation for a host-only eval preauthorization pass. Authority
-   * challenges must bind their waiters to this signal. */
-  evalPreauthorizationSignal?: AbortSignal;
   /** Verified root initiator for prompts/audit when a deputy (notably EvalDO)
    * transports the operation. Domain routing still uses `caller`. */
   authorizingCaller?: VerifiedCaller;
@@ -384,8 +437,6 @@ export type ServiceContext = {
       capability: string;
       resourceKey: string;
       requirement: import("./authorization.js").AuthorityRequirement;
-      /** How invocation code may satisfy this dynamically prepared leaf. */
-      acquisition?: import("./typedServiceClient.js").EvalCapabilityAcquisition;
       /** Verified principal on whose behalf a host-mediated operation runs. */
       authorizingCaller?: VerifiedCaller;
       /** Host-derived review copy for a state-dependent canonical resource. */
@@ -395,7 +446,6 @@ export type ServiceContext = {
       capability: string;
       resourceKey: string;
       requirement: import("./authorization.js").AuthorityRequirement;
-      acquisition?: import("./typedServiceClient.js").EvalCapabilityAcquisition;
       authorizingCaller?: VerifiedCaller;
       challenge?: AuthorityChallengePresentation;
     }): Promise<boolean>;
@@ -403,7 +453,7 @@ export type ServiceContext = {
   /** Decisions produced by the canonical pre-handler authority challenge
    * adapter, available only for result/audit ergonomics. Handlers never use
    * this map to authorize an effect. */
-  authorityDecisions?: Map<string, "once" | "run" | "session" | "version">;
+  authorityDecisions?: Map<string, "once" | "session" | "version">;
   /**
    * Upstream userland caller for an extension-originated service call. Set
    * only after the server validates an extension's opaque parent invocation
@@ -462,6 +512,7 @@ export interface AuthorityChallengePresentation {
     groupKey?: string;
   };
   details?: readonly { label: string; value: string; format?: ApprovalDetailFormat }[];
+  diffReview?: readonly DiffReviewEntry[];
   /**
    * Exact decisions meaningful for this operation. This is host-derived policy,
    * not UI presentation: authority brokers must intersect their ordinary grant
@@ -517,17 +568,38 @@ export class ServiceError extends Error {
  * transports can map this to a 403 / structured RPC error code.
  */
 export class ServiceAccessError extends ServiceError {
-  constructor(service: string, method: string, message?: string, code = "EACCES") {
+  constructor(
+    service: string,
+    method: string,
+    message?: string,
+    code = "EACCES",
+    errorData?: import("@vibestudio/rpc").RpcErrorData
+  ) {
     super(
       service,
       method,
       message ?? `Authority denied for service '${service}.${method}'`,
       code,
       undefined,
-      "access"
+      "access",
+      errorData
     );
     this.name = "ServiceAccessError";
   }
+}
+
+export interface HostAuthorityEffect {
+  service: string;
+  method: string;
+  capability: string;
+  resourceKey: string;
+  requirement: import("./authorization.js").AuthorityRequirement;
+  tier: "open" | "gated" | "critical";
+  sessionAdmission: MethodTierDecision["session"];
+  args: readonly unknown[];
+  preparedStateDigest: string;
+  challenge?: AuthorityChallengePresentation;
+  sensitivity?: import("./serviceAuthority.js").MethodSensitivity;
 }
 
 /**
@@ -536,7 +608,53 @@ export class ServiceAccessError extends ServiceError {
 export class ServiceDispatcher {
   private handlers = new Map<string, ServiceHandler>();
   private definitions = new Map<string, ServiceDefinition>();
+  private readonly methodTiers = new Map<string, MethodTierDecision>();
   private initialized = false;
+  private readonly tierLookup: (method: string) => MethodTierDecision | null;
+  private readonly capabilityLookup: (method: string) => string | null;
+  private authorityAcquirer?: {
+    request(input: {
+      snapshot: InvocationSnapshot;
+      snapshotDigest: string;
+      tier: "gated" | "critical";
+      caller: VerifiedCaller;
+      renderedAction: string;
+      resource: ResourceScope;
+      presentation?: AuthorityChallengePresentation;
+    }): AcquisitionInfo;
+    acquire(
+      input: {
+        snapshot: InvocationSnapshot;
+        snapshotDigest: string;
+        tier: "gated" | "critical";
+        caller: VerifiedCaller;
+        renderedAction: string;
+        resource: ResourceScope;
+        presentation?: AuthorityChallengePresentation;
+      },
+      signal?: AbortSignal
+    ): Promise<{
+      state: "decided" | "closed";
+      decision?: "once" | "session" | "version" | "deny";
+      info?: AcquisitionInfo;
+    }>;
+    consume(grantId: string): boolean;
+    invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
+  };
+
+  constructor(
+    opts: {
+      tierLookup?: (method: string) => MethodTierDecision | null;
+      capabilityLookup?: (method: string) => string | null;
+    } = {}
+  ) {
+    this.tierLookup = opts.tierLookup ?? methodTier;
+    this.capabilityLookup = opts.capabilityLookup ?? hostMethodCapability;
+  }
+
+  setAuthorityAcquirer(acquirer: NonNullable<ServiceDispatcher["authorityAcquirer"]>): void {
+    this.authorityAcquirer = acquirer;
+  }
   private authorityResolver?: (input: {
     ctx: ServiceContext;
     caller: VerifiedCaller;
@@ -545,10 +663,10 @@ export class ServiceDispatcher {
     capability: string;
     resourceKey: string;
     requirement: import("./authorization.js").AuthorityRequirement;
-    acquisition?: import("./typedServiceClient.js").EvalCapabilityAcquisition;
     challenge?: AuthorityChallengePresentation;
-    preauthorization?: boolean;
     sensitivity?: import("./serviceAuthority.js").MethodSensitivity;
+    tier: MethodTierDecision["tier"];
+    sessionAdmission: MethodTierDecision["session"];
   }) =>
     | {
         context: AuthorizationContext;
@@ -557,7 +675,7 @@ export class ServiceDispatcher {
         authorizingCaller?: VerifiedCaller;
         contextId?: string;
         readOnly?: boolean;
-        decision?: "once" | "run" | "session" | "version";
+        decision?: "once" | "session" | "version";
       }
     | Promise<{
         context: AuthorizationContext;
@@ -566,7 +684,7 @@ export class ServiceDispatcher {
         authorizingCaller?: VerifiedCaller;
         contextId?: string;
         readOnly?: boolean;
-        decision?: "once" | "run" | "session" | "version";
+        decision?: "once" | "session" | "version";
       }>;
 
   setAuthorityResolver(
@@ -578,10 +696,10 @@ export class ServiceDispatcher {
       capability: string;
       resourceKey: string;
       requirement: import("./authorization.js").AuthorityRequirement;
-      acquisition?: import("./typedServiceClient.js").EvalCapabilityAcquisition;
       challenge?: AuthorityChallengePresentation;
-      preauthorization?: boolean;
       sensitivity?: import("./serviceAuthority.js").MethodSensitivity;
+      tier: MethodTierDecision["tier"];
+      sessionAdmission: MethodTierDecision["session"];
     }) =>
       | {
           context: AuthorizationContext;
@@ -590,7 +708,7 @@ export class ServiceDispatcher {
           authorizingCaller?: VerifiedCaller;
           contextId?: string;
           readOnly?: boolean;
-          decision?: "once" | "run" | "session" | "version";
+          decision?: "once" | "session" | "version";
         }
       | Promise<{
           context: AuthorizationContext;
@@ -599,10 +717,40 @@ export class ServiceDispatcher {
           authorizingCaller?: VerifiedCaller;
           contextId?: string;
           readOnly?: boolean;
-          decision?: "once" | "run" | "session" | "version";
+          decision?: "once" | "session" | "version";
         }>
   ): void {
     this.authorityResolver = resolver;
+  }
+
+  /**
+   * Enforce a host-owned effect that does not enter through an RPC method
+   * (for example protected publication or raw egress). It deliberately runs
+   * through the same resolver, snapshot, acquisition, grant, and consume path
+   * as ordinary service dispatch; callers may not provide a precomputed allow.
+   */
+  async authorizeHostEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void> {
+    const methodDef = {
+      description: effect.challenge?.title ?? effect.capability,
+      args: z.tuple([]),
+      ...(effect.sensitivity ? { access: { sensitivity: effect.sensitivity } } : {}),
+    } as MethodSchema;
+    await this.enforceRequirement(
+      ctx,
+      effect.service,
+      effect.method,
+      effect.capability,
+      effect.resourceKey,
+      effect.requirement,
+      methodDef,
+      effect.args,
+      effect.preparedStateDigest,
+      undefined,
+      effect.challenge,
+      false,
+      effect.tier,
+      { tier: effect.tier, session: effect.sessionAdmission, rationale: "host-owned effect" }
+    );
   }
 
   /**
@@ -623,6 +771,23 @@ export class ServiceDispatcher {
   registerService(def: ServiceDefinition): ServiceDefinition | undefined {
     const usedPreparers = new Set<string>();
     for (const [method, schema] of Object.entries(def.methods)) {
+      const qualifiedMethod = `${def.name}.${method}`;
+      const reviewedTier = schema.tier ?? this.tierLookup(qualifiedMethod);
+      if (!reviewedTier) {
+        throw new Error(`Service method ${qualifiedMethod} has no reviewed tier decision`);
+      }
+      if (!reviewedTier.rationale.trim()) {
+        throw new Error(`Service method ${qualifiedMethod} has an empty tier rationale`);
+      }
+      if (
+        reviewedTier.tier !== "open" &&
+        !(schema.capability ?? this.capabilityLookup(qualifiedMethod))
+      ) {
+        throw new Error(
+          `Promptable service method ${qualifiedMethod} has no reviewed semantic capability`
+        );
+      }
+      this.methodTiers.set(qualifiedMethod, reviewedTier);
       if (!schema.authority && !def.authority) {
         throw new Error(`Service method ${def.name}.${method} has no authority declaration`);
       }
@@ -718,10 +883,9 @@ export class ServiceDispatcher {
       }
     }
 
-    await this.assertAuthority(ctx, service, method, args);
-
-    try {
-      const result = await handler(ctx, method, args);
+    const invoke = async (invocationCtx: ServiceContext): Promise<unknown> => {
+      await this.assertAuthority(invocationCtx, service, method, args);
+      const result = await handler(invocationCtx, method, args);
       let normalizedResult = result;
       if (methodDef?.returns) {
         normalizedResult = normalizeReturnForSchema(result, methodDef.returns);
@@ -737,6 +901,34 @@ export class ServiceDispatcher {
         }
       }
       return normalizedResult;
+    };
+
+    try {
+      // Authority acquisition is part of the protected invocation, not a
+      // transport prelude. A hibernatable caller that explicitly opted into
+      // deferral must receive its acknowledgement before a human decision is
+      // awaited. Preflight is side-effect free and tells us whether the exact
+      // live invocation would prompt; the detached continuation then resolves
+      // authority again and invokes the handler only after the grant exists.
+      //
+      // Remove `deferral` from that continuation. A handler may have its own
+      // approval boundary (credential use is the canonical example); nesting
+      // another run under the same request/idempotency key would settle the
+      // outer continuation with a deferred sentinel instead of the real result.
+      if (ctx.deferral?.canDefer) {
+        const preflight = await this.preflightAuthority(ctx, service, method, args);
+        if (preflight.decision === "acquirable") {
+          const { deferral: _deferral, ...continuationBase } = ctx;
+          return ctx.deferral.run(async (signal) =>
+            invoke({
+              ...continuationBase,
+              signal,
+              authorityAcquisition: "wait",
+            })
+          );
+        }
+      }
+      return await invoke(ctx);
     } catch (error) {
       if (error instanceof ServiceError) {
         throw error;
@@ -754,35 +946,6 @@ export class ServiceDispatcher {
   }
 
   /**
-   * Validate and resolve a call's exact canonical authority leaves without
-   * invoking its handler. Eval start uses this for up-front preauthorization;
-   * eventual dispatch validates and evaluates the call again from live state.
-   */
-  async preauthorize(
-    ctx: ServiceContext,
-    service: string,
-    method: string,
-    args: unknown[]
-  ): Promise<void> {
-    if (!ctx.evalInvocation || ctx.evalPreauthorization !== true) {
-      throw new ServiceError(service, method, "Preauthorization requires a live eval invocation");
-    }
-    const def = this.definitions.get(service);
-    const methodDef = def?.methods[method];
-    if (!def || !methodDef) throw new ServiceError(service, method, "Unknown service method");
-    const normalized = normalizeServiceArgs(args, methodDef.args);
-    const parsed = methodDef.args.safeParse(normalized);
-    if (!parsed.success) {
-      throw new ServiceError(
-        service,
-        method,
-        `Invalid args: ${formatArgsValidationError(parsed.error)}${formatUsageHint(service, method, methodDef)}`
-      );
-    }
-    await this.assertAuthority(ctx, service, method, normalized);
-  }
-
-  /**
    * Enforce the exact same compositional contract for alternate transports
    * whose byte streaming cannot pass through the ordinary handler invocation.
    */
@@ -792,6 +955,43 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[]
   ): Promise<void> {
+    await this.assessAuthority(ctx, service, method, args, false);
+  }
+
+  /** Execute the complete authority contract without cards, grants, consumption, or handlers. */
+  async preflightAuthority(
+    ctx: ServiceContext,
+    service: string,
+    method: string,
+    args: unknown[]
+  ): Promise<AuthorityPreflightResult> {
+    const methodDef = this.definitions.get(service)?.methods[method];
+    if (!methodDef) throw new ServiceError(service, method, "Unknown service method");
+    const normalized = normalizeServiceArgs(args, methodDef.args);
+    const parsed = methodDef.args.safeParse(normalized);
+    if (!parsed.success) {
+      throw new ServiceError(
+        service,
+        method,
+        `Invalid args: ${formatArgsValidationError(parsed.error)}${formatUsageHint(service, method, methodDef)}`
+      );
+    }
+    return this.assessAuthority(
+      ctx,
+      service,
+      method,
+      normalized,
+      true
+    ) as Promise<AuthorityPreflightResult>;
+  }
+
+  private async assessAuthority(
+    ctx: ServiceContext,
+    service: string,
+    method: string,
+    args: unknown[],
+    preflight: boolean
+  ): Promise<void | AuthorityPreflightResult> {
     if (ctx.evalInvocation && !ctx.transportCaller) ctx.transportCaller = ctx.caller;
     const serviceDef = this.definitions.get(service);
     const methodDef = serviceDef?.methods[method];
@@ -802,106 +1002,81 @@ export class ServiceDispatcher {
     if (!this.authorityResolver) {
       throw new ServiceError(service, method, "Compositional authority resolver is unavailable");
     }
-    const capabilityName = `service:${service}.${method}`;
+    const transportLabel = `service:${service}.${method}`;
+    const methodTierDecision = this.methodTiers.get(`${service}.${method}`);
+    if (!methodTierDecision) {
+      throw new ServiceError(service, method, "Reviewed method tier is unavailable");
+    }
+    const capabilityName =
+      methodTierDecision.tier === "open"
+        ? transportLabel
+        : (methodDef.capability ?? this.capabilityLookup(`${service}.${method}`));
+    if (!capabilityName) {
+      throw new ServiceError(
+        service,
+        method,
+        "Promptable host method has no reviewed semantic capability"
+      );
+    }
     const descriptor =
       "requirement" in declaration
         ? declaration
         : {
-            requirement: requirementForPrincipals(declaration.principals, capabilityName),
+            requirement: requirementForPrincipals(declaration.principals, capabilityName, {
+              codeOnly: methodTierDecision.session === "codeOnly",
+            }),
             resource: { kind: "literal" as const, key: capabilityName },
           };
     const resourceKey = deriveAuthorityResource(descriptor.resource, args);
-    ctx.authority = {
-      assert: ({
-        capability,
-        resourceKey: dynamicResource,
-        requirement,
-        acquisition,
-        authorizingCaller,
-        challenge,
-      }) =>
-        this.enforceRequirement(
-          ctx,
-          service,
-          method,
-          capability,
-          dynamicResource,
-          bindMethodCapability(requirement, capability),
-          methodDef,
-          acquisition,
-          authorizingCaller,
-          challenge
-        ),
-      allows: async ({
-        capability,
-        resourceKey: dynamicResource,
-        requirement,
-        acquisition,
-        authorizingCaller,
-        challenge,
-      }) => {
-        try {
-          await this.enforceRequirement(
-            ctx,
-            service,
-            method,
-            capability,
-            dynamicResource,
-            bindMethodCapability(requirement, capability),
-            methodDef,
-            acquisition,
-            authorizingCaller,
-            challenge
-          );
-          return true;
-        } catch (error) {
-          if (isAuthorityDenial(error)) return false;
-          throw error;
-        }
-      },
-    };
-    await this.enforceRequirement(
-      ctx,
-      service,
-      method,
-      capabilityName,
-      resourceKey,
-      bindMethodCapability(descriptor.requirement, capabilityName),
-      methodDef,
-      "evalAcquisition" in descriptor ? descriptor.evalAcquisition : undefined
-    );
-    for (const additional of "additional" in descriptor ? (descriptor.additional ?? []) : []) {
-      if (
-        additional.when &&
-        !additional.when.origins.includes(ctx.authorization?.authorizingOrigin.kind ?? "code")
-      ) {
-        continue;
+    const preflightLeaves: AuthorityPreflightLeaf[] = [];
+    let preflightPrompt: AuthorityPreflightResult["wouldPrompt"];
+    if (
+      methodTierDecision.session === "codeOnly" &&
+      (ctx.authorization?.authorizingOrigin.kind === "session" ||
+        (!ctx.authorization && ctx.caller.sessionOrigin === true))
+    ) {
+      if (preflight) {
+        return preflightResult(
+          [
+            {
+              capability: capabilityName,
+              resourceKey,
+              status: "denied",
+              tier: methodTierDecision.tier,
+            },
+          ],
+          reviewedSeverity(methodTierDecision.tier)
+        );
       }
-      const additionalResourceKey = deriveAuthorityResource(additional.resource, args);
-      await this.enforceRequirement(
-        ctx,
+      throw new ServiceAccessError(
         service,
         method,
-        additional.capability,
-        additionalResourceKey,
-        bindMethodCapability(additional.requirement, additional.capability),
-        methodDef,
-        additional.evalAcquisition
+        `The reviewed ${service}.${method} surface requires a durable code identity`,
+        "EACCES"
       );
     }
-    if ("prepared" in descriptor && descriptor.prepared) {
-      const prepare = serviceDef.authorityPreparation?.[descriptor.prepared.resolver];
+    type PreparedSelection = {
+      selection: PreparedAuthoritySelection;
+      leaf: NonNullable<MethodAuthorityDescriptor["prepared"]>["leaves"][number];
+      requirement: import("./authorization.js").AuthorityRequirement;
+      tier?: "open" | "gated" | "critical";
+    };
+    const prepareDescriptor = "prepared" in descriptor ? descriptor.prepared : undefined;
+    const collectPreparedSelections = async (): Promise<PreparedSelection[]> => {
+      if (!prepareDescriptor) return [];
+      const prepare = serviceDef.authorityPreparation?.[prepareDescriptor.resolver];
       if (!prepare) {
         throw new ServiceError(
           service,
           method,
-          `Authority preparer '${descriptor.prepared.resolver}' is unavailable`
+          `Authority preparer '${prepareDescriptor.resolver}' is unavailable`
         );
       }
       const selected = await prepare(ctx, args);
+      const collected: PreparedSelection[] = [];
       const seen = new Set<string>();
       for (const selection of selected) {
-        const matchingLeaves = descriptor.prepared.leaves.filter((leaf) =>
+        const matchingLeaves = prepareDescriptor.leaves.filter((leaf) =>
           capabilityPatternCovers(leaf.capability, selection.capability)
         );
         if (matchingLeaves.length !== 1) {
@@ -923,24 +1098,169 @@ export class ServiceDispatcher {
           );
         }
         seen.add(selectionKey);
-        const requirement = resolvePreparedRequirement(
-          service,
-          method,
-          leaf.requirement,
-          selection
-        );
-        await this.enforceRequirement(
+        collected.push({
+          selection,
+          leaf,
+          requirement: resolvePreparedRequirement(service, method, leaf.requirement, selection),
+          tier: resolvePreparedTier(service, method, leaf.tier, selection.tier),
+        });
+      }
+      return collected;
+    };
+    const preparedDigest = (selections: readonly PreparedSelection[]): string =>
+      selections.length
+        ? sha256Canonical(
+            selections.map(({ selection, requirement, tier }) => ({
+              capability: selection.capability,
+              resourceKey: selection.resourceKey,
+              requirement,
+              authorizingCaller: selection.authorizingCaller
+                ? {
+                    runtime: selection.authorizingCaller.runtime,
+                    hostOriginated: selection.authorizingCaller.hostOriginated === true,
+                    code: selection.authorizingCaller.code
+                      ? {
+                          principal: selection.authorizingCaller.code.repoPath,
+                          effectiveVersion: selection.authorizingCaller.code.effectiveVersion,
+                          executionDigest: selection.authorizingCaller.code.executionDigest ?? null,
+                        }
+                      : null,
+                    subject: selection.authorizingCaller.subject?.userId ?? null,
+                  }
+                : null,
+              challenge: selection.challenge ?? null,
+              tier: tier ?? null,
+            }))
+          )
+        : "-";
+    const preparedSelections = await collectPreparedSelections();
+    const preparedStateDigest = preparedDigest(preparedSelections);
+    ctx.authority = {
+      assert: ({
+        capability,
+        resourceKey: dynamicResource,
+        requirement,
+        authorizingCaller,
+        challenge,
+      }) =>
+        this.enforceRequirement(
           ctx,
           service,
           method,
-          selection.capability,
-          selection.resourceKey,
-          bindMethodCapability(requirement, selection.capability),
+          capability,
+          dynamicResource,
+          bindMethodCapability(requirement, capability),
           methodDef,
-          leaf.evalAcquisition,
-          selection.authorizingCaller,
-          selection.challenge
-        );
+          args,
+          preparedStateDigest,
+          authorizingCaller,
+          challenge
+        ).then(() => undefined),
+      allows: async ({
+        capability,
+        resourceKey: dynamicResource,
+        requirement,
+        authorizingCaller,
+        challenge,
+      }) => {
+        try {
+          await this.enforceRequirement(
+            ctx,
+            service,
+            method,
+            capability,
+            dynamicResource,
+            bindMethodCapability(requirement, capability),
+            methodDef,
+            args,
+            preparedStateDigest,
+            authorizingCaller,
+            challenge
+          );
+          return true;
+        } catch (error) {
+          if (isAuthorityDenial(error)) return false;
+          throw error;
+        }
+      },
+    };
+    const primary = await this.enforceRequirement(
+      ctx,
+      service,
+      method,
+      capabilityName,
+      resourceKey,
+      bindMethodCapability(descriptor.requirement, capabilityName),
+      methodDef,
+      args,
+      preparedStateDigest,
+      undefined,
+      undefined,
+      preflight
+    );
+    if (primary) {
+      preflightLeaves.push(primary.leaf);
+      preflightPrompt ??= primary.wouldPrompt;
+    }
+    for (const additional of "additional" in descriptor ? (descriptor.additional ?? []) : []) {
+      if (
+        additional.when &&
+        !additional.when.origins.includes(ctx.authorization?.authorizingOrigin.kind ?? "code")
+      ) {
+        continue;
+      }
+      const additionalResourceKey = deriveAuthorityResource(additional.resource, args);
+      const result = await this.enforceRequirement(
+        ctx,
+        service,
+        method,
+        additional.capability,
+        additionalResourceKey,
+        bindMethodCapability(additional.requirement, additional.capability),
+        methodDef,
+        args,
+        preparedStateDigest,
+        undefined,
+        undefined,
+        preflight,
+        additional.tier
+      );
+      if (result) {
+        preflightLeaves.push(result.leaf);
+        preflightPrompt ??= result.wouldPrompt;
+      }
+    }
+    for (const { selection, requirement, tier } of preparedSelections) {
+      const result = await this.enforceRequirement(
+        ctx,
+        service,
+        method,
+        selection.capability,
+        selection.resourceKey,
+        bindMethodCapability(requirement, selection.capability),
+        methodDef,
+        args,
+        preparedStateDigest,
+        selection.authorizingCaller,
+        selection.challenge,
+        preflight,
+        tier
+      );
+      if (result) {
+        preflightLeaves.push(result.leaf);
+        preflightPrompt ??= result.wouldPrompt;
+      }
+    }
+
+    // A parked acquisition may outlive the host state used to select a target,
+    // provider, or canonical resource. Re-run the side-effect-free preparer at
+    // the handler boundary and restart the complete authority assessment when
+    // anything changed. The old invocation-bound grant remains unusable because
+    // the replacement snapshot has a different prepared-state digest.
+    if (!preflight && prepareDescriptor) {
+      const livePrepared = await collectPreparedSelections();
+      if (preparedDigest(livePrepared) !== preparedStateDigest) {
+        return this.assessAuthority(ctx, service, method, args, false);
       }
     }
 
@@ -950,6 +1270,14 @@ export class ServiceDispatcher {
     // enforcement point (every dispatch path funnels here), so the containment
     // can't be bypassed.
     if (ctx.readOnly && methodDef.access?.sensitivity !== "read") {
+      if (preflight) {
+        for (const leaf of preflightLeaves) leaf.status = "denied";
+        return preflightResult(
+          preflightLeaves,
+          reviewedSeverity(methodTierDecision.tier),
+          preflightPrompt
+        );
+      }
       throw new ServiceError(
         service,
         method,
@@ -958,6 +1286,9 @@ export class ServiceDispatcher {
           `only invoke methods declaring access.sensitivity === "read".`,
         "EVAL_READ_ONLY"
       );
+    }
+    if (preflight) {
+      return preflightResult(preflightLeaves, severityForLeaves(preflightLeaves), preflightPrompt);
     }
   }
 
@@ -969,69 +1300,206 @@ export class ServiceDispatcher {
     resourceKey: string,
     requirement: import("./authorization.js").AuthorityRequirement,
     methodDef: MethodSchema,
-    acquisition?: import("./typedServiceClient.js").EvalCapabilityAcquisition,
+    validatedArgs: readonly unknown[],
+    preparedStateDigest: string,
     authorizingCaller?: VerifiedCaller,
-    challenge?: AuthorityChallengePresentation
-  ): Promise<void> {
+    challenge?: AuthorityChallengePresentation,
+    preflight = false,
+    tierOverride?: "open" | "gated" | "critical",
+    effectReview?: MethodTierDecision
+  ): Promise<{
+    leaf: AuthorityPreflightLeaf;
+    wouldPrompt?: AuthorityPreflightResult["wouldPrompt"];
+  } | void> {
+    const reviewedMethod = effectReview ?? this.methodTiers.get(`${service}.${method}`);
+    if (!reviewedMethod) {
+      throw new ServiceError(service, method, "Reviewed method tier is unavailable");
+    }
+    const reviewedTier = tierOverride ?? reviewedMethod.tier;
     const resolver = this.authorityResolver;
     if (!resolver) {
       throw new ServiceError(service, method, "Compositional authority resolver is unavailable");
     }
-    const resolved = await resolver({
-      ctx,
-      caller: authorizingCaller ?? ctx.caller,
-      service,
-      method,
-      capability,
-      resourceKey,
-      requirement,
-      ...(acquisition ? { acquisition } : {}),
-      ...(challenge ? { challenge } : {}),
-      ...(ctx.evalPreauthorization ? { preauthorization: true } : {}),
-      ...(methodDef.access?.sensitivity ? { sensitivity: methodDef.access.sensitivity } : {}),
-    });
-    ctx.authorization = resolved.context;
-    if (ctx.evalInvocation && resolved.contextId) {
-      ctx.evalInvocation.contextId = resolved.contextId;
-    }
-    if (resolved.authorizingCaller) {
-      ctx.authorizingCaller = resolved.authorizingCaller;
-    }
-    // Evaluated code is neither its initiating user/agent nor the EvalDO kernel
-    // that transports its calls. Once the invocation coordinator authenticates
-    // the opaque lease it supplies a host-attested code caller for domain
-    // policy. The root initiator remains separately available for prompts and
-    // user-facing attribution through `authorizingCaller`.
-    if (resolved.effectiveCaller) ctx.caller = resolved.effectiveCaller;
-    if (resolved.readOnly === true) ctx.readOnly = true;
-    if (resolved.decision) {
-      (ctx.authorityDecisions ??= new Map()).set(capability, resolved.decision);
-    }
-    const decision = evaluateAuthority({
-      context: resolved.context,
-      requirement,
-      resourceKey,
-      grants: resolved.grants,
-    });
-    if (!decision.allowed) {
-      const evalCode = ctx.evalInvocation
-        ? decision.code === "relationship" || decision.code === "session"
-          ? "EVAL_RELATIONSHIP_FAILED"
-          : decision.code === "delegation"
-            ? "EVAL_CAPABILITY_NOT_DELEGATED"
-            : decision.code === "denied"
-              ? "EVAL_APPROVAL_DENIED"
-              : decision.code === "missing-grant"
-                ? "EVAL_APPROVAL_REQUIRED"
-                : decision.code === "not-requested"
-                  ? "EVAL_AUTHORITY_CONSTRAINT"
-                  : "EVAL_CAPABILITY_CLOSED"
-        : "EACCES";
+    const caller = authorizingCaller ?? ctx.caller;
+    const resolveLive = () =>
+      resolver({
+        ctx,
+        caller,
+        service,
+        method,
+        capability,
+        resourceKey,
+        requirement,
+        ...(challenge ? { challenge } : {}),
+        ...(methodDef.access?.sensitivity ? { sensitivity: methodDef.access.sensitivity } : {}),
+        tier: reviewedTier,
+        sessionAdmission: reviewedMethod.session,
+      });
+
+    for (;;) {
+      const resolved = await resolveLive();
+      if (!preflight) {
+        ctx.authorization = resolved.context;
+        if (ctx.evalInvocation && resolved.contextId)
+          ctx.evalInvocation.contextId = resolved.contextId;
+        if (resolved.authorizingCaller) ctx.authorizingCaller = resolved.authorizingCaller;
+        if (resolved.effectiveCaller) ctx.caller = resolved.effectiveCaller;
+        if (resolved.readOnly === true) ctx.readOnly = true;
+        if (resolved.decision)
+          (ctx.authorityDecisions ??= new Map()).set(capability, resolved.decision);
+      }
+
+      const snapshot = createInvocationSnapshot({
+        service,
+        method,
+        capability,
+        resourceKey,
+        args: validatedArgs,
+        preparedStateDigest,
+        callerPrincipal: resolved.context.authorizingOrigin.principal,
+        sessionId: resolved.context.session.id,
+        mission: resolved.context.session.mission
+          ? `mission:${resolved.context.session.mission.missionId}@${resolved.context.session.mission.closureDigest}`
+          : "-",
+        snippetDigest:
+          resolved.context.authorizingOrigin.kind === "session"
+            ? (resolved.context.executingCode?.principal.split("@").slice(-1)[0] ?? "-")
+            : "-",
+        codeLineage: resolved.context.executingCode
+          ? {
+              class: resolved.context.executingCode.sourceLineage.class,
+              chain: resolved.context.executingCode.sourceLineage.externalKeys,
+            }
+          : { class: "unknown", chain: [] },
+        contextLineage: resolved.context.contextIntegrity,
+        initiatorChain: resolved.context.initiatorChain,
+      });
+      const snapshotDigest = invocationSnapshotDigest(snapshot);
+      const decision = evaluateAuthority({
+        context: resolved.context,
+        requirement,
+        resourceKey,
+        grants: resolved.grants,
+        tier: reviewedTier,
+        invocationDigest: snapshotDigest,
+      });
+      if (decision.allowed) {
+        if (preflight) {
+          return {
+            leaf: {
+              capability,
+              resourceKey,
+              status: decision.consumable ? "consumable-once" : "granted",
+              tier: reviewedTier,
+            },
+          };
+        }
+        if (decision.consumable && decision.grantId) {
+          if (!this.authorityAcquirer?.consume(decision.grantId)) {
+            this.authorityAcquirer?.invalidate(
+              snapshotDigest,
+              caller.runtime.id,
+              resolved.context.authorizingOrigin.principal
+            );
+            continue;
+          }
+        }
+        return;
+      }
+
+      const acquirable =
+        reviewedTier !== "open" &&
+        (decision.code === "missing-grant" || decision.code === "lineage");
+      if (acquirable) {
+        const tier = reviewedTier as "gated" | "critical";
+        const renderedAction =
+          challenge?.operation.verb ??
+          methodDef.access?.approval?.[0]?.operation.verb ??
+          describeCapability(capability).action;
+        if (preflight) {
+          return {
+            leaf: { capability, resourceKey, status: "acquirable", tier },
+            wouldPrompt: {
+              cardType:
+                tier === "critical"
+                  ? "confirm.critical"
+                  : resolved.context.contextIntegrity?.class === "external"
+                    ? "permission.outside"
+                    : "permission.gated",
+              renderedAction,
+            },
+          };
+        }
+        const acquisitionInput = {
+          snapshot,
+          snapshotDigest,
+          tier,
+          caller,
+          renderedAction,
+          resource: { kind: "exact" as const, key: resourceKey },
+          ...(challenge ? { presentation: challenge } : {}),
+        };
+        let presented: AcquisitionInfo | undefined;
+        if (
+          this.authorityAcquirer &&
+          (resolved.context.authorizingOrigin.kind !== "code" ||
+            ctx.authorityAcquisition === "wait")
+        ) {
+          this.authorityAcquirer.invalidate(
+            snapshotDigest,
+            caller.runtime.id,
+            resolved.context.authorizingOrigin.principal
+          );
+          const outcome = await this.authorityAcquirer.acquire(acquisitionInput, ctx.signal);
+          if (outcome.state === "decided" && outcome.decision !== "deny") continue;
+          presented = outcome.info;
+          if (outcome.state === "decided" && outcome.decision === "deny") {
+            throw new ServiceAccessError(
+              service,
+              method,
+              `The authority request was denied${formatAccessHint(methodDef)}`,
+              "EACCES",
+              { denied: true }
+            );
+          }
+        } else if (this.authorityAcquirer) {
+          presented = this.authorityAcquirer.request(acquisitionInput);
+        }
+        const acquisitionInfo: AcquisitionInfo = presented ?? {
+          acquisitionId: `acq:${snapshotDigest}`,
+          ownerRuntimeId: caller.runtime.id,
+          snapshotDigest,
+          capability,
+          resourceKey,
+          tier,
+          cardType:
+            tier === "critical"
+              ? "confirm.critical"
+              : resolved.context.contextIntegrity?.class === "external"
+                ? "permission.outside"
+                : "permission.gated",
+          renderedAction,
+          pending: false,
+        };
+        throw new ServiceAccessError(
+          service,
+          method,
+          `${decision.reason} (${decision.code})${formatAccessHint(methodDef)}`,
+          "EACQUIRE",
+          { acquisition: acquisitionInfo }
+        );
+      }
+      if (preflight) {
+        return {
+          leaf: { capability, resourceKey, status: "denied", tier: reviewedTier },
+        };
+      }
       throw new ServiceAccessError(
         service,
         method,
         `${decision.reason} (${decision.code})${formatAccessHint(methodDef)}`,
-        evalCode
+        "EACCES",
+        decision.code === "denied" ? { denied: true } : undefined
       );
     }
   }
@@ -1074,6 +1542,63 @@ function isAuthorityDenial(error: unknown): boolean {
   return code === "EACCES" || code.startsWith("EVAL_");
 }
 
+function reviewedSeverity(tier: MethodTierDecision["tier"]): "routine" | "sensitive" | "critical" {
+  return tier === "critical" ? "critical" : tier === "gated" ? "sensitive" : "routine";
+}
+
+function severityForLeaves(
+  leaves: readonly AuthorityPreflightLeaf[]
+): "routine" | "sensitive" | "critical" {
+  if (leaves.some((leaf) => leaf.tier === "critical")) return "critical";
+  if (leaves.some((leaf) => leaf.tier === "gated")) return "sensitive";
+  return "routine";
+}
+
+function preflightResult(
+  leaves: AuthorityPreflightLeaf[],
+  severityPreview: NonNullable<AuthorityPreflightResult["severityPreview"]>,
+  wouldPrompt?: AuthorityPreflightResult["wouldPrompt"]
+): AuthorityPreflightResult {
+  const decision = leaves.some((leaf) => leaf.status === "denied")
+    ? "denied"
+    : leaves.some((leaf) => leaf.status === "acquirable")
+      ? "acquirable"
+      : "allowed";
+  return {
+    decision,
+    leaves,
+    severityPreview,
+    ...(wouldPrompt ? { wouldPrompt } : {}),
+  };
+}
+
+function resolvePreparedTier(
+  service: string,
+  method: string,
+  declaration:
+    | "open"
+    | "gated"
+    | "critical"
+    | { selectedFrom: readonly ("gated" | "critical")[] }
+    | undefined,
+  selection: "gated" | "critical" | undefined
+): "open" | "gated" | "critical" | undefined {
+  if (declaration && typeof declaration === "object") {
+    if (!selection || !declaration.selectedFrom.includes(selection)) {
+      throw new ServiceError(
+        service,
+        method,
+        `Authority preparer selected an undeclared tier for a dynamic leaf`
+      );
+    }
+    return selection;
+  }
+  if (selection !== undefined && selection !== declaration) {
+    throw new ServiceError(service, method, `Authority preparer replaced a fixed leaf tier`);
+  }
+  return declaration;
+}
+
 function resolvePreparedRequirement(
   service: string,
   method: string,
@@ -1102,10 +1627,16 @@ function resolvePreparedRequirement(
   const validate = (requirement: import("./authorization.js").AuthorityRequirement): void => {
     if (requirement.kind === "capability") {
       capabilityLeaves += 1;
-      if (
-        requirement.capability !== selection.capability ||
-        !allowedPrincipals.has(requirement.principal)
-      ) {
+      // A declaration for the code family admits both an installed-code origin
+      // and the session principal that mediates agent execution.  The
+      // preparer expands that family explicitly so the selected requirement
+      // can still intersect it with resource/relationship constraints.  A
+      // code-only declaration never produces the session leaf in the first
+      // place.
+      const principalIsInDeclaredFamily =
+        allowedPrincipals.has(requirement.principal) ||
+        (requirement.principal === "session" && allowedPrincipals.has("code"));
+      if (requirement.capability !== selection.capability || !principalIsInDeclaredFamily) {
         throw new ServiceError(
           service,
           method,

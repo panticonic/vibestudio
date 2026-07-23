@@ -147,12 +147,12 @@ class FrameworkBase {
   }
 }
 class IntermediateBase extends FrameworkBase {
-  @rpc async chatOp(_op: string) {
+  @rpc({ effect: { kind: "runtime-intrinsic" }, tier: "open", principals: ["code"], sensitivity: "write" }) async chatOp(_op: string) {
     return "ok"; // decorated on an intermediate base → still exposed on the concrete DO
   }
 }
 class ConcreteDO extends IntermediateBase {
-  @rpc async run(x: number) {
+  @rpc({ effect: { kind: "runtime-intrinsic" }, tier: "open", principals: ["code"], sensitivity: "write" }) async run(x: number) {
     return x + 1;
   }
   // NOT @rpc — an ungated app helper (like appendDurable/callGad): must be unreachable over RPC.
@@ -198,37 +198,36 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
 
 // Direct authority declarations register both exposure and their compositional requirement.
 class PolicyBase {
-  @rpc({ principals: ["host"], sensitivity: "write" }) async serverOnly() {
+  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" }) async serverOnly() {
     return "s"; // decorated on a base → policy lands on the concrete class too
   }
 }
 class PolicyDO extends PolicyBase {
-  @rpc({ principals: ["user", "code", "entity"], sensitivity: "read" }) async broad() {
+  @rpc({ principals: ["user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" }) async broad() {
     return "b";
-  }
-  @rpc async noPolicy() {
-    return "n"; // bare @rpc → exposed, but NO policy (realm gate / inline check governs)
   }
 }
 
 describe("@rpc direct authority declaration", () => {
-  it("returns the complete declaration for own and inherited methods, and undefined for bare @rpc", () => {
+  it("returns the complete declaration for own and inherited methods", () => {
     const inst = new PolicyDO();
     expect(rpcMethodAuthority(inst, "broad")).toEqual({
-      principals: ["user", "code", "entity"],
+      principals: ["user", "code"],
+      effect: { kind: "runtime-intrinsic" },
+      tier: "open",
       sensitivity: "read",
     });
     expect(rpcMethodAuthority(inst, "serverOnly")).toEqual({
       principals: ["host"],
+      effect: { kind: "runtime-intrinsic" },
+      tier: "open",
       sensitivity: "write",
     });
-    expect(rpcMethodAuthority(inst, "noPolicy")).toBeUndefined();
   });
 
   it("the factory form still registers exposure", () => {
     expect([...rpcExposedMethodNames(new PolicyDO())].sort()).toEqual([
       "broad",
-      "noPolicy",
       "serverOnly",
     ]);
   });

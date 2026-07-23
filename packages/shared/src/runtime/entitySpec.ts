@@ -31,7 +31,14 @@ export interface RuntimeAgentBindingInput {
   channelId: string;
 }
 
-export type EntityStatus = "active" | "retired";
+/**
+ * Durable runtime lifecycle.
+ *
+ * Panels may be reserved before their immutable runtime image is ready. A
+ * preparing entity owns its stable id/context coordinates, but is deliberately
+ * not an executable principal until activation seals the build identity.
+ */
+export type EntityStatus = "preparing" | "active" | "retired";
 
 /** A workspace-relative repo path (`packages/foo`, `panels/chat`, `meta`). */
 export type RepoPath = string;
@@ -331,6 +338,8 @@ export type RuntimeEntityCreateSpec =
       agentChannelId?: string;
     };
 
+export type RuntimePanelEntityCreateSpec = Extract<RuntimeEntityCreateSpec, { kind: "panel" }>;
+
 export interface RuntimeEntityHandle {
   id: string;
   kind: "panel" | "app" | "worker" | "do" | "session";
@@ -338,8 +347,8 @@ export interface RuntimeEntityHandle {
   /** Content-addressed BuildV2 artifact selected for this incarnation. */
   buildKey?: string;
   executionDigest?: string;
-  authorityRequests?: readonly import("@vibestudio/rpc").CapabilityScope[];
-  authorityDelegations?: readonly import("../authorityManifest.js").EvalAuthorityDelegation[];
+  authorityRequests?: readonly import("../authorityManifest.js").UnitAuthorityRequest[];
+  authorityEvalCeilings?: readonly import("../authorityManifest.js").EvalAuthorityCeiling[];
   contextId: string;
   targetId: string;
 }

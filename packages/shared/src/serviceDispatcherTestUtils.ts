@@ -8,7 +8,7 @@ import {
 } from "./serviceDispatcher.js";
 import type { ServiceDefinition } from "./serviceDefinition.js";
 import { evaluateAuthority, type AuthorityRequirement } from "./authorization.js";
-import { capabilityPatternCovers } from "./authorityManifest.js";
+import { methodTier } from "./authority/tierTable.js";
 
 const TEST_DIGEST = "0".repeat(64);
 const TEST_HOST = "host:test" as const;
@@ -18,8 +18,19 @@ const TEST_HOST = "host:test" as const;
  * must install a resolver backed by live identity, membership, manifests, and
  * grants; this helper deliberately lives in a test-only module.
  */
-export function createTestServiceDispatcher(): ServiceDispatcher {
-  const dispatcher = new ServiceDispatcher();
+export function createTestServiceDispatcher(opts: { openMethods?: readonly string[] } = {}): ServiceDispatcher {
+  const openMethods = new Set(opts.openMethods ?? []);
+  const dispatcher = new ServiceDispatcher({
+    tierLookup: (method) =>
+      methodTier(method) ??
+      (openMethods.has(method)
+        ? {
+            tier: "open",
+            session: "family",
+            rationale: "Explicit unit-test-only open method",
+          }
+        : null),
+  });
   dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
     testAuthority(caller, capability, resourceKey)
   );
@@ -52,12 +63,11 @@ export function withTestServiceDispatcher(definition: ServiceDefinition): Servic
         input.resourceKey
       );
     }
-    if (input.challenge && input.acquisition?.kind === "approval" && adapter) {
+    if (input.challenge && adapter) {
       await adapter.assert({
         capability: input.capability,
         resourceKey: input.resourceKey,
         requirement: input.requirement,
-        acquisition: input.acquisition,
         authorizingCaller: input.caller,
         challenge: input.challenge,
       });
@@ -161,53 +171,54 @@ export function testAuthority(
       : caller.runtime.kind === "shell"
         ? ("user:test" as const)
         : null;
-  // An explicit host-verified agent binding models an entity-originated call
-  // unless the fixture also supplies an exact code identity. Do not fabricate
-  // a synthetic code origin over that stronger production fact.
+  // Only explicitly verified eval/causal invocations authorize as sessions.
+  // Agent binding remains an attribution and relationship fact, never an
+  // authorizing origin or grant subject.
   const carriesCode =
     Boolean(caller.code) ||
-    (!caller.agentBinding &&
+    (!(caller.sessionOrigin === true) &&
       ["panel", "app", "worker", "do", "extension"].includes(caller.runtime.kind));
-  const codeRequested = caller.code?.requested?.some((scope) =>
-    capabilityPatternCovers(scope.capability, capability)
-  );
-  const code =
-    carriesCode &&
-    (!caller.code || codeRequested) &&
-    (!platformCapability || codeRequested)
-      ? (`code:${caller.code?.repoPath ?? "tests/service-dispatch"}@${caller.code?.executionDigest ?? TEST_DIGEST}` as const)
-      : null;
+  // Code identity and manifest requests are independent facts. Under-declared
+  // code remains code and must fail as `not-requested`; erasing its identity
+  // here would incorrectly turn it into a user or product-host invocation.
+  const code = carriesCode
+    ? (`code:${caller.code?.repoPath ?? "tests/service-dispatch"}@${caller.code?.executionDigest ?? TEST_DIGEST}` as const)
+    : null;
   const entity =
     caller.agentBinding || caller.runtime.kind === "agent" || code
       ? (`entity:${caller.agentBinding?.entityId ?? caller.runtime.id}` as const)
       : null;
+  const sessionPrincipal = `session:test:${caller.runtime.id}` as const;
   const context: AuthorizationContext = {
     authorizingOrigin: caller.hostOriginated
       ? { kind: "host", principal: host ?? TEST_HOST }
       : code
         ? { kind: "code", principal: code }
-        : entity
-          ? { kind: "entity", principal: entity }
+        : caller.sessionOrigin === true
+          ? { kind: "session", principal: sessionPrincipal }
         : actingUser
           ? { kind: "user", principal: actingUser }
           : { kind: "host", principal: host ?? TEST_HOST },
     host,
     actingUser,
-    device: null,
     entity,
     incarnation: null,
-    codeAuthority: {
-      executor: code
+    executingCode: code
         ? {
             principal: code,
-            requested: [{ capability, resource: { kind: "exact", key: resourceKey } }],
+            requested:
+              caller.code?.requested ??
+              (platformCapability
+                ? []
+                : [{ capability, resource: { kind: "exact" as const, key: resourceKey } }]),
+            sourceLineage: { class: "internal", externalKeys: [] },
           }
         : null,
-      execution: null,
-      initiator: null,
-      delegations: [],
-    },
-    deviceOwnership: null,
+    initiatorChain: [
+      ...(actingUser ? [actingUser] : []),
+      ...(entity ? [entity] : []),
+      ...(code ? [code] : []),
+    ],
     ownerChain: actingUser ? [actingUser] : [],
     agentBinding:
       entity && caller.agentBinding
@@ -224,12 +235,16 @@ export function testAuthority(
       version: "1.0.0",
       expiresAt: now + 60_000,
     },
+    contextIntegrity:
+      caller.sessionOrigin === true
+        ? { class: "internal", latchEpoch: 0, externalKeys: [] }
+        : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
   };
   const subjects: Principal[] = [];
   if (host) subjects.push(host);
   if (actingUser) subjects.push(actingUser);
   if (code) subjects.push(code);
-  if (entity) subjects.push(entity);
+  if (context.authorizingOrigin.kind === "session") subjects.push(sessionPrincipal);
   return {
     context,
     grants: subjects.map((subject) => ({
@@ -240,7 +255,6 @@ export function testAuthority(
       issuedBy: TEST_HOST,
       createdAt: now,
       expiresAt: now + 60_000,
-      binding: { kind: "principal" },
       provenance: "test-fixture",
     })),
   };

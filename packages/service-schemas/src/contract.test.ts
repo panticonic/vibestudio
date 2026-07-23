@@ -7,10 +7,13 @@ import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient
 import { appMethods } from "./app.js";
 import { accountMethods } from "./account.js";
 import { authMethods } from "./auth.js";
+import { authorityMethods } from "./authority.js";
 import { autofillMethods } from "./autofill.js";
 import { blobstoreMethods } from "./blobstore.js";
 import { buildMethods } from "./build.js";
 import { channelMethods } from "./channel.js";
+import { contentTrustMethods } from "./contentTrust.js";
+import { contextIntegrityMethods } from "./contextIntegrity.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
 import { docsMethods } from "./docs.js";
@@ -24,6 +27,7 @@ import { hubControlMethods } from "./hubControl.js";
 import { serverLogMethods } from "./serverLog.js";
 import { menuMethods } from "./menu.js";
 import { mirrorMethods } from "./mirror.js";
+import { missionMethods } from "./mission.js";
 import { notificationMethods } from "./notification.js";
 import { paletteMethods } from "./palette.js";
 import { panelMethods } from "./panel.js";
@@ -57,10 +61,17 @@ const serviceTables: ServiceTable[] = [
   { service: "account", file: "account.ts", methods: accountMethods },
   { service: "app", file: "app.ts", methods: appMethods },
   { service: "auth", file: "auth.ts", methods: authMethods },
+  { service: "authority", file: "authority.ts", methods: authorityMethods },
   { service: "autofill", file: "autofill.ts", methods: autofillMethods },
   { service: "blobstore", file: "blobstore.ts", methods: blobstoreMethods },
   { service: "build", file: "build.ts", methods: buildMethods },
   { service: "channel", file: "channel.ts", methods: channelMethods },
+  { service: "contentTrust", file: "contentTrust.ts", methods: contentTrustMethods },
+  {
+    service: "contextIntegrity",
+    file: "contextIntegrity.ts",
+    methods: contextIntegrityMethods,
+  },
   { service: "corsApproval", file: "corsApproval.ts", methods: corsApprovalMethods },
   { service: "credentials", file: "credentials.ts", methods: credentialsMethods },
   { service: "docs", file: "docs.ts", methods: docsMethods },
@@ -74,6 +85,7 @@ const serviceTables: ServiceTable[] = [
   { service: "serverLog", file: "serverLog.ts", methods: serverLogMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "mirror", file: "mirror.ts", methods: mirrorMethods },
+  { service: "mission", file: "mission.ts", methods: missionMethods },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
   { service: "palette", file: "palette.ts", methods: paletteMethods },
   { service: "panel", file: "panel.ts", methods: panelMethods },

@@ -4,252 +4,336 @@ import {
   capability,
   evaluateAuthority,
   relationship,
+  requirementForPrincipals,
   type AuthorizationContext,
   type AuthorityGrant,
   type Principal,
 } from "./authorization.js";
 
-const user = "user:alice" as Principal;
-const code = `code:workers/example@${"a".repeat(64)}` as Principal;
-const entity = "entity:worker:example" as Principal;
+const RESOURCE = "workspace:ws-1/repo:projects/vibestudio";
+const user = "user:alice" as const;
+const code = `code:workers/example@${"a".repeat(64)}` as `code:${string}`;
+const session = "session:s1" as const;
+const mission = `mission:nightly@${"b".repeat(64)}` as `mission:${string}`;
 
-function context(): AuthorizationContext {
+function codeContext(): AuthorizationContext {
   return {
     authorizingOrigin: { kind: "code", principal: code },
     host: null,
     actingUser: user,
-    device: "device:laptop" as Principal,
-    entity,
+    entity: "entity:worker:example",
     incarnation: "inc:1",
-    codeAuthority: {
-      executor: {
-        principal: code,
-        requested: [
-          {
-            capability: "fs.write",
-            resource: { kind: "exact", key: "workspace:ws-1/repo:projects/vibestudio" },
-          },
-        ],
-      },
-      execution: null,
-      initiator: null,
-      delegations: [],
+    executingCode: {
+      principal: code,
+      requested: [{ capability: "fs.write", resource: { kind: "exact", key: RESOURCE } }],
+      sourceLineage: { class: "internal", externalKeys: [] },
     },
-    deviceOwnership: {
-      device: "device:laptop" as Principal,
-      user,
-      revision: "3",
-    },
+    initiatorChain: [user, code],
     ownerChain: [user],
     agentBinding: null,
     workspace: { workspaceId: "ws-1", member: true, role: "member", revision: "7" },
     session: { id: "s1", audience: "host", version: "2.1", expiresAt: 10_000 },
+    contextIntegrity: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
   };
+}
+
+function sessionContext(externalKeys: readonly string[] = []): AuthorizationContext {
+  return {
+    ...codeContext(),
+    authorizingOrigin: { kind: "session", principal: session },
+    executingCode: null,
+    session: {
+      id: "s1",
+      audience: "host",
+      version: "2.1",
+      expiresAt: 10_000,
+      mission: {
+        missionId: "nightly",
+        closureDigest: "b".repeat(64),
+        harness: { unit: "workspace/workers/system-agent", ev: "c".repeat(64) },
+      },
+    },
+    contextIntegrity: {
+      class: externalKeys.length > 0 ? "external" : "internal",
+      latchEpoch: externalKeys.length,
+      externalKeys,
+    },
+  };
+}
+
+function codeMediatedEvalContext(requestedCapability = "fs.write"): AuthorizationContext {
+  const context = sessionContext();
+  context.executingCode = {
+    principal: code,
+    requested: [
+      { capability: requestedCapability, resource: { kind: "exact", key: RESOURCE } },
+    ],
+    sourceLineage: { class: "internal", externalKeys: [] },
+  };
+  return context;
 }
 
 function grant(
   subject: Principal,
-  capabilityName: string,
-  effect: "allow" | "deny" = "allow"
+  capabilityName = "fs.write",
+  effect: "allow" | "deny" = "allow",
+  constraints?: AuthorityGrant["constraints"]
 ): AuthorityGrant {
   return {
+    id: `${effect}-${subject}`,
     subject,
     capability: capabilityName,
-    resource: { kind: "exact", key: "workspace:ws-1/repo:projects/vibestudio" },
+    resource: { kind: "exact", key: RESOURCE },
     effect,
     issuedBy: user,
     createdAt: 1,
-    binding: { kind: "principal" },
+    ...(constraints ? { constraints } : {}),
     provenance: "test",
   };
 }
 
 describe("compositional authority", () => {
-  it("intersects the authorizing code capability with live relationship facts", () => {
-    const decision = evaluateAuthority({
-      context: context(),
-      requirement: allOf(capability("code", "fs.write"), relationship("workspace-member")),
-      resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-      grants: [grant(code, "fs.write")],
-      now: 100,
-    });
-    expect(decision.allowed).toBe(true);
-  });
-
-  it("never lets acting-user grants authorize a code-originated branch", () => {
-    const decision = evaluateAuthority({
-      context: context(),
-      requirement: {
-        kind: "any",
-        requirements: [capability("code", "fs.write"), capability("user", "workspace.edit")],
-      },
-      resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-      grants: [grant(user, "fs.write"), grant(user, "workspace.edit")],
-      now: 100,
-    });
-    expect(decision.allowed).toBe(false);
-    expect(decision.reason).toContain("lacks fs.write");
-  });
-
-  it("fails closed when an anyOf graph has no branch for the authorizing origin", () => {
-    const decision = evaluateAuthority({
-      context: context(),
-      requirement: {
-        kind: "any",
-        requirements: [capability("user", "workspace.edit")],
-      },
-      resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-      grants: [grant(user, "workspace.edit")],
-      now: 100,
-    });
-    expect(decision).toMatchObject({ allowed: false, code: "missing-principal" });
-    expect(decision.reason).toContain("no authority branch admits the code origin");
-  });
-
-  it("applies exact-principal denies before allows", () => {
-    const decision = evaluateAuthority({
-      context: context(),
-      requirement: capability("code", "fs.write"),
-      resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-      grants: [grant(code, "fs.write"), grant(code, "fs.write", "deny")],
-      now: 100,
-    });
-    expect(decision).toMatchObject({ allowed: false, code: "denied", principal: code });
-  });
-
-  it("does not turn workspace membership into a capability", () => {
-    const decision = evaluateAuthority({
-      context: context(),
-      requirement: allOf(capability("code", "fs.write"), relationship("workspace-member")),
-      resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-      grants: [],
-      now: 100,
-    });
-    expect(decision.allowed).toBe(false);
-    expect(decision.code).toBe("missing-grant");
-  });
-
-  it("requires code to request the granted capability in its exact manifest", () => {
-    const ctx = context();
-    ctx.codeAuthority.executor = { principal: code, requested: [] };
-    const decision = evaluateAuthority({
-      context: ctx,
-      requirement: capability("code", "fs.write"),
-      resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-      grants: [grant(code, "fs.write")],
-      now: 100,
-    });
-    expect(decision).toMatchObject({ allowed: false, code: "not-requested" });
-  });
-
-  it("does not accept a grant issued to an altered execution digest", () => {
-    const altered = `code:workers/example@${"b".repeat(64)}` as Principal;
-    const decision = evaluateAuthority({
-      context: context(),
-      requirement: capability("code", "fs.write"),
-      resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-      grants: [grant(altered, "fs.write")],
-      now: 100,
-    });
-    expect(decision).toMatchObject({ allowed: false, code: "missing-grant", principal: code });
-  });
-
-  it("requires a verified ownership edge for a user-device relationship", () => {
-    const ctx = context();
-    ctx.deviceOwnership = {
-      device: "device:attacker" as Principal,
-      user,
-      revision: "4",
-    };
-    const decision = evaluateAuthority({
-      context: ctx,
-      requirement: relationship("device-owned-by-user"),
-      resourceKey: "workspace:ws-1",
-      grants: [],
-      now: 100,
-    });
-    expect(decision).toMatchObject({ allowed: false, code: "relationship" });
-  });
-
-  it("uses a live relationship resolver instead of cached membership", () => {
-    const decision = evaluateAuthority({
-      context: context(),
-      requirement: relationship("workspace-member"),
-      resourceKey: "workspace:ws-1",
-      grants: [],
-      now: 100,
-      relation: () => false,
-    });
-    expect(decision).toMatchObject({ allowed: false, code: "relationship" });
-  });
-
-  it("requires an audience- and purpose-bound attenuated delegation", () => {
-    const ctx = context();
-    ctx.codeAuthority.delegations = [
-      {
-        id: "delegation-1",
-        issuer: user,
-        subject: code,
-        audience: "another-host",
-        purpose: "workspace-development",
-        capabilities: [
-          {
-            capability: "fs.write",
-            resource: { kind: "prefix", prefix: "workspace:ws-1" },
-          },
-        ],
-        expiresAt: 1_000,
-      },
-    ];
-    const decision = evaluateAuthority({
-      context: ctx,
-      requirement: capability("code", "fs.write", {
-        audience: "host",
-        purpose: "workspace-development",
-        issuer: user,
-      }),
-      resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-      grants: [grant(code, "fs.write")],
-      now: 100,
-    });
-    expect(decision).toMatchObject({ allowed: false, code: "delegation" });
-  });
-
-  it("honors revocation time and session constraints", () => {
-    const bound = {
-      ...grant(code, "fs.write"),
-      revokedAt: 200,
-      constraints: { sessionId: "s1", minVersion: "2.0", maxVersion: "2.2" },
-    } satisfies AuthorityGrant;
+  it("intersects installed-code grants with the sealed explicit request", () => {
     expect(
       evaluateAuthority({
-        context: context(),
+        context: codeContext(),
+        requirement: allOf(capability("code", "fs.write"), relationship("workspace-member")),
+        resourceKey: RESOURCE,
+        grants: [grant(code)],
+        now: 100,
+      }).allowed
+    ).toBe(true);
+
+    const ctx = codeContext();
+    ctx.executingCode = { ...ctx.executingCode!, requested: [] };
+    expect(
+      evaluateAuthority({
+        context: ctx,
         requirement: capability("code", "fs.write"),
-        resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-        grants: [bound],
+        resourceKey: RESOURCE,
+        grants: [grant(code)],
+        now: 100,
+      })
+    ).toMatchObject({ allowed: false, code: "not-requested" });
+  });
+
+  it("never unions the acting user's grants into a code origin", () => {
+    expect(
+      evaluateAuthority({
+        context: codeContext(),
+        requirement: {
+          kind: "any",
+          requirements: [capability("code", "fs.write"), capability("user", "fs.write")],
+        },
+        resourceKey: RESOURCE,
+        grants: [grant(user)],
+        now: 100,
+      })
+    ).toMatchObject({ allowed: false, code: "missing-grant" });
+  });
+
+  it("matches a session's exact session and authenticated mission subjects", () => {
+    const requirement = requirementForPrincipals(["code"], "fs.write");
+    expect(
+      evaluateAuthority({
+        context: sessionContext(),
+        requirement,
+        resourceKey: RESOURCE,
+        grants: [grant(mission)],
         now: 100,
       }).allowed
     ).toBe(true);
     expect(
       evaluateAuthority({
-        context: context(),
-        requirement: capability("code", "fs.write"),
-        resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-        grants: [bound],
-        now: 200,
-      }).code
-    ).toBe("missing-grant");
+        context: sessionContext(),
+        requirement,
+        resourceKey: RESOURCE,
+        grants: [grant(session)],
+        now: 100,
+      }).allowed
+    ).toBe(true);
+  });
 
-    const wrongSession = context();
-    wrongSession.session = { ...wrongSession.session, id: "s2" };
+  it("caps code-mediated eval acquisition at the owner's sealed eval ceiling", () => {
+    const requirement = requirementForPrincipals(["code"], "fs.write");
     expect(
       evaluateAuthority({
-        context: wrongSession,
-        requirement: capability("code", "fs.write"),
-        resourceKey: "workspace:ws-1/repo:projects/vibestudio",
-        grants: [bound],
+        context: codeMediatedEvalContext(),
+        requirement,
+        resourceKey: RESOURCE,
+        grants: [grant(session)],
+        tier: "gated",
         now: 100,
-      }).code
-    ).toBe("missing-grant");
+      }).allowed
+    ).toBe(true);
+    expect(
+      evaluateAuthority({
+        context: codeMediatedEvalContext("workspace.read"),
+        requirement,
+        resourceKey: RESOURCE,
+        grants: [grant(session)],
+        tier: "gated",
+        now: 100,
+      })
+    ).toMatchObject({ allowed: false, code: "not-requested" });
+  });
+
+  it("applies deny precedence across session and mission facets", () => {
+    expect(
+      evaluateAuthority({
+        context: sessionContext(),
+        requirement: capability("session", "fs.write"),
+        resourceKey: RESOURCE,
+        grants: [grant(mission), grant(session, "fs.write", "deny")],
+        now: 100,
+      })
+    ).toMatchObject({ allowed: false, code: "denied" });
+  });
+
+  it("lets codeOnly exclude eval sessions", () => {
+    const requirement = requirementForPrincipals(["code"], "fs.write", { codeOnly: true });
+    expect(
+      evaluateAuthority({
+        context: sessionContext(),
+        requirement,
+        resourceKey: RESOURCE,
+        grants: [grant(session)],
+        now: 100,
+      })
+    ).toMatchObject({ allowed: false, code: "missing-principal" });
+  });
+
+  it("requires lineageAtConsent to cover every current outside source", () => {
+    const ctx = sessionContext(["web:example.com", "api:github"]);
+    expect(
+      evaluateAuthority({
+        context: ctx,
+        requirement: capability("session", "fs.write"),
+        resourceKey: RESOURCE,
+        grants: [grant(session, "fs.write", "allow", { lineageAtConsent: ["web:example.com"] })],
+        now: 100,
+      })
+    ).toMatchObject({ allowed: false, code: "lineage" });
+    expect(
+      evaluateAuthority({
+        context: ctx,
+        requirement: capability("session", "fs.write"),
+        resourceKey: RESOURCE,
+        grants: [
+          grant(session, "fs.write", "allow", {
+            lineageAtConsent: ["web:example.com", "api:github"],
+          }),
+        ],
+        now: 100,
+      }).allowed
+    ).toBe(true);
+  });
+
+  it("binds once grants and critical confirmations to the exact invocation", () => {
+    const once = {
+      ...grant(session, "fs.write", "allow", { invocationDigest: "ask-1" }),
+      provenance: "critical-confirmation",
+    } satisfies AuthorityGrant;
+    const base = {
+      context: sessionContext(),
+      requirement: capability("session", "fs.write"),
+      resourceKey: RESOURCE,
+      grants: [once],
+      now: 100,
+      tier: "critical" as const,
+    };
+    expect(evaluateAuthority({ ...base, invocationDigest: "ask-2" }).allowed).toBe(false);
+    expect(evaluateAuthority({ ...base, invocationDigest: "ask-1" })).toMatchObject({
+      allowed: true,
+      grantId: once.id,
+      consumable: true,
+    });
+  });
+
+  it("never reuses a consumed invocation-bound grant at gated tier", () => {
+    const consumed = {
+      ...grant(session, "fs.write", "allow", { invocationDigest: "ask-1" }),
+      consumedAt: 50,
+    } satisfies AuthorityGrant;
+    const fresh = {
+      ...grant(session, "fs.write", "allow", { invocationDigest: "ask-1" }),
+      id: "fresh-once",
+    } satisfies AuthorityGrant;
+    const input = {
+      context: sessionContext(),
+      requirement: capability("session", "fs.write"),
+      resourceKey: RESOURCE,
+      now: 100,
+      tier: "gated" as const,
+      invocationDigest: "ask-1",
+    };
+
+    expect(evaluateAuthority({ ...input, grants: [consumed] })).toMatchObject({
+      allowed: false,
+      code: "missing-grant",
+    });
+    expect(evaluateAuthority({ ...input, grants: [consumed, fresh] })).toMatchObject({
+      allowed: true,
+      grantId: "fresh-once",
+      consumable: true,
+    });
+  });
+
+  it("intersects installed-code critical requests with a session-scoped confirmation", () => {
+    const confirmation = {
+      ...grant(session, "fs.write", "allow", {
+        sessionId: "s1",
+        invocationDigest: "critical-ask",
+      }),
+      provenance: "critical-confirmation",
+    } satisfies AuthorityGrant;
+    const base = {
+      context: codeContext(),
+      requirement: allOf(capability("code", "fs.write"), relationship("workspace-member")),
+      resourceKey: RESOURCE,
+      grants: [confirmation],
+      now: 100,
+      tier: "critical" as const,
+      invocationDigest: "critical-ask",
+    };
+
+    expect(evaluateAuthority(base)).toMatchObject({
+      allowed: true,
+      grantId: confirmation.id,
+      consumable: true,
+    });
+
+    const undeclared = codeContext();
+    undeclared.executingCode = { ...undeclared.executingCode!, requested: [] };
+    expect(evaluateAuthority({ ...base, context: undeclared })).toMatchObject({
+      allowed: false,
+      code: "not-requested",
+    });
+  });
+
+  it("does not accept an altered installed-unit execution digest", () => {
+    const altered = `code:workers/example@${"d".repeat(64)}` as `code:${string}`;
+    expect(
+      evaluateAuthority({
+        context: codeContext(),
+        requirement: capability("code", "fs.write"),
+        resourceKey: RESOURCE,
+        grants: [grant(altered)],
+        now: 100,
+      })
+    ).toMatchObject({ allowed: false, code: "missing-grant", principal: code });
+  });
+
+  it("uses live relationship resolution instead of cached membership", () => {
+    expect(
+      evaluateAuthority({
+        context: codeContext(),
+        requirement: relationship("workspace-member"),
+        resourceKey: "workspace:ws-1",
+        grants: [],
+        now: 100,
+        relation: () => false,
+      })
+    ).toMatchObject({ allowed: false, code: "relationship" });
   });
 });

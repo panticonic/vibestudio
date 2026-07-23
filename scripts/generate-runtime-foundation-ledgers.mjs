@@ -155,7 +155,6 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
         r3b: { review: "schema-owned-additional-leaf", change: null },
         parityAssertion:
           "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
-        evalAcquisition: additional.evalAcquisition,
       });
     }
     for (const leaf of declaration.prepared?.leaves ?? []) {
@@ -187,7 +186,6 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
         r3b: { review: "schema-owned-prepared-leaf", change: null },
         parityAssertion:
           "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
-        evalAcquisition: leaf.evalAcquisition,
       });
     }
   }
@@ -219,6 +217,29 @@ const directSource = (file) => {
   }
   throw new Error(`Direct RPC source ${path.relative(root, file)} has no owning package`);
 };
+const directCapability = (source, method, sensitivity, declaration = "") => {
+  const semantic = declaration.match(
+    /effect:\s*\{\s*kind:\s*["']semantic["']\s*,\s*capability:\s*["']([^"']+)["']/
+  )?.[1];
+  if (semantic) return semantic;
+  if (/effect:\s*\{\s*kind:\s*["']workspace-service["']/.test(declaration)) {
+    return "workspace-service:<live-declaration>";
+  }
+  if (/effect:\s*\{\s*kind:\s*["']runtime-intrinsic["']/.test(declaration)) {
+    return null;
+  }
+  if (source === "product/browser-data") {
+    return sensitivity === "read"
+      ? "browser-data.read"
+      : sensitivity === "destructive"
+        ? "browser-data.delete"
+        : "browser-data.write";
+  }
+  if (source === "product/eval") return "runtime.code-execution.manage";
+  if (source === "product/webhook-store") return "webhooks.manage";
+  if (source === "product/bootstrap") return "workspace.runtime-state.manage";
+  return null;
+};
 const walk = (directory) => {
   const files = [];
   if (!fs.existsSync(directory)) return files;
@@ -234,6 +255,24 @@ const walk = (directory) => {
 const rpcPattern =
   /@rpc\(\{\s*principals:\s*\[([^\]]*)\][\s\S]*?\}\)\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(/g;
 const namedRpcPattern = /@rpc\(([A-Z][A-Z0-9_]*)\)\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(/g;
+const factoryRpcPattern =
+  /@rpc\(([A-Za-z_$][\w$]*)\(["'](read|write|admin|destructive)["']\)\)\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(/g;
+
+function functionDeclarationSource(source, name) {
+  const start = source.search(new RegExp(`function\\s+${name}\\s*\\(`));
+  if (start < 0) return null;
+  const brace = source.indexOf("{", start);
+  if (brace < 0) return null;
+  let depth = 0;
+  for (let index = brace; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    else if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  return null;
+}
 for (const file of directRoots.flatMap(walk).sort()) {
   const source = fs.readFileSync(file, "utf8");
   for (const match of source.matchAll(rpcPattern)) {
@@ -243,18 +282,23 @@ for (const file of directRoots.flatMap(walk).sort()) {
     const sensitivity = match[0].match(
       /sensitivity:\s*["'](read|write|admin|destructive)["']/
     )?.[1];
+    const tier = match[0].match(/tier:\s*["'](open|gated|critical)["']/)?.[1];
+    if (!tier) throw new Error(`${owner}:${method} has no reviewed tier`);
     if (principals.includes("code") && !sensitivity) {
       throw new Error(`${owner}:${method} admits code but has no reviewed sensitivity`);
     }
+    const sourceName = directSource(file);
     authorityRows.push({
       id: `direct:${owner}:${method}`,
       rpcPlane: "workspace-do",
       owner,
-      source: directSource(file),
+      source: sourceName,
       method,
       resourceDerivation: { kind: "direct-target", owner },
       authorityPrincipals: principals,
       sensitivity: sensitivity ?? "unknown",
+      tier,
+      capability: directCapability(sourceName, method, sensitivity, match[0]),
       authenticatedFacts: [
         "session",
         "acting-user-relay",
@@ -292,21 +336,25 @@ for (const file of directRoots.flatMap(walk).sort()) {
     const sensitivity = declarationSource.match(
       /sensitivity:\s*["'](read|write|admin|destructive)["']/
     )?.[1];
+    const tier = declarationSource.match(/tier:\s*["'](open|gated|critical)["']/)?.[1];
     const principals = [...declarationSource.matchAll(/methodCapability\(["']([^"']+)["']\)/g)]
       .map((item) => item[1])
       .sort();
-    if (!sensitivity) {
-      throw new Error(`${owner}:${method} uses ${declaration} without a reviewed sensitivity`);
+    if (!sensitivity || !tier) {
+      throw new Error(`${owner}:${method} uses ${declaration} without a reviewed tier/sensitivity`);
     }
+    const sourceName = directSource(file);
     authorityRows.push({
       id: `direct:${owner}:${method}`,
       rpcPlane: "workspace-do",
       owner,
-      source: directSource(file),
+      source: sourceName,
       method,
       resourceDerivation: { kind: "direct-target", owner },
       authorityPrincipals: principals,
       sensitivity,
+      tier,
+      capability: directCapability(sourceName, method, sensitivity, declarationSource),
       authenticatedFacts: [
         "session",
         "acting-user-relay",
@@ -331,25 +379,86 @@ for (const file of directRoots.flatMap(walk).sort()) {
         "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census",
     });
   }
+  for (const match of source.matchAll(factoryRpcPattern)) {
+    const factory = match[1];
+    const sensitivity = match[2];
+    const method = match[3];
+    const owner = path.relative(root, file).replaceAll(path.sep, "/");
+    const declarationSource = functionDeclarationSource(source, factory);
+    if (!declarationSource) {
+      throw new Error(`${owner}:${method} uses unresolved RPC authority factory ${factory}`);
+    }
+    const principals = [
+      ...declarationSource.matchAll(/capability\(["'](host|user|code|session|mission)["']\s*,/g),
+    ]
+      .map((item) => item[1])
+      .filter((principal, index, all) => all.indexOf(principal) === index)
+      .sort();
+    const tier = declarationSource.match(/tier:\s*["'](open|gated|critical)["']/)?.[1];
+    if (principals.length === 0) {
+      throw new Error(
+        `${owner}:${method} RPC authority factory ${factory} has no capability leaves`
+      );
+    }
+    if (!tier) throw new Error(`${owner}:${method} RPC authority factory ${factory} has no tier`);
+    const sourceName = directSource(file);
+    authorityRows.push({
+      id: `direct:${owner}:${method}`,
+      rpcPlane: "workspace-do",
+      owner,
+      source: sourceName,
+      method,
+      resourceDerivation: { kind: "direct-target", owner },
+      authorityPrincipals: principals,
+      sensitivity,
+      tier,
+      capability: directCapability(sourceName, method, sensitivity),
+      authenticatedFacts: [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation",
+      ],
+      currentOutcomes: {
+        allowed: "instance-resolved direct-RPC requirement satisfied",
+        denied: "missing attested facts or requirement failure is EACCES",
+      },
+      predicates: [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation",
+      ],
+      r3aRequirement: `factory:${factory}`,
+      r3b: { review: "instance-resolved-parity", change: null },
+      parityAssertion:
+        "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census",
+    });
+  }
 }
 authorityRows.sort((a, b) => a.id.localeCompare(b.id));
+for (const row of authorityRows) {
+  if (row.rpcPlane === "workspace-do" && row.tier !== "open" && !row.capability) {
+    throw new Error(`${row.owner}:${row.method} has no manifest-facing semantic capability`);
+  }
+}
 
-const evalAcquisitionPolicy = JSON.parse(
-  fs.readFileSync(path.join(root, "scripts/eval-capability-acquisition.json"), "utf8")
+const evalRuntimeBoundaries = JSON.parse(
+  fs.readFileSync(path.join(root, "scripts/eval-runtime-boundaries.json"), "utf8")
 );
 if (
-  evalAcquisitionPolicy.version !== 2 ||
-  !evalAcquisitionPolicy.rows ||
-  !Array.isArray(evalAcquisitionPolicy.kernelCapabilities) ||
-  evalAcquisitionPolicy.kernelCapabilities.length === 0 ||
-  !Array.isArray(evalAcquisitionPolicy.additionalLeaves) ||
-  !Array.isArray(evalAcquisitionPolicy.directSurfaceReachability)
+  evalRuntimeBoundaries.version !== 1 ||
+  !Array.isArray(evalRuntimeBoundaries.kernelCapabilities) ||
+  evalRuntimeBoundaries.kernelCapabilities.length === 0 ||
+  !Array.isArray(evalRuntimeBoundaries.directSurfaceReachability)
 ) {
-  throw new Error("scripts/eval-capability-acquisition.json has an unsupported schema");
+  throw new Error("scripts/eval-runtime-boundaries.json has an unsupported schema");
 }
 const directRows = authorityRows.filter((row) => row.rpcPlane === "workspace-do");
 const directSurfaceReachability = {};
-for (const group of evalAcquisitionPolicy.directSurfaceReachability) {
+for (const group of evalRuntimeBoundaries.directSurfaceReachability) {
   if (
     !group ||
     typeof group.definitionSource !== "string" ||
@@ -432,17 +541,13 @@ for (const service of workspaceServices) {
     throw new Error(`Workspace service ${service.name} has no compositional authority principals`);
   }
 }
-const workspaceServiceNames = workspaceServices.map((service) => service.name);
-const workspaceServicePrincipalsByName = Object.fromEntries(
-  workspaceServices.map((service) => [service.name, [...new Set(service.principals)].sort()])
-);
 const workspaceServiceEvalRows = workspaceServices.map((service) => ({
   id: `workspace-service:${service.name}`,
   capability: `workspace-service:${service.name}`,
   rpcPlane: "workspace-service",
   authorityPrincipals: service.principals,
 }));
-const acquisitionSubjects = [
+const invocationSubjects = [
   ...authorityRows.map((row) =>
     Object.assign(row, {
       capability:
@@ -453,80 +558,7 @@ const acquisitionSubjects = [
     })
   ),
   ...workspaceServiceEvalRows,
-  ...evalAcquisitionPolicy.additionalLeaves.map((leaf) => ({
-    ...leaf,
-    evalAcquisition: leaf.acquisition,
-  })),
 ];
-const requiredAcquisitionIds = new Set(
-  acquisitionSubjects.filter((row) => row.evalAcquisition === undefined).map((row) => row.id)
-);
-const configuredAcquisitionIds = new Set(Object.keys(evalAcquisitionPolicy.rows));
-const missingAcquisition = [...requiredAcquisitionIds].filter(
-  (id) => !configuredAcquisitionIds.has(id)
-);
-const staleAcquisition = [...configuredAcquisitionIds].filter(
-  (id) => !requiredAcquisitionIds.has(id)
-);
-if (missingAcquisition.length || staleAcquisition.length) {
-  throw new Error(
-    [
-      missingAcquisition.length
-        ? `Unclassified eval capability leaves: ${missingAcquisition.join(", ")}`
-        : "",
-      staleAcquisition.length ? `Stale eval capability leaves: ${staleAcquisition.join(", ")}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n")
-  );
-}
-for (const row of acquisitionSubjects) {
-  const acquisition = row.evalAcquisition ?? evalAcquisitionPolicy.rows[row.id];
-  if (!["baseline", "approval", "closed"].includes(acquisition.kind)) {
-    throw new Error(`Invalid eval acquisition for ${row.id}: ${JSON.stringify(acquisition)}`);
-  }
-  const codeAdmitted = row.authorityPrincipals.includes("code");
-  if (!codeAdmitted && acquisition.kind !== "closed") {
-    throw new Error(`${row.id} does not admit code and must be eval-closed`);
-  }
-  if (acquisition.kind === "closed" && !acquisition.reason) {
-    throw new Error(`${row.id} is eval-closed without a reason`);
-  }
-  if (
-    acquisition.kind === "approval" &&
-    (!acquisition.title ||
-      !acquisition.description ||
-      !acquisition.operation?.kind ||
-      !acquisition.operation?.verb ||
-      !Array.isArray(acquisition.grantScopes) ||
-      acquisition.grantScopes.some((scope) => !["run", "session", "version"].includes(scope)))
-  ) {
-    throw new Error(`${row.id} has an incomplete eval approval declaration`);
-  }
-  row.evalAcquisition = acquisition;
-}
-for (const [capability, rows] of Map.groupBy(acquisitionSubjects, (row) => row.capability)) {
-  const kinds = new Set(rows.map((row) => row.evalAcquisition.kind));
-  if (rows.some((row) => row.rpcPlane === "workspace-do") && kinds.size > 1) {
-    throw new Error(
-      `Direct eval capability ${capability} has inconsistent acquisition: ${rows
-        .map((row) => `${row.id}=${row.evalAcquisition.kind}`)
-        .join(", ")}`
-    );
-  }
-}
-const evalBaselineCapabilities = [
-  ...new Set(
-    acquisitionSubjects
-      .filter(
-        (row) =>
-          row.authorityPrincipals.includes("code") &&
-          row.evalAcquisition.kind === "baseline" &&
-          !row.capability.endsWith("*")
-      )
-      .map((row) => row.capability)
-  ),
-].sort();
 
 const executionRows = [
   [
@@ -741,146 +773,21 @@ write("authority-ledger.json", { version: 1, rows: authorityRows });
 write("channel-behavior-ledger.json", { version: 1, rows: channelRows });
 write("bootstrap-dependency-graph.json", bootstrap);
 
-const directCapabilities = [
-  ...new Set(
-    authorityRows.filter((row) => row.rpcPlane === "workspace-do").map((row) => `rpc:${row.method}`)
-  ),
-].sort();
-const directCapabilitiesPath = path.join(
-  root,
-  "src",
-  "server",
-  "services",
-  "productDirectAuthorityCapabilities.generated.ts"
-);
-const directCapabilitiesSource = await formatTypeScript(
-  `/* Generated by scripts/generate-runtime-foundation-ledgers.mjs. */\n\nexport const PRODUCT_DIRECT_AUTHORITY_CAPABILITIES = ${JSON.stringify(directCapabilities, null, 2)} as const;\n`,
-  directCapabilitiesPath
-);
-if (check) {
-  if (fs.readFileSync(directCapabilitiesPath, "utf8") !== directCapabilitiesSource) {
-    throw new Error(
-      `${path.relative(root, directCapabilitiesPath)} is stale; run pnpm generate:runtime-foundations`
-    );
-  }
-} else {
-  fs.writeFileSync(directCapabilitiesPath, directCapabilitiesSource);
-}
-
-// `walk` above intentionally selects TypeScript for the direct-RPC census.
-// Package manifests need their own traversal.
-const manifestFiles = [];
-const walkManifests = (directory) => {
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === "dist") continue;
-    const absolute = path.join(directory, entry.name);
-    if (entry.isDirectory()) walkManifests(absolute);
-    else if (entry.name === "package.json") manifestFiles.push(absolute);
-  }
-};
-walkManifests(path.join(root, "workspace"));
-
-const codeCapabilitiesBySource = {};
-const evalBaselineCapabilitySet = new Set(evalBaselineCapabilities);
-const codeAdmittedDirectCapabilities = new Set(
-  acquisitionSubjects
-    .filter(
-      (row) => row.rpcPlane === "workspace-do" && row.authorityPrincipals.includes("code")
-    )
-    .map((row) => row.capability)
-);
-for (const file of manifestFiles.sort()) {
-  const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-  const requests = manifest.vibestudio?.authority?.requests;
-  if (!requests) continue;
-  const source = path
-    .relative(path.join(root, "workspace"), path.dirname(file))
-    .replaceAll(path.sep, "/");
-  const capabilities = [
-    ...new Set([
-      ...requests.map((request) => request.capability),
-      // A sealed delegation can convey only authority the product has made
-      // available to the delegator. Seed exactly the reviewed baseline leaves
-      // that this unit explicitly named in a delegation; direct execution
-      // remains bounded by `requests`, while the child eval is bounded by the
-      // matching delegation. Approval-acquired leaves remain absent until a
-      // user grant exists.
-      ...(manifest.vibestudio?.authority?.delegations ?? []).flatMap((delegation) =>
-        delegation.capabilities
-          .map((entry) => entry.capability)
-          .filter((capability) => evalBaselineCapabilitySet.has(capability))
-      ),
-    ]),
-  ].sort();
-  for (const capability of capabilities) {
-    if (capability.endsWith("*")) {
-      throw new Error(`${source} retains wildcard authority request ${capability}`);
-    }
-    if (
-      directCapabilities.includes(capability) &&
-      !codeAdmittedDirectCapabilities.has(capability)
-    ) {
-      throw new Error(
-        `${source} requests direct capability ${capability}, but no receiver method admits the code principal`
-      );
-    }
-  }
-  codeCapabilitiesBySource[source] = capabilities;
-}
-codeCapabilitiesBySource["product/eval"] = [...evalAcquisitionPolicy.kernelCapabilities].sort();
-
-const productCodeCapabilities = authorityRows
-  .filter(
-    (row) => row.authorityPrincipals.includes("code") && row.evalAcquisition.kind !== "closed"
-  )
-  .map(
-    (row) =>
-      row.capability ??
-      (row.rpcPlane === "host-service" ? `service:${row.owner}.${row.method}` : `rpc:${row.method}`)
-  )
-  .filter((capability) => !capability.endsWith("*"));
-const productWorkspaceServiceCapabilities = workspaceServiceNames.map(
-  (name) => `workspace-service:${name}`
-);
-for (const source of ["product/bootstrap", "product/browser-data", "product/webhook-store"]) {
-  codeCapabilitiesBySource[source] = [
-    ...new Set([...productCodeCapabilities, ...productWorkspaceServiceCapabilities]),
-  ].sort();
-}
-
-// Product-baked internal DOs retain the truthful executable source
-// `vibestudio/internal`. Their checked-in per-class request manifests are the
-// reviewed ceiling; the source grant is their exact capability union, and the
-// evaluator still intersects it with each class's sealed request envelope.
-const internalDoExecutionCatalog = JSON.parse(
-  fs.readFileSync(path.join(root, "src/server/internalDOs/internalDoExecutionCatalog.json"), "utf8")
-);
-if (internalDoExecutionCatalog.version !== 1 || !internalDoExecutionCatalog.classes) {
-  throw new Error("Internal Durable Object execution catalog has an unsupported shape");
-}
-codeCapabilitiesBySource["vibestudio/internal"] = [
-  ...new Set(
-    Object.values(internalDoExecutionCatalog.classes).flatMap((manifest) =>
-      manifest.requests.map((request) => request.capability)
-    )
-  ),
-].sort();
-
-const evalAcquisitionRows = acquisitionSubjects.map((row) => ({
+const evalSurfaceRows = invocationSubjects.map((row) => ({
   id: row.id,
   rpcPlane: row.rpcPlane,
   capability: row.capability,
+  authorityPrincipals: row.authorityPrincipals,
   ...(row.owner ? { owner: row.owner } : {}),
   ...(row.source ? { source: row.source } : {}),
   ...(row.method ? { method: row.method } : {}),
   ...(row.sensitivity ? { sensitivity: row.sensitivity } : {}),
   ...(row.resourceDerivation ? { resourceDerivation: row.resourceDerivation } : {}),
-  acquisition: row.evalAcquisition,
 }));
 const evalInvocationExposure = [
   ...new Set(
-    evalAcquisitionRows
-      .filter((row) => row.acquisition.kind !== "closed" && !row.capability.endsWith("*"))
+    evalSurfaceRows
+      .filter((row) => row.authorityPrincipals?.includes("code") && !row.capability.endsWith("*"))
       .map((row) => row.capability)
   ),
 ].sort();
@@ -899,7 +806,7 @@ const evalExposurePath = path.join(
   "evalInvocationExposure.generated.ts"
 );
 const evalExposureSource = await formatTypeScript(
-  `/* Generated by scripts/generate-runtime-foundation-ledgers.mjs. This is an exposure ceiling, never a grant. */\n\nexport const EVAL_CAPABILITY_ACQUISITION_LEDGER = ${JSON.stringify(evalAcquisitionRows, null, 2)} as const;\n\n/** Every reviewed server-host method. Bootstrap verifies that this exact census is registered before accepting RPC. */\nexport const EVAL_SERVER_HOST_METHODS = ${JSON.stringify(evalServerHostMethods, null, 2)} as const;\n\n/** Reviewed runtime sources that may reach exact direct RPC methods defined by another workspace unit. */\nexport const EVAL_DIRECT_SURFACE_REACHABILITY = ${JSON.stringify(sortedDirectSurfaceReachability, null, 2)} as const;\n\nexport const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = ${JSON.stringify(evalInvocationExposure, null, 2)} as const;\n`,
+  `/* Generated by scripts/generate-runtime-foundation-ledgers.mjs. Admission census only; never a request or grant. */\n\nexport const EVAL_INVOCATION_SURFACE_CENSUS = ${JSON.stringify(evalSurfaceRows, null, 2)} as const;\n\n/** Every reviewed server-host method. Bootstrap verifies that this exact census is registered before accepting RPC. */\nexport const EVAL_SERVER_HOST_METHODS = ${JSON.stringify(evalServerHostMethods, null, 2)} as const;\n\n/** Reviewed runtime sources that may reach exact direct RPC methods defined by another workspace unit. */\nexport const EVAL_DIRECT_SURFACE_REACHABILITY = ${JSON.stringify(sortedDirectSurfaceReachability, null, 2)} as const;\n\nexport const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = ${JSON.stringify(evalInvocationExposure, null, 2)} as const;\n`,
   evalExposurePath
 );
 if (check) {
@@ -910,51 +817,4 @@ if (check) {
   }
 } else {
   fs.writeFileSync(evalExposurePath, evalExposureSource);
-}
-
-const principalCapabilities = {};
-for (const principal of ["host", "user", "device", "entity"]) {
-  principalCapabilities[principal] = [
-    ...new Set(
-      authorityRows
-        .filter((row) => row.authorityPrincipals.includes(principal))
-        .map(
-          (row) =>
-            row.capability ??
-            (row.rpcPlane === "host-service"
-              ? `service:${row.owner}.${row.method}`
-              : `rpc:${row.method}`)
-        )
-        .filter((capability) => !capability.endsWith("*"))
-    ),
-  ].sort();
-}
-const productCatalogPath = path.join(
-  root,
-  "src",
-  "server",
-  "services",
-  "productAuthorityGrantCatalog.generated.ts"
-);
-const productCatalogSource = await formatTypeScript(
-  `/* Generated by scripts/generate-runtime-foundation-ledgers.mjs. Reviewed exact-source product grants.\n * P0 ADMISSION INPUT — scheduled to freeze in docs/capability-model-redesign.md P2.\n */\n\nexport const PRODUCT_AUTHORITY_GRANT_CATALOG = ${JSON.stringify(
-    {
-      version: 2,
-      principalCapabilities,
-      codeCapabilitiesBySource,
-      workspaceServicePrincipalsByName,
-    },
-    null,
-    2
-  )} as const;\n`,
-  productCatalogPath
-);
-if (check) {
-  if (fs.readFileSync(productCatalogPath, "utf8") !== productCatalogSource) {
-    throw new Error(
-      `${path.relative(root, productCatalogPath)} is stale; run pnpm generate:runtime-foundations`
-    );
-  }
-} else {
-  fs.writeFileSync(productCatalogPath, productCatalogSource);
 }

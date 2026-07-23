@@ -14,7 +14,7 @@ const AUTH_READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
 const AUTH_CONNECTION_INFO_POLICY: ServiceAuthorityPolicy = {
-  principals: ["host", "user", "code", "entity"],
+  principals: ["host", "user", "code"],
 };
 const AUTH_PAIRING_ACCESS: MethodAccessDescriptor = {
   sensitivity: "admin",

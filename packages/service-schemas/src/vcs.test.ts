@@ -187,6 +187,8 @@ describe("one authored-change model", () => {
       decisionIds: [],
       intentSummary: "Rename the greeting",
       externalSnapshot: null,
+      contentClass: "internal" as const,
+      externalKeys: [],
       normalizationProtocol: "normalization:v1",
       createdAt: "2026-07-15T08:00:00.000Z",
     };
@@ -641,6 +643,8 @@ describe("honest external snapshot imports", () => {
         snapshotDigest: `snapshot:${"d".repeat(64)}`,
         targetRepositoryIds: ["repository:imported"],
       },
+      contentClass: "external" as const,
+      externalKeys: ["git:example.test/repository@snapshot"],
       normalizationProtocol: "normalization:v1",
       createdAt: "2026-07-15T08:00:00.000Z",
     };

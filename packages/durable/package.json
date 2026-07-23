@@ -15,7 +15,8 @@
     "test": "cd ../.. && vitest run packages/durable/src"
   },
   "dependencies": {
-    "@vibestudio/rpc": "workspace:*"
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/shared": "workspace:*"
   },
   "devDependencies": {
     "sql.js": "^1.14.0",

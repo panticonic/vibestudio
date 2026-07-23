@@ -50,7 +50,7 @@ describe("approvalCopy", () => {
         },
         details: [{ label: "URL", value: "https://github.com/foo/bar" }],
       },
-      category: "Browser action",
+      category: "Open in browser",
       title: "Open github.com/foo/...",
       summaryIncludes: "github.com/foo/...",
     },
@@ -68,7 +68,7 @@ describe("approvalCopy", () => {
         oauthAuthorizeOrigin: "https://accounts.google.com",
         oauthTokenOrigin: "https://oauth2.googleapis.com",
       },
-      category: "Connection request",
+      category: "Connect an account",
       title: "Connect Google Calendar",
       summaryIncludes: "Connects Google Calendar",
     },
@@ -95,7 +95,7 @@ describe("approvalCopy", () => {
           service: "github",
         },
       },
-      category: "Git write",
+      category: "Push changes",
       title: "Push to github.com/acme/project",
       summaryIncludes: "github.com/acme/project",
     },
@@ -121,9 +121,9 @@ describe("approvalCopy", () => {
           },
         },
       },
-      category: "Network access",
+      category: "Internet access",
       title: "Connect to localhost:42531",
-      summaryIncludes: "raw network requests",
+      summaryIncludes: "Sends and receives data",
     },
     {
       name: "credential repo binding",
@@ -144,7 +144,7 @@ describe("approvalCopy", () => {
           action: "use",
         },
       },
-      category: "Access request",
+      category: "Use an account",
       title: "Use GitHub repositories",
       summaryIncludes: "GitHub repositories at github.com/acme/project",
     },
@@ -162,9 +162,9 @@ describe("approvalCopy", () => {
           value: "panels/spectrolite",
         },
       },
-      category: "Workspace source",
+      category: "Workspace code update",
       title: "Update panels/spectrolite",
-      summaryIncludes: "Updates workspace source",
+      summaryIncludes: "Saves code changes",
     },
     {
       name: "client-config",
@@ -180,9 +180,9 @@ describe("approvalCopy", () => {
           { name: "clientSecret", label: "Client Secret", type: "secret", required: true },
         ],
       },
-      category: "Service setup",
+      category: "Set up a connection",
       title: "Set up Google Calendar",
-      summaryIncludes: "Saves OAuth client settings",
+      summaryIncludes: "Saves your connection settings",
     },
     {
       name: "credential-input",
@@ -197,7 +197,7 @@ describe("approvalCopy", () => {
         scopes: ["projects.read"],
         fields: [{ name: "apiKey", label: "API Key", type: "secret", required: true }],
       },
-      category: "Service setup",
+      category: "Set up a connection",
       title: "Add Acme API",
       summaryIncludes: "api.acme.test/v1/...",
     },
@@ -216,10 +216,10 @@ describe("approvalCopy", () => {
         oauthTokenOrigin: "https://oauth2.googleapis.com",
         oauthAudienceDomainMismatch: true,
       },
-      category: "Connection request",
+      category: "Connect an account",
       title: "Connect Google Calendar",
       summaryIncludes: "calendar.google.com",
-      warning: "The sign-in domain differs from the service domain.",
+      warning: "The sign-in site is different from the service's site. Make sure you recognize both.",
       risk: "caution",
     },
     {
@@ -244,10 +244,10 @@ describe("approvalCopy", () => {
         ],
         configWrite: null,
       },
-      category: "App source",
+      category: "App code update",
       title: "Shell app source change",
-      summaryIncludes: "trusted workspace app code",
-      warning: "Approving allows these workspace apps to run in the app host.",
+      summaryIncludes: "trusted workspace app",
+      warning: "You are approving apps that run in your workspace.",
       detailsOpen: true,
       risk: "caution",
     },
@@ -273,10 +273,10 @@ describe("approvalCopy", () => {
         ],
         configWrite: null,
       },
-      category: "Extension management",
+      category: "Manage extensions",
       title: "Reload extension",
       summaryIncludes: "reload @workspace-extensions/acme",
-      warning: "Approving runs native code with filesystem, network, and process access.",
+      warning: "You are approving an extension with full access to your files, internet, and system.",
       detailsOpen: true,
       risk: "danger",
     },
@@ -299,10 +299,10 @@ describe("approvalCopy", () => {
           { label: "Runtime entity", value: "do:workers/agent:AgentDO:headless" },
         ],
       },
-      category: "Capability request",
+      category: "Permission request",
       title: "Retire runtime entity in another context",
       summaryIncludes: "stops a runtime entity",
-      warning: "This can affect another workspace branch and the work running in it.",
+      warning: "This can affect files and running work in a different part of your project.",
     },
     {
       name: "context boundary create do",
@@ -323,10 +323,10 @@ describe("approvalCopy", () => {
         },
         details: [{ label: "Owner", value: "Agent X" }],
       },
-      category: "Capability request",
+      category: "Permission request",
       title: "Launch background process in another workspace branch",
-      summaryIncludes: "repository state and running work",
-      warning: "This can affect another workspace branch and the work running in it.",
+      summaryIncludes: "files and anything running",
+      warning: "This can affect files and running work in a different part of your project.",
     },
     {
       name: "userland",
@@ -339,7 +339,7 @@ describe("approvalCopy", () => {
         promptOptions: "choices",
         options: [{ value: "allow", label: "Allow", tone: "primary" }],
       },
-      category: "Worker request",
+      category: "Agent request",
       title: "Allow foo?",
       summaryIncludes: "Team X is requesting access to foo.",
     },
@@ -378,9 +378,10 @@ describe("approvalCopy", () => {
   );
 
   it("formats requester category labels", () => {
-    expect(getRequesterCategoryLabel("eval")).toBe("Eval");
-    expect(getRequesterCategoryLabel("agent")).toBe("Agent");
-    expect(getRequesterCategoryLabel("internal-service")).toBe("Internal service");
+    expect(getRequesterCategoryLabel("eval")).toBe("Agent");
+    expect(getRequesterCategoryLabel("worker")).toBe("Agent");
+    expect(getRequesterCategoryLabel("durable-object")).toBe("Agent");
+    expect(getRequesterCategoryLabel("internal-service")).toBe("System service");
   });
 
   it("derives semantic attribution chips, never raw ids", () => {
@@ -469,15 +470,20 @@ describe("approvalCopy", () => {
       "panels/spectrolite"
     );
     expect(getStandardActionCopy(networkEgress).once.label).toBe("Connect once");
-    expect(getStandardActionCopy(networkEgress).session!.label).toBe("Allow this origin");
+    expect(getStandardActionCopy(networkEgress).session!.label).toBe("Allow this site");
     expect(getStandardActionCopy(networkEgress).session!.description).toContain("localhost:42531");
-    expect(getStandardActionCopy(networkEgress).version!.label).toBe("Trust version with network");
-    expect(getStandardActionCopy(evalNetworkEgress).version!.label).toBe(
-      "Trust identity with network"
+    expect(getStandardActionCopy(networkEgress).version!.label).toBe(
+      "Trust this version with internet access"
     );
-    expect(getStandardActionCopy(evalCredential).version!.label).toBe("Trust identity");
+    expect(getStandardActionCopy(evalNetworkEgress).version!.label).toBe(
+      "Trust this agent with internet access"
+    );
+    expect(getStandardActionCopy(evalCredential).version!.label).toBe("Trust this agent");
     expect(getStandardActionCopy(evalCredential).version!.description).toContain(
-      "runtime identity"
+      "this agent"
+    );
+    expect(getStandardActionCopy(evalCredential).version!.description).toContain(
+      "Every eval still receives its own code review"
     );
   });
 
@@ -509,17 +515,59 @@ describe("approvalCopy", () => {
     expect(getUnitBatchActionCopy(approval)).toMatchObject({
       once: {
         label: "Approve all",
-        description: "Approve 2 workspace units (workspace apps, scheduled jobs).",
+        description: "Approve 1 app and 1 scheduled task.",
       },
       session: {
-        label: "Dev session",
-        description: "Allow workspace-config changes without asking again for the next 4 hours.",
+        label: "Allow for 4 hours",
+        description: "Allow settings changes without asking for 4 hours.",
       },
       deny: {
         label: "Deny all",
-        description: "Do not approve these workspace units.",
+        description: "Don't approve 1 app and 1 scheduled task.",
       },
     });
+  });
+
+  it("names panels and workers in shared unit-batch consent copy", () => {
+    const approval: Extract<PendingApproval, { kind: "unit-batch" }> = {
+      ...base,
+      kind: "unit-batch",
+      trigger: "startup",
+      title: "Review workspace units",
+      description: "Review exact versions before first activation.",
+      units: [
+        {
+          unitKind: "panel",
+          unitName: "panels/chat",
+          displayName: "Chat",
+          source: { kind: "workspace-repo", repo: "panels/chat", ref: "main" },
+          capabilities: ["AI conversations"],
+        },
+        {
+          unitKind: "worker",
+          unitName: "workers/ai-chat",
+          displayName: "AI Chat Worker",
+          source: { kind: "workspace-repo", repo: "workers/ai-chat", ref: "main" },
+          capabilities: ["AI model access"],
+        },
+      ],
+    };
+
+    expect(getUnitBatchActionCopy(approval).once.description).toBe("Approve 1 panel and 1 background task.");
+    expect(getApprovalCopy(approval).title).toBe("Start 1 panel and 1 background task");
+    expect(getApprovalCopy(approval).summary).toBe(
+      "Review exact versions before first activation."
+    );
+    expect(
+      [
+        getApprovalCopy(approval).title,
+        getApprovalCopy(approval).summary,
+        getUnitBatchActionCopy(approval).once.description,
+      ].join(" ")
+    ).not.toMatch(/\bunits?\b/iu);
+    expect(getApprovalCopy(approval).warning).toBe(
+      "You are approving panels that appear and work in your workspace and background tasks that run in your workspace."
+    );
   });
 
   it("formats low-level detail helpers", () => {

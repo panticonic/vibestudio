@@ -99,6 +99,12 @@ export const phoneProvisioningMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.array(PhoneProviderSchema),
     access: readAccess,
+    capability: "mobile.devices.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      rationale: "Connected desktop-provider inventory is private device state.",
+    },
   },
   devices: {
     description:
@@ -106,6 +112,12 @@ export const phoneProvisioningMethods = defineServiceMethods({
     args: z.tuple([PhoneDeviceQuerySchema]),
     returns: PhoneDeviceDiscoverySchema,
     access: readAccess,
+    capability: "mobile.devices.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      rationale: "Attached device inventory and installed-app state are private.",
+    },
   },
   install: {
     description:
@@ -113,6 +125,12 @@ export const phoneProvisioningMethods = defineServiceMethods({
     args: z.tuple([PhoneInstallArgsSchema]),
     returns: PhoneProvisioningResultSchema,
     access: adminAccess,
+    capability: "mobile.install",
+    tier: {
+      tier: "gated",
+      session: "family",
+      rationale: "Installs software through an attached desktop device.",
+    },
   },
   openPairing: {
     description:
@@ -120,5 +138,11 @@ export const phoneProvisioningMethods = defineServiceMethods({
     args: z.tuple([PhoneOpenPairingArgsSchema]),
     returns: PhoneProvisioningResultSchema,
     access: adminAccess,
+    capability: "mobile.pair",
+    tier: {
+      tier: "gated",
+      session: "family",
+      rationale: "Opens a one-time pairing link on an external device.",
+    },
   },
 });

@@ -4,7 +4,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./responsive": "./src/responsive.ts"
+    "./auto-mount": "./src/autoMount.ts",
+    "./responsive": "./src/responsive.ts",
+    "./theme": "./src/theme.ts"
   },
   "dependencies": {
     "@vibestudio/types": "workspace:*",

@@ -157,6 +157,30 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
 });
 
 describe("manifest declarations: product workspace services", () => {
+  it("accepts user-facing service approval copy", () => {
+    expect(
+      parse(`services:
+  - source: workers/notes
+    name: notes
+    title: Notes
+    action: read and update your notes
+    description: Reads and updates notes stored in this workspace.
+    authority:
+      principals: [code]
+    durableObject:
+      className: NotesDO
+`)
+    ).toMatchObject({
+      services: [
+        {
+          name: "notes",
+          title: "Notes",
+          action: "read and update your notes",
+        },
+      ],
+    });
+  });
+
   it("rejects a workspace service that redeclares a product-owned name", () => {
     expect(() =>
       parse(`services:

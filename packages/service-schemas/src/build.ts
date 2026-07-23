@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
 
 export const AuthorityResourceScopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("exact"), key: z.string() }).strict(),
@@ -24,18 +25,25 @@ export const CapabilityScopeSchema = z
   })
   .strict() satisfies z.ZodType<CapabilityScope>;
 
-export const EvalAuthorityDelegationSchema = z
+/** Immutable, reviewed request metadata embedded in an executable artifact. */
+export const UnitAuthorityRequestSchema = CapabilityScopeSchema.extend({
+  tier: z.enum(["gated", "critical"]),
+  evidence: z.enum(["exact", "bounded-dynamic", "intentional-broad"]),
+  packages: z.array(z.string().min(1)).readonly().optional(),
+}).strict() satisfies z.ZodType<UnitAuthorityRequest>;
+
+export const EvalAuthorityCeilingSchema = z
   .object({
     audience: z.literal("eval"),
     purpose: z.enum(["agentic-code-execution", "tool-eval", "test-eval"]),
-    capabilities: z.array(CapabilityScopeSchema),
+    capabilities: z.array(UnitAuthorityRequestSchema).readonly(),
   })
   .strict();
 
 export const UnitAuthorityManifestSchema = z
   .object({
-    requests: z.array(CapabilityScopeSchema),
-    delegations: z.array(EvalAuthorityDelegationSchema),
+    requests: z.array(UnitAuthorityRequestSchema),
+    evalCeilings: z.array(EvalAuthorityCeilingSchema),
   })
   .strict();
 
@@ -57,6 +65,7 @@ const GC_ACCESS: MethodAccessDescriptor = {
 export const buildBundleResultSchema = z
   .object({
     bundle: z.string(),
+    format: z.enum(["cjs", "async-cjs"]),
   })
   .strict();
 export type BuildBundleResult = z.infer<typeof buildBundleResultSchema>;
@@ -175,6 +184,7 @@ export const unitBuildReportSchema = z
     unitName: z.string().optional(),
     kind: z.string(),
     status: z.enum(["ok", "failed", "skipped"]),
+    diagnostics: z.array(buildDiagnosticSchema),
     builds: z.array(unitBuildTargetSchema),
   })
   .strict();
@@ -374,7 +384,7 @@ export const buildMethods = defineServiceMethods({
   },
   getBuildReport: {
     description:
-      "Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return an agent-actionable unit build report with structured esbuild + tsc diagnostics. This advisory projection does not publish source, authorize publication, or advance any head.",
+      "Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return an agent-actionable unit build report. Read diagnostics from report.builds.flatMap((build) => build.diagnostics); diagnostics are per target, not a top-level report field. This advisory projection does not publish source, authorize publication, or advance any head.",
     args: z.tuple([
       z.string().describe("Unit name or workspace-relative path."),
       z
@@ -385,6 +395,32 @@ export const buildMethods = defineServiceMethods({
         ),
     ]),
     returns: unitBuildReportSchema,
+    examples: [
+      {
+        args: ["workers/example", "ctx:<contextId>"],
+        returns: {
+          repoPath: "workers/example",
+          unitName: "@workspace-workers/example",
+          kind: "worker",
+          status: "failed",
+          builds: [
+            {
+              target: "runtime",
+              diagnostics: [
+                {
+                  source: "esbuild",
+                  severity: "error",
+                  file: "workers/example/index.ts",
+                  line: 12,
+                  column: 4,
+                  message: "Example build diagnostic",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
     access: BUILD_ACCESS,
   },
   getEffectiveVersion: {

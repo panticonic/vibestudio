@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./brand": "./src/brand.tsx",
     "./panel": "./src/panel.ts",
     "./tokens.css": "./src/tokens.css"
   },

@@ -15,12 +15,12 @@ export type {
   AuthorityGrant,
   AuthorityRequirement,
   CapabilityScope,
+  ContextIntegrityFact,
   DirectAuthorityAttestation,
   LiveWorkspaceRelationship,
   Principal,
   PrincipalKind,
   ResourceScope,
-  VerifiedDelegation,
 } from "@vibestudio/rpc";
 
 export interface AuthorityEvaluationInput {
@@ -29,6 +29,10 @@ export interface AuthorityEvaluationInput {
   resourceKey: string;
   grants: readonly AuthorityGrant[];
   now?: number;
+  /** Critical confirmation checks bind to the concrete invocation. */
+  invocationDigest?: string;
+  /** Critical ignores ordinary grants and admits only a fresh confirmation. */
+  tier?: "open" | "gated" | "critical";
   relation?: (input: {
     context: AuthorizationContext;
     name: Extract<AuthorityRequirement, { kind: "relationship" }>["name"];
@@ -41,13 +45,13 @@ export interface AuthorityEvaluationInput {
 export function capability(
   principal: PrincipalKind,
   name: string,
-  delegation?: { audience: string; purpose: string; issuer?: Principal }
+  options: { codeOnly?: boolean } = {}
 ): AuthorityRequirement {
   return {
     kind: "capability",
     principal,
     capability: name,
-    ...(delegation ? { delegation } : {}),
+    ...(options.codeOnly ? { codeOnly: true as const } : {}),
   };
 }
 
@@ -96,50 +100,98 @@ export function bindMethodCapability(
   return requirement;
 }
 
-/** Canonical R3A requirement for a method's explicitly admitted principals. */
+/**
+ * Canonical requirement for a method's admitted principal families. A code
+ * declaration admits both installed code and eval sessions unless explicitly
+ * marked codeOnly during the method census.
+ */
 export function requirementForPrincipals(
   principals: readonly PrincipalKind[],
-  capabilityName: string
+  capabilityName: string,
+  options: { codeOnly?: boolean } = {}
 ): AuthorityRequirement {
   const unique = [...new Set(principals)];
   if (unique.length === 0) throw new Error("An authority declaration requires a principal");
-  const requirements = unique.map((principal): AuthorityRequirement => {
-    const grant = capability(principal, capabilityName);
+  const requirements = unique.flatMap((principal): AuthorityRequirement[] => {
     switch (principal) {
       case "host":
-        return grant;
+        return [capability("host", capabilityName)];
       case "user":
-      case "code":
-        return allOf(grant, relationship("workspace-member"));
-      case "device":
-        return allOf(grant, relationship("device-owned-by-user"), relationship("workspace-member"));
-      case "entity":
-        return allOf(grant, relationship("agent-binding"), relationship("workspace-member"));
+        return [allOf(capability("user", capabilityName), relationship("workspace-member"))];
+      case "code": {
+        const installed = allOf(
+          capability("code", capabilityName),
+          relationship("workspace-member")
+        );
+        return options.codeOnly
+          ? [
+              allOf(
+                capability("code", capabilityName, { codeOnly: true }),
+                relationship("workspace-member")
+              ),
+            ]
+          : [
+              installed,
+              allOf(capability("session", capabilityName), relationship("workspace-member")),
+            ];
+      }
+      case "session":
+        return [allOf(capability("session", capabilityName), relationship("workspace-member"))];
+      case "mission":
+        return [allOf(capability("mission", capabilityName), relationship("workspace-member"))];
     }
   });
   return requirements.length === 1 ? requirements[0]! : anyOf(...requirements);
 }
 
 /**
- * Evaluates one complete compound requirement. Capabilities are checked only
- * against the named principal; grants from other principals are never unioned.
+ * Evaluates a complete compound requirement against exactly one authority set.
+ * Session origins may expose two exact subject facets (session and authenticated
+ * mission), but grants from users, harness code, entities, and other sessions are
+ * never unioned into that set. Deny precedence is uniform across both facets.
  */
 export function evaluateAuthority(input: AuthorityEvaluationInput): AuthorizationDecision {
   const now = input.now ?? Date.now();
   if (!input.resourceKey || input.resourceKey !== input.resourceKey.trim()) {
     throw new Error("Authority resource key must be a non-empty canonical string");
   }
+  const authoritySubjects = new Set(subjectsForOrigin(input.context));
+  // Critical confirmation is always a one-shot fact of the authenticated
+  // session, including when installed code remains the authorizing origin for
+  // manifest confinement. This adds only the exact confirmation subject; it
+  // does not union ordinary session grants into code authority.
+  if (input.tier === "critical") {
+    authoritySubjects.add(`session:${input.context.session.id}`);
+  }
+
   const evaluate = (requirement: AuthorityRequirement): AuthorizationDecision => {
     if (requirement.kind === "all") {
+      let consumable: AuthorizationDecision | null = null;
       for (const child of requirement.requirements) {
         const decision = evaluate(child);
         if (!decision.allowed) return { ...decision, requirement };
+        if (decision.consumable) {
+          if (consumable && consumable.grantId !== decision.grantId) {
+            throw new Error(
+              "One compound authority leaf cannot merge multiple single-use confirmations"
+            );
+          }
+          consumable = decision;
+        }
       }
-      return { allowed: true, code: "allowed", reason: "all requirements satisfied", requirement };
+      return {
+        allowed: true,
+        code: "allowed",
+        reason: "all requirements satisfied",
+        requirement,
+        ...(consumable?.principal ? { principal: consumable.principal } : {}),
+        ...(consumable?.grantId ? { grantId: consumable.grantId } : {}),
+        ...(consumable ? { consumable: true } : {}),
+      };
     }
     if (requirement.kind === "any") {
       const matching = requirement.requirements.filter((child) =>
-        requirementMatchesOrigin(child, input.context.authorizingOrigin.kind)
+        requirementMatchesOrigin(child, input.context)
       );
       if (matching.length === 0) {
         return {
@@ -151,16 +203,19 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       }
       const decisions = matching.map(evaluate);
       const allowed = decisions.find((decision) => decision.allowed);
-      return allowed
-        ? { allowed: true, code: "allowed", reason: allowed.reason, requirement }
-        : {
-            allowed: false,
-            code: decisions.some((decision) => decision.code === "denied")
-              ? "denied"
+      if (allowed) return { ...allowed, requirement };
+      return {
+        allowed: false,
+        code: decisions.some((decision) => decision.code === "denied")
+          ? "denied"
+          : decisions.some((decision) => decision.code === "lineage")
+            ? "lineage"
+            : decisions.some((decision) => decision.code === "not-requested")
+              ? "not-requested"
               : "missing-grant",
-            reason: decisions.map((decision) => decision.reason).join("; "),
-            requirement,
-          };
+        reason: decisions.map((decision) => decision.reason).join("; "),
+        requirement,
+      };
     }
     if (requirement.kind === "session") {
       const session = input.context.session;
@@ -185,10 +240,10 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
             resourceKey: input.resourceKey,
             now,
           })
-        : builtinRelationship(input.context, requirement.name, requirement.value, now);
+        : builtinRelationship(input.context, requirement.name, requirement.value);
       return {
         allowed,
-        code: allowed ? "allowed" : "relationship",
+        code: allowed ? "allowed" : requirement.name === "context-integrity" ? "lineage" : "relationship",
         reason: allowed
           ? `relationship ${requirement.name} satisfied`
           : `relationship ${requirement.name} not satisfied`,
@@ -196,7 +251,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       };
     }
 
-    const principal = principalFor(input.context, requirement.principal);
+    const principal = principalForRequirement(input.context, requirement);
     if (!principal) {
       return {
         allowed: false,
@@ -205,7 +260,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         requirement,
       };
     }
-    if (!isCanonicalPrincipal(principal, requirement.principal)) {
+    if (!isCanonicalPrincipal(principal)) {
       return {
         allowed: false,
         code: "missing-principal",
@@ -213,11 +268,33 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         requirement,
       };
     }
-    if (requirement.principal === "code") {
-      const manifest =
-        input.context.codeAuthority.execution ?? input.context.codeAuthority.executor;
+
+    // Open waives only the request/grant requirement. Principal-family and
+    // relationship checks in the surrounding requirement still run.
+    if (input.tier === "open") {
+      return {
+        allowed: true,
+        code: "allowed",
+        reason: `${principal} is admitted to open capability ${requirement.capability}`,
+        requirement,
+        principal,
+      };
+    }
+
+    // Installed code must have explicitly requested the semantic capability.
+    // A code-mediated eval session has no manifest of its own, but the host
+    // projects its owner's sealed eval ceiling into executingCode.requested.
+    // That ceiling caps what the dynamic session may ask to acquire. A direct
+    // user/host eval has no executingCode fact and is bounded by its session
+    // envelope instead.
+    if (
+      input.context.authorizingOrigin.kind === "code" ||
+      (input.context.authorizingOrigin.kind === "session" && input.context.executingCode)
+    ) {
+      const manifest = input.context.executingCode;
       const requested =
-        manifest?.principal === principal &&
+        manifest !== null &&
+        (input.context.authorizingOrigin.kind === "session" || manifest.principal === principal) &&
         manifest.requested.some(
           (scope) =>
             capabilityPatternCovers(scope.capability, requirement.capability) &&
@@ -233,21 +310,41 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         };
       }
     }
-    const grantPrincipal =
-      requirement.principal === "code" && input.context.codeAuthority.execution
-        ? input.context.codeAuthority.initiator?.principal
-        : principal;
-    const matching = input.grants.filter(
+
+    const candidates = input.grants.filter(
       (grant) =>
-        grant.subject === grantPrincipal &&
+        authoritySubjects.has(grant.subject) &&
         capabilityPatternCovers(grant.capability, requirement.capability) &&
         grant.createdAt <= now &&
         (grant.revokedAt === undefined || grant.revokedAt > now) &&
         (grant.expiresAt === undefined || grant.expiresAt > now) &&
-        grantConstraintsMatch(grant, input.context) &&
+        grantConstraintsMatch(grant, input.context, input.invocationDigest) &&
         scopeCovers(grant.resource, input.resourceKey)
     );
-    const denied = matching.some((grant) => grant.effect === "deny");
+
+    // Invocation-bound grants are single-use at every tier. Keeping a consumed
+    // gated grant eligible makes the dispatcher select it, fail its atomic
+    // consume, and retry the same stale row forever. Standing grants have no
+    // invocation digest and remain reusable.
+    const unconsumedCandidates = candidates.filter(
+      (grant) =>
+        grant.effect === "deny" ||
+        grant.constraints?.invocationDigest === undefined ||
+        grant.consumedAt === undefined
+    );
+
+    // A critical exercise is authorized only by an unconsumed confirmation for
+    // this exact invocation; ordinary standing/session grants are invisible.
+    const tierCandidates =
+      input.tier === "critical"
+        ? unconsumedCandidates.filter(
+            (grant) =>
+              grant.provenance === "critical-confirmation" &&
+              grant.constraints?.invocationDigest === input.invocationDigest
+          )
+        : unconsumedCandidates;
+
+    const denied = candidates.find((grant) => grant.effect === "deny");
     if (denied) {
       return {
         allowed: false,
@@ -255,72 +352,67 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         reason: `${principal} is explicitly denied ${requirement.capability} on ${input.resourceKey}`,
         requirement,
         principal,
+        ...(denied.id ? { grantId: denied.id } : {}),
       };
     }
-    const allowed = matching.some((grant) => grant.effect === "allow");
-    const needsDelegation = Boolean(
-      allowed && requirement.principal === "code" && input.context.codeAuthority.execution
+    const lineageRejected = tierCandidates.some(
+      (grant) => grant.effect === "allow" && !lineageAtConsentCovers(grant, input.context)
     );
-    if (allowed && (requirement.delegation || needsDelegation)) {
-      const delegated = input.context.codeAuthority.delegations.some(
-        (delegation) =>
-          delegation.subject === principal &&
-          (requirement.delegation === undefined ||
-            (delegation.audience === requirement.delegation.audience &&
-              delegation.audience === input.context.session.audience &&
-              delegation.purpose === requirement.delegation.purpose)) &&
-          (requirement.delegation?.issuer === undefined ||
-            delegation.issuer === requirement.delegation.issuer) &&
-          (grantPrincipal === undefined || delegation.issuer === grantPrincipal) &&
-          (delegation.revokedAt === undefined || delegation.revokedAt > now) &&
-          (delegation.notBefore === undefined || delegation.notBefore <= now) &&
-          delegation.expiresAt > now &&
-          delegation.capabilities.some(
-            (scope) =>
-              capabilityPatternCovers(scope.capability, requirement.capability) &&
-              scopeCovers(scope.resource, input.resourceKey)
-          )
-      );
-      if (!delegated) {
-        return {
-          allowed: false,
-          code: "delegation",
-          reason: `${principal} lacks a live attenuated delegation for ${requirement.capability}`,
-          requirement,
-          principal,
-        };
-      }
+    const allowed = tierCandidates.find(
+      (grant) => grant.effect === "allow" && lineageAtConsentCovers(grant, input.context)
+    );
+    if (!allowed && lineageRejected) {
+      return {
+        allowed: false,
+        code: "lineage",
+        reason: `${principal} has authority, but new outside content entered the session`,
+        requirement,
+        principal,
+      };
     }
     return {
-      allowed,
+      allowed: Boolean(allowed),
       code: allowed ? "allowed" : "missing-grant",
       reason: allowed
         ? `${principal} is granted ${requirement.capability}`
         : `${principal} lacks ${requirement.capability} on ${input.resourceKey}`,
       requirement,
       principal,
+      ...(allowed?.id ? { grantId: allowed.id } : {}),
+      ...(allowed?.constraints?.invocationDigest ? { consumable: true } : {}),
     };
   };
   return evaluate(input.requirement);
 }
 
-function principalFor(context: AuthorizationContext, kind: PrincipalKind): Principal | null {
-  if (context.authorizingOrigin.kind !== kind) return null;
-  switch (kind) {
-    case "host":
-      return context.host;
-    case "user":
-      return context.actingUser;
-    case "device":
-      return context.device;
-    case "code":
-      return context.authorizingOrigin.principal;
-    case "entity":
-      return context.entity;
+export function subjectsForOrigin(context: AuthorizationContext): ReadonlySet<Principal> {
+  const subjects = new Set<Principal>([context.authorizingOrigin.principal]);
+  if (context.authorizingOrigin.kind === "session" && context.session.mission) {
+    subjects.add(
+      `mission:${context.session.mission.missionId}@${context.session.mission.closureDigest}`
+    );
   }
+  return subjects;
 }
 
-function scopeCovers(scope: ResourceScope, key: string): boolean {
+function principalForRequirement(
+  context: AuthorizationContext,
+  requirement: Extract<AuthorityRequirement, { kind: "capability" }>
+): Principal | null {
+  const kind = requirement.principal;
+  const origin = context.authorizingOrigin;
+  if (kind === origin.kind) return origin.principal;
+  // Declared code methods admit eval sessions by family mapping.
+  if (kind === "code" && origin.kind === "session" && requirement.codeOnly !== true) {
+    return origin.principal;
+  }
+  if (kind === "mission" && origin.kind === "session" && context.session.mission) {
+    return `mission:${context.session.mission.missionId}@${context.session.mission.closureDigest}`;
+  }
+  return null;
+}
+
+export function scopeCovers(scope: ResourceScope, key: string): boolean {
   switch (scope.kind) {
     case "exact":
       return scope.key === key;
@@ -330,9 +422,7 @@ function scopeCovers(scope: ResourceScope, key: string): boolean {
       return key === scope.origin;
     case "domain": {
       const hostname = resourceHostname(key);
-      return Boolean(
-        hostname && (hostname === scope.domain || hostname.endsWith(`.${scope.domain}`))
-      );
+      return Boolean(hostname && (hostname === scope.domain || hostname.endsWith(`.${scope.domain}`)));
     }
     case "network":
       return true;
@@ -350,75 +440,47 @@ function resourceHostname(value: string): string | null {
 function builtinRelationship(
   context: AuthorizationContext,
   name: Extract<AuthorityRequirement, { kind: "relationship" }>["name"],
-  value: string | undefined,
-  now: number
+  value: string | undefined
 ): boolean {
   switch (name) {
     case "workspace-member":
       return context.workspace?.member === true;
     case "workspace-role":
       return context.workspace?.member === true && context.workspace.role === value;
-    case "device-owned-by-user":
-      return Boolean(
-        context.device &&
-        context.actingUser &&
-        context.deviceOwnership?.device === context.device &&
-        context.deviceOwnership.user === context.actingUser
-      );
     case "entity-self":
       return context.entity !== null && (value === undefined || context.entity === value);
     case "entity-owner":
-      return (
-        context.entity !== null && context.ownerChain.includes(context.actingUser as Principal)
-      );
-    case "entity-deputy":
-      return (
-        context.entity !== null &&
-        context.ownerChain.slice(1).includes(context.actingUser as Principal)
-      );
-    case "channel-owner":
-    case "channel-editor":
-    case "channel-member":
-      // Channel relations require a live lookup from the owning channel service.
-      return false;
+      return context.entity !== null && context.actingUser !== null && context.ownerChain.includes(context.actingUser);
     case "agent-binding":
-      return context.agentBinding?.entity === context.entity;
+      return context.entity !== null && context.agentBinding?.entity === context.entity;
     case "code-source": {
-      if (context.authorizingOrigin.kind !== "code" || value === undefined) return false;
-      const match = /^code:([^@]+)@[0-9a-f]{64}$/.exec(context.authorizingOrigin.principal);
+      const code = context.executingCode?.principal;
+      if (!code || value === undefined) return false;
+      const match = /^code:([^@]+)@[0-9a-f]{64}$/.exec(code);
       const repoPath = match?.[1];
-      return Boolean(
-        repoPath && (value.endsWith("/") ? repoPath.startsWith(value) : repoPath === value)
-      );
+      return Boolean(repoPath && (value.endsWith("/") ? repoPath.startsWith(value) : repoPath === value));
     }
-    case "delegation":
-      return context.codeAuthority.delegations.some(
-        (delegation) =>
-          (delegation.revokedAt === undefined || delegation.revokedAt > now) &&
-          (delegation.notBefore === undefined || delegation.notBefore <= now) &&
-          delegation.expiresAt > now &&
-          delegation.audience === context.session.audience &&
-          (value === undefined || delegation.purpose === value)
-      );
+    case "context-integrity":
+      return context.contextIntegrity?.class !== "external";
+    case "closure-internal":
+      // Only the receiver's attested-chain relation resolver can satisfy this.
+      return false;
   }
 }
 
 function requirementMatchesOrigin(
   requirement: AuthorityRequirement,
-  origin: AuthorizationContext["authorizingOrigin"]["kind"]
+  context: AuthorizationContext
 ): boolean {
-  if (requirement.kind === "capability") return requirement.principal === origin;
+  if (requirement.kind === "capability") {
+    return principalForRequirement(context, requirement) !== null;
+  }
   if (requirement.kind === "all") {
-    const capabilities = requirement.requirements.filter((child) =>
-      containsCapabilityRequirement(child)
-    );
-    return (
-      capabilities.length === 0 ||
-      capabilities.some((child) => requirementMatchesOrigin(child, origin))
-    );
+    const capabilities = requirement.requirements.filter(containsCapabilityRequirement);
+    return capabilities.length === 0 || capabilities.some((child) => requirementMatchesOrigin(child, context));
   }
   if (requirement.kind === "any") {
-    return requirement.requirements.some((child) => requirementMatchesOrigin(child, origin));
+    return requirement.requirements.some((child) => requirementMatchesOrigin(child, context));
   }
   return true;
 }
@@ -431,29 +493,34 @@ function containsCapabilityRequirement(requirement: AuthorityRequirement): boole
   return false;
 }
 
-function grantConstraintsMatch(grant: AuthorityGrant, context: AuthorizationContext): boolean {
+function grantConstraintsMatch(
+  grant: AuthorityGrant,
+  context: AuthorizationContext,
+  invocationDigest: string | undefined
+): boolean {
   const constraints = grant.constraints;
   if (!constraints) return true;
-  if (constraints.sessionId !== undefined && constraints.sessionId !== context.session.id) {
-    return false;
+  if (constraints.sessionId !== undefined && constraints.sessionId !== context.session.id) return false;
+  if (constraints.invocationDigest !== undefined && constraints.invocationDigest !== invocationDigest) return false;
+  if (constraints.missionSubject !== undefined) {
+    const mission = context.session.mission;
+    if (!mission || constraints.missionSubject !== `mission:${mission.missionId}@${mission.closureDigest}`) return false;
   }
-  if (
-    constraints.minVersion !== undefined &&
-    compareVersions(context.session.version, constraints.minVersion) < 0
-  ) {
-    return false;
-  }
-  return !(
-    constraints.maxVersion !== undefined &&
-    compareVersions(context.session.version, constraints.maxVersion) > 0
-  );
+  return true;
 }
 
-function isCanonicalPrincipal(principal: Principal, expected: PrincipalKind): boolean {
-  if (!principal.startsWith(`${expected}:`) || principal.length <= expected.length + 1)
-    return false;
-  if (expected !== "code") return true;
-  return /^code:[^@]+@[0-9a-f]{64}$/.test(principal);
+function lineageAtConsentCovers(grant: AuthorityGrant, context: AuthorizationContext): boolean {
+  const integrity = context.contextIntegrity;
+  // P3 interim semantics: no latch fact means no lineage gate yet.
+  if (!integrity || integrity.class === "not-applicable") return true;
+  const consented = new Set(grant.constraints?.lineageAtConsent ?? []);
+  return integrity.externalKeys.every((key) => consented.has(key));
+}
+
+function isCanonicalPrincipal(principal: Principal): boolean {
+  if (/^(host|user|session):[^:][^\0]*$/.test(principal)) return true;
+  if (/^code:[^@]+@[0-9a-f]{64}$/.test(principal)) return true;
+  return /^mission:[^@]+@[0-9a-f]{64}$/.test(principal);
 }
 
 function compareVersions(left: string, right: string): number {

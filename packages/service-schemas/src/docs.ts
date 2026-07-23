@@ -2,7 +2,8 @@
  * Wire schema for the agent-facing "docs" capability-catalog service.
  *
  * The catalog exposes the implemented automatically documented surfaces:
- * `service` (server RPC) and `runtime` (userland runtime surface).
+ * `service` (server RPC), `runtime` (userland runtime surface), and
+ * `workspace` (services declared by the currently loaded workspace).
  *
  * `docs` replaces `meta` as the agent entry point: it derives entries from the
  * dispatcher's live service definitions, filters them to what the caller may
@@ -14,7 +15,7 @@
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
-export const catalogSurfaceSchema = z.enum(["service", "runtime"]);
+export const catalogSurfaceSchema = z.enum(["service", "runtime", "workspace"]);
 export type CatalogSurface = z.infer<typeof catalogSurfaceSchema>;
 
 /** Serialized access descriptor (loose; typed home is MethodAccessDescriptor). */
@@ -30,6 +31,8 @@ export const catalogEntrySchema = z.object({
   parent: z.string().optional(),
   title: z.string(),
   description: z.string().optional(),
+  /** Source-level signature for dynamically built workspace RPC methods. */
+  signature: z.string().optional(),
   /** Access/restrictedness and authority-principal discovery metadata. */
   access: catalogAccessSchema.optional(),
   argsSchema: z.record(z.unknown()).optional(),
@@ -70,7 +73,7 @@ const READONLY_ACCESS = {
 // service): the per-service view used by docs.listServices / docs.describeService
 // and by eval's help() + the CLI `services` command. ──
 const serializedAuthoritySchema = z.object({
-  principals: z.array(z.enum(["host", "user", "device", "code", "entity"])),
+  principals: z.array(z.enum(["host", "user", "code", "session", "mission"])),
   description: z.string().optional(),
 });
 

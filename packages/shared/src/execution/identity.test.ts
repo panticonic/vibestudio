@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalArtifactPath,
-  codePrincipal,
   computeRecipeDigest,
-  createExecutionArtifactRef,
+  createArtifactManifest,
   createSourceRevision,
   displayDigest,
   domainHash,
@@ -61,9 +60,10 @@ describe("exact execution identity", () => {
 
   it("binds source, recipe, build key, manifest, and emitted bytes", () => {
     const source = createSourceRevision({ repoPath: "workers/example", stateHash: a });
-    const first = createExecutionArtifactRef({
+    const recipeDigest = computeRecipeDigest(recipe());
+    const first = createArtifactManifest({
       source,
-      recipe: recipe(),
+      recipeDigest,
       entries: [
         {
           path: "bundle.js",
@@ -74,9 +74,9 @@ describe("exact execution identity", () => {
         },
       ],
     });
-    const changedBytes = createExecutionArtifactRef({
+    const changedBytes = createArtifactManifest({
       source,
-      recipe: recipe(),
+      recipeDigest,
       entries: [
         {
           path: "bundle.js",
@@ -87,9 +87,8 @@ describe("exact execution identity", () => {
         },
       ],
     });
-    expect(first.ref.artifactDigest).not.toBe(changedBytes.ref.artifactDigest);
-    expect(first.ref.executionDigest).not.toBe(changedBytes.ref.executionDigest);
-    expect(codePrincipal(first.ref)).toBe(`code:workers/example@${first.ref.executionDigest}`);
+    expect(first.artifactDigest).not.toBe(changedBytes.artifactDigest);
+    expect(first.manifest.buildKey).toBe(changedBytes.manifest.buildKey);
   });
 
   it("normalizes portable paths and rejects traversal and duplicate aliases", () => {
@@ -97,9 +96,9 @@ describe("exact execution identity", () => {
     expect(() => canonicalArtifactPath("../secret")).toThrow("not canonical");
     const source = createSourceRevision({ repoPath: "workers/example", stateHash: a });
     expect(() =>
-      createExecutionArtifactRef({
+      createArtifactManifest({
         source,
-        recipe: recipe(),
+        recipeDigest: computeRecipeDigest(recipe()),
         entries: [
           {
             path: "a\\b",

@@ -2,6 +2,12 @@
   "$comment": "Host/workspace boundary allowlist for soft workspace-reference findings only. Hard import findings from scripts/check-host-workspace-imports.mjs are never allowlistable. Regenerate soft references with `node scripts/check-host-workspace-imports.mjs --update-allowlist`. An entry with no `specifier` covers the whole file; `category` is optional.",
   "entries": [
     {
+      "file": "packages/service-schemas/src/build.ts",
+      "specifier": "@workspace-workers/example",
+      "category": "workspace-reference",
+      "reason": "public build-report example uses the canonical workspace worker package scope"
+    },
+    {
       "file": "packages/workspace-contracts/src/sourceDirs.ts",
       "specifier": "@workspace-about/",
       "category": "workspace-reference",
@@ -44,6 +50,30 @@
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
     },
     {
+      "file": "scripts/generate-unit-authority-manifests.mjs",
+      "specifier": "@workspace/about-shared",
+      "category": "workspace-reference",
+      "reason": "authority generator classifies reviewed public workspace implementation packages by package id"
+    },
+    {
+      "file": "scripts/generate-unit-authority-manifests.mjs",
+      "specifier": "@workspace/react",
+      "category": "workspace-reference",
+      "reason": "authority generator classifies reviewed public workspace implementation packages by package id"
+    },
+    {
+      "file": "scripts/generate-unit-authority-manifests.mjs",
+      "specifier": "@workspace/runtime",
+      "category": "workspace-reference",
+      "reason": "authority generator classifies reviewed public workspace implementation packages by package id"
+    },
+    {
+      "file": "scripts/generate-unit-authority-manifests.mjs",
+      "specifier": "@workspace/svelte",
+      "category": "workspace-reference",
+      "reason": "authority generator classifies reviewed public workspace implementation packages by package id"
+    },
+    {
       "file": "src/server/buildV2/platformModules.ts",
       "specifier": "@workspace/cdp-client",
       "category": "workspace-reference",
@@ -54,6 +84,12 @@
       "specifier": "@workspace/react",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
+    },
+    {
+      "file": "src/server/buildV2/platformModules.ts",
+      "specifier": "@workspace/react/auto-mount",
+      "category": "workspace-reference",
+      "reason": "host-owned build contract declares the sealed React framework entry module by package id"
     },
     {
       "file": "src/server/buildV2/platformModules.ts",

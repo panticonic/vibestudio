@@ -3,27 +3,27 @@ import { createBuildServiceClient, createEvalImportLoader } from "./evalImportLo
 
 describe("createEvalImportLoader", () => {
   it("loads npm refs through getBuildNpm", async () => {
-    const call = vi.fn(async () => ({ bundle: "npm-bundle" }));
+    const call = vi.fn(async () => ({ bundle: "npm-bundle", format: "cjs" as const }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
-    await expect(loadImport("left-pad", "npm:1.3.0", ["react"])).resolves.toBe("npm-bundle");
+    await expect(loadImport("left-pad", "npm:1.3.0", ["react"])).resolves.toEqual({ bundle: "npm-bundle", format: "cjs" });
 
     expect(call).toHaveBeenCalledWith("build", "getBuildNpm", ["left-pad", "1.3.0", ["react"]]);
   });
 
   it("accepts package-qualified npm refs when the package matches the import key", async () => {
-    const call = vi.fn(async () => ({ bundle: "npm-bundle" }));
+    const call = vi.fn(async () => ({ bundle: "npm-bundle", format: "cjs" as const }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
-    await expect(loadImport("left-pad", "npm:left-pad@1.3.0", [])).resolves.toBe("npm-bundle");
-    await expect(loadImport("@scope/pkg", "npm:@scope/pkg@2.0.0", [])).resolves.toBe("npm-bundle");
+    await expect(loadImport("left-pad", "npm:left-pad@1.3.0", [])).resolves.toEqual({ bundle: "npm-bundle", format: "cjs" });
+    await expect(loadImport("@scope/pkg", "npm:@scope/pkg@2.0.0", [])).resolves.toEqual({ bundle: "npm-bundle", format: "cjs" });
 
     expect(call).toHaveBeenNthCalledWith(1, "build", "getBuildNpm", ["left-pad", "1.3.0", []]);
     expect(call).toHaveBeenNthCalledWith(2, "build", "getBuildNpm", ["@scope/pkg", "2.0.0", []]);
   });
 
   it("rejects package-qualified npm refs when the package does not match the import key", async () => {
-    const call = vi.fn(async () => ({ bundle: "npm-bundle" }));
+    const call = vi.fn(async () => ({ bundle: "npm-bundle", format: "cjs" as const }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
     await expect(loadImport("left-pad", "npm:lodash@4.17.21", [])).rejects.toThrow(
@@ -33,12 +33,13 @@ describe("createEvalImportLoader", () => {
   });
 
   it("loads workspace refs as library builds tagged with the host target", async () => {
-    const call = vi.fn(async () => ({ bundle: "workspace-bundle" }));
+    const call = vi.fn(async () => ({ bundle: "workspace-bundle", format: "cjs" as const }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
-    await expect(loadImport("@workspace/pkg", "abc123", ["react"])).resolves.toBe(
-      "workspace-bundle"
-    );
+    await expect(loadImport("@workspace/pkg", "abc123", ["react"])).resolves.toEqual({
+      bundle: "workspace-bundle",
+      format: "cjs",
+    });
 
     expect(call).toHaveBeenCalledWith("build", "getBuild", [
       "@workspace/pkg",
@@ -50,13 +51,14 @@ describe("createEvalImportLoader", () => {
   it("resolves automatic and workspace-protocol refs against the sandbox context", async () => {
     const call = vi.fn(async (_service: string, _method: string, _args: unknown[]) => ({
       bundle: "workspace-bundle",
+      format: "cjs" as const,
     }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker", {
       defaultWorkspaceRef: () => "ctx:eval-context",
     });
 
     for (const ref of [undefined, "latest", "workspace", "workspace:*", "workspace:^"]) {
-      await expect(loadImport("@workspace/pkg", ref, [])).resolves.toBe("workspace-bundle");
+      await expect(loadImport("@workspace/pkg", ref, [])).resolves.toEqual({ bundle: "workspace-bundle", format: "cjs" });
     }
 
     for (let index = 1; index <= 5; index += 1) {
@@ -71,6 +73,7 @@ describe("createEvalImportLoader", () => {
   it("preserves explicit GAD workspace refs", async () => {
     const call = vi.fn(async (_service: string, _method: string, _args: unknown[]) => ({
       bundle: "workspace-bundle",
+      format: "cjs" as const,
     }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker", {
       defaultWorkspaceRef: "ctx:eval-context",

@@ -7,10 +7,13 @@ export const CONTEXT_BOUNDARY_CAPABILITY = "context.boundary" as const;
 export function contextBoundaryAuthority(input: {
   service: string;
   method: string;
+  /** Stable semantic primary capability for a promptable method. */
+  primaryCapability?: string;
   principals: readonly PrincipalKind[];
   resolver?: string;
+  tier: "gated" | "critical";
 }) {
-  const primary = `service:${input.service}.${input.method}`;
+  const primary = input.primaryCapability ?? `service:${input.service}.${input.method}`;
   return {
     requirement: requirementForPrincipals(input.principals, primary),
     resource: { kind: "literal" as const, key: primary },
@@ -20,16 +23,10 @@ export function contextBoundaryAuthority(input: {
         {
           capability: CONTEXT_BOUNDARY_CAPABILITY,
           requirement: requirementForPrincipals(
-            ["host", "user", "code", "entity"],
+            ["host", "user", "code"],
             CONTEXT_BOUNDARY_CAPABILITY
           ),
-          evalAcquisition: {
-            kind: "approval" as const,
-            title: "Use another runtime context",
-            description: "Review access to another agent or panel's existing context.",
-            operation: { kind: "runtime", verb: "Use existing context" },
-            grantScopes: ["run", "session", "version"] as const,
-          },
+          tier: input.tier,
         },
       ],
     },

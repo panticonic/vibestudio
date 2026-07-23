@@ -20,77 +20,34 @@
     "authority": {
       "requests": [
         {
-          "capability": "service:extensions.health",
+          "capability": "context.boundary",
           "resource": {
             "kind": "prefix",
-            "prefix": ""
-          }
+            "prefix": "context"
+          },
+          "tier": "critical",
+          "evidence": "bounded-dynamic"
         },
         {
-          "capability": "service:extensions.invoke",
+          "capability": "context.materialize",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "service:extensions.log",
+          "capability": "user-approval.request",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
-        },
-        {
-          "capability": "service:extensions.ready",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:runtime.createEntity",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:runtime.resolveContext",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:userlandApproval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:vcs.status",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.ensureContextFolder",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.getInfo",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ],
-      "delegations": []
+      "evalCeilings": []
     }
   },
   "dependencies": {
