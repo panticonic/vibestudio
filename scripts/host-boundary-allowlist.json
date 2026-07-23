@@ -74,6 +74,12 @@
       "reason": "authority generator classifies reviewed public workspace implementation packages by package id"
     },
     {
+      "file": "src/server/buildV2/adapters/react.ts",
+      "specifier": "@workspace/ui/tokens.css",
+      "category": "workspace-reference",
+      "reason": "host-owned React build contract resolves the reviewed workspace theme asset into each content-addressed panel build without importing workspace code into the host"
+    },
+    {
       "file": "src/server/buildV2/platformModules.ts",
       "specifier": "@workspace/cdp-client",
       "category": "workspace-reference",
