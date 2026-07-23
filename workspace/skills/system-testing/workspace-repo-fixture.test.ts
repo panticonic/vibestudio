@@ -616,6 +616,7 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(seededText).toContain('"entry": "index.ts"');
     expect(seededText).toContain('"className": "FixtureWorkerDO"');
     expect(seededText).toContain('from "@workspace/runtime/worker"');
+    expect(seededText).toContain("Direct resolveDurableObject methods are runtime-intrinsic");
     expect(fake.importSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
         repositories: [
