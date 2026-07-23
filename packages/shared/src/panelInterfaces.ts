@@ -106,7 +106,12 @@ export interface PanelViewLike {
     capabilities?: readonly AppCapability[],
     identity?: HostedCodeIdentity
   ): Promise<void>;
-  createViewForBrowser?(panelId: string, url: string, contextId: string): Promise<void>;
+  createViewForBrowser?(
+    panelId: string,
+    url: string,
+    contextId: string,
+    partition: string
+  ): Promise<void>;
   hasView(panelId: string): boolean;
   /** Session partition of an existing view (null = no view; undefined =
    *  default session). Lets the orchestrator navigate in place when the

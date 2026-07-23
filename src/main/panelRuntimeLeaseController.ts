@@ -49,7 +49,7 @@ export interface PanelRuntimeLeaseControllerDeps {
   sendPanelEvent: (panelId: string, event: string, payload: unknown) => void;
   gatewayPort: number;
   gatewayBasePath?: string;
-  getBrowserSessionPartition: () => string;
+  waitForBrowserSessionPartition: () => Promise<string>;
   pinStore?: PanelPinStoreApi;
   /**
    * Panel ids currently bound to native slots (resident in the shell's
@@ -420,14 +420,22 @@ export class PanelRuntimeLeaseController {
     if (!view) return;
     this.locallyLoadingSlots.add(panelId);
     try {
-      this.destroyViewIfPartitionChanged(view, panelId, snapshot);
+      const browserPartition = snapshot.source.startsWith("browser:")
+        ? await this.deps.waitForBrowserSessionPartition()
+        : undefined;
+      this.destroyViewIfPartitionChanged(view, panelId, snapshot, browserPartition);
       await this.acquireRuntimeLease(panelId, leaseMode);
       if (snapshot.source.startsWith("browser:")) {
         const url = snapshot.source.slice("browser:".length);
         if (!view.createViewForBrowser) {
           throw new Error("Panel host cannot create browser views");
         }
-        await view.createViewForBrowser(panelId, url, snapshot.contextId);
+        await view.createViewForBrowser(
+          panelId,
+          url,
+          snapshot.contextId,
+          assertPresent(browserPartition)
+        );
         this.recordViewMutation();
         this.deps.registry.updateArtifacts(panelId, { buildState: "ready", htmlPath: url });
         this.deps.registry.notifyPanelTreeUpdate();
@@ -546,7 +554,10 @@ export class PanelRuntimeLeaseController {
   ): Promise<void> {
     const view = this.deps.getPanelView();
     if (!view) return;
-    this.destroyViewIfPartitionChanged(view, panelId, snapshot);
+    const browserPartition = snapshot.source.startsWith("browser:")
+      ? await this.deps.waitForBrowserSessionPartition()
+      : undefined;
+    this.destroyViewIfPartitionChanged(view, panelId, snapshot, browserPartition);
     this.connectionBySlot.set(panelId, {
       runtimeEntityId: lease.runtimeEntityId,
       connectionId: lease.connectionId,
@@ -554,7 +565,12 @@ export class PanelRuntimeLeaseController {
     if (snapshot.source.startsWith("browser:")) {
       const url = snapshot.source.slice("browser:".length);
       if (view.createViewForBrowser) {
-        await view.createViewForBrowser(panelId, url, snapshot.contextId);
+        await view.createViewForBrowser(
+          panelId,
+          url,
+          snapshot.contextId,
+          assertPresent(browserPartition)
+        );
         this.recordViewMutation();
       }
       this.deps.registry.updateArtifacts(panelId, { buildState: "ready", htmlPath: url });
@@ -653,11 +669,12 @@ export class PanelRuntimeLeaseController {
   private destroyViewIfPartitionChanged(
     view: PanelViewLike,
     panelId: string,
-    snapshot: PanelSnapshot
+    snapshot: PanelSnapshot,
+    browserPartition?: string
   ): void {
     if (!view.hasView(panelId)) return;
     const target = snapshot.source.startsWith("browser:")
-      ? this.deps.getBrowserSessionPartition()
+      ? assertPresent(browserPartition)
       : snapshot.contextId
         ? contextIdToPartition(snapshot.contextId)
         : undefined;

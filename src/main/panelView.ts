@@ -124,8 +124,6 @@ export class PanelView implements PanelViewLike {
   private appPreloadPath?: string;
   private browserPreloadPath?: string;
   private browserHistoryRecorder?: BrowserHistoryRecorder;
-  private readonly getBrowserSessionPartition: () => string;
-
   private browserStateCleanup = new Map<
     string,
     { cleanup: () => void; destroyedHandler: () => void }
@@ -162,7 +160,6 @@ export class PanelView implements PanelViewLike {
     appPreloadPath?: string;
     browserPreloadPath?: string;
     browserHistoryRecorder?: BrowserHistoryRecorder;
-    getBrowserSessionPartition?: () => string;
   }) {
     this.viewManager = deps.viewManager;
     this.panelRegistry = deps.panelRegistry;
@@ -184,11 +181,6 @@ export class PanelView implements PanelViewLike {
     this.appPreloadPath = deps.appPreloadPath;
     this.browserPreloadPath = deps.browserPreloadPath;
     this.browserHistoryRecorder = deps.browserHistoryRecorder;
-    this.getBrowserSessionPartition =
-      deps.getBrowserSessionPartition ??
-      (() => {
-        throw new Error("Browser environment is not initialized");
-      });
   }
 
   private buildManagedHosts(serverInfo: ServerInfoLike): string[] {
@@ -400,7 +392,12 @@ export class PanelView implements PanelViewLike {
    * Create a view for a browser panel (external URL).
    * No auth cookies, no link interception — browser panels navigate freely.
    */
-  async createViewForBrowser(panelId: string, url: string, _contextId: string): Promise<void> {
+  async createViewForBrowser(
+    panelId: string,
+    url: string,
+    _contextId: string,
+    partition: string
+  ): Promise<void> {
     if (this.viewManager.hasView(panelId)) {
       const currentUrl = this.viewManager.getViewUrl(panelId);
       if (currentUrl !== url) await this.viewManager.navigateView(panelId, url);
@@ -414,7 +411,7 @@ export class PanelView implements PanelViewLike {
       type: "panel",
       preload: this.browserPreloadPath ?? this.autofillPreloadPath ?? null,
       parentId: parentId ?? undefined,
-      partition: this.getBrowserSessionPartition(),
+      partition,
       injectHostThemeVariables: false,
     });
 

@@ -49,6 +49,7 @@ import {
   peekPendingConnectLink,
   registerProtocol,
 } from "./protocolHandler.js";
+import { BrowserEnvironmentReadiness } from "./services/browserEnvironmentReadiness.js";
 
 const log = createDevLogger("App");
 const APP_NAME = "Vibestudio";
@@ -367,11 +368,9 @@ let shellCore: ReturnType<
 > | null = null;
 let serverSession: SessionConnection | null = null;
 let activeBrowserSessionPartition: string | null = null;
+const browserEnvironmentReadiness = new BrowserEnvironmentReadiness();
 const getBrowserSessionPartition = (): string => {
-  if (!activeBrowserSessionPartition) {
-    throw new Error("Browser environment is not initialized");
-  }
-  return activeBrowserSessionPartition;
+  return browserEnvironmentReadiness.requireReady();
 };
 let panelLocationForWorkspaceRelaunch: PanelLocation | null = null;
 let approvalAttention: ApprovalAttention | null = null;
@@ -397,7 +396,6 @@ const applicationWindow = new ApplicationWindowController({
     appliedElectronHostTargetKey = null;
     electronHostLaunchLastStatusKey = null;
   },
-  getBrowserSessionPartition,
 });
 
 app.on("second-instance", () => {
@@ -2378,7 +2376,7 @@ app.on("ready", async () => {
       protocol: conn.protocol,
       gatewayPort: conn.gatewayPort,
       gatewayBasePath,
-      getBrowserSessionPartition,
+      waitForBrowserSessionPartition: () => browserEnvironmentReadiness.wait(),
       sendPanelEvent: (panelId, event, payload) => {
         const wc = applicationWindow.viewManager?.getWebContents(panelId);
         if (wc && !wc.isDestroyed()) {
@@ -2676,8 +2674,14 @@ app.on("ready", async () => {
           serverClient: sc,
           hostId: `desktop:${conn.workspaceId}`,
           outboxRoot: app.getPath("userData"),
+          onInitializing() {
+            browserEnvironmentReadiness.begin();
+          },
           setActivePartition(partition) {
             activeBrowserSessionPartition = partition;
+          },
+          onUnavailable(error) {
+            browserEnvironmentReadiness.unavailable(error);
           },
           async onReady(api) {
             browserCookieProjection = api;
@@ -2711,8 +2715,12 @@ app.on("ready", async () => {
             });
             await manager.start();
             browserDownloadManager = manager;
+            browserEnvironmentReadiness.ready(api.partition);
           },
           async onStopped() {
+            browserEnvironmentReadiness.unavailable(
+              new Error("Browser environment stopped with the workspace")
+            );
             websiteNotificationBridge?.stop();
             websiteNotificationBridge = null;
             browserPermissionController?.stop();

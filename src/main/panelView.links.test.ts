@@ -100,7 +100,6 @@ function createHarness(
     panelOrchestrator,
     sendPanelEvent,
     appPreloadPath: "/app-preload.js",
-    getBrowserSessionPartition: () => "persist:browser-test",
   } as never);
 
   return { panelId, panelView, panelOrchestrator, sendPanelEvent, ...wc };
@@ -306,7 +305,12 @@ describe("PanelView plain panel links", () => {
 
   it("opens middle-clicked web links as unfocused child panels", async () => {
     const { panelId, panelView, windowOpen, panelOrchestrator } = createHarness();
-    await panelView.createViewForBrowser(panelId, "https://source.example/", "ctx-current");
+    await panelView.createViewForBrowser(
+      panelId,
+      "https://source.example/",
+      "ctx-current",
+      "persist:browser-test"
+    );
 
     const result = windowOpen({
       url: "http://127.0.0.1:1234/panels/chat/",

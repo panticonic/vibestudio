@@ -67,7 +67,7 @@ export interface PanelOrchestratorDeps {
   protocol: "http" | "https";
   gatewayPort: number;
   gatewayBasePath?: string;
-  getBrowserSessionPartition?: () => string;
+  waitForBrowserSessionPartition?: () => Promise<string>;
 
   /**
    * Send an event to a panel. In IPC mode, this calls
@@ -127,11 +127,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       sendPanelEvent: deps.sendPanelEvent,
       gatewayPort: deps.gatewayPort,
       gatewayBasePath: deps.gatewayBasePath,
-      getBrowserSessionPartition:
-        deps.getBrowserSessionPartition ??
-        (() => {
-          throw new Error("Browser environment is not initialized");
-        }),
+      waitForBrowserSessionPartition:
+        deps.waitForBrowserSessionPartition ??
+        (() => Promise.reject(new Error("Browser environment is unavailable"))),
       pinStore: deps.pinStore,
       ...(deps.getResidentPanelIds ? { getResidentPanelIds: deps.getResidentPanelIds } : {}),
       client: deps.runtimeClient ?? {},

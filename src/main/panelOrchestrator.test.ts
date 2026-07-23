@@ -69,12 +69,15 @@ function createOrchestrator(
     runtimeClient?: ConstructorParameters<typeof PanelOrchestrator>[0]["runtimeClient"];
     workspaceConfig?: ConstructorParameters<typeof PanelOrchestrator>[0]["workspaceConfig"];
     pinStore?: ConstructorParameters<typeof PanelOrchestrator>[0]["pinStore"];
+    waitForBrowserSessionPartition?: () => Promise<string>;
   } = {}
 ) {
   const closedIds: string[] = [];
   const panelView = {
     createViewForPanel: vi.fn(async (_panelId: string, _url: string, _contextId?: string) => {}),
-    createViewForBrowser: vi.fn(async (_panelId: string, _url: string, _contextId?: string) => {}),
+    createViewForBrowser: vi.fn(
+      async (_panelId: string, _url: string, _contextId: string, _partition: string) => {}
+    ),
     hasView: vi.fn((_panelId: string) => false),
     getWebContents: vi.fn((_panelId: string) => null),
     getViewPartition: vi.fn((_panelId: string) => undefined as string | undefined),
@@ -254,6 +257,8 @@ function createOrchestrator(
         : undefined),
     runtimeClient: opts.runtimeClient,
     pinStore: opts.pinStore,
+    waitForBrowserSessionPartition:
+      opts.waitForBrowserSessionPartition ?? (() => Promise.resolve("persist:browser-test")),
   });
   orchestratorRef = orchestrator;
 
@@ -725,13 +730,54 @@ describe("PanelOrchestrator.createPanel", () => {
     expect(panelView.createViewForBrowser).toHaveBeenCalledWith(
       id,
       "https://example.com/",
-      `ctx-${id}`
+      `ctx-${id}`,
+      "persist:browser-test"
     );
     const acquireOrder = serverClient.call.mock.invocationCallOrder[acquireCallIndex];
     const createViewOrder = panelView.createViewForBrowser.mock.invocationCallOrder[0];
     expect(acquireOrder).toBeDefined();
     expect(createViewOrder).toBeDefined();
     expect(acquireOrder!).toBeLessThan(createViewOrder!);
+  });
+
+  it("waits for browser-environment readiness before acquiring a lease or creating a view", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const caller = makePanel("panel:tree/caller");
+    registry.addPanel(caller, null, { addAsRoot: true });
+    let resolvePartition!: (partition: string) => void;
+    const partitionReady = new Promise<string>((resolve) => {
+      resolvePartition = resolve;
+    });
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry, vi.fn(), {
+      waitForBrowserSessionPartition: () => partitionReady,
+    });
+    const loadedPanels = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loadedPanels.has(panelId));
+    panelView.createViewForBrowser.mockImplementation(async (panelId: string) => {
+      loadedPanels.add(panelId);
+    });
+
+    const creating = orchestrator.createBrowserUrlPanel(caller.id, "https://example.com/", {
+      focus: false,
+    });
+    await vi.waitFor(() =>
+      expect(serverClient.call).toHaveBeenCalledWith("panelTree", "create", expect.any(Array))
+    );
+    expect(
+      serverClient.call.mock.calls.some(
+        ([service, method]) => service === "panelRuntime" && method === "acquire"
+      )
+    ).toBe(false);
+    expect(panelView.createViewForBrowser).not.toHaveBeenCalled();
+
+    resolvePartition("persist:browser-environment:ready");
+    await expect(creating).resolves.toMatchObject({ id: expect.any(String) });
+    expect(panelView.createViewForBrowser).toHaveBeenCalledWith(
+      expect.any(String),
+      "https://example.com/",
+      expect.any(String),
+      "persist:browser-environment:ready"
+    );
   });
 
   it("creates unscoped browser child panels as the trusted host (shell authority)", async () => {

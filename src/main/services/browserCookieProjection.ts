@@ -21,7 +21,6 @@ import type { ServerClient } from "../serverClient.js";
 
 const log = createDevLogger("BrowserCookieProjection");
 
-const EXTENSION_WAIT_TIMEOUT_MS = 5 * 60_000;
 const EXTENSION_WAIT_INTERVAL_MS = 3_000;
 
 function isExtensionUnavailableError(error: unknown): boolean {
@@ -29,16 +28,46 @@ function isExtensionUnavailableError(error: unknown): boolean {
   return /Extension is not installed|Extension failed to start|ENOEXT|ENOTREADY/i.test(message);
 }
 
-/** Retry a browser-data call while the extension is still installing/activating. */
-async function retryWhileExtensionUnavailable<T>(call: () => Promise<T>): Promise<T> {
-  const deadline = Date.now() + EXTENSION_WAIT_TIMEOUT_MS;
+function abortError(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("Aborted", "AbortError");
+}
+
+async function waitForExtensionRetry(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw abortError(signal);
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(finish, EXTENSION_WAIT_INTERVAL_MS);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      reject(abortError(signal));
+    };
+    function finish() {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Retry in the service's background lifecycle while the extension activates. */
+async function retryWhileExtensionUnavailable<T>(
+  call: () => Promise<T>,
+  signal: AbortSignal
+): Promise<T> {
+  let waitingLogged = false;
   for (;;) {
+    if (signal.aborted) throw abortError(signal);
     try {
       return await call();
     } catch (error) {
-      if (!isExtensionUnavailableError(error) || Date.now() >= deadline) throw error;
-      log.info("browser-data extension not ready yet; retrying");
-      await new Promise((resolve) => setTimeout(resolve, EXTENSION_WAIT_INTERVAL_MS));
+      if (!isExtensionUnavailableError(error)) throw error;
+      if (!waitingLogged) {
+        waitingLogged = true;
+        log.info(
+          "browser-data extension is not ready; cookie projection will attach in background"
+        );
+      }
+      await waitForExtensionRetry(signal);
     }
   }
 }
@@ -74,12 +103,17 @@ export function createBrowserCookieProjectionService(deps: {
   serverClient: ServerClient;
   hostId: string;
   outboxRoot: string;
-  setActivePartition(partition: string): void;
+  setActivePartition(partition: string | null): void;
+  onInitializing?(): void;
+  onUnavailable?(error: unknown): void | Promise<void>;
   onReady?(api: BrowserCookieProjectionApi): void | Promise<void>;
   onStopped?(): void | Promise<void>;
 }): ManagedService {
   let projection: BrowserCookieProjection | null = null;
   let stopListening: (() => void) | null = null;
+  let initializationController: AbortController | null = null;
+  let initializationTask: Promise<void> | null = null;
+  let hostIntegrationActive = false;
   const events = new EventsClient({
     stream(targetId, method, args, options) {
       if (targetId !== "main") throw new Error(`Unexpected browser projection target: ${targetId}`);
@@ -87,34 +121,27 @@ export function createBrowserCookieProjectionService(deps: {
       return deps.serverClient.stream(method.slice(0, dot), method.slice(dot + 1), args, options);
     },
   });
-  return {
-    name: "browser-cookie-projection",
-    async start() {
-      // On a workspace's first boot the browser-data extension is still
-      // building/awaiting install approval; its provider methods report
-      // ENOEXT/ENOTREADY until activation completes. That is a normal cold
-      // start, not a fatal condition — wait it out instead of failing the
-      // whole app bootstrap.
-      let identity: BrowserEnvironmentIdentity;
-      try {
-        identity = await retryWhileExtensionUnavailable(() =>
-          deps.browserDataClient.getBrowserEnvironment()
-        );
-      } catch (error) {
-        // A browser environment is an enhancement (cookie/session projection
-        // for browser panels), not a requirement for the shell to run — e.g. a
-        // session without a verified user cannot resolve one. Degrade to
-        // no-projection instead of failing app bootstrap.
-        log.error(
-          `Browser environment unavailable; continuing without cookie projection: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-        return null;
-      }
+
+  const stopHostIntegration = async (): Promise<void> => {
+    if (!hostIntegrationActive) return;
+    hostIntegrationActive = false;
+    deps.setActivePartition(null);
+    await deps.onStopped?.();
+  };
+
+  const initialize = async (signal: AbortSignal): Promise<void> => {
+    let candidate: BrowserCookieProjection | null = null;
+    let candidateStopListening: (() => void) | null = null;
+    let attached = false;
+    try {
+      const identity = await retryWhileExtensionUnavailable(
+        () => deps.browserDataClient.getBrowserEnvironment(),
+        signal
+      );
+      if (signal.aborted) throw abortError(signal);
+
       const partition = browserEnvironmentPartition(identity.environmentKey);
-      deps.setActivePartition(partition);
-      projection = new BrowserCookieProjection({
+      candidate = new BrowserCookieProjection({
         browserDataClient: deps.browserDataClient,
         browserSession: session.fromPartition(partition),
         identity,
@@ -127,37 +154,85 @@ export function createBrowserCookieProjectionService(deps: {
           "cookie-outbox.json"
         ),
       });
-      await projection.start();
+      await candidate.start();
+      if (signal.aborted) throw abortError(signal);
+
       const config = (await deps.serverClient.call(
         "workspace",
         "getConfig",
         []
       )) as WorkspaceConfig | null;
+      if (signal.aborted) throw abortError(signal);
       const broker = config ? workspaceProviderExtensionPackageName(config, "browserData") : null;
       if (broker) {
         const eventName = `extensions:${broker}::data-changed` as EventName;
-        stopListening = events.on(eventName, (payload) => {
+        candidateStopListening = events.on(eventName, (payload) => {
           if (
             payload &&
             typeof payload === "object" &&
             (payload as { dataType?: unknown }).dataType === "cookies"
           ) {
+            candidate?.notifyCanonicalRevision();
             projection?.notifyCanonicalRevision();
           }
         });
         await events.subscribe(eventName);
+        if (signal.aborted) throw abortError(signal);
       }
-      const api = projection.api();
+
+      const api = candidate.api();
+      deps.setActivePartition(partition);
+      hostIntegrationActive = true;
       await deps.onReady?.(api);
-      return api;
+      if (signal.aborted) throw abortError(signal);
+
+      projection = candidate;
+      candidate = null;
+      stopListening = candidateStopListening;
+      candidateStopListening = null;
+      attached = true;
+      log.info("Browser cookie projection attached");
+    } catch (error) {
+      if (!signal.aborted) {
+        await deps.onUnavailable?.(error);
+        log.error(
+          `Browser environment unavailable; continuing without cookie projection: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    } finally {
+      candidateStopListening?.();
+      if (candidate) await candidate.stop().catch(() => {});
+      if (!attached) {
+        await events.unsubscribeAll().catch(() => {});
+        await stopHostIntegration().catch(() => {});
+      }
+    }
+  };
+
+  return {
+    name: "browser-cookie-projection",
+    start() {
+      deps.onInitializing?.();
+      initializationController = new AbortController();
+      initializationTask = initialize(initializationController.signal);
+      // This service describes eventual attachment, not a boot prerequisite.
+      // Returning immediately keeps extension build/approval off the shell's
+      // startup critical path.
+      return Promise.resolve();
     },
     async stop() {
+      initializationController?.abort();
+      initializationController = null;
+      await initializationTask?.catch(() => {});
+      initializationTask = null;
       await projection?.stop();
+      projection = null;
       stopListening?.();
       stopListening = null;
       await events.unsubscribeAll().catch(() => {});
-      projection = null;
-      await deps.onStopped?.();
+      await stopHostIntegration();
     },
   };
 }

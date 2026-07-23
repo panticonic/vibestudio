@@ -49,7 +49,6 @@ export interface ApplicationWindowControllerDeps {
   drainPendingReadyElectronLaunch: () => Promise<void>;
   initializePanelTreeOnce: (reason: string) => void;
   onWindowClosed: () => void;
-  getBrowserSessionPartition?: () => string;
 }
 
 interface ApplicationWindowLifetime {
@@ -264,11 +263,6 @@ export class ApplicationWindowController {
       appPreloadPath: path.join(__dirname, "appPreload.cjs"),
       browserPreloadPath: path.join(__dirname, "browserPreload.cjs"),
       browserHistoryRecorder,
-      getBrowserSessionPartition:
-        this.deps.getBrowserSessionPartition ??
-        (() => {
-          throw new Error("Browser environment is not initialized");
-        }),
     });
     lifetime.panelView = panelView;
     // Native→shell focus feedback (§5.2): surface native view focus
