@@ -33,6 +33,7 @@ import {
   type RpcRequest,
 } from "@vibestudio/rpc";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import { workerLogMethods } from "@vibestudio/service-schemas/workerLog";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import { fs, _initFsWithRpc } from "./fs.js";
@@ -192,10 +193,21 @@ function installWorkerConsoleBridge(rpc: Pick<DeferrableRpcClient, "call">): voi
     }
   };
   const source = (globalThis as { __vibestudioWorkerSource?: string }).__vibestudioWorkerSource;
-  console.log = (...args: unknown[]) => forward("log", args, source);
-  console.info = (...args: unknown[]) => forward("info", args, source);
-  console.warn = (...args: unknown[]) => forward("warn", args, source);
-  console.error = (...args: unknown[]) => forward("error", args, source);
+  const installSink = (
+    globalThis as typeof globalThis & {
+      __vibestudioInstallConsoleSink?: (
+        sink: (level: "log" | "info" | "warn" | "error", args: unknown[]) => void
+      ) => void;
+    }
+  ).__vibestudioInstallConsoleSink;
+  if (installSink) {
+    installSink((level, args) => forward(level, args, source));
+  } else {
+    console.log = (...args: unknown[]) => forward("log", args, source);
+    console.info = (...args: unknown[]) => forward("info", args, source);
+    console.warn = (...args: unknown[]) => forward("warn", args, source);
+    console.error = (...args: unknown[]) => forward("error", args, source);
+  }
 }
 
 /**
@@ -211,15 +223,19 @@ export interface WorkerRuntime extends WorkspaceRuntime {
 /**
  * Create or retrieve the worker runtime for the given environment.
  *
- * The runtime is cached per worker instance (same WORKER_ID returns same runtime).
+ * The runtime is cached per sealed worker entity identity.
  * This is important because workerd may call fetch() multiple times on the same
  * isolate, and we want to reuse the HTTP RPC bridge.
  */
 export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   const workerId = env.WORKER_ID;
+  const workerSource = env.WORKER_SOURCE;
+  if (!workerId) throw new Error("Worker env must provide WORKER_ID");
+  if (!workerSource) throw new Error("Worker env must provide WORKER_SOURCE");
+  const selfId = canonicalEntityId({ kind: "worker", source: workerSource, key: workerId });
 
   // Return cached runtime if same worker
-  if (cachedRuntime && cachedWorkerId === workerId) {
+  if (cachedRuntime && cachedWorkerId === selfId) {
     return cachedRuntime;
   }
 
@@ -228,9 +244,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     throw new Error("Worker env must provide GATEWAY_URL");
   }
 
-  const selfId = `worker:${workerId}`;
-  (globalThis as { __vibestudioWorkerSource?: string }).__vibestudioWorkerSource =
-    typeof env["WORKER_SOURCE"] === "string" ? env["WORKER_SOURCE"] : undefined;
+  (globalThis as { __vibestudioWorkerSource?: string }).__vibestudioWorkerSource = workerSource;
   const parentId = (env.PARENT_ID as string) || null;
   const parentEntityId = (env.PARENT_ENTITY_ID as string) || parentId;
   const parentKind = parseParentKind(env.PARENT_KIND);
@@ -290,7 +304,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   });
 
   const host: RuntimeHost = {
-    id: workerId,
+    id: selfId,
     contextId: env.CONTEXT_ID,
     rpc,
     fs: runtimeFs,
@@ -310,7 +324,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     ...core,
     handleRpcPost: (body: unknown) => handleInboundWorkerEnvelope(connectionless, body),
     destroy: () => {
-      if (cachedWorkerId === workerId) {
+      if (cachedWorkerId === selfId) {
         cachedRuntime = null;
         cachedWorkerId = null;
       }
@@ -318,7 +332,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   };
 
   cachedRuntime = runtime;
-  cachedWorkerId = workerId;
+  cachedWorkerId = selfId;
 
   return runtime;
 }

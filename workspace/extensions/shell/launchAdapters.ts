@@ -10,10 +10,10 @@
  *    sessions, which may rewrite env/argv (e.g. the claude-code extension wiring
  *    a bare `claude` into a connected linked agent).
  *
- * The registry is in-memory and per-process: extensions re-register on
- * activation (all extensions have activationEvents "*"). Built-in detect-only
- * adapters are seeded at shell activation so tagging works with zero
- * registrants.
+ * The registry is in-memory and per-process: provider extensions re-register
+ * whenever they activate. On-invoke providers therefore add their richer
+ * handlers when first used. Built-in detect-only adapters are seeded at shell
+ * activation so basic tagging works before any provider activates.
  */
 
 import type { LaunchAdapter } from "./types.js";

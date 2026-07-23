@@ -1,4 +1,11 @@
-import { execute, getDefaultRequire, preloadRequires, unavailableModuleMessage } from "./execute.js";
+import {
+  execute,
+  getDefaultRequire,
+  preloadRequires,
+  unavailableModuleMessage,
+  type CompileFunction,
+  type ExecuteOptions,
+} from "./execute.js";
 import { transformCode, type TransformOptions } from "./transform.js";
 
 export type LoadSourceFile = (path: string) => Promise<string>;
@@ -21,6 +28,12 @@ export interface SourceFileOptions {
   moduleMap?: Record<string, unknown>;
   /** Require paired with `moduleMap`; falls back to `getDefaultRequire()` when absent. */
   require?: (id: string) => unknown;
+  /** Compiler paired with the execution realm; required where `new Function` is unavailable. */
+  compileFunction?: CompileFunction;
+  /** Resolve local-module free names through the same private guest global as the entry module. */
+  confinement?: ExecuteOptions["confinement"];
+  /** Harden each local module namespace before publishing it through the module map. */
+  harden?: <T>(value: T) => T;
 }
 
 export interface PreparedSource {
@@ -535,19 +548,21 @@ async function loadLocalModules(
   resolutions: Map<string, string>,
   syntax: TransformOptions["syntax"],
   ensureExternalRequires: EnsureExternalRequires,
-  moduleMapOverride?: Record<string, unknown>,
-  requireOverride?: (id: string) => unknown
+  execution: Pick<
+    SourceFileOptions,
+    "moduleMap" | "require" | "compileFunction" | "confinement" | "harden"
+  >
 ): Promise<void> {
   const localModuleIds = new Set(files.keys());
   const loadedContent = new Map<string, string>();
   const loading = new Set<string>();
   const moduleMap =
-    moduleMapOverride ??
+    execution.moduleMap ??
     (((globalThis as Record<string, unknown>)["__vibestudioModuleMap__"] ??= {}) as Record<
       string,
       unknown
     >);
-  const requireFn = requireOverride ?? getDefaultRequire();
+  const requireFn = execution.require ?? getDefaultRequire();
   if (!requireFn) throw new Error("__vibestudioRequire__ not available. Build may be outdated.");
 
   async function loadModule(filePath: string): Promise<void> {
@@ -574,8 +589,12 @@ async function loadLocalModules(
       );
       await ensureExternalRequires(externalRequires, { importerPath: normalized });
 
-      const result = execute(transformed.code, { require: requireFn });
-      moduleMap[normalized] = result.exports;
+      const result = execute(transformed.code, {
+        require: requireFn,
+        compileFunction: execution.compileFunction,
+        confinement: execution.confinement,
+      });
+      moduleMap[normalized] = execution.harden ? execution.harden(result.exports) : result.exports;
       loadedContent.set(normalized, rewritten);
     } finally {
       loading.delete(normalized);
@@ -628,8 +647,7 @@ export async function prepareSourceCode(
     resolutions,
     options.syntax,
     ensureExternalRequires,
-    options.moduleMap,
-    options.require
+    options
   );
 
   return {

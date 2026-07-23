@@ -21,6 +21,7 @@ import {
   validateRequires,
   preloadRequires,
   defaultCompileFunction,
+  type CompileFunction,
 } from "./execute.js";
 import {
   getMissingPackageDeclarations,
@@ -39,10 +40,17 @@ import { instrumentDeadlineCheckpoints } from "./deadline.js";
 // =============================================================================
 
 export interface SandboxImportLoader {
-  (specifier: string, ref: string | undefined, externals: string[]): Promise<string>;
+  (specifier: string, ref: string | undefined, externals: string[]): Promise<LibraryModuleArtifact>;
   /** Optional build-backed probe supplied by Vibestudio hosts. */
   resolveWorkspaceImport?: (specifier: string) => Promise<boolean>;
 }
+
+export interface LibraryModuleArtifact {
+  bundle: string;
+  format: "cjs" | "async-cjs";
+}
+
+export type SandboxFailureKind = "user-code" | "infrastructure" | "cancelled";
 
 export interface SandboxOptions {
   /** Source syntax (default: "tsx") */
@@ -85,6 +93,18 @@ export interface SandboxOptions {
    * When absent, falls back to `getDefaultRequire()` (the global require).
    */
   require?: (id: string) => unknown;
+  /** Realm compiler supplied explicitly by workerd's UnsafeEval-backed host. */
+  compileFunction?: CompileFunction;
+  /** Keep guest free-name resolution inside an allowlisted, private global scope. */
+  confinement?: "private-global";
+  /** Host hardener applied before a loaded module namespace becomes guest-reachable. */
+  harden?: <T>(value: T) => T;
+  /**
+   * Panel runtimes still expose a realm-local lazy loader. A confined EvalDO
+   * passes false and routes module loading through closure-held runtime options,
+   * so no per-owner loader is ever published on the shared isolate global.
+   */
+  publishLazyLoaderToGlobal?: boolean;
 }
 
 export interface SandboxResult {
@@ -97,8 +117,53 @@ export interface SandboxResult {
   exports?: Record<string, unknown>;
   /** Error message (if failed) */
   error?: string;
+  /** Stable failure domain used by durable callers to choose terminal policy. */
+  failureKind?: SandboxFailureKind;
+  /** Stable machine-readable diagnostic; never inferred from error copy. */
+  failureCode?: string;
   /** Agent-facing panel operation summary, when panel runtime journaling was active. */
   panelJournalFooter?: string;
+}
+
+class SandboxInfrastructureError extends Error {
+  readonly code: string;
+
+  constructor(code: string, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "SandboxInfrastructureError";
+    this.code = code;
+  }
+}
+
+const CORRECTABLE_IMPORT_FAILURE_CODES = new Set([
+  "package_not_found",
+  "package_manifest_missing",
+  "package_export_not_found",
+  "package_export_target_missing",
+]);
+
+function structuredFailureCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const errorData = (error as { errorData?: unknown }).errorData;
+  if (!errorData || typeof errorData !== "object") return undefined;
+  const code = (errorData as Record<string, unknown>)["code"];
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
+
+async function runInfrastructurePhase<T>(
+  code: string,
+  operation: () => Promise<T>,
+  signal?: AbortSignal
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    const structuredCode = structuredFailureCode(error);
+    if (structuredCode && CORRECTABLE_IMPORT_FAILURE_CODES.has(structuredCode)) throw error;
+    if (error instanceof SandboxInfrastructureError) throw error;
+    throw new SandboxInfrastructureError(code, error);
+  }
 }
 
 export interface CompileResult<T> {
@@ -109,6 +174,8 @@ export interface CompileResult<T> {
   cacheKey?: string;
   /** Error message (if failed) */
   error?: string;
+  /** Developer-facing stack for the source-loading/compilation boundary. */
+  errorStack?: string;
 }
 
 export interface CompileModuleResult<T extends Record<string, unknown> = Record<string, unknown>> {
@@ -152,15 +219,19 @@ const loadedBundleContent = new Map<string, string>();
  * Load a CJS library bundle into the panel's module map.
  * Skips re-execution if the bundle content is identical to what's already loaded.
  */
-function loadLibraryBundle(
+async function loadLibraryBundle(
   specifier: string,
-  bundleCode: string,
+  artifact: LibraryModuleArtifact,
   moduleMap: Record<string, unknown>,
-  requireFn?: (id: string) => unknown
-): void {
+  requireFn?: (id: string) => unknown,
+  compileFunction: CompileFunction = defaultCompileFunction,
+  harden?: <T>(value: T) => T,
+  loadImport?: SandboxImportLoader,
+  confinement?: "private-global"
+): Promise<void> {
   // loadedBundleContent is a per-isolate cache, but it's gated on moduleMap[specifier],
   // so per-object maps are correct: a fresh map has no entry → the bundle re-executes.
-  if (loadedBundleContent.get(specifier) === bundleCode && moduleMap[specifier]) return;
+  if (loadedBundleContent.get(specifier) === artifact.bundle && moduleMap[specifier]) return;
 
   const resolvedRequire =
     requireFn ??
@@ -169,12 +240,50 @@ function loadLibraryBundle(
       | undefined);
   if (!resolvedRequire) throw new Error("__vibestudioRequire__ not available");
 
-  const exports: Record<string, unknown> = {};
-  const module = { exports };
-  const fn = defaultCompileFunction(["require", "exports", "module"], bundleCode);
-  fn(resolvedRequire, exports, module);
-  moduleMap[specifier] = module.exports;
-  loadedBundleContent.set(specifier, bundleCode);
+  const body =
+    artifact.format === "async-cjs"
+      ? `return (async () => {\n${artifact.bundle}\n})();`
+      : artifact.bundle;
+  const controlledImport = async (dependency: string): Promise<unknown> => {
+    try {
+      return resolvedRequire(dependency);
+    } catch (originalError) {
+      // Bare packages can be acquired through the same dynamic workspace build
+      // service as authored imports. Relative imports must be part of the
+      // package artifact; accepting an ambient URL/file loader here would cross
+      // the package's reviewed authority boundary.
+      if (
+        !loadImport ||
+        dependency.startsWith(".") ||
+        dependency.startsWith("/") ||
+        dependency.startsWith("node:") ||
+        dependency.includes(":")
+      ) {
+        throw originalError;
+      }
+      const dependencyArtifact = await loadImport(dependency, undefined, Object.keys(moduleMap));
+      await loadLibraryBundle(
+        dependency,
+        dependencyArtifact,
+        moduleMap,
+        resolvedRequire,
+        compileFunction,
+        harden,
+        loadImport,
+        confinement
+      );
+      return resolvedRequire(dependency);
+    }
+  };
+  const result = execute(body, {
+    require: resolvedRequire,
+    compileFunction,
+    confinement,
+    bindings: { __vibestudioImport: controlledImport },
+  });
+  await result.returnValue;
+  moduleMap[specifier] = harden ? harden(result.exports) : result.exports;
+  loadedBundleContent.set(specifier, artifact.bundle);
 }
 
 /**
@@ -182,9 +291,12 @@ function loadLibraryBundle(
  */
 async function loadImports(
   imports: Record<string, string>,
-  loadImport: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>,
+  loadImport: SandboxImportLoader,
   moduleMapOverride?: Record<string, unknown>,
-  requireFn?: (id: string) => unknown
+  requireFn?: (id: string) => unknown,
+  compileFunction?: CompileFunction,
+  harden?: <T>(value: T) => T,
+  confinement?: "private-global"
 ): Promise<void> {
   const moduleMap = getModuleMap(moduleMapOverride);
   for (const [specifier, refValue] of Object.entries(imports)) {
@@ -196,8 +308,17 @@ async function loadImports(
     const ref = refValue === "latest" ? undefined : refValue;
     // Recompute externals each iteration so earlier imports are externalized
     const externals = Object.keys(moduleMap);
-    const bundleCode = await loadImport(specifier, ref, externals);
-    loadLibraryBundle(specifier, bundleCode, moduleMap, requireFn);
+    const artifact = await loadImport(specifier, ref, externals);
+    await loadLibraryBundle(
+      specifier,
+      artifact,
+      moduleMap,
+      requireFn,
+      compileFunction,
+      harden,
+      loadImport,
+      confinement
+    );
   }
 }
 
@@ -222,7 +343,8 @@ function installPreloadedModuleAlias(
 function installLazyImportLoader(
   loadImport: SandboxOptions["loadImport"] | undefined,
   moduleMapOverride?: Record<string, unknown>,
-  requireFn?: (id: string) => unknown
+  requireFn?: (id: string) => unknown,
+  compileFunction?: CompileFunction
 ): (() => void) | null {
   if (!loadImport) return null;
   const globals = globalThis as Record<string, unknown>;
@@ -238,8 +360,16 @@ function installLazyImportLoader(
     const moduleMap = getModuleMap(moduleMapOverride);
     if (moduleMap[specifier]) return moduleMap[specifier];
     const ref = refValue === "latest" ? undefined : refValue;
-    const bundleCode = await loadImport(specifier, ref, Object.keys(moduleMap));
-    loadLibraryBundle(specifier, bundleCode, moduleMap, requireFn);
+    const artifact = await loadImport(specifier, ref, Object.keys(moduleMap));
+    await loadLibraryBundle(
+      specifier,
+      artifact,
+      moduleMap,
+      requireFn,
+      compileFunction,
+      undefined,
+      loadImport
+    );
     return moduleMap[specifier];
   };
   return () => {
@@ -292,6 +422,9 @@ async function ensureRequires(
     imports?: Record<string, string>;
     moduleMap?: Record<string, unknown>;
     require?: (id: string) => unknown;
+    compileFunction?: CompileFunction;
+    harden?: <T>(value: T) => T;
+    confinement?: "private-global";
   } = {},
   context?: ExternalRequireContext
 ): Promise<void> {
@@ -310,7 +443,15 @@ async function ensureRequires(
     });
 
     if (Object.keys(inferredImports).length > 0) {
-      await loadImports(inferredImports, options.loadImport, options.moduleMap, options.require);
+      await loadImports(
+        inferredImports,
+        options.loadImport,
+        options.moduleMap,
+        options.require,
+        options.compileFunction,
+        options.harden,
+        options.confinement
+      );
       validation = validateRequires(requires, requireFn);
     }
   }
@@ -995,15 +1136,35 @@ export async function executeSandbox(
         ? (ambientCompatModule as Record<string, unknown>)
         : null
     );
-    restoreLazyImportLoader = installLazyImportLoader(options.loadImport, moduleMap, requireFn);
+    if (options.publishLazyLoaderToGlobal !== false) {
+      restoreLazyImportLoader = installLazyImportLoader(
+        options.loadImport,
+        moduleMap,
+        requireFn,
+        options.compileFunction
+      );
+    }
 
     // Load on-demand imports
     if (options.imports && Object.keys(options.imports).length > 0) {
       if (!options.loadImport) {
         throw new Error("loadImport callback required when imports are specified");
       }
-      await withAbort(
-        loadImports(options.imports, options.loadImport, moduleMap, requireFn),
+      await runInfrastructurePhase(
+        "package_load_failed",
+        () =>
+          withAbort(
+            loadImports(
+              options.imports!,
+              options.loadImport!,
+              moduleMap,
+              requireFn,
+              options.compileFunction,
+              options.harden,
+              options.confinement
+            ),
+            signal
+          ),
         signal
       );
     }
@@ -1019,6 +1180,9 @@ export async function executeSandbox(
             loadSourceFile: options.loadSourceFile,
             moduleMap,
             require: requireFn,
+            compileFunction: options.compileFunction,
+            confinement: options.confinement,
+            harden: options.harden,
           },
           (requires, context) =>
             ensureRequires(
@@ -1030,6 +1194,9 @@ export async function executeSandbox(
                 imports: options.imports,
                 moduleMap,
                 require: requireFn,
+                compileFunction: options.compileFunction,
+                harden: options.harden,
+                confinement: options.confinement,
               },
               context
             )
@@ -1087,6 +1254,8 @@ export async function executeSandbox(
         success: false,
         consoleOutput: "",
         error: "__vibestudioRequire__ not available. Build may be outdated.",
+        failureKind: "infrastructure",
+        failureCode: "module_runtime_unavailable",
       };
     }
 
@@ -1106,7 +1275,23 @@ export async function executeSandbox(
       if (Object.keys(autoImports).length > 0) {
         throwIfAborted(signal);
         options.onConsole?.(`[eval] Auto-loading: ${Object.keys(autoImports).join(", ")}...`);
-        await withAbort(loadImports(autoImports, options.loadImport, moduleMap, requireFn), signal);
+        await runInfrastructurePhase(
+          "package_load_failed",
+          () =>
+            withAbort(
+              loadImports(
+                autoImports,
+                options.loadImport!,
+                moduleMap,
+                requireFn,
+                options.compileFunction,
+                options.harden,
+                options.confinement
+              ),
+              signal
+            ),
+          signal
+        );
         validation = validateRequires(transformed.requires, requireFn);
       }
     }
@@ -1118,6 +1303,8 @@ export async function executeSandbox(
           success: false,
           consoleOutput: "",
           error: unavailableModuleMessage(missing),
+          failureKind: "infrastructure",
+          failureCode: "unsupported_node_module",
         };
       }
       const available = Object.keys(moduleMap);
@@ -1170,23 +1357,27 @@ export async function executeSandbox(
           console: capture.proxy,
           bindings: executionBindings,
           require: requireFn,
+          compileFunction: options.compileFunction,
+          confinement: options.confinement,
         });
       } finally {
         tracking?.exit();
       }
 
-      // Wait for async operations and promised return values without imposing a
-      // wall-clock limit. Agentic eval work should finish by completion, error,
-      // or explicit user interruption, not a hidden timeout.
-      throwIfAborted(signal);
-      if (tracking && trackingContext) {
-        await withAbort(tracking.waitAll(trackingContext), signal);
-      }
-
+      // The top-level result is the eval's terminal. Observe it before waiting
+      // for incidental tracked work: if user code has already rejected, an
+      // unrelated in-flight promise must not keep the invocation open forever.
+      // Successful runs still drain all tracked work below. No wall-clock limit
+      // is imposed; pending primary work finishes only by completion, error, or
+      // explicit user interruption.
       throwIfAborted(signal);
       let returnValue = result.returnValue;
       if (isPromise(returnValue)) {
         returnValue = await withAbort(returnValue, signal);
+      }
+      throwIfAborted(signal);
+      if (tracking && trackingContext) {
+        await withAbort(tracking.waitAll(trackingContext), signal);
       }
       throwIfAborted(signal);
       return {
@@ -1219,6 +1410,18 @@ export async function executeSandbox(
       success: false,
       consoleOutput: formatConsoleOutput(consoleEntries) + debugInfo,
       error: errorMessage,
+      failureKind:
+        err instanceof SandboxInfrastructureError
+          ? "infrastructure"
+          : signal?.aborted
+            ? "cancelled"
+            : "user-code",
+      failureCode:
+        err instanceof SandboxInfrastructureError
+          ? err.code
+          : signal?.aborted
+            ? "eval_cancelled"
+            : (structuredFailureCode(err) ?? "guest_execution_failed"),
     };
   } finally {
     deactivateDeadline?.();
@@ -1362,6 +1565,7 @@ export async function compileComponent<T = ComponentType<Record<string, unknown>
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      ...(err instanceof Error && err.stack ? { errorStack: err.stack } : {}),
     };
   }
 }

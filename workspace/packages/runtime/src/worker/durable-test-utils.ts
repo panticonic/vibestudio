@@ -7,6 +7,8 @@ import type {
   Principal,
   PrincipalKind,
 } from "@vibestudio/rpc";
+import { rpcMethodAuthority } from "@vibestudio/rpc";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 
 type BindParams = Parameters<Database["run"]>[1];
 
@@ -149,7 +151,7 @@ const AGENTIC_ENV_DEFAULTS: Record<string, string> = {
 function principalKindForTestCaller(callerKind: AuthenticatedCaller["callerKind"]): PrincipalKind {
   if (callerKind === "server") return "host";
   if (callerKind === "shell") return "user";
-  if (callerKind === "agent") return "entity";
+  if (callerKind === "agent") return "session";
   return "code";
 }
 
@@ -162,6 +164,12 @@ function principalKindForTestCaller(callerKind: AuthenticatedCaller["callerKind"
 export function createTestDirectAuthority(input: {
   callerKind: AuthenticatedCaller["callerKind"];
   method: string;
+  /** Exact manifest-facing method capability declared by the receiver. */
+  capability?: string;
+  effect?: DirectAuthorityAttestation["effect"];
+  /** Product service boundary traversed to reach a workspace-service method. */
+  targetCapability?: `workspace-service:${string}`;
+  targetPrincipals?: readonly PrincipalKind[];
   source?: string;
   className?: string;
   objectKey?: string;
@@ -172,51 +180,82 @@ export function createTestDirectAuthority(input: {
   const className = input.className ?? AGENTIC_ENV_DEFAULTS["WORKER_CLASS_NAME"]!;
   const objectKey = input.objectKey ?? "test-key";
   const audience = `do:${source}:${className}:${objectKey}`;
-  const capability = `rpc:${input.method}`;
+  const capability = input.capability ?? `rpc:${input.method}`;
   const now = input.now ?? Date.now();
   const kind = principalKindForTestCaller(input.callerKind);
   const subject = (kind === "code" ? `code:test@${"a".repeat(64)}` : `${kind}:test`) as Principal;
-  const actingUser = kind === "host" ? null : ("user:test" as Principal);
-  const entity = kind === "entity" ? subject : null;
-  const requested = [{ capability, resource: { kind: "exact" as const, key: audience } }];
+  const actingUser = kind === "host" ? null : ("user:test" as const);
+  const entity = input.callerKind === "agent" ? ("entity:test" as const) : null;
+  const capabilities = [...new Set([capability, input.targetCapability].filter(Boolean))] as string[];
+  const requested = capabilities.map((requestedCapability) => ({
+    capability: requestedCapability,
+    resource: { kind: "exact" as const, key: audience },
+  }));
   const context: AuthorizationContext = {
     authorizingOrigin: { kind, principal: subject } as AuthorizationContext["authorizingOrigin"],
-    host: kind === "host" ? subject : null,
+    host: kind === "host" ? (subject as `host:${string}`) : null,
     actingUser,
-    device: null,
     entity,
     incarnation: null,
-    codeAuthority: {
-      executor: kind === "code" ? { principal: subject, requested } : null,
-      execution: null,
-      initiator: null,
-      delegations: [],
-    },
-    deviceOwnership: null,
+    executingCode:
+      kind === "code"
+        ? {
+            principal: subject as `code:${string}`,
+            requested,
+            sourceLineage: { class: "internal", externalKeys: [] },
+          }
+        : null,
+    initiatorChain: [
+      ...(actingUser ? [actingUser] : []),
+      ...(entity ? [entity] : []),
+      subject,
+    ],
     ownerChain: actingUser ? [actingUser] : [],
     agentBinding:
       entity === null ? null : { entity, contextId: "ctx:test", channelId: "channel:test" },
     workspace: { workspaceId: "test", member: true, role: null, revision: "test" },
     session: { id: "test-session", audience, version: "1.0.0", expiresAt: now + 5_000 },
+    contextIntegrity:
+      kind === "session"
+        ? { class: "internal", latchEpoch: 0, externalKeys: [] }
+        : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
   };
-  const grant: AuthorityGrant = {
+  const grants: AuthorityGrant[] = capabilities.map((grantedCapability) => ({
     subject,
-    capability,
+    capability: grantedCapability,
     resource: { kind: "exact", key: audience },
     effect: "allow",
     issuedBy: "host:test",
     createdAt: now,
-    binding: { kind: "principal" },
     provenance: "durable-test-host-attestation",
-  };
+  }));
   return {
     audience,
     method: input.method,
+    effect:
+      input.effect ??
+      (input.targetCapability
+        ? { kind: "workspace-service" }
+        : input.capability
+          ? { kind: "semantic", capability }
+          : { kind: "runtime-intrinsic" }),
+    capability,
     resourceKey: audience,
     issuedAt: now,
     expiresAt: now + 5_000,
+    nonce: crypto.randomUUID(),
     context,
-    grants: [grant],
+    grants,
+    ...(input.targetCapability
+      ? {
+          targetRequirement: requirementForPrincipals(
+            input.targetPrincipals ?? [kind],
+            input.targetCapability
+          ),
+          targetCapability: input.targetCapability,
+          targetTier: "gated" as const,
+        }
+      : {}),
     ...input.overrides,
   };
 }
@@ -317,6 +356,15 @@ export async function createTestDO<T>(
     // the server (production calls always carry a verified caller; the
     // workspace-realm default-deny gate refuses unattributed calls).
     const url = `http://test/${encodeURIComponent(objectKey)}/__rpc`;
+    const declaration = rpcMethodAuthority(instance as object, method);
+    const targetCapability =
+      declaration?.effect.kind === "workspace-service"
+        ? ("workspace-service:test-fixture" as const)
+        : undefined;
+    const capability =
+      declaration?.effect.kind === "semantic"
+        ? declaration.effect.capability
+        : (targetCapability ?? `rpc:${method}`);
     const envelope = {
       from: "main",
       target: `do:test:${objectKey}`,
@@ -327,6 +375,10 @@ export async function createTestDO<T>(
           authorization: createTestDirectAuthority({
             callerKind: caller,
             method,
+            capability,
+            effect: declaration?.effect,
+            targetCapability,
+            targetPrincipals: declaration?.principals,
             source: String(mergedEnv["WORKER_SOURCE"]),
             className: String(mergedEnv["WORKER_CLASS_NAME"]),
             objectKey,

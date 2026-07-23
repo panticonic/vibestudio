@@ -22,7 +22,12 @@ function authenticatedTestCaller(
 class EchoDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   echo(...args: unknown[]): unknown[] {
     return args;
   }
@@ -31,7 +36,12 @@ class EchoDO extends DurableObjectBase {
 class StreamProbeDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ principals: ["user", "code"], sensitivity: "write" })
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   subscribe(): Response {
     return new Response("stream-owned", {
       headers: { "Content-Type": "application/x-ndjson" },
@@ -42,7 +52,12 @@ class StreamProbeDO extends DurableObjectBase {
 class AgentSubscriptionProbeDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "write" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   subscribeChannel(): { subscribed: true } {
     return { subscribed: true };
   }
@@ -51,7 +66,12 @@ class AgentSubscriptionProbeDO extends DurableObjectBase {
 class StructuredErrorDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ principals: ["host"], sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   fail(): never {
     const error = new Error("revision does not resolve") as Error & {
       errorData: Record<string, unknown>;
@@ -85,7 +105,12 @@ class LifecycleProbeDO extends DurableObjectBase {
     this.resumed = true;
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   callerKind(): string | null {
     return this.caller?.callerKind ?? null;
   }
@@ -118,7 +143,12 @@ class SchemaProbeDO extends DurableObjectBase {
     return ["required_table"];
   }
 
-  @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   hasRequiredTable(): boolean {
     return (
       this.sql
@@ -135,7 +165,12 @@ class SchemaProbeDO extends DurableObjectBase {
 class AlarmProbeDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   scheduleWake(wakeAt: number): string {
     this.setAlarmAt(wakeAt);
     return "scheduled";
@@ -147,7 +182,12 @@ class DerivedAlarmProbeDO extends DurableObjectBase {
 
   protected createTables(): void {}
 
-  @rpc({ principals: ["host"], sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   recordWake(wakeAt: number): string {
     this.wakeAt = wakeAt;
     return "recorded";
@@ -533,6 +573,59 @@ describe("DurableObjectBase lifecycle routing", () => {
     // unattributed ordinary call, so a real caller is always present.)
     await expect(callAs("panel", "callerKind")).resolves.toBe("panel");
     expect(instance.scheduleProjectionCalls).toBe(1);
+  });
+
+  it("rejects a forged server kind without host authority", async () => {
+    const { instance } = await createTestDO(LifecycleProbeDO);
+    const response = await (
+      instance as unknown as { fetch(request: Request): Promise<Response> }
+    ).fetch(
+      new Request("http://test/test-key/__lifecycle/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          args: [{ epoch: "e1", mode: "suspend", reason: "test", deadlineMs: 1 }],
+          __instanceToken: "token",
+          __instanceId: "do:internal/WorkspaceDO:test-key",
+          __caller: { callerId: "main", callerKind: "server" },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      errorCode: "EACCES",
+      error: expect.stringMatching(/host attestation required/),
+    });
+  });
+});
+
+describe("DurableObjectBase durable replay protection", () => {
+  it("rejects the same direct-RPC attestation after object reconstruction", async () => {
+    const first = await createTestDO(EchoDO);
+    const caller = authenticatedTestCaller("echo");
+    const dispatch = (instance: EchoDO) =>
+      (instance as unknown as { fetch(request: Request): Promise<Response> }).fetch(
+        new Request("http://test/test-key/echo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            args: ["hello"],
+            __instanceToken: "token",
+            __instanceId: "do:test:TestDO:test-key",
+            __caller: caller,
+          }),
+        })
+      );
+
+    await expect(dispatch(first.instance)).resolves.toMatchObject({ status: 200 });
+    const reconstructed = await createTestDO(EchoDO, undefined, { db: first.db });
+    const replay = await dispatch(reconstructed.instance);
+    expect(replay.status).toBe(403);
+    await expect(replay.json()).resolves.toMatchObject({
+      errorCode: "EACCES",
+      error: expect.stringMatching(/replayed/),
+    });
   });
 });
 

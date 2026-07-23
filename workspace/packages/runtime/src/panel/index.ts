@@ -215,6 +215,13 @@ export const panel = helpfulNamespace("panel", {
   parentId: runtimeParentId,
   contextId,
   env: _env,
+  setTitle: (
+    title: string | null,
+    options?: {
+      /** Preserve this user-chosen title across inferred document-title updates. */
+      explicit?: boolean;
+    }
+  ) => callMain<void>("runtime.setTitle", title, options),
   getInfo: runtime.getInfo,
   focusPanel: runtime.focusPanel,
   getTheme: runtime.getTheme,

@@ -239,7 +239,13 @@ export const RegistryMutationInputSchema = z.discriminatedUnion("kind", [
 export type RegistryMutationInput = z.infer<typeof RegistryMutationInputSchema>;
 
 const ChannelEnvelopeAppendInputSchema = channelEnvelopeSchema
-  .omit({ seq: true, envelopeId: true, publishedAt: true })
+  .omit({
+    seq: true,
+    envelopeId: true,
+    publishedAt: true,
+    contentClass: true,
+    externalKeys: true,
+  })
   .extend({
     envelopeId: z.string().nullish(),
     publishedAt: z.string().nullish(),

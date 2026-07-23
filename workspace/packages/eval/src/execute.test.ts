@@ -1,5 +1,13 @@
+import vm from "node:vm";
 import { describe, it, expect, vi } from "vitest";
-import { execute, executeDefault, validateRequires, getDefaultRequire } from "./execute";
+import { tameRealmCodegen } from "@vibestudio/shared/evalConfinement";
+import {
+  execute,
+  executeDefault,
+  validateRequires,
+  getDefaultRequire,
+  type CompileFunction,
+} from "./execute";
 
 describe("execute", () => {
   // Mock require function for tests
@@ -131,6 +139,104 @@ describe("execute", () => {
       expect(() =>
         execute(`undeclaredVariable = 42;`, { require: mockRequire })
       ).toThrow();
+    });
+  });
+
+  describe("private guest global", () => {
+    // Confinement is a property of the realm guest code compiles into, so the
+    // guest gets its own realm with codegen tamed — the arrangement an evaluator
+    // bootstrap creates, and what workerd's isolate gives for free.
+    const guestContext = vm.createContext({});
+    tameRealmCodegen(vm.runInContext("globalThis", guestContext) as Record<string, unknown>);
+    const compileFunction: CompileFunction = (argNames, body) =>
+      vm.runInContext(`(function (${argNames.join(", ")}) {\n${body}\n})`, guestContext) as (
+        ...args: unknown[]
+      ) => unknown;
+
+    const confined = (code: string, bindings?: Record<string, unknown>) =>
+      execute(code, {
+        require: mockRequire,
+        bindings,
+        compileFunction,
+        confinement: "private-global",
+      });
+
+    it("refuses to run confined in a realm that can still compile code", () => {
+      expect(() =>
+        execute(`return 1;`, { require: mockRequire, confinement: "private-global" })
+      ).toThrow(/compile code/);
+    });
+
+    it("denies the constructor-chain route out of the private global", () => {
+      const result = confined(`
+        const attempts = [];
+        for (const reach of [
+          () => ({}).constructor.constructor("return globalThis")(),
+          () => [].constructor.constructor("return globalThis")(),
+          () => (function () {}).constructor("return globalThis")(),
+          () => (async function () {}).constructor("return globalThis")(),
+          () => Object.getPrototypeOf(function () {}).constructor("return globalThis")(),
+        ]) {
+          try {
+            attempts.push(typeof reach());
+          } catch (err) {
+            attempts.push(/does not permit dynamic code generation/.test(String(err))
+              ? "denied"
+              : "other:" + err);
+          }
+        }
+        return attempts;
+      `);
+
+      expect(result.returnValue).toEqual(["denied", "denied", "denied", "denied", "denied"]);
+    });
+
+    it("does not expose evaluator globals or Vibestudio kernel hooks", () => {
+      (globalThis as Record<string, unknown>)["__vibestudioKernelSecret__"] = "host-only";
+      try {
+        const result = confined(`return {
+          processType: typeof process,
+          fetchType: typeof fetch,
+          webSocketType: typeof WebSocket,
+          kernelHook: globalThis.__vibestudioKernelSecret__,
+          prototype: Object.getPrototypeOf(globalThis),
+        };`);
+
+        expect(result.returnValue).toEqual({
+          processType: "undefined",
+          fetchType: "undefined",
+          webSocketType: "undefined",
+          kernelHook: undefined,
+          prototype: null,
+        });
+      } finally {
+        delete (globalThis as Record<string, unknown>)["__vibestudioKernelSecret__"];
+      }
+    });
+
+    it("keeps strict-mode this semantics and explicit endowments", () => {
+      const result = confined(
+        `return { receiver: (function () { return this; })(), answer: secret + 1 };`,
+        { secret: 41 }
+      );
+
+      expect(result.returnValue).toEqual({ receiver: undefined, answer: 42 });
+    });
+
+    it("retains the private lexical boundary in callbacks that outlive execution", () => {
+      // Endowments come from the guest realm: an object carried in from a
+      // codegen-capable realm would reopen the escape through its own
+      // constructor chain.
+      const holder = vm.runInContext("({})", guestContext) as { callback?: () => unknown };
+      confined(
+        `holder.callback = () => ({ processType: typeof process, secret, global: globalThis });`,
+        { holder, secret: "endowed" }
+      );
+
+      const value = holder.callback?.() as Record<string, unknown>;
+      expect(value["processType"]).toBe("undefined");
+      expect(value["secret"]).toBe("endowed");
+      expect(Object.getPrototypeOf(value["global"])).toBeNull();
     });
   });
 

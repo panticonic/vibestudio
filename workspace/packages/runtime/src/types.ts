@@ -15,8 +15,8 @@ export interface ThemeConfig {
 
 /** Default identity until the shell pushes the user's choice. */
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
-  accentColor: "amber",
-  grayColor: "slate",
+  accentColor: "violet",
+  grayColor: "mauve",
   radius: "medium",
   scaling: "100%",
   panelBackground: "translucent",

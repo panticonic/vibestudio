@@ -1,17 +1,22 @@
+import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tameRealmCodegen } from "@vibestudio/shared/evalConfinement";
 import { executeSandbox } from "./sandbox";
+import { createFallbackAsyncTracking } from "./asyncTracking";
 
 describe("executeSandbox", () => {
   let originalModuleMap: unknown;
   let originalRequire: unknown;
   let originalPreload: unknown;
   let originalLoadImport: unknown;
+  let originalAsyncTracking: unknown;
 
   beforeEach(() => {
     originalModuleMap = (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"];
     originalRequire = (globalThis as Record<string, unknown>)["__vibestudioRequire__"];
     originalPreload = (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"];
     originalLoadImport = (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"];
+    originalAsyncTracking = (globalThis as Record<string, unknown>)["__vibestudioAsyncTracking__"];
 
     const moduleMap: Record<string, unknown> = {};
     (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"] = moduleMap;
@@ -41,6 +46,23 @@ describe("executeSandbox", () => {
     if (originalLoadImport === undefined)
       delete (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"];
     else (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"] = originalLoadImport;
+    if (originalAsyncTracking === undefined)
+      delete (globalThis as Record<string, unknown>)["__vibestudioAsyncTracking__"];
+    else
+      (globalThis as Record<string, unknown>)["__vibestudioAsyncTracking__"] =
+        originalAsyncTracking;
+  });
+
+  it("settles a rejected top-level result without waiting on unrelated tracked work", async () => {
+    const tracking = createFallbackAsyncTracking();
+    tracking.waitAll = () => new Promise<void>(() => undefined);
+    (globalThis as Record<string, unknown>)["__vibestudioAsyncTracking__"] = tracking;
+
+    await expect(
+      executeSandbox('await Promise.resolve(); throw new Error("terminal eval failure");', {
+        syntax: "typescript",
+      })
+    ).resolves.toMatchObject({ success: false, error: "terminal eval failure" });
   });
 
   it("settles a pending async eval when its signal is aborted", async () => {
@@ -77,6 +99,68 @@ describe("executeSandbox", () => {
     });
     expect(result.success).toBe(true);
     expect(result.returnValue).toBe(3);
+  });
+
+  it("propagates private-global confinement through the transformed sandbox", async () => {
+    // Confinement requires a realm that cannot compile code; node:vm stands in
+    // for the codegen-free evaluator isolate.
+    const guestContext = vm.createContext({});
+    tameRealmCodegen(vm.runInContext("globalThis", guestContext) as Record<string, unknown>);
+    const result = await executeSandbox(
+      `return { processType: typeof process, fetchType: typeof fetch, answer: seed + 1 };`,
+      {
+        syntax: "typescript",
+        bindings: { seed: 41 },
+        confinement: "private-global",
+        compileFunction: (argNames, body) =>
+          vm.runInContext(`(function (${argNames.join(", ")}) {\n${body}\n})`, guestContext) as (
+            ...args: unknown[]
+          ) => unknown,
+      }
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      returnValue: { processType: "undefined", fetchType: "undefined", answer: 42 },
+    });
+  });
+
+  it("confines and hardens relative source modules before publishing their exports", async () => {
+    const guestContext = vm.createContext({ evaluatorSecret: "LEAKED" });
+    tameRealmCodegen(vm.runInContext("globalThis", guestContext) as Record<string, unknown>);
+    const moduleMap: Record<string, unknown> = {};
+    const harden = vi.fn(<T>(value: T): T => {
+      if ((typeof value === "object" && value !== null) || typeof value === "function") {
+        Object.freeze(value);
+      }
+      return value;
+    });
+    const result = await executeSandbox(
+      `import { observedSecret } from "./helper"; return observedSecret;`,
+      {
+        syntax: "typescript",
+        sourcePath: "src/main.ts",
+        sourceFiles: {
+          "src/main.ts": `import { observedSecret } from "./helper"; return observedSecret;`,
+          "src/helper.ts": `export const observedSecret = typeof evaluatorSecret;`,
+        },
+        moduleMap,
+        require: (id) => {
+          if (id in moduleMap) return moduleMap[id];
+          throw new Error(`Module not found: ${id}`);
+        },
+        confinement: "private-global",
+        compileFunction: (argNames, body) =>
+          vm.runInContext(`(function (${argNames.join(", ")}) {\n${body}\n})`, guestContext) as (
+            ...args: unknown[]
+          ) => unknown,
+        harden,
+      }
+    );
+
+    expect(result).toMatchObject({ success: true, returnValue: "undefined" });
+    expect(harden).toHaveBeenCalled();
+    expect(Object.isFrozen(moduleMap["src/helper.ts"])).toBe(true);
   });
 
   it("settles synchronous loops at an explicit cooperative deadline", async () => {
@@ -324,6 +408,70 @@ return fs.readFileSync("/tmp/a");`,
     expect(result.error).toContain('Node built-in module "node:child_process" is not available');
     expect(result.error).toContain("@workspace/runtime");
     expect(result.error).not.toContain("npm:latest");
+    expect(result).toMatchObject({
+      failureKind: "infrastructure",
+      failureCode: "unsupported_node_module",
+    });
+  });
+
+  it("classifies package build/link failures as infrastructure failures", async () => {
+    const result = await executeSandbox(
+      'import { answer } from "@workspace/broken"; return answer;',
+      {
+        syntax: "typescript",
+        imports: { "@workspace/broken": "workspace:*" },
+        loadImport: async () => {
+          throw new Error("worker export uses an unsupported module feature");
+        },
+      }
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "worker export uses an unsupported module feature",
+      failureKind: "infrastructure",
+      failureCode: "package_load_failed",
+    });
+  });
+
+  it("keeps a structured invalid package subpath correctable", async () => {
+    const result = await executeSandbox(
+      'import panel from "@workspace/runtime/panel"; return panel;',
+      {
+        syntax: "typescript",
+        imports: { "@workspace/runtime/panel": "workspace:*" },
+        loadImport: async () => {
+          throw Object.assign(new Error("No export ./panel found for @workspace/runtime"), {
+            errorData: {
+              code: "package_export_not_found",
+              packageName: "@workspace/runtime",
+              subpath: "./panel",
+              conditions: ["worker", "workerd", "default"],
+            },
+          });
+        },
+      }
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "No export ./panel found for @workspace/runtime",
+      failureKind: "user-code",
+      failureCode: "package_export_not_found",
+    });
+  });
+
+  it("keeps guest exceptions distinct from infrastructure failures", async () => {
+    const result = await executeSandbox('throw new Error("authored boom")', {
+      syntax: "typescript",
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "authored boom",
+      failureKind: "user-code",
+      failureCode: "guest_execution_failed",
+    });
   });
 
   it("exposes a lazy import loader to runtime helpers during eval", async () => {
@@ -335,7 +483,7 @@ return fs.readFileSync("/tmp/a");`,
           expect(specifier).toBe("lazy-package");
           expect(ref).toBeUndefined();
           expect(externals).toEqual([]);
-          return "module.exports = { answer: 42 };";
+          return { bundle: "module.exports = { answer: 42 };", format: "cjs" as const };
         },
       }
     );
@@ -351,7 +499,7 @@ return fs.readFileSync("/tmp/a");`,
       vi.fn(async (specifier: string, ref: string | undefined) => {
         expect(specifier).toBe("local-worker");
         expect(ref).toBeUndefined();
-        return "module.exports = { answer: 42 };";
+        return { bundle: "module.exports = { answer: 42 };", format: "cjs" as const };
       }),
       { resolveWorkspaceImport }
     );

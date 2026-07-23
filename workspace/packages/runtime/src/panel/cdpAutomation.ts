@@ -19,18 +19,31 @@ const LIGHTWEIGHT_CDP_MODULE = "@workspace/cdp-client";
 interface CdpAutomationOptions {
   kind?: "workspace" | "browser";
   requesterPanelId?: string | null;
+  /** Closure-held module resolver used by confined hosted runtimes. */
+  loadModule?: (id: string) => unknown | Promise<unknown>;
 }
 
 function isLightweightCdpClientModule(value: unknown): value is LightweightCdpClientModule {
   return Boolean((value as LightweightCdpClientModule | undefined)?.BrowserImpl?.connect);
 }
 
-async function loadLightweightClient(): Promise<LightweightCdpClientModule> {
+async function loadLightweightClient(
+  loadModule?: (id: string) => unknown | Promise<unknown>
+): Promise<LightweightCdpClientModule> {
   const loadErrors: string[] = [];
   const rememberLoadError = (source: string, error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     loadErrors.push(`${source}: ${message}`);
   };
+  if (loadModule) {
+    try {
+      const loaded = await loadModule(LIGHTWEIGHT_CDP_MODULE);
+      if (isLightweightCdpClientModule(loaded)) return loaded;
+      throw new Error("module does not expose BrowserImpl.connect");
+    } catch (error) {
+      rememberLoadError("host module loader", error);
+    }
+  }
   const runtimeRequire = (globalThis as Record<string, unknown>)["__vibestudioRequire__"] as
     | ((id: string) => unknown)
     | undefined;
@@ -100,7 +113,7 @@ export function createCdpAutomation(
   };
 
   const connectPage = async (): Promise<any> => {
-    const { BrowserImpl } = await loadLightweightClient();
+    const { BrowserImpl } = await loadLightweightClient(options.loadModule);
     const endpoint = await getCdpEndpoint();
     const connectOptions: { isElectronWebview: boolean; transportOptions?: { authToken: string } } =
       {

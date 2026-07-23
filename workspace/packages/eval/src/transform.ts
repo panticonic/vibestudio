@@ -53,6 +53,11 @@ export async function transformCode(source: string, options: TransformOptions): 
     transforms,
     jsxRuntime: "automatic",
     jsxImportSource: "react",
+    // Dynamic workspace UI executes inside an already-built panel. Its JSX
+    // runtime must not vary with the server process's NODE_ENV: production
+    // panel bundles intentionally do not expose jsxDEV. Target the stable
+    // react/jsx-runtime contract for both development and packaged hosts.
+    production: true,
     disableESTransforms: true,
   });
 

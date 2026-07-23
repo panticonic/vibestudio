@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rpc } from "@vibestudio/rpc";
+import { createTestDirectAuthority } from "./durable-test-utils.js";
 
 // Envelope-native /rpc: the mock receives an RpcEnvelope and must reply with a
 // response envelope echoing the requestId (else the connectionless client never
@@ -78,7 +79,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+      @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
       async probePanelTree(): Promise<{
         title: string | undefined;
         source: string | undefined;
@@ -164,7 +165,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+      @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
       async probePanelTree(): Promise<boolean> {
         return this.panelTree.get("slot-a").isLoaded();
       }
@@ -250,7 +251,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+      @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
       async probePanelTree(): Promise<{
         allIds: string[];
         childParentId: string | null | undefined;
@@ -331,7 +332,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelAliasProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+      @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
       async probePanelAliases(): Promise<{
         createdId: string;
         listedCount: number;
@@ -377,7 +378,12 @@ describe("DurableObjectBase panelTree handles", () => {
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
-      return respond(init, { wsEndpoint: "ws://cdp.test" });
+      return respond(
+        init,
+        body.method === "panelCdp.getCdpEndpoint"
+          ? { wsEndpoint: "ws://cdp.test" }
+          : undefined
+      );
     }) as typeof fetch;
 
     const [{ DurableObjectBase }, { createTestDO }] = await Promise.all([
@@ -388,7 +394,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class ParentProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ principals: ["host", "user", "code", "entity"], sensitivity: "read" })
+      @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
       async probeParent(): Promise<{
         id: string;
         title: string | undefined;
@@ -415,6 +421,12 @@ describe("DurableObjectBase panelTree handles", () => {
       callerId: "panel:parent-entity",
       callerKind: "panel",
       callerPanelId: "parent-slot",
+      authorization: createTestDirectAuthority({
+        callerKind: "panel",
+        method: "probeParent",
+        source: "test",
+        className: "TestDO",
+      }),
     };
     const response = await fetchable.fetch(
       new Request("http://test/test-key/__rpc", {
@@ -436,7 +448,10 @@ describe("DurableObjectBase panelTree handles", () => {
       })
     );
 
-    const responseEnvelope = (await response.json()) as { message: { result: unknown } };
+    const responseEnvelope = (await response.json()) as {
+      message: { result?: unknown; error?: string };
+    };
+    expect(responseEnvelope.message.error).toBeUndefined();
     expect(responseEnvelope.message.result).toEqual({
       id: "parent-slot",
       title: "parent-slot",
