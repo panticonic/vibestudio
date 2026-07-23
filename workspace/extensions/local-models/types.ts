@@ -181,6 +181,7 @@ export type ServerState =
   | { state: "error"; message: string; logTail: string[] };
 
 export interface OwnerInfo {
+  schemaVersion: 1;
   pid: number;
   bootId: string;
   ports: { utility: number; main: number };
