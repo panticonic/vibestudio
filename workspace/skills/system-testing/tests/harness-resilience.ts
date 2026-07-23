@@ -1,9 +1,6 @@
 import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "../types.js";
 import { getToolCalls } from "./_helpers.js";
-import {
-  completedScenarioEvidence,
-  invocationReturnValue,
-} from "./_scenario-evidence.js";
+import { completedScenarioEvidence, invocationReturnValue } from "./_scenario-evidence.js";
 
 type ToolCall = ReturnType<typeof getToolCalls>[number];
 
@@ -105,18 +102,18 @@ function validateHugeReturn(result: TestExecutionResult) {
       const marker = returned.value;
       const isBoundedMarker = Boolean(
         marker &&
-          typeof marker === "object" &&
-          !Array.isArray(marker) &&
-          (marker as Record<string, unknown>)["truncated"] === true &&
-          typeof (marker as Record<string, unknown>)["originalChars"] === "number" &&
-          ((marker as Record<string, unknown>)["originalChars"] as number) > 100_000 &&
-          (marker as Record<string, unknown>)["scopeKey"] === "$lastReturn"
+        typeof marker === "object" &&
+        !Array.isArray(marker) &&
+        (marker as Record<string, unknown>)["truncated"] === true &&
+        typeof (marker as Record<string, unknown>)["originalChars"] === "number" &&
+        ((marker as Record<string, unknown>)["originalChars"] as number) > 100_000 &&
+        (marker as Record<string, unknown>)["scopeKey"] === "$lastLargeReturn"
       );
       return (
         isBoundedMarker &&
         protocolText.length < 100_000 &&
         /truncated/iu.test(protocolText) &&
-        /scope\.\$lastReturn/u.test(protocolText)
+        /scope\.\$lastLargeReturn/u.test(protocolText)
       );
     } catch {
       return false;
@@ -145,9 +142,10 @@ function timedOutEval(call: ToolCall): boolean {
 
 function invalidToolArguments(call: ToolCall): boolean {
   return (
-    ["docs_search", "eval", "vcs"].includes(call.name) &&
     isFailure(call) &&
-    /invalid|schema validation/iu.test(errorText(call))
+    /invalid arguments?|schema validation|expected (?:string|number|boolean|object|array)/iu.test(
+      errorText(call)
+    )
   );
 }
 
@@ -276,11 +274,6 @@ export const harnessResilienceTests: TestCase[] = [
     category: "harness-resilience",
     prompt:
       "Show that a malformed tool request is visible and a corrected request of the same kind still works.",
-    expectedToolFailures: [
-      { name: "docs_search", errorIncludes: "invalid" },
-      { name: "eval", errorIncludes: "invalid" },
-      { name: "vcs", errorIncludes: "schema validation" },
-    ],
     validate: (result) => recoverySequence(result, invalidToolArguments, "invalid-argument", true),
   },
   {

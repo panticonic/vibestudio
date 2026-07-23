@@ -10,6 +10,13 @@
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
+/**
+ * Maximum serialized return preview carried in one terminal eval result.
+ * Consumers that return a page through eval must stay below this wire budget
+ * after worst-case JSON escaping.
+ */
+export const EVAL_RESULT_RETURN_PREVIEW_CHARS = 12_000;
+
 export const evalRunArgsSchema = z
   .object({
     /**
@@ -72,12 +79,13 @@ export const evalRunResultSchema = z
   .object({
     success: z.boolean(),
     /** Formatted console output captured during the run. Oversized output may be windowed; read
-     *  `scope.$lastConsole` in a follow-up eval for the bounded saved copy. */
+     *  `scope.$lastLargeConsole` in follow-up evals for the bounded saved copy. */
     console: z.string(),
     /** Safe-serialized return value (present on success). Oversized values may be replaced with a
-     *  structured truncation summary pointing at `scope.$lastReturn`. */
+     *  structured truncation summary pointing at `scope.$lastLargeReturn`. */
     returnValue: z.unknown().optional(),
-    /** Error message (present on failure). */
+    /** Error message (present on failure). Oversized errors are windowed and retained at
+     *  `scope.$lastLargeError` for bounded follow-up inspection. */
     error: z.string().optional(),
     /** Failure domain controls whether an agent may recover in-turn. */
     failureKind: z.enum(["user-code", "infrastructure", "cancelled"]).optional(),

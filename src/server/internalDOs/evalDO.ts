@@ -14,6 +14,7 @@ import {
   type EvalImportLoader,
 } from "@vibestudio/service-schemas/clients/evalImportLoader";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
+import { EVAL_RESULT_RETURN_PREVIEW_CHARS } from "@vibestudio/service-schemas/eval";
 import { fsMethods } from "@vibestudio/service-schemas/fs";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import { docsMethods } from "@vibestudio/service-schemas/docs";
@@ -59,7 +60,6 @@ const RESERVED_TABLE = /\b(state|repl_scopes|sqlite_[A-Za-z0-9_]*)\b/i;
 const DESTRUCTIVE_STMT = /^\s*(DROP|DELETE|ALTER|UPDATE|INSERT|REPLACE|TRUNCATE|CREATE)\b/i;
 
 const RESULT_CONSOLE_MAX_CHARS = 80_000;
-const RESULT_RETURN_PREVIEW_CHARS = 60_000;
 const RESULT_ERROR_MAX_CHARS = 20_000;
 const RESULT_STORAGE_MAX_CHARS = 250_000;
 
@@ -1437,11 +1437,10 @@ export class EvalDO extends DurableObjectBase {
       // hold this durable run open.
       streamer?.close();
       const consoleText = result.consoleOutput || consoleOutput;
-      // Recoverable large output: the harness windows console/return for the
-      // model, losing the tail. Stash a bounded copy into the persistent scope so
-      // the agent can page/grep it in a follow-up eval. Overwritten each run (not
-      // accumulated), and cleared when output is small, so scope can't balloon.
-      this.spillLargeOutput(scopeManager.current, consoleText, result.returnValue);
+      // Recoverable large output: the harness windows console/error/return for
+      // the model, losing the tail. Keep one bounded spill per output kind in
+      // stable slots that small follow-up inspectors do not overwrite.
+      this.spillLargeOutput(scopeManager.current, consoleText, result.error, result.returnValue);
       return {
         success: result.success,
         console: consoleText,
@@ -1466,9 +1465,9 @@ export class EvalDO extends DurableObjectBase {
   private compactRunResult(result: RunResult): RunResult {
     const compact: RunResult = {
       success: result.success,
-      console: this.windowText(result.console, RESULT_CONSOLE_MAX_CHARS, "$lastConsole"),
+      console: this.windowText(result.console, RESULT_CONSOLE_MAX_CHARS, "$lastLargeConsole"),
       ...(result.error
-        ? { error: this.windowText(result.error, RESULT_ERROR_MAX_CHARS, "$lastConsole") }
+        ? { error: this.windowText(result.error, RESULT_ERROR_MAX_CHARS, "$lastLargeError") }
         : {}),
       ...(result.failureKind ? { failureKind: result.failureKind } : {}),
       ...(result.failureCode ? { failureCode: result.failureCode } : {}),
@@ -1483,19 +1482,13 @@ export class EvalDO extends DurableObjectBase {
 
     const fallback: RunResult = {
       success: compact.success,
-      console: this.windowText(compact.console, 20_000, "$lastConsole"),
-      ...(compact.error ? { error: this.windowText(compact.error, 10_000, "$lastConsole") } : {}),
+      console: this.windowText(compact.console, 20_000, "$lastLargeConsole"),
+      ...(compact.error
+        ? { error: this.windowText(compact.error, 10_000, "$lastLargeError") }
+        : {}),
       ...(compact.failureKind ? { failureKind: compact.failureKind } : {}),
       ...(compact.failureCode ? { failureCode: compact.failureCode } : {}),
-      ...(compact.returnValue !== undefined
-        ? {
-            returnValue: {
-              truncated: true,
-              reason: "eval return value exceeded result storage limit",
-              scopeKey: "$lastReturn",
-            },
-          }
-        : {}),
+      ...(compact.returnValue !== undefined ? { returnValue: compact.returnValue } : {}),
       ...(compact.scopeKeys ? { scopeKeys: compact.scopeKeys.slice(0, 200) } : {}),
     };
     encoded = JSON.stringify(fallback);
@@ -1504,8 +1497,8 @@ export class EvalDO extends DurableObjectBase {
     return {
       success: result.success,
       console:
-        "[eval] Result exceeded the EvalDO storage limit. Large console/return data may be available in scope.$lastConsole and scope.$lastReturn.",
-      ...(result.error ? { error: this.windowText(result.error, 10_000, "$lastConsole") } : {}),
+        "[eval] Result exceeded the EvalDO storage limit. Large console/error/return data may be available in scope.$lastLargeConsole, scope.$lastLargeError, and scope.$lastLargeReturn.",
+      ...(result.error ? { error: this.windowText(result.error, 10_000, "$lastLargeError") } : {}),
       ...(result.failureKind ? { failureKind: result.failureKind } : {}),
       ...(result.failureCode ? { failureCode: result.failureCode } : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 100) } : {}),
@@ -1514,13 +1507,13 @@ export class EvalDO extends DurableObjectBase {
 
   private compactReturnValue(returnValue: unknown): unknown {
     const text = this.stringifyForResult(returnValue);
-    if (text.length <= RESULT_RETURN_PREVIEW_CHARS) return returnValue;
+    if (text.length <= EVAL_RESULT_RETURN_PREVIEW_CHARS) return returnValue;
     return {
       truncated: true,
       reason: "eval return value exceeded result transport/storage limit",
       originalChars: text.length,
-      scopeKey: "$lastReturn",
-      preview: this.windowText(text, RESULT_RETURN_PREVIEW_CHARS, "$lastReturn"),
+      scopeKey: "$lastLargeReturn",
+      preview: this.windowText(text, EVAL_RESULT_RETURN_PREVIEW_CHARS, "$lastLargeReturn"),
     };
   }
 
@@ -1540,35 +1533,33 @@ export class EvalDO extends DurableObjectBase {
     return (
       `${text.slice(0, head)}\n` +
       `[eval output truncated: ${elided} of ${text.length} chars elided. ` +
-      `Read scope.${scopeKey} in pages, e.g. return scope.${scopeKey}.slice(0, 40000).]\n` +
+      `Inspect scope.${scopeKey} compactly, e.g. return { length: scope.${scopeKey}.length, sample: scope.${scopeKey}.slice(0, 1500) }.]\n` +
       `${text.slice(-tail)}`
     );
   }
 
   /**
-   * Keep the previous return value available for REPL-style follow-up calls.
-   * Small values retain their structured form (`scope.$lastReturn.methods`,
-   * etc.); large values spill as a bounded JSON/text string suitable for
-   * paging. Console spill remains large-output-only.
+   * Keep the previous return value available for ordinary REPL-style follow-up
+   * calls, and retain one stable bounded spill for each large output kind.
+   * Small inspectors overwrite `$lastReturn`, but deliberately do not erase
+   * `$lastLarge*`, so a large result can be inspected over multiple calls.
    */
   private spillLargeOutput(
     scope: Record<string, unknown>,
     console: string,
+    error: string | undefined,
     returnValue: unknown
   ): void {
-    const THRESHOLD = 50_000; // ≤ the harness window — anything windowed IS spilled
     const MAX = 1_000_000; // hard cap so the persisted scope can't balloon
-    const stash = (key: string, text: string): void => {
-      if (text.length <= THRESHOLD) {
-        Reflect.deleteProperty(scope, key);
-        return;
-      }
+    const stashLarge = (key: string, text: string | undefined, threshold: number): void => {
+      if (!text || text.length <= threshold) return;
       scope[key] =
         text.length > MAX
           ? `${text.slice(0, MAX)}\n…[${text.length - MAX} more chars dropped]`
           : text;
     };
-    stash("$lastConsole", console);
+    stashLarge("$lastLargeConsole", console, RESULT_CONSOLE_MAX_CHARS);
+    stashLarge("$lastLargeError", error, RESULT_ERROR_MAX_CHARS);
     if (returnValue === undefined) {
       Reflect.deleteProperty(scope, "$lastReturn");
       return;
@@ -1579,7 +1570,8 @@ export class EvalDO extends DurableObjectBase {
     } catch {
       returnText = String(returnValue);
     }
-    if (returnText.length <= THRESHOLD) {
+    stashLarge("$lastLargeReturn", returnText, EVAL_RESULT_RETURN_PREVIEW_CHARS);
+    if (returnText.length <= EVAL_RESULT_RETURN_PREVIEW_CHARS) {
       scope["$lastReturn"] = returnValue;
     } else {
       scope["$lastReturn"] =
