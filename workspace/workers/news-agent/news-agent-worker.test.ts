@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { rpcMethodAuthority } from "@vibestudio/rpc";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { Fetcher } from "@workspace/feeds";
 import { articleId } from "@workspace/feeds";
@@ -220,6 +221,24 @@ async function addExampleFeed(
 }
 
 describe("NewsAgentWorker", () => {
+  it("keeps every channel-scoped news operation off the direct RPC plane", async () => {
+    const worker = await makeWorker();
+    for (const method of [
+      "getOverview",
+      "listArticles",
+      "briefingHistory",
+      "searchArchive",
+      "startDeepDive",
+      "addFeed",
+      "markRead",
+      "setSaved",
+      "refreshNow",
+      "setSchedule",
+    ]) {
+      expect(rpcMethodAuthority(worker, method)).toBeUndefined();
+    }
+  });
+
   it("exposes the web research tools its briefing prompt requires", async () => {
     const worker = await makeWorker();
     expect(worker.loopTools()).toEqual(

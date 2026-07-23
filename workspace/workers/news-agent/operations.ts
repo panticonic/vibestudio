@@ -27,6 +27,7 @@ export interface NewsHandlers {
   triageNow(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   refreshNow(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   requestDeepDive(channelId: string, args: Record<string, unknown>): Promise<unknown>;
+  startDeepDive(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   getOverview(channelId: string, args: Record<string, unknown>): Promise<unknown>;
 }
 
@@ -365,6 +366,26 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     exposure: ["method"],
     needsRecovery: true,
     run: (ctx, channelId, args) => ctx.handlers.requestDeepDive(channelId, args),
+  },
+  {
+    name: "startDeepDive",
+    description:
+      "Initialize a freshly-forked news channel as an analyst thread and seed its opening analysis turn.",
+    schema: {
+      type: "object",
+      properties: {
+        articleId: { type: "string" },
+        url: { type: "string", minLength: 1 },
+        title: { type: "string", minLength: 1 },
+        source: { type: "string" },
+        briefingTldr: { type: "string" },
+      },
+      required: ["url", "title"],
+      additionalProperties: false,
+    },
+    exposure: ["method"],
+    needsRecovery: true,
+    run: (ctx, channelId, args) => ctx.handlers.startDeepDive(channelId, args),
   },
   {
     name: "getOverview",

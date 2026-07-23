@@ -68,8 +68,9 @@ import {
   createPanelSandboxConfig,
   launchAgentIntoChannel,
   parseSignalEvent,
+  unwrapChatMethodResult,
 } from "@workspace/agentic-core";
-import { connectViaRpc } from "@workspace/pubsub";
+import { connectViaRpc, type PubSubClient } from "@workspace/pubsub";
 import { forkConversation } from "@workspace/channel-fork";
 import {
   DEFAULT_AGENT_MODEL_REF,
@@ -283,7 +284,7 @@ async function ensureAgentSubscribed(args: {
   channelContextId: string;
   config?: Record<string, unknown>;
 }): Promise<string> {
-  const { handle } = await launchAgentIntoChannel(rpc, {
+  const { subscription } = await launchAgentIntoChannel(rpc, {
     source: NEWS_AGENT_SOURCE,
     className: NEWS_AGENT_CLASS,
     key: args.agentKey,
@@ -292,7 +293,21 @@ async function ensureAgentSubscribed(args: {
     config: { handle: NEWS_AGENT_HANDLE, ...(args.config ?? {}) },
     replay: true,
   });
-  return handle.targetId;
+  if (!subscription.participantId) {
+    throw new Error("News agent subscription did not return a participant identity");
+  }
+  return subscription.participantId;
+}
+
+async function callChannelParticipant(
+  client: PubSubClient,
+  participantId: string,
+  method: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  await client.ready();
+  const result = await client.callMethod(participantId, method, args).result;
+  return unwrapChatMethodResult(result);
 }
 
 /** True when the panel is too narrow for the side-by-side reader+chat layout. */
@@ -463,7 +478,7 @@ export default function NewsPanel() {
   const resolvedContextId = requireNewsContextId(runtimeContextId);
 
   const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
-  const [agentTarget, setAgentTarget] = useState<string | null>(null);
+  const [agentParticipantId, setAgentParticipantId] = useState<string | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [articles, setArticles] = useState<ArticleRow[]>([]);
   const [briefings, setBriefings] = useState<BriefingRow[]>([]);
@@ -495,6 +510,9 @@ export default function NewsPanel() {
   const [bootstrapNonce, setBootstrapNonce] = useState(0);
   const modelServiceRef = useRef<DurableObjectServiceClient | null>(null);
   const modelProbeRef = useRef<{ catalog: ModelCatalog; modelRef: string } | null>(null);
+  const readerClientRef = useRef<PubSubClient | null>(null);
+  const refreshRef = useRef<() => Promise<void>>(async () => undefined);
+  const handleDeepDiveRef = useRef<(story: DeepDiveStory) => Promise<void>>(async () => undefined);
   // Snapshot the last-visit time at mount; articles fetched after it are "new".
   // 0 (first ever visit) means "don't badge everything", so isNew requires > 0.
   const previousVisitRef = useRef<number>(
@@ -543,13 +561,13 @@ export default function NewsPanel() {
           settings?.defaultModel ??
           DEFAULT_AGENT_MODEL_REF;
 
-        const targetId = await ensureAgentSubscribed({
+        const participantId = await ensureAgentSubscribed({
           agentKey,
           channelId: channel,
           channelContextId: resolvedContextId,
           config: { model, ...(stateArgs.agentConfig ?? {}) },
         });
-        setAgentTarget(targetId);
+        setAgentParticipantId(participantId);
 
         // Nudge the user to connect a model if the agent's turns would stall.
         // Stash the catalog so refresh() can re-reconcile (the credential may
@@ -572,10 +590,20 @@ export default function NewsPanel() {
 
   const retryBootstrap = useCallback(() => {
     setError(null);
-    setAgentTarget(null);
+    setAgentParticipantId(null);
     bootstrapAttempted.current = false;
     setBootstrapNonce((value) => value + 1);
   }, []);
+
+  const callAgentParticipant = useCallback(
+    async (method: string, args: Record<string, unknown>): Promise<unknown> => {
+      const client = readerClientRef.current;
+      if (!client) throw new Error("News reader is not connected to its channel");
+      if (!agentParticipantId) throw new Error("News agent has no channel participant identity");
+      return callChannelParticipant(client, agentParticipantId, method, args);
+    },
+    [agentParticipantId]
+  );
 
   const handleConnectModel = useCallback(async () => {
     if (!modelConnect) return;
@@ -598,18 +626,17 @@ export default function NewsPanel() {
 
   // ── reader data ────────────────────────────────────────────────────────────
   const refresh = useCallback(async () => {
-    if (!agentTarget || !channelName) return;
+    if (!agentParticipantId || !channelName) return;
     try {
       const [nextOverview, articleList, history] = await Promise.all([
-        rpc.call<Overview>(agentTarget, "getOverview", [channelName, {}]),
-        rpc.call<{ articles: ArticleRow[] }>(agentTarget, "listArticles", [
-          channelName,
-          { limit: 60, triagedOnly: true },
-        ]),
-        rpc.call<{ briefings: BriefingRow[] }>(agentTarget, "briefingHistory", [
-          channelName,
-          { limit: 12 },
-        ]),
+        callAgentParticipant("getOverview", {}) as Promise<Overview>,
+        callAgentParticipant("listArticles", {
+          limit: 60,
+          triagedOnly: true,
+        }) as Promise<{ articles: ArticleRow[] }>,
+        callAgentParticipant("briefingHistory", {
+          limit: 12,
+        }) as Promise<{ briefings: BriefingRow[] }>,
       ]);
       setOverview(nextOverview);
       setArticles(articleList.articles);
@@ -644,25 +671,26 @@ export default function NewsPanel() {
         // leave the existing nudge state untouched on a transient failure
       }
     }
-  }, [agentTarget, channelName]);
+  }, [agentParticipantId, callAgentParticipant, channelName]);
+  refreshRef.current = refresh;
 
   useEffect(() => {
-    if (!agentTarget) return;
+    if (!agentParticipantId) return;
     void refresh();
     const timer = setInterval(() => void refresh(), 60_000);
     return () => clearInterval(timer);
-  }, [agentTarget, refresh]);
+  }, [agentParticipantId, refresh]);
 
   // ── lightweight agent calls (no busy/refresh churn) + optimistic updates ──
   const quietAgentCall = useCallback(
     (method: string, args: Record<string, unknown>, onFailure?: () => void) => {
-      if (!agentTarget || !channelName) return;
-      void rpc.call(agentTarget, method, [channelName, args]).catch((err) => {
+      if (!agentParticipantId || !channelName) return;
+      void callAgentParticipant(method, args).catch((err) => {
         onFailure?.();
         setError(`Couldn't save that change: ${err instanceof Error ? err.message : String(err)}`);
       });
     },
-    [agentTarget, channelName]
+    [agentParticipantId, callAgentParticipant, channelName]
   );
 
   /** Apply an optimistic patch to a story across every list it may appear in
@@ -756,25 +784,31 @@ export default function NewsPanel() {
           result.clonedAgents.find((entry) => entry.className === NEWS_AGENT_CLASS) ??
           result.clonedAgents[0];
         if (agent) {
-          // Seed the analyst's opening turn directly on the clone (reliable —
-          // agent-initiated, so it bypasses the chat's history-suppression).
+          // Address the clone through its authenticated participant identity.
+          // This is the same channel method plane used by every other reader
+          // operation; the caller never supplies a channel id to the vessel.
+          const forkClient = connectViaRpc({
+            rpc,
+            channel: result.forkedChannelId,
+            contextId: result.forkedContextId,
+            clientId: `${rpc.selfId}:deep-dive:${result.forkId}`,
+            name: "News reader",
+            type: "panel",
+            handle: "news-reader",
+            replayMode: "skip",
+          });
           try {
-            await rpc.call(
-              `do:${agent.source}:${agent.className}:${agent.objectKey}`,
-              "startDeepDive",
-              [
-                result.forkedChannelId,
-                {
-                  articleId: story.articleId,
-                  url: story.url,
-                  title: story.title,
-                  source: story.source,
-                  briefingTldr: latestTldrRef.current,
-                },
-              ]
-            );
+            await callChannelParticipant(forkClient, agent.participantId, "startDeepDive", {
+              articleId: story.articleId,
+              url: story.url,
+              title: story.title,
+              source: story.source,
+              briefingTldr: latestTldrRef.current,
+            });
           } catch (err) {
             console.warn("[NewsPanel] startDeepDive failed:", err);
+          } finally {
+            await forkClient.close?.();
           }
         }
         await openPanel("panels/chat", {
@@ -807,6 +841,7 @@ export default function NewsPanel() {
     },
     [channelName, resolvedContextId, markReadLocal]
   );
+  handleDeepDiveRef.current = handleDeepDive;
 
   // ── channel listener: live refresh + card-initiated deep-dive signals ─────
   useEffect(() => {
@@ -821,13 +856,14 @@ export default function NewsPanel() {
       handle: "news-reader",
       replayMode: "skip",
     });
+    readerClientRef.current = client;
     let cancelled = false;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleRefresh = () => {
       if (refreshTimer) return;
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
-        void refresh();
+        void refreshRef.current();
       }, 750);
     };
     void (async () => {
@@ -845,7 +881,7 @@ export default function NewsPanel() {
               NEWS_DEEPDIVE_SIGNAL
             );
             if (payload) {
-              void handleDeepDive(payload);
+              void handleDeepDiveRef.current(payload);
               continue;
             }
           }
@@ -857,18 +893,19 @@ export default function NewsPanel() {
     })();
     return () => {
       cancelled = true;
+      if (readerClientRef.current === client) readerClientRef.current = null;
       if (refreshTimer) clearTimeout(refreshTimer);
       void client.close?.();
     };
-  }, [channelName, resolvedContextId, handleDeepDive, refresh]);
+  }, [channelName, resolvedContextId]);
 
   const callAgent = useCallback(
     async (method: string, args: Record<string, unknown>) => {
-      if (!agentTarget || !channelName) return;
+      if (!agentParticipantId || !channelName) return;
       setBusy(true);
       setError(null);
       try {
-        await rpc.call(agentTarget, method, [channelName, args]);
+        await callAgentParticipant(method, args);
         await refresh();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -876,7 +913,7 @@ export default function NewsPanel() {
         setBusy(false);
       }
     },
-    [agentTarget, channelName, refresh]
+    [agentParticipantId, callAgentParticipant, channelName, refresh]
   );
 
   const config: ConnectionConfig = useMemo(
@@ -898,18 +935,18 @@ export default function NewsPanel() {
       triageInFlightRef.current = false;
       return;
     }
-    if (triageInFlightRef.current || !agentTarget || !channelName) return;
+    if (triageInFlightRef.current || !agentParticipantId || !channelName) return;
     triageInFlightRef.current = true;
-    void rpc
-      .call(agentTarget, "triageNow", [channelName, {}])
-      .catch((err) => console.warn("[NewsPanel] triageNow failed:", err));
-  }, [overview?.untriagedCount, agentTarget, channelName]);
+    void callAgentParticipant("triageNow", {}).catch((err) =>
+      console.warn("[NewsPanel] triageNow failed:", err)
+    );
+  }, [overview?.untriagedCount, agentParticipantId, callAgentParticipant, channelName]);
 
   // Peek at the un-triaged backlog when the "Categorizing…" disclosure is open,
   // so an impatient reader can click through before the agent finishes. Re-fetch
   // as the count shrinks (triage processes items).
   useEffect(() => {
-    if (!pendingOpen || !agentTarget || !channelName) return;
+    if (!pendingOpen || !agentParticipantId || !channelName) return;
     if ((overview?.untriagedCount ?? 0) === 0) {
       setPendingArticles([]);
       setPendingError(null);
@@ -917,11 +954,12 @@ export default function NewsPanel() {
     }
     setPendingError(null);
     let cancelled = false;
-    void rpc
-      .call<{ articles: ArticleRow[] }>(agentTarget, "listArticles", [
-        channelName,
-        { untriagedOnly: true, limit: 50 },
-      ])
+    void (
+      callAgentParticipant("listArticles", {
+        untriagedOnly: true,
+        limit: 50,
+      }) as Promise<{ articles: ArticleRow[] }>
+    )
       .then((res) => {
         if (!cancelled) {
           setPendingArticles(res.articles);
@@ -936,17 +974,24 @@ export default function NewsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [pendingOpen, overview?.untriagedCount, agentTarget, channelName]);
+  }, [
+    pendingOpen,
+    overview?.untriagedCount,
+    agentParticipantId,
+    callAgentParticipant,
+    channelName,
+  ]);
 
   // Saved view: fetch on demand (saved items can be older than the feed window).
   useEffect(() => {
-    if (view !== "saved" || !agentTarget || !channelName) return;
+    if (view !== "saved" || !agentParticipantId || !channelName) return;
     let cancelled = false;
-    void rpc
-      .call<{ articles: ArticleRow[] }>(agentTarget, "listArticles", [
-        channelName,
-        { savedOnly: true, limit: 200 },
-      ])
+    void (
+      callAgentParticipant("listArticles", {
+        savedOnly: true,
+        limit: 200,
+      }) as Promise<{ articles: ArticleRow[] }>
+    )
       .then((res) => {
         if (!cancelled) setSavedArticles(res.articles);
       })
@@ -959,19 +1004,18 @@ export default function NewsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [view, agentTarget, channelName]);
+  }, [view, agentParticipantId, callAgentParticipant, channelName]);
 
   // Archive search: debounced; empty query clears results back to the feed.
   useEffect(() => {
     const query = searchInput.trim();
-    if (!query || !agentTarget || !channelName) {
+    if (!query || !agentParticipantId || !channelName) {
       setSearchResults(null);
       return;
     }
     let cancelled = false;
     const timer = setTimeout(() => {
-      void rpc
-        .call<SearchResults>(agentTarget, "searchArchive", [channelName, { query, limit: 60 }])
+      void (callAgentParticipant("searchArchive", { query, limit: 60 }) as Promise<SearchResults>)
         .then((res) => {
           if (!cancelled) setSearchResults(res);
         })
@@ -984,7 +1028,7 @@ export default function NewsPanel() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [searchInput, agentTarget, channelName]);
+  }, [searchInput, agentParticipantId, callAgentParticipant, channelName]);
 
   // The list the reader is showing right now (search > saved > feed), with the
   // source filter applied, grouped into same-event clusters and then into the
@@ -1184,14 +1228,14 @@ export default function NewsPanel() {
                   <Button
                     size="1"
                     variant="soft"
-                    disabled={busy || !agentTarget}
+                    disabled={busy || !agentParticipantId}
                     onClick={() => void callAgent("refreshNow", {})}
                   >
                     <ReloadIcon /> Refresh
                   </Button>
                   <Button
                     size="1"
-                    disabled={busy || !agentTarget}
+                    disabled={busy || !agentParticipantId}
                     onClick={() => void callAgent("refreshNow", { briefing: true })}
                   >
                     <LightningBoltIcon /> Brief me now
@@ -1217,7 +1261,7 @@ export default function NewsPanel() {
                     <Text size="1" color="red" role="alert">
                       {error}
                     </Text>
-                    {!agentTarget ? (
+                    {!agentParticipantId ? (
                       <Button size="1" variant="soft" color="red" onClick={retryBootstrap}>
                         Retry startup
                       </Button>

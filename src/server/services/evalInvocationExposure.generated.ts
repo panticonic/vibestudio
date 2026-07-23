@@ -3292,20 +3292,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "direct:workspace/workers/news-agent/news-agent-worker.ts:startDeepDive",
-    rpcPlane: "workspace-do",
-    capability: "rpc:startDeepDive",
-    authorityPrincipals: ["code"],
-    owner: "workspace/workers/news-agent/news-agent-worker.ts",
-    source: "workers/news-agent",
-    method: "startDeepDive",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "direct-target",
-      owner: "workspace/workers/news-agent/news-agent-worker.ts",
-    },
-  },
-  {
     id: "direct:workspace/workers/pubsub-channel/channel-do.ts:acknowledgeInvite",
     rpcPlane: "workspace-do",
     capability: "workspace-service:<live-declaration>",
@@ -12885,7 +12871,6 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "rpc:registerPushTarget",
   "rpc:reportExternalExit",
   "rpc:setAttentionPrefs",
-  "rpc:startDeepDive",
   "rpc:subscribeChannel",
   "rpc:unregisterPushTarget",
   "rpc:unsubscribeChannel",
