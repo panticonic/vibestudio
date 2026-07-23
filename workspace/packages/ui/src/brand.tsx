@@ -1,14 +1,14 @@
 import type { CSSProperties } from "react";
-import vibestudioLogoDark from "./assets/vibestudio-dark.png";
-import vibestudioLogoLight from "./assets/vibestudio-light.png";
-import vibestudioMarkOnDark from "./assets/vibestudio-mark-on-dark.png";
-import vibestudioMarkOnLight from "./assets/vibestudio-mark-on-light.png";
+import vibestudioLogo from "./assets/vibestudio-logo.svg";
+import vibestudioSymbol from "./assets/vibestudio-symbol.svg";
+import vibestudioSymbolOnDark from "./assets/vibestudio-symbol-on-dark.svg";
+import vibestudioSymbolOnLight from "./assets/vibestudio-symbol-on-light.svg";
 
 export interface VibestudioLogoProps {
-  /** Pixel size for the square logo box. */
+  /** Pixel height. The full logo keeps its original 2:3 aspect ratio. */
   size?: number | string;
-  /** Tile includes the source background; mark uses transparent artwork. */
-  variant?: "tile" | "mark";
+  /** Full lockup, standalone glyph, or glyph on a theme-aware tile. */
+  variant?: "logo" | "symbol" | "tile";
   /** Set to false when the logo should be announced as an image. */
   decorative?: boolean;
   alt?: string;
@@ -18,23 +18,38 @@ export interface VibestudioLogoProps {
 
 export function VibestudioLogo({
   size = 48,
-  variant = "tile",
+  variant = "symbol",
   decorative = true,
   alt = "Vibestudio",
   className,
   style,
 }: VibestudioLogoProps) {
-  const lightSrc = variant === "mark" ? vibestudioMarkOnLight : vibestudioLogoLight;
-  const darkSrc = variant === "mark" ? vibestudioMarkOnDark : vibestudioLogoDark;
+  const src = variant === "logo" ? vibestudioLogo : vibestudioSymbol;
   const accessibleAlt = decorative ? "" : alt;
   return (
     <span
-      className={["vibestudio-logo", `vibestudio-logo-${variant}`, className].filter(Boolean).join(" ")}
-      style={{ width: size, height: size, ...style }}
+      className={["vibestudio-logo", `vibestudio-logo-${variant}`, className]
+        .filter(Boolean)
+        .join(" ")}
+      style={{ height: size, aspectRatio: variant === "logo" ? "2 / 3" : "1", ...style }}
       aria-hidden={decorative ? "true" : undefined}
     >
-      <img className="vibestudio-logo-img vibestudio-logo-img-light" src={lightSrc} alt={accessibleAlt} />
-      <img className="vibestudio-logo-img vibestudio-logo-img-dark" src={darkSrc} alt={accessibleAlt} />
+      {variant === "tile" ? (
+        <>
+          <img
+            className="vibestudio-logo-img vibestudio-logo-img-light"
+            src={vibestudioSymbolOnLight}
+            alt={accessibleAlt}
+          />
+          <img
+            className="vibestudio-logo-img vibestudio-logo-img-dark"
+            src={vibestudioSymbolOnDark}
+            alt={accessibleAlt}
+          />
+        </>
+      ) : (
+        <img className="vibestudio-logo-img" src={src} alt={accessibleAlt} />
+      )}
     </span>
   );
 }

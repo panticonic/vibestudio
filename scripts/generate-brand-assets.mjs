@@ -8,8 +8,12 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const sourceDir = path.join(repoRoot, "build-resources", "brand", "source");
-const defaultLightSource = path.join(sourceDir, "vibestudio-light.png");
-const defaultDarkSource = path.join(sourceDir, "vibestudio-dark.png");
+const canonicalSources = {
+  logo: path.join(sourceDir, "vibestudio-logo.svg"),
+  symbol: path.join(sourceDir, "vibestudio-symbol.svg"),
+};
+const lightBackground = "#F7F1FF";
+const darkBackground = "#100B18";
 
 const args = new Map();
 for (let i = 2; i < process.argv.length; i += 1) {
@@ -21,8 +25,10 @@ for (let i = 2; i < process.argv.length; i += 1) {
   }
 }
 
-const lightInput = path.resolve(args.get("light") ?? defaultLightSource);
-const darkInput = path.resolve(args.get("dark") ?? defaultDarkSource);
+const suppliedSources = {
+  logo: path.resolve(args.get("logo") ?? canonicalSources.logo),
+  symbol: path.resolve(args.get("symbol") ?? canonicalSources.symbol),
+};
 const shouldUpdateSource = args.has("update-source");
 
 function ensureDir(dir) {
@@ -45,64 +51,8 @@ function requireCommand(command) {
   }
 }
 
-function convert(args) {
-  run("convert", args);
-}
-
-function convertOut(args) {
-  return run("convert", args, { capture: true }).trim();
-}
-
-function cropToLogoSquare(input, output) {
-  const trim = convertOut([input, "-fuzz", "5%", "-trim", "-format", "%w %h %X %Y", "info:"]);
-  const match = trim.match(/^(\d+)\s+(\d+)\s+([+-]\d+)\s+([+-]\d+)$/);
-  if (!match) {
-    throw new Error(`Could not detect trim bounds for ${input}: ${trim}`);
-  }
-  const [, wRaw, hRaw, xRaw, yRaw] = match;
-  const w = Number(wRaw);
-  const h = Number(hRaw);
-  const x = Number(xRaw);
-  const y = Number(yRaw);
-  const sourceSize = Number(convertOut([input, "-format", "%w", "info:"]));
-  const max = Math.max(w, h);
-  const side = Math.min(sourceSize, Math.ceil(max * 1.17));
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-  const left = Math.max(0, Math.min(sourceSize - side, Math.round(cx - side / 2)));
-  const top = Math.max(0, Math.min(sourceSize - side, Math.round(cy - side / 2)));
-  convert([input, "-crop", `${side}x${side}+${left}+${top}`, "+repage", "-strip", output]);
-}
-
-function resizePng(input, output, size, extra = []) {
-  ensureDir(path.dirname(output));
-  convert([input, "-resize", `${size}x${size}`, ...extra, "-strip", "PNG32:" + output]);
-}
-
-function resizeOpaquePng(input, output, size, extra = []) {
-  ensureDir(path.dirname(output));
-  convert([
-    input,
-    "-resize",
-    `${size}x${size}`,
-    ...extra,
-    "-background",
-    topLeftPixel(input),
-    "-alpha",
-    "remove",
-    "-alpha",
-    "off",
-    "-strip",
-    "PNG24:" + output,
-  ]);
-}
-
-function optimizePng(file) {
-  try {
-    run("pngquant", ["--force", "--skip-if-larger", "--ext", ".png", "256", file]);
-  } catch {
-    // pngquant is an optional optimizer. Keep ImageMagick output when it fails.
-  }
+function convert(commandArgs) {
+  run("convert", commandArgs);
 }
 
 function writeIco(entries, output) {
@@ -128,7 +78,11 @@ function writeIco(entries, output) {
   header.writeUInt16LE(entries.length, 4);
   fs.writeFileSync(
     output,
-    Buffer.concat([header, ...buffers.flatMap((b) => [b.directory]), ...buffers.map((b) => b.data)])
+    Buffer.concat([
+      header,
+      ...buffers.map(({ directory }) => directory),
+      ...buffers.map(({ data }) => data),
+    ])
   );
 }
 
@@ -157,57 +111,54 @@ function writeText(file, value) {
   fs.writeFileSync(file, value);
 }
 
-function brandMarkSvg(stroke = "currentColor") {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 904 904" fill="none">
-  <path d="M116 805H788" stroke="${stroke}" stroke-width="32" stroke-linecap="round"/>
-  <path d="M496 805V350L204 536" stroke="${stroke}" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M155 608L496 392" stroke="${stroke}" stroke-width="32" stroke-linecap="round"/>
-  <path d="M280 238L414 372L179 519" stroke="${stroke}" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M302 184L430 312" stroke="${stroke}" stroke-width="32" stroke-linecap="round"/>
-  <path d="M338 88L510 278" stroke="${stroke}" stroke-width="32" stroke-linecap="round"/>
-  <path d="M265 127L291 153" stroke="${stroke}" stroke-width="32" stroke-linecap="round"/>
-  <path d="M496 278L557 180C592 123 552 80 507 87C470 93 450 121 450 165V236" stroke="${stroke}" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M525 355L616 222C653 168 728 189 737 238C743 274 724 295 690 303L538 342L633 437" stroke="${stroke}" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M554 578V431L709 579V394" stroke="${stroke}" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-`;
+function validateVectorSource(file, name) {
+  if (!fs.existsSync(file)) throw new Error(`Missing ${name} source: ${file}`);
+  const svg = fs.readFileSync(file, "utf8");
+  if (!/<svg\b/.test(svg) || !/<path\b/.test(svg)) {
+    throw new Error(`${name} must be an SVG containing vector paths: ${file}`);
+  }
+  if (/<image\b|data:image/i.test(svg)) {
+    throw new Error(`${name} embeds raster artwork; provide a true vector SVG: ${file}`);
+  }
 }
 
-function brandTileSvg() {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 904 904" fill="none">
-  <rect width="904" height="904" fill="#0A0B0C"/>
-  <g opacity="0.98">
-${brandMarkSvg("#F8FAFC")
-  .split("\n")
-  .slice(1, -2)
-  .map((line) => `    ${line}`)
-  .join("\n")}
-  </g>
-</svg>
-`;
-}
-
-function topLeftPixel(input) {
-  return convertOut([input, "-format", "%[pixel:p{0,0}]", "info:"]);
-}
-
-function transparentMark(input, output, size) {
-  const background = topLeftPixel(input);
+function renderSvg(input, output, width, height = width) {
   ensureDir(path.dirname(output));
-  convert([
+  run("rsvg-convert", [
+    "--width",
+    String(width),
+    "--height",
+    String(height),
+    "--output",
+    output,
     input,
-    "-alpha",
-    "set",
-    "-fuzz",
-    "8%",
-    "-transparent",
-    background,
-    "-resize",
-    `${size}x${size}`,
-    "-strip",
-    "PNG32:" + output,
   ]);
-  optimizePng(output);
+}
+
+let tempAssetIndex = 0;
+function makeSymbolTile(output, size, background) {
+  ensureDir(path.dirname(output));
+  const layer = path.join(tmp, `symbol-${size}-${tempAssetIndex++}.png`);
+  renderSvg(sources.symbol, layer, size);
+  convert([
+    "-size",
+    `${size}x${size}`,
+    `xc:${background}`,
+    layer,
+    "-gravity",
+    "center",
+    "-composite",
+    "-strip",
+    "PNG24:" + output,
+  ]);
+}
+
+function symbolOnBackgroundSvg(input, background, radius = 220) {
+  const source = fs.readFileSync(input, "utf8");
+  const viewBox = source.match(/viewBox=["']([^"']+)["']/)?.[1];
+  const contents = source.replace(/^\s*<svg\b[^>]*>\s*/, "").replace(/\s*<\/svg>\s*$/, "");
+  if (!viewBox) throw new Error(`SVG is missing a viewBox: ${input}`);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">\n  <rect width="1024" height="1024" rx="${radius}" fill="${background}"/>\n  <svg width="1024" height="1024" viewBox="${viewBox}">\n${contents}\n  </svg>\n</svg>\n`;
 }
 
 function imageSetContents() {
@@ -222,19 +173,21 @@ function imageSetContents() {
 }
 
 requireCommand("convert");
-
-if (!fs.existsSync(lightInput) || !fs.existsSync(darkInput)) {
-  throw new Error(`Missing brand source(s): ${lightInput}, ${darkInput}`);
-}
+requireCommand("rsvg-convert");
+for (const [name, file] of Object.entries(suppliedSources)) validateVectorSource(file, name);
 
 ensureDir(sourceDir);
 if (shouldUpdateSource) {
-  cropToLogoSquare(lightInput, defaultLightSource);
-  cropToLogoSquare(darkInput, defaultDarkSource);
+  for (const [name, input] of Object.entries(suppliedSources)) {
+    const destination = canonicalSources[name];
+    if (input !== destination) fs.copyFileSync(input, destination);
+  }
 }
 
-const lightSource = defaultLightSource;
-const darkSource = defaultDarkSource;
+const sources = shouldUpdateSource ? canonicalSources : suppliedSources;
+for (const rasterMaster of ["vibestudio-logo.png", "vibestudio-symbol.png"]) {
+  fs.rmSync(path.join(sourceDir, rasterMaster), { force: true });
+}
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-brand-"));
 
 try {
@@ -275,29 +228,75 @@ try {
     ensureDir(dir);
   }
 
-  fs.copyFileSync(lightSource, path.join(brandDir, "vibestudio-light.png"));
-  fs.copyFileSync(darkSource, path.join(brandDir, "vibestudio-dark.png"));
-  resizeOpaquePng(lightSource, path.join(brandDir, "vibestudio-light-512.png"), 512);
-  resizeOpaquePng(darkSource, path.join(brandDir, "vibestudio-dark-512.png"), 512);
-  resizeOpaquePng(darkSource, path.join(brandDir, "vibestudio-icon-1024.png"), 1024);
-  resizeOpaquePng(darkSource, path.join(brandDir, "vibestudio-icon-512.png"), 512);
-  transparentMark(lightSource, path.join(brandDir, "vibestudio-mark-on-light.png"), 1024);
-  transparentMark(darkSource, path.join(brandDir, "vibestudio-mark-on-dark.png"), 1024);
-  transparentMark(lightSource, path.join(brandDir, "vibestudio-mark-on-light-512.png"), 512);
-  transparentMark(darkSource, path.join(brandDir, "vibestudio-mark-on-dark-512.png"), 512);
-  writeText(path.join(brandDir, "vibestudio-mark.svg"), brandMarkSvg());
-  writeText(path.join(brandDir, "vibestudio-mark-black.svg"), brandMarkSvg("#050506"));
-  writeText(path.join(brandDir, "vibestudio-mark-white.svg"), brandMarkSvg("#F8FAFC"));
-  writeText(path.join(brandDir, "favicon.svg"), brandTileSvg());
+  for (const file of [
+    "vibestudio-light.png",
+    "vibestudio-light-512.png",
+    "vibestudio-dark.png",
+    "vibestudio-dark-512.png",
+    "vibestudio-icon-1024.png",
+    "vibestudio-icon-512.png",
+    "vibestudio-mark.svg",
+    "vibestudio-mark-black.svg",
+    "vibestudio-mark-white.svg",
+    "vibestudio-mark-on-light.png",
+    "vibestudio-mark-on-light-512.png",
+    "vibestudio-mark-on-dark.png",
+    "vibestudio-mark-on-dark-512.png",
+  ]) {
+    fs.rmSync(path.join(brandDir, file), { force: true });
+  }
+  for (const dir of [workspaceUiAssetsDir, mobileWorkspaceAssets, mobileHostAssets]) {
+    for (const file of [
+      "vibestudio-light.png",
+      "vibestudio-dark.png",
+      "vibestudio-mark-on-light.png",
+      "vibestudio-mark-on-dark.png",
+    ]) {
+      fs.rmSync(path.join(dir, file), { force: true });
+    }
+  }
+  for (const file of [
+    "vibestudio-logo.png",
+    "vibestudio-symbol.png",
+    "vibestudio-symbol-on-light.png",
+    "vibestudio-symbol-on-dark.png",
+  ]) {
+    fs.rmSync(path.join(workspaceUiAssetsDir, file), { force: true });
+  }
 
-  for (const size of [16, 32, 48, 64, 128, 180, 192, 256, 512]) {
-    resizeOpaquePng(darkSource, path.join(brandDir, `favicon-${size}.png`), size);
+  fs.copyFileSync(sources.logo, path.join(brandDir, "vibestudio-logo.svg"));
+  fs.copyFileSync(sources.symbol, path.join(brandDir, "vibestudio-symbol.svg"));
+  fs.rmSync(path.join(brandDir, "vibestudio-symbol-small.svg"), { force: true });
+  writeText(
+    path.join(brandDir, "vibestudio-symbol-on-light.svg"),
+    symbolOnBackgroundSvg(sources.symbol, lightBackground)
+  );
+  writeText(
+    path.join(brandDir, "vibestudio-symbol-on-dark.svg"),
+    symbolOnBackgroundSvg(sources.symbol, darkBackground)
+  );
+  writeText(
+    path.join(brandDir, "favicon.svg"),
+    symbolOnBackgroundSvg(sources.symbol, darkBackground)
+  );
+
+  renderSvg(sources.logo, path.join(brandDir, "vibestudio-logo.png"), 1024, 1536);
+  renderSvg(sources.logo, path.join(brandDir, "vibestudio-logo-512.png"), 341, 512);
+  renderSvg(sources.symbol, path.join(brandDir, "vibestudio-symbol.png"), 1024);
+  renderSvg(sources.symbol, path.join(brandDir, "vibestudio-symbol-512.png"), 512);
+  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-light.png"), 1024, lightBackground);
+  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-dark.png"), 1024, darkBackground);
+  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-light-512.png"), 512, lightBackground);
+  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-dark-512.png"), 512, darkBackground);
+
+  for (const size of [16, 24, 32, 48, 64, 128, 180, 192, 256, 512]) {
+    makeSymbolTile(path.join(brandDir, `favicon-${size}.png`), size, darkBackground);
   }
 
   const icoEntries = [];
   for (const size of [16, 24, 32, 48, 64, 128, 256]) {
     const file = path.join(tmp, `ico-${size}.png`);
-    resizeOpaquePng(darkSource, file, size);
+    makeSymbolTile(file, size, darkBackground);
     icoEntries.push({ size, file });
   }
   writeIco(icoEntries, path.join(repoRoot, "build-resources", "icon.ico"));
@@ -318,29 +317,31 @@ try {
   const icnsEntries = [];
   for (const [size, type] of icnsMap) {
     const file = path.join(tmp, `icns-${size}.png`);
-    resizeOpaquePng(darkSource, file, size);
+    makeSymbolTile(file, size, darkBackground);
     icnsEntries.push({ type, file });
   }
   writeIcns(icnsEntries, path.join(repoRoot, "build-resources", "icon.icns"));
 
   for (const size of [16, 24, 32, 48, 64, 128, 256, 512, 1024]) {
-    resizeOpaquePng(darkSource, path.join(linuxDir, `${size}x${size}.png`), size);
+    makeSymbolTile(path.join(linuxDir, `${size}x${size}.png`), size, darkBackground);
   }
 
-  resizeOpaquePng(lightSource, path.join(workspaceUiAssetsDir, "vibestudio-light.png"), 512);
-  resizeOpaquePng(darkSource, path.join(workspaceUiAssetsDir, "vibestudio-dark.png"), 512);
-  transparentMark(
-    lightSource,
-    path.join(workspaceUiAssetsDir, "vibestudio-mark-on-light.png"),
-    512
+  fs.copyFileSync(sources.logo, path.join(workspaceUiAssetsDir, "vibestudio-logo.svg"));
+  fs.copyFileSync(sources.symbol, path.join(workspaceUiAssetsDir, "vibestudio-symbol.svg"));
+  fs.rmSync(path.join(workspaceUiAssetsDir, "vibestudio-symbol-small.svg"), { force: true });
+  writeText(
+    path.join(workspaceUiAssetsDir, "vibestudio-symbol-on-light.svg"),
+    symbolOnBackgroundSvg(sources.symbol, lightBackground)
   );
-  transparentMark(darkSource, path.join(workspaceUiAssetsDir, "vibestudio-mark-on-dark.png"), 512);
-
+  writeText(
+    path.join(workspaceUiAssetsDir, "vibestudio-symbol-on-dark.svg"),
+    symbolOnBackgroundSvg(sources.symbol, darkBackground)
+  );
   for (const dir of [mobileWorkspaceAssets, mobileHostAssets]) {
-    resizeOpaquePng(lightSource, path.join(dir, "vibestudio-light.png"), 512);
-    resizeOpaquePng(darkSource, path.join(dir, "vibestudio-dark.png"), 512);
-    transparentMark(lightSource, path.join(dir, "vibestudio-mark-on-light.png"), 512);
-    transparentMark(darkSource, path.join(dir, "vibestudio-mark-on-dark.png"), 512);
+    renderSvg(sources.logo, path.join(dir, "vibestudio-logo.png"), 341, 512);
+    renderSvg(sources.symbol, path.join(dir, "vibestudio-symbol.png"), 512);
+    makeSymbolTile(path.join(dir, "vibestudio-symbol-on-light.png"), 512, lightBackground);
+    makeSymbolTile(path.join(dir, "vibestudio-symbol-on-dark.png"), 512, darkBackground);
   }
 
   const androidSizes = new Map([
@@ -351,21 +352,17 @@ try {
     ["mipmap-xxxhdpi", 192],
   ]);
   for (const [dir, size] of androidSizes) {
-    resizeOpaquePng(darkSource, path.join(androidRes, dir, "ic_launcher.png"), size);
-    resizeOpaquePng(darkSource, path.join(androidRes, dir, "ic_launcher_round.png"), size);
+    makeSymbolTile(path.join(androidRes, dir, "ic_launcher.png"), size, darkBackground);
+    makeSymbolTile(path.join(androidRes, dir, "ic_launcher_round.png"), size, darkBackground);
   }
-  resizePng(
-    path.join(brandDir, "vibestudio-mark-on-dark.png"),
-    path.join(androidRes, "drawable", "splash_logo.png"),
-    192
-  );
+  renderSvg(sources.symbol, path.join(androidRes, "drawable", "splash_logo.png"), 192);
   writeText(
     path.join(androidRes, "drawable", "launch_screen.xml"),
     `<?xml version="1.0" encoding="utf-8"?>\n<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n    <item android:drawable="@color/vibestudio_splash_background" />\n    <item>\n        <bitmap\n            android:gravity="center"\n            android:src="@drawable/splash_logo" />\n    </item>\n</layer-list>\n`
   );
   writeText(
     path.join(androidRes, "values", "colors.xml"),
-    `<resources>\n    <color name="vibestudio_splash_background">#0A0B0C</color>\n</resources>\n`
+    `<resources>\n    <color name="vibestudio_splash_background">${darkBackground}</color>\n</resources>\n`
   );
 
   const iosEntries = [
@@ -391,7 +388,7 @@ try {
   const writtenIosIcons = new Set();
   for (const [, , , size, filename] of iosEntries) {
     if (writtenIosIcons.has(filename)) continue;
-    resizeOpaquePng(darkSource, path.join(iosIconDir, filename), size);
+    makeSymbolTile(path.join(iosIconDir, filename), size, darkBackground);
     writtenIosIcons.add(filename);
   }
   writeJson(path.join(iosIconDir, "Contents.json"), {
@@ -404,56 +401,31 @@ try {
     info: { version: 1, author: "xcode" },
   });
 
-  resizePng(
-    path.join(brandDir, "vibestudio-mark-on-dark.png"),
-    path.join(iosLaunchLogoDir, "launch-logo.png"),
-    96
-  );
-  resizePng(
-    path.join(brandDir, "vibestudio-mark-on-dark.png"),
-    path.join(iosLaunchLogoDir, "launch-logo@2x.png"),
-    192
-  );
-  resizePng(
-    path.join(brandDir, "vibestudio-mark-on-dark.png"),
-    path.join(iosLaunchLogoDir, "launch-logo@3x.png"),
-    288
-  );
+  renderSvg(sources.symbol, path.join(iosLaunchLogoDir, "launch-logo.png"), 96);
+  renderSvg(sources.symbol, path.join(iosLaunchLogoDir, "launch-logo@2x.png"), 192);
+  renderSvg(sources.symbol, path.join(iosLaunchLogoDir, "launch-logo@3x.png"), 288);
   writeJson(path.join(iosLaunchLogoDir, "Contents.json"), imageSetContents());
 
+  const dmgLogo = path.join(tmp, "dmg-logo.png");
+  renderSvg(sources.logo, dmgLogo, 107, 160);
   convert([
     "-size",
     "660x420",
-    "gradient:#111315-#050506",
-    "(",
-    darkSource,
-    "-resize",
-    "132x132",
-    ")",
+    `gradient:#21122F-${darkBackground}`,
+    dmgLogo,
     "-gravity",
     "center",
     "-geometry",
-    "+0-44",
+    "+0-120",
     "-composite",
-    "-gravity",
-    "center",
     "-fill",
-    "#f6f6f4",
-    "-font",
-    "DejaVu-Sans-Bold",
-    "-pointsize",
-    "28",
-    "-annotate",
-    "+0+74",
-    "Vibestudio",
-    "-fill",
-    "#a8adb3",
+    "#C7B9D8",
     "-font",
     "DejaVu-Sans",
     "-pointsize",
     "13",
     "-annotate",
-    "+0+102",
+    "+0+148",
     "Agentic panel workspace",
     "-strip",
     "PNG24:" + path.join(repoRoot, "build-resources", "dmg-background.png"),
@@ -462,4 +434,4 @@ try {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-console.log("Generated Vibestudio brand assets.");
+console.log("Generated Vibestudio brand assets from true vector masters.");

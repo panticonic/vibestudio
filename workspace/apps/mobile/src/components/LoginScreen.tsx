@@ -250,8 +250,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.content}>
-        <VibestudioLogo size={84} variant="tile" style={styles.brandMark} />
-        <Text style={[styles.title, { color: colors.text }]}>Vibestudio</Text>
+        <VibestudioLogo size={156} variant="logo" style={styles.brandMark} />
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
           Opening the selected workspace
         </Text>
@@ -330,11 +329,6 @@ const styles = StyleSheet.create({
   },
   brandMark: {
     marginBottom: 18,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: "bold",
-    marginBottom: 8,
   },
   subtitle: {
     fontSize: 16,

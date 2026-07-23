@@ -23,7 +23,17 @@ import {
   type ThemeConfigValue,
 } from "../state/themeAtoms";
 
-const ACCENTS = ["amber", "gray", "iris", "blue", "cyan", "grass", "tomato", "violet"] as const;
+const ACCENTS = [
+  "violet",
+  "pink",
+  "iris",
+  "blue",
+  "cyan",
+  "grass",
+  "tomato",
+  "amber",
+  "gray",
+] as const;
 const GRAYS = ["gray", "mauve", "slate", "sage", "olive", "sand"] as const;
 const RADII: ThemeConfigValue["radius"][] = ["none", "small", "medium", "large", "full"];
 const SCALINGS: ThemeConfigValue["scaling"][] = ["90%", "95%", "100%", "105%", "110%"];

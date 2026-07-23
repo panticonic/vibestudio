@@ -1090,7 +1090,7 @@ export function LazyPanelTreeSidebar({
           px="4"
           style={{ flex: 1, textAlign: "center" }}
         >
-          <VibestudioLogo size={48} variant="mark" />
+          <VibestudioLogo size={48} variant="symbol" />
           <Text size="2" weight="medium" style={{ color: "var(--gray-12)" }}>
             No panels yet
           </Text>

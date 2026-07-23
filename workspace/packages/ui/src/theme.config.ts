@@ -12,8 +12,8 @@
  * a hardcoded literal.
  */
 export const APP_THEME = {
-  accentColor: "amber",
-  grayColor: "slate",
+  accentColor: "violet",
+  grayColor: "mauve",
   radius: "medium",
   scaling: "100%",
   panelBackground: "translucent",

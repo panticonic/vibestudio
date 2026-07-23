@@ -109,7 +109,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     padding: 32,
-    backgroundColor: "#0a0b0c",
+    backgroundColor: "#100b18",
   },
   title: {
     fontSize: 18,
@@ -127,7 +127,7 @@ const styles = StyleSheet.create({
   reloadButton: {
     paddingHorizontal: 24,
     paddingVertical: 12,
-    backgroundColor: "#0f3460",
+    backgroundColor: "#5b21b6",
     borderRadius: 8,
   },
   reloadText: {

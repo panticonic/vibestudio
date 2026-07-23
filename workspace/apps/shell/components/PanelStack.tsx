@@ -1046,7 +1046,7 @@ export function PanelStack({
         gap="3"
         style={{ flex: 1, height: "100%" }}
       >
-        <VibestudioLogo size={68} variant="mark" />
+        <VibestudioLogo size={68} variant="symbol" />
         <Spinner size="3" />
         <Text>Initializing panels...</Text>
       </Flex>
@@ -1062,7 +1062,7 @@ export function PanelStack({
         gap="3"
         style={{ flex: 1, height: "100%", textAlign: "center" }}
       >
-        <VibestudioLogo size={72} variant="mark" />
+        <VibestudioLogo size={72} variant="symbol" />
         <Text weight="medium">No panels available.</Text>
         <Text size="2" color="gray">
           Create a panel or choose another workspace to continue.
@@ -1091,7 +1091,7 @@ export function PanelStack({
     if (!visiblePanel) {
       return (
         <Flex direction="column" align="center" justify="center" gap="3" height="100%">
-          <VibestudioLogo size={56} variant="mark" />
+          <VibestudioLogo size={56} variant="symbol" />
           <Spinner size="3" />
           <Text>Loading panel...</Text>
         </Flex>

@@ -324,7 +324,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
 
       {flatItems.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <VibestudioLogo size={72} variant="mark" style={styles.emptyLogo} />
+          <VibestudioLogo size={72} variant="symbol" style={styles.emptyLogo} />
           <Text style={[styles.emptyTitle, { color: colors.text }]}>No panels open yet</Text>
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
             Tap + to choose a panel, or tap URL in the top bar and enter a website or panel source.

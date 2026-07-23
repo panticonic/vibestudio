@@ -664,7 +664,7 @@ function VibestudioMobileHostBootstrap() {
             <LaunchTimeline session={launchSession} />
             {busy ? (
               <View style={styles.loadingRow}>
-                <ActivityIndicator color="#78d4ff" />
+                <ActivityIndicator color="#a874ff" />
                 <Text style={styles.loadingText}>Preparing secure workspace access</Text>
               </View>
             ) : null}
@@ -789,7 +789,7 @@ function VibestudioMobileHostBootstrap() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#12141b",
+    backgroundColor: "#100b18",
   },
   scrollContent: {
     flexGrow: 1,
@@ -828,7 +828,7 @@ const styles = StyleSheet.create({
   },
   statusPanel: {
     backgroundColor: "#1a1f2b",
-    borderColor: "#303a4f",
+    borderColor: "#49305f",
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
@@ -840,7 +840,7 @@ const styles = StyleSheet.create({
     lineHeight: 23,
   },
   timeline: {
-    borderColor: "#303a4f",
+    borderColor: "#49305f",
     borderRadius: 8,
     borderWidth: 1,
     gap: 10,
@@ -928,7 +928,7 @@ const styles = StyleSheet.create({
   },
   stepActive: {
     backgroundColor: "#243347",
-    borderColor: "#78d4ff",
+    borderColor: "#a874ff",
   },
   stepDot: {
     backgroundColor: "#63708a",
@@ -937,7 +937,7 @@ const styles = StyleSheet.create({
     width: 6,
   },
   stepDotActive: {
-    backgroundColor: "#78d4ff",
+    backgroundColor: "#a874ff",
   },
   stepText: {
     color: "#aab6c8",
@@ -995,7 +995,7 @@ const styles = StyleSheet.create({
   },
   unitCard: {
     backgroundColor: "#111722",
-    borderColor: "#303a4f",
+    borderColor: "#49305f",
     borderRadius: 8,
     borderWidth: 1,
     gap: 6,
@@ -1040,7 +1040,7 @@ const styles = StyleSheet.create({
   },
   scannerCard: {
     backgroundColor: "#101722",
-    borderColor: "#303a4f",
+    borderColor: "#49305f",
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
@@ -1093,8 +1093,8 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   primaryButton: {
-    backgroundColor: "#78d4ff",
-    borderColor: "#78d4ff",
+    backgroundColor: "#a874ff",
+    borderColor: "#a874ff",
   },
   secondaryButton: {
     backgroundColor: "#202633",

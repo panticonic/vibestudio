@@ -1564,7 +1564,7 @@ export function MainScreen() {
       <View style={styles.contentArea}>
         {!activePanelId && (
           <View style={styles.placeholderContainer}>
-            <VibestudioLogo size={76} variant="mark" style={styles.placeholderLogo} />
+            <VibestudioLogo size={76} variant="symbol" style={styles.placeholderLogo} />
             <Text style={[styles.placeholderText, { color: colors.textSecondary }]}>
               Select a panel from the drawer
             </Text>
@@ -1579,7 +1579,7 @@ export function MainScreen() {
           !activePanelLoadError &&
           !webViewStack.some((entry) => entry.panelId === loadingPanelId) && (
             <View style={styles.loadingContainer}>
-              <VibestudioLogo size={64} variant="mark" style={styles.placeholderLogo} />
+              <VibestudioLogo size={64} variant="symbol" style={styles.placeholderLogo} />
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
                 Loading panel...
@@ -1592,7 +1592,7 @@ export function MainScreen() {
           !activePanelLeasedElsewhere &&
           !webViewStack.some((entry) => entry.panelId === activePanelId) && (
             <View style={styles.placeholderContainer}>
-              <VibestudioLogo size={72} variant="mark" style={styles.placeholderLogo} />
+              <VibestudioLogo size={72} variant="symbol" style={styles.placeholderLogo} />
               <Text style={[styles.placeholderText, { color: colors.text }]}>
                 Panel failed to load
               </Text>
@@ -1617,7 +1617,7 @@ export function MainScreen() {
 
         {activePanelId && activePanelLeasedElsewhere && (
           <View style={styles.placeholderContainer}>
-            <VibestudioLogo size={72} variant="mark" style={styles.placeholderLogo} />
+            <VibestudioLogo size={72} variant="symbol" style={styles.placeholderLogo} />
             <Text style={[styles.placeholderText, { color: colors.text }]}>
               Running on {activeRuntimeLease?.holderLabel ?? "another client"}
             </Text>

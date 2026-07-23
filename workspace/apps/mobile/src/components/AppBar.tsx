@@ -184,7 +184,7 @@ export function AppBar({
           <Menu size={23} color={colors.text} />
         </Pressable>
 
-        <VibestudioLogo size={30} variant="mark" style={styles.brandLogo} />
+        <VibestudioLogo size={30} variant="symbol" style={styles.brandLogo} />
 
         {/* Panel title */}
         <Text

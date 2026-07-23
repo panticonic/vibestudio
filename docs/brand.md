@@ -1,23 +1,24 @@
 # Vibestudio Brand Assets
 
-Vibestudio uses a single monochrome palm/tree mark with light and dark source tiles.
+Vibestudio uses a violet-to-pink vertical logo lockup and a standalone "S" glyph.
 Do not hand-edit generated output files unless you are testing locally and plan
 to regenerate the suite afterward.
 
 ## Canonical Sources
 
-- `build-resources/brand/source/vibestudio-light.png`
-- `build-resources/brand/source/vibestudio-dark.png`
+- `build-resources/brand/source/vibestudio-logo.svg`
+- `build-resources/brand/source/vibestudio-symbol.svg`
 
-These cropped PNGs are the canonical raster sources. Generated output is written
-to desktop, web, workspace, mobile host, Android, and iOS asset locations.
+These true-vector SVGs are the only canonical sources. The exact standalone
+glyph is used at every symbol size, including 16 px and 24 px. Generated output
+is written to desktop, web, workspace, mobile host, Android, and iOS locations.
 
 ## Regeneration
 
 Prerequisites:
 
+- librsvg `rsvg-convert`
 - ImageMagick `convert`
-- Optional `pngquant` for smaller PNGs
 
 Regenerate all branded assets:
 
@@ -25,11 +26,14 @@ Regenerate all branded assets:
 pnpm generate:brand-assets
 ```
 
-Crop new source art and replace the canonical source files:
+Replace the canonical source files from production-ready vector artwork:
 
 ```bash
-pnpm generate:brand-assets -- --light /path/to/light.png --dark /path/to/dark.png --update-source
+pnpm generate:brand-assets -- --logo /path/to/logo.svg --symbol /path/to/symbol.svg --update-source
 ```
+
+The generator rejects SVGs that embed raster images. Large PNG outputs retain
+full-color gradients instead of being reduced to indexed palettes.
 
 Generated surfaces include:
 
@@ -37,7 +41,8 @@ Generated surfaces include:
 - `build-resources/icon.ico`
 - `build-resources/dmg-background.png`
 - `build-resources/brand/favicon-*`
-- `build-resources/brand/vibestudio-mark*.svg`
+- `build-resources/brand/vibestudio-logo*`
+- `build-resources/brand/vibestudio-symbol*`
 - `workspace/packages/ui/src/assets/*`
 - `workspace/apps/mobile/src/assets/*`
 - `apps/mobile/assets/*`
@@ -54,22 +59,24 @@ Use the shared components instead of importing PNGs directly in product UI:
 - Workspace mobile app: `VibestudioLogo` from `workspace/apps/mobile/src/components/VibestudioLogo`
 - Shipped native host fallback: `VibestudioLogo` from `apps/mobile/VibestudioLogo.js`
 
-The web component and its four raster assets are owned together by
-`@workspace/ui`. Product UI should consume `VibestudioLogo`; the PNGs are an
-internal implementation detail rather than a second public asset package.
+The web component uses the vector masters directly. Native surfaces consume
+generated PNGs because React Native's core image component does not load SVGs.
+Product UI should consume `VibestudioLogo` rather than importing either format.
 
-Prefer `variant="tile"` for onboarding, splash-adjacent, and prominent brand
-surfaces. Prefer `variant="mark"` for title bars, empty states, loading states,
-and compact chrome.
+Prefer `variant="logo"` for onboarding and prominent brand surfaces. Use
+`variant="symbol"` for title bars, empty states, loading states, and compact
+chrome. Use `variant="tile"` only where the glyph needs its generated
+light/dark background tile.
 
-SVG mark and favicon files are generated only under `build-resources/brand/`,
-where host packaging and HTTP surfaces consume them. The cropped PNG source
-tiles remain canonical for every generated asset.
+SVG logo, symbol, background variants, and favicon files are generated under
+`build-resources/brand/` for packaging and HTTP surfaces. Static platform icons
+use the dark tile; the light tile remains available for light application surfaces.
 
 Brand color direction:
 
-- Primary surfaces are neutral ink/slate.
-- The default app accent is amber.
-- Avoid new purple/blue gradients for app chrome.
+- Primary surfaces are mauve-neutral with violet depth.
+- The default app accent is violet; pink is the secondary brand spark.
+- Brand gradients run violet through purple to pink. Keep semantic success,
+  warning, and danger colors distinct from the brand palette.
 - Panel-local syntax colors, agent colors, and user-lane colors may use their
   own semantic palettes when they are not acting as brand chrome.
