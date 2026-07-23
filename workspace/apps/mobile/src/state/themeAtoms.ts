@@ -14,7 +14,7 @@
 
 import { atom } from "jotai";
 import { Appearance, type ColorSchemeName } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { getNativeAppStorage } from "../services/nativeAppStorage";
 
 /** Current color scheme from the system ("light" | "dark" | null) */
 export const systemColorSchemeAtom = atom<ColorSchemeName>(Appearance.getColorScheme());
@@ -30,14 +30,14 @@ export const themePreferenceAtom = atom(
   (get) => get(themePreferenceBaseAtom),
   (_get, set, next: ThemePreference) => {
     set(themePreferenceBaseAtom, next);
-    void AsyncStorage.setItem(THEME_PREFERENCE_KEY, next).catch(() => {});
+    void getNativeAppStorage().setItem(THEME_PREFERENCE_KEY, next).catch(() => {});
   }
 );
 
 /** Hydrates the persisted theme preference; call once at app start. */
 export const hydrateThemePreferenceAtom = atom(null, async (_get, set) => {
   try {
-    const stored = await AsyncStorage.getItem(THEME_PREFERENCE_KEY);
+    const stored = await getNativeAppStorage().getItem(THEME_PREFERENCE_KEY);
     if (stored === "light" || stored === "dark" || stored === "system") {
       set(themePreferenceBaseAtom, stored);
     }

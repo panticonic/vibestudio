@@ -17,12 +17,7 @@ const BLOCKED_NATIVE_IMPORTS = {
     "src/services/pushNotifications.ts",
   ],
   "@react-native-async-storage/async-storage": [
-    "src/services/backgroundActionQueue.ts",
-    "src/services/connectLinkReplayGuard.ts",
-    "src/services/panelAssetFacade.ts",
-    "src/services/pushNotifications.ts",
-    "src/shellCore/localViewState.ts",
-    "src/shellCore/pinnedPanels.ts",
+    "src/services/nativeAppStorage.ts",
   ],
   // The shared WebRTC shell-connection capability (provider + reconnect + the
   // device's shell-reconnect credential, which it persists via AsyncStorage). The
@@ -101,7 +96,7 @@ function createNativeBoundary(workspaceAppRoot) {
       throw new Error(
         `Direct import of native module "${moduleName}" from workspace app code is blocked. ` +
           `Importer: ${origin || "unknown"}. ` +
-          "Use the Vibestudio capability-gated service wrapper for this native surface.",
+          "Use the Vibestudio platform-owned wrapper for this native surface.",
       );
     },
   };

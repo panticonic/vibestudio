@@ -39,8 +39,7 @@ import {
 } from "@vibestudio/shared/panel/assetHeaders";
 import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
 import type { MobileRpcClient } from "./mobileTransport";
-
-declare const require: (moduleName: string) => unknown;
+import { getNativeAppStorage } from "./nativeAppStorage";
 
 // The connected-socket type — `Socket` is a member of the default export's
 // namespace, not a top-level named export, so derive the instance type from it.
@@ -70,25 +69,8 @@ export interface PanelAssetFacade {
 // HTTP cache warm across app launches).
 // --------------------------------------------------------------------------
 
-interface AsyncStorageLike {
-  getItem(key: string): Promise<string | null>;
-  setItem(key: string, value: string): Promise<void>;
-}
-
-function getAsyncStorage(): AsyncStorageLike | null {
-  try {
-    const mod = require("@react-native-async-storage/async-storage") as {
-      default?: AsyncStorageLike;
-    } & AsyncStorageLike;
-    return mod.default ?? mod;
-  } catch {
-    return null;
-  }
-}
-
 async function readPersistedPort(): Promise<number | null> {
-  const storage = getAsyncStorage();
-  if (!storage) return null;
+  const storage = getNativeAppStorage();
   try {
     const raw = await storage.getItem(PERSISTED_PORT_KEY);
     const port = raw ? Number.parseInt(raw, 10) : NaN;
@@ -99,8 +81,7 @@ async function readPersistedPort(): Promise<number | null> {
 }
 
 async function writePersistedPort(port: number): Promise<void> {
-  const storage = getAsyncStorage();
-  if (!storage) return;
+  const storage = getNativeAppStorage();
   try {
     await storage.setItem(PERSISTED_PORT_KEY, String(port));
   } catch {

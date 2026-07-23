@@ -5,23 +5,7 @@
  * keyed by **slot id** and persist across reloads under a per-workspace key.
  */
 
-declare const require: (moduleName: string) => unknown;
-
-interface AsyncStorageLike {
-  getItem(key: string): Promise<string | null>;
-  setItem(key: string, value: string): Promise<void>;
-}
-
-function getAsyncStorage(): AsyncStorageLike | null {
-  try {
-    const mod = require("@react-native-async-storage/async-storage") as {
-      default?: AsyncStorageLike;
-    } & AsyncStorageLike;
-    return mod.default ?? mod;
-  } catch {
-    return null;
-  }
-}
+import { getNativeAppStorage } from "../services/nativeAppStorage";
 
 interface PinnedPanelsFile {
   version: 1;
@@ -33,8 +17,7 @@ function storageKey(workspaceId: string): string {
 }
 
 export async function loadPinnedPanelIds(workspaceId: string): Promise<string[]> {
-  const storage = getAsyncStorage();
-  if (!storage) return [];
+  const storage = getNativeAppStorage();
   try {
     const raw = await storage.getItem(storageKey(workspaceId));
     if (!raw) return [];
@@ -51,8 +34,7 @@ export async function savePinnedPanelIds(
   workspaceId: string,
   pinnedPanelIds: string[],
 ): Promise<void> {
-  const storage = getAsyncStorage();
-  if (!storage) return;
+  const storage = getNativeAppStorage();
   const payload: PinnedPanelsFile = { version: 1, pinnedPanelIds };
   try {
     await storage.setItem(storageKey(workspaceId), JSON.stringify(payload));
