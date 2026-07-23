@@ -130,6 +130,7 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
           displayName: "E2E Approval Extension",
           entry: "index.ts",
           extension: { activationEvents: ["*"] },
+          authority: { requests: [], evalCeilings: [] },
         },
       },
       null,
@@ -1166,18 +1167,9 @@ test.describe("Desktop Startup Approvals", () => {
           intervals: [500, 1000, 2000, 5000],
         })
         .toBe(true);
-      await expect
-        .poll(
-          async () => (await listPendingApprovals(testApp!)).filter(isUnitBatchApproval).length,
-          { timeout: 30_000, intervals: [500, 1000, 2000] }
-        )
-        .toBe(1);
-      await expect
-        .poll(() => clickShellButton(testApp!, /^Approve all$/), {
-          timeout: 30_000,
-          intervals: [250, 500, 1000],
-        })
-        .toBe(true);
+      // The launch-gate decision is the workspace's one shared startup review:
+      // it includes the shell and deferred extensions, so there must not be a
+      // second in-app prompt for the same exact versions.
       await expect
         .poll(
           async () => (await listPendingApprovals(testApp!)).filter(isUnitBatchApproval).length,

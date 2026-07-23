@@ -713,7 +713,7 @@ describe("vibestudio CLI", () => {
         buildKey: "build-terminal",
         executionDigest: "a".repeat(64),
         authorityRequests: [],
-        authorityDelegations: [],
+        authorityEvalCeilings: [],
       },
     }));
     const { main } = await import("./client.js");

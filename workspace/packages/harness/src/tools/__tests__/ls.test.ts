@@ -5,6 +5,12 @@ import { StubFs } from "./stub-fs.js";
 const CWD = "/work/ctx";
 
 describe("createLsTool", () => {
+  it("distinguishes source presence from live runtime availability", () => {
+    const tool = createLsTool(CWD, new StubFs());
+    expect(tool.description).toContain("proves only that source exists");
+    expect(tool.description).toContain("documented live runtime API");
+  });
+
   it("lists files and directories alphabetically", async () => {
     const fs = new StubFs({
       files: {

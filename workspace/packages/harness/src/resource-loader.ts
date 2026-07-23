@@ -153,6 +153,9 @@ export function formatSkillIndex(skills: SkillEntry[]): string {
   lines.push(
     'Use the read tool to load a skill: `read("<dirPath>/SKILL.md")` using the path shown next to each skill.'
   );
+  lines.push(
+    "Before acting, read every skill whose description clearly matches the task. A broad neighboring skill does not replace a more specific matching skill; when several match, use all of them."
+  );
   lines.push("(Skill files are available in the per-context folder under their repo paths.)");
   lines.push("");
   lines.push(

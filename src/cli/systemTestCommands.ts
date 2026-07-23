@@ -122,7 +122,7 @@ function routing(scope: SessionScope, stored?: StoredSystemTestRun | null) {
   };
 }
 
-function runCode(runId: string, config: StoredSystemTestRun["config"]): string {
+export function systemTestRunCode(runId: string, config: StoredSystemTestRun["config"]): string {
   const options = JSON.stringify({ runId, ...config });
   return `
     const progressKey = ${JSON.stringify(runId)};
@@ -145,19 +145,20 @@ function runCode(runId: string, config: StoredSystemTestRun["config"]): string {
     };
     let driver = null;
     let driverRetired = false;
+    let cancellationCleanup = null;
     const retireDriver = async () => {
       if (!driver || driverRetired) return;
       driverRetired = true;
-      await rpc.call("main", "runtime.retireEntity", [{ id: driver.id }]);
+      await services.runtime.retireEntity({ id: driver.id });
     };
     try {
-      driver = await rpc.call("main", "runtime.createEntity", [{
+      driver = await services.runtime.createEntity({
         kind: "do",
         source: "workers/system-test-runner",
         className: "SystemTestRunnerDO",
         key: progressKey,
         contextId: ctx.contextId,
-      }]);
+      });
       let record = null;
       let executionError = null;
       let settled = false;
@@ -169,19 +170,23 @@ function runCode(runId: string, config: StoredSystemTestRun["config"]): string {
         (error) => { executionError = error; settled = true; },
       );
       ctx.onCancel(async () => {
-        const cancelledRecord = await rpc.call(
-          driver.targetId,
-          "cancelSystemTestRun",
-          [progressKey],
-        );
-        if (cancelledRecord) {
-          const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
-            ? scope.systemTestRuns
-            : {};
-          runs[progressKey] = cancelledRecord;
-          scope.systemTestRuns = runs;
-        }
-        await retireDriver();
+        const cleanup = (async () => {
+          const cancelledRecord = await rpc.call(
+            driver.targetId,
+            "cancelSystemTestRun",
+            [progressKey],
+          );
+          if (cancelledRecord) {
+            const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
+              ? scope.systemTestRuns
+              : {};
+            runs[progressKey] = cancelledRecord;
+            scope.systemTestRuns = runs;
+          }
+          await retireDriver();
+        })();
+        cancellationCleanup = cleanup;
+        await cleanup;
       });
       while (!settled) {
         await Promise.race([
@@ -218,7 +223,12 @@ function runCode(runId: string, config: StoredSystemTestRun["config"]): string {
       });
       throw error;
     } finally {
-      await retireDriver();
+      // EvalDO starts registered cancellation cleanup before aborting ordinary
+      // execution. Let that cleanup retain the driver until its nested eval has
+      // settled; racing the ordinary finally would revoke the driver's sealed
+      // runtime identity while cancelSystemTestRun is still using it.
+      if (cancellationCleanup) await cancellationCleanup;
+      else await retireDriver();
     }
   `;
 }
@@ -259,7 +269,7 @@ async function startRun(
   await client.startRun({
     ...routing(scope, stored),
     runId,
-    code: runCode(runId, config),
+    code: systemTestRunCode(runId, config),
     syntax: "typescript",
   });
   saveSystemTestRun(stored);
@@ -648,8 +658,8 @@ async function expandTruncatedReturn(
               const chunk = source.slice(${offset}, ${offset + requestedChars});
               return {
                 length: source.length,
-                encoding: "utf16le-base64",
-                chunk: Buffer.from(chunk, "utf16le").toString("base64"),
+                encoding: "plain-string",
+                chunk,
               };
             `,
           syntax: "typescript",
@@ -669,11 +679,14 @@ async function expandTruncatedReturn(
       if (
         typeof resolvedRow?.length !== "number" ||
         typeof resolvedRow.chunk !== "string" ||
-        resolvedRow.encoding !== "utf16le-base64"
+        (resolvedRow.encoding !== "utf16le-base64" && resolvedRow.encoding !== "plain-string")
       ) {
         throw new CliError("invalid page while retrieving large system-test result");
       }
-      const decodedChunk = Buffer.from(resolvedRow.chunk, "base64").toString("utf16le");
+      const decodedChunk =
+        resolvedRow.encoding === "plain-string"
+          ? resolvedRow.chunk
+          : Buffer.from(resolvedRow.chunk, "base64").toString("utf16le");
       reportedLength ??= resolvedRow.length;
       if (resolvedRow.length !== reportedLength) {
         throw new CliError("large system-test result changed while it was being retrieved");
@@ -797,8 +810,8 @@ async function trajectory(inv: ParsedInvocation): Promise<number> {
                 const chunk = source.slice(${start}, ${end});
                 return {
                   length: source.length,
-                  encoding: "utf16le-base64",
-                  chunk: Buffer.from(chunk, "utf16le").toString("base64"),
+                  encoding: "plain-string",
+                  chunk,
                 };
               })()`
             )

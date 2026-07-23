@@ -93,6 +93,10 @@ export class StubVcs implements ToolEditingVcs {
       repoPath,
       path: requestedPath,
       contentHash: `blob:${this.version}:${fullPath}`,
+      authoredChangeId: `change:${this.version}:${fullPath}`,
+      authoredByWorkUnitId: `work:${this.version}`,
+      contentClass: "internal" as const,
+      externalKeys: [],
       mode: 0o644,
       content: { kind: "text" as const, text },
     };

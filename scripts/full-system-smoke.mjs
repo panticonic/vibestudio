@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { envelopeFromMessage } from "@vibestudio/rpc";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
 
@@ -309,6 +310,10 @@ async function runMultiUserPhase(options, resultsDir) {
   env.HOME = home;
   env.XDG_CONFIG_HOME = path.join(home, ".config");
   env.NODE_ENV = env.NODE_ENV ?? "development";
+  // This is a disposable unattended product smoke. Exercise the real
+  // acquisition coordinator while resolving its human decisions automatically;
+  // never weaken or bypass the critical receiver requirement.
+  env.VIBESTUDIO_HUB_AUTO_APPROVE = "1";
   delete env.VIBESTUDIO_PROCESS_ROLE;
   delete env.VIBESTUDIO_IDENTITY_DB_PATH;
   delete env.VIBESTUDIO_ADMIN_TOKEN;
@@ -471,6 +476,7 @@ async function runMultiUserPhase(options, resultsDir) {
           socket.send(
             JSON.stringify({
               type: "ws:auth",
+              contractVersion: RPC_CONTRACT_VERSION,
               token: session.shellToken,
               clientLabel: label,
               clientPlatform: "test",
@@ -750,37 +756,59 @@ async function runMultiUserPhase(options, resultsDir) {
     await step(
       "provenance: Bob's shared approval resolution is durable and attributed",
       async () => {
-        const worker = await childRpc(aliceChild, "runtime.createEntity", {
+        const requester = await childRpc(aliceChild, "runtime.createEntity", {
           kind: "worker",
           source: "workers/agent-worker",
           key: `multi-user-provenance-${Date.now().toString(36)}`,
         });
-        const grant = await childRpc(aliceChild, "auth.grantConnection", worker.id);
-        const workerSession = {
+        const grant = await childRpc(aliceChild, "auth.grantConnection", requester.id);
+        const requesterSession = {
           serverUrl: aliceChild.serverUrl,
           shellToken: grant.token,
-          callerId: worker.id,
+          callerId: requester.id,
         };
-        const workerSocket = await openChildSocket(workerSession, "provenance-worker");
-        const openRequest = childWsRpc(
-          workerSocket,
-          worker.id,
+        const requesterSocket = await openChildSocket(requesterSession, "provenance-requester");
+        const approvalRequest = childWsRpc(
+          requesterSocket,
+          requester.id,
           "worker",
-          "externalOpen.openExternal",
-          "https://example.com/full-system-smoke"
+          "userlandApproval.request",
+          {
+            subject: {
+              id: `full-system-smoke:${requester.id}`,
+              label: "Shared approval provenance smoke",
+            },
+            title: "Approve the shared smoke request",
+            summary: "Verifies that another workspace member can resolve one shared request.",
+            promptOptions: "choices",
+            options: [
+              { value: "allow", label: "Allow", tone: "primary" },
+              { value: "deny", label: "Deny", tone: "danger" },
+            ],
+          }
+        ).then(
+          (result) => ({ ok: true, result }),
+          (error) => ({ ok: false, error })
         );
         const deadline = Date.now() + 10_000;
         let approval = null;
         while (!approval && Date.now() < deadline) {
           const pending = await childRpc(bobChild, "shellApproval.listPending");
           approval = pending.find(
-            (entry) => entry.kind === "capability" && entry.capability === "external-browser-open"
+            (entry) =>
+              entry.kind === "userland" &&
+              entry.subject?.id === `full-system-smoke:${requester.id}`
           );
           if (!approval) await new Promise((resolve) => setTimeout(resolve, 100));
         }
-        expect(approval?.approvalId, "worker request must expose a capability approval");
-        await childRpc(bobChild, "shellApproval.resolve", approval.approvalId, "version");
-        await openRequest;
+        expect(approval?.approvalId, "installed-code request must expose a shared approval");
+        await childRpc(bobChild, "shellApproval.resolveUserland", approval.approvalId, "allow");
+        const approvalOutcome = await approvalRequest;
+        if (!approvalOutcome.ok) throw approvalOutcome.error;
+        expect(
+          approvalOutcome.result?.kind === "choice" && approvalOutcome.result?.choice === "allow",
+          `requester must receive Bob's decision, got ${JSON.stringify(approvalOutcome.result)}`
+        );
         const after = await childRpc(aliceChild, "shellApproval.listPending");
         expect(
           !after.some((entry) => entry.approvalId === approval.approvalId),

@@ -410,63 +410,23 @@ async function isPanelElementVisible(
   ).catch(() => false);
 }
 
-async function getSpectroliteViewHookState(
-  app: TestApp,
-  panelId: string
-): Promise<{
-  backlinksOpen: boolean | null;
-  filesOpen: boolean | null;
-  settingsOpen: boolean | null;
-  sidebarOpen: boolean | null;
-} | null> {
-  return executePanelScript<{
-    backlinksOpen: boolean | null;
-    filesOpen: boolean | null;
-    settingsOpen: boolean | null;
-    sidebarOpen: boolean | null;
-  } | null>(
-    app.app,
-    panelId,
-    `
-    (() => {
-      const hook = globalThis.__spectroliteE2EView__;
-      if (!hook) return null;
-      const toValue = (value?: () => boolean) => (
-        typeof value === "function" ? Boolean(value()) : null
-      );
-      return {
-        backlinksOpen: toValue(hook.isBacklinksOpen),
-        filesOpen: toValue(hook.isFilesOpen),
-        settingsOpen: toValue(hook.isSettingsOpen),
-        sidebarOpen: toValue(hook.isSidebarOpen),
-      };
-    })()
-  `
-  ).catch(() => null);
-}
-
-async function openSpectroliteViewDrawer(
+async function clickPanelControlAndObserve(
   app: TestApp,
   panelId: string,
-  method: "openBacklinks" | "openFiles" | "openSettings"
+  triggerSelector: string,
+  openSelector: string
 ): Promise<boolean> {
   return executePanelScript<boolean>(
     app.app,
     panelId,
     `
     (async () => {
-      const view = globalThis.__spectroliteE2EView__;
-      const open = view?.[${JSON.stringify(method)}];
-      if (typeof open !== "function") return false;
-      open();
+      if (document.querySelector(${JSON.stringify(openSelector)})) return true;
+      const trigger = document.querySelector(${JSON.stringify(triggerSelector)});
+      if (!(trigger instanceof HTMLElement)) return false;
+      trigger.click();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      const stateMethod = {
-        openBacklinks: "isBacklinksOpen",
-        openFiles: "isFilesOpen",
-        openSettings: "isSettingsOpen",
-      }[${JSON.stringify(method)}];
-      const readState = view?.[stateMethod];
-      return typeof readState === "function" ? Boolean(readState()) : true;
+      return Boolean(document.querySelector(${JSON.stringify(openSelector)}));
     })()
   `
   ).catch(() => false);
@@ -532,12 +492,6 @@ async function ensureMobileShellStackMode(app: ElectronApplication): Promise<voi
 
 async function openFilesDrawer(app: TestApp, panelId: string): Promise<void> {
   const isMobile = await isMobileSpectroliteLayout(app, panelId);
-  const state = await getSpectroliteViewHookState(app, panelId);
-  const alreadyOpenState = state ? (isMobile ? state.sidebarOpen : state.filesOpen) : null;
-  const alreadyOpen = alreadyOpenState === true;
-  if (alreadyOpen) {
-    return;
-  }
   const triggerSelector = isMobile
     ? '[aria-label="Open files"]'
     : '[data-testid="spectrolite-files-trigger"]';
@@ -552,24 +506,8 @@ async function openFilesDrawer(app: TestApp, panelId: string): Promise<void> {
   await expect
     .poll(
       async () => {
-        const state = await getSpectroliteViewHookState(app, panelId);
-        if (isMobile ? state?.sidebarOpen === true : state?.filesOpen === true) return true;
         if (await isPanelElementVisible(app, panelId, drawerSelector)) return true;
-
-        // The native bridge can report a dispatched click before React has
-        // accepted it (for example while the previous Radix dialog is still
-        // restoring focus). Keep retrying until the drawer itself is open.
-        const hooked = await openSpectroliteViewDrawer(app, panelId, "openFiles");
-        if (hooked) return true;
-        if (!hooked) {
-          const clicked = await clickPanelSelector(app.app, panelId, triggerSelector).catch(
-            () => false
-          );
-          if (!clicked) {
-            await clickPanelElement(app, panelId, triggerSelector).catch(() => false);
-          }
-        }
-        return false;
+        return clickPanelControlAndObserve(app, panelId, triggerSelector, drawerSelector);
       },
       {
         timeout: 30000,
@@ -646,14 +584,6 @@ async function openFileFromFilesDrawer(
 async function openBacklinksDrawer(app: TestApp, panelId: string): Promise<void> {
   const isMobile = await isMobileSpectroliteLayout(app, panelId);
   const isOpen = async (): Promise<boolean> => {
-    const state = await getSpectroliteViewHookState(app, panelId);
-    if (state) {
-      if (isMobile) {
-        if (state.sidebarOpen === true) return true;
-      } else if (state.backlinksOpen === true) {
-        return true;
-      }
-    }
     return executePanelScript<boolean>(
       app.app,
       panelId,
@@ -706,21 +636,12 @@ async function openBacklinksDrawer(app: TestApp, panelId: string): Promise<void>
     .poll(
       async () => {
         if (await isOpen()) return true;
-
-        // Prefer the explicit test hook because a synthetic DOM click can be
-        // dispatched while Radix is still restoring focus from the previous
-        // drawer. The visible trigger remains a fallback that also exercises
-        // the production interaction path.
-        const hooked = await openSpectroliteViewDrawer(app, panelId, "openBacklinks");
-        if (hooked) return true;
-        if (!hooked) {
-          await clickPanelSelector(
-            app.app,
-            panelId,
-            '[data-testid="spectrolite-backlinks-trigger"]'
-          ).catch(() => false);
-        }
-        return isOpen();
+        return clickPanelControlAndObserve(
+          app,
+          panelId,
+          '[data-testid="spectrolite-backlinks-trigger"]',
+          '[data-testid="spectrolite-backlinks-drawer"]'
+        );
       },
       { timeout: 30000, intervals: [100, 250, 500] }
     )
@@ -736,41 +657,16 @@ async function openWorkspaceSettings(app: TestApp, panelId: string): Promise<voi
     .toContain(
       isMobile ? 'aria-label="Workspace settings"' : 'data-testid="spectrolite-workspace-settings"'
     );
-  let opened =
-    (await openSpectroliteViewDrawer(app, panelId, "openSettings")) ||
-    (await clickPanelSelector(
-      app.app,
-      panelId,
-      '[data-testid="spectrolite-workspace-settings"]'
-    ).catch(() => false)) ||
-    (await executePanelScript<boolean>(
-      app.app,
-      panelId,
-      `
-      (() => {
-        const button = document.querySelector('[data-testid="spectrolite-workspace-settings"], [aria-label="Workspace settings"]');
-        if (!(button instanceof HTMLElement)) return false;
-        button.click();
-        return true;
-      })()
-    `
-    ));
-  if (!opened && isMobile) {
-    opened = await clickPanelElement(app, panelId, '[aria-label="Workspace settings"]').catch(
-      () => false
-    );
-  }
-  expect(opened).toBe(true);
   await expect
     .poll(
-      () =>
-        executePanelScript<boolean>(
-          app.app,
-          panelId,
-          `
-    Boolean(document.querySelector('[data-testid="spectrolite-workspace-settings-drawer"]'))
-  `
-        ),
+      () => clickPanelControlAndObserve(
+        app,
+        panelId,
+        isMobile
+          ? '[aria-label="Workspace settings"]'
+          : '[data-testid="spectrolite-workspace-settings"]',
+        '[data-testid="spectrolite-workspace-settings-drawer"]'
+      ),
       {
         timeout: 30000,
       }
@@ -805,15 +701,7 @@ async function closeTopDialog(app: TestApp, panelId: string): Promise<void> {
         const drawers = document.querySelectorAll(
           '[data-testid="spectrolite-files-drawer"], [data-testid="spectrolite-backlinks-drawer"], [data-testid="spectrolite-workspace-settings-drawer"]'
         );
-        const view = globalThis.__spectroliteE2EView__;
-        const hookOpen = [
-          view?.isFilesOpen?.(),
-          view?.isBacklinksOpen?.(),
-          view?.isSettingsOpen?.(),
-          view?.isSidebarOpen?.(),
-        ].some(Boolean);
         return drawers.length === 0 &&
-          !hookOpen &&
           getComputedStyle(document.body).pointerEvents !== "none";
       })()
     `
@@ -1569,7 +1457,6 @@ test.describe("Spectrolite", () => {
     await expect
       .poll(
         async () => {
-          await openSpectroliteViewDrawer(testApp!, panelId, "openBacklinks");
           return getPanelHtml(testApp!.app, panelId);
         },
         {

@@ -3,7 +3,7 @@
  *
  * System-test source is intentionally evaluated in the normal EvalDO runtime,
  * where its portable APIs actually live. This installed unit contributes only
- * an explicit, review-visible `tool-eval` delegation ceiling; the EvalDO gets
+ * an explicit, review-visible `tool-eval` ceiling; the EvalDO gets
  * no authority that this exact build did not name.
  */
 import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
@@ -24,6 +24,18 @@ interface EvalRunStatus {
   status: string;
   progress?: unknown;
   result?: { success: boolean; returnValue?: unknown; error?: string };
+}
+
+interface EvalRunResult {
+  success: boolean;
+  returnValue?: unknown;
+  error?: string;
+}
+
+interface StoredSystemTestRecord {
+  kind: "system-test-record-v1";
+  scopeKey: string;
+  length: number;
 }
 
 interface ActiveSystemTestRun {
@@ -49,6 +61,7 @@ function systemTestEvalCode(options: SystemTestRunConfig): string {
     } from "@workspace-skills/system-testing/cli";
     const options = ${JSON.stringify(options)};
     const progressKey = options.runId;
+    const recordScopeKey = "$systemTestRecord:" + progressKey;
     const durableHeartbeatLimit = 220 * 1024;
     let lastProgress = null;
     const publishProgress = (progress) => {
@@ -100,12 +113,13 @@ function systemTestEvalCode(options: SystemTestRunConfig): string {
           }
         }),
       });
-      const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
-        ? scope.systemTestRuns
-        : {};
-      runs[progressKey] = record;
-      scope.systemTestRuns = runs;
-      return record;
+      const serializedRecord = JSON.stringify(record);
+      scope[recordScopeKey] = serializedRecord;
+      return {
+        kind: "system-test-record-v1",
+        scopeKey: recordScopeKey,
+        length: serializedRecord.length,
+      };
     } catch (error) {
       const prior = lastProgress && typeof lastProgress === "object"
         ? lastProgress
@@ -130,7 +144,7 @@ export class SystemTestRunnerDO extends DurableObjectBase {
     // activation-local and its runtime entity is retired after every CLI run.
   }
 
-  @rpc({ requires: SYSTEM_TEST_OPERATOR, sensitivity: "write" })
+  @rpc({ requires: SYSTEM_TEST_OPERATOR, effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
   async runSystemTests(options: SystemTestRunConfig): Promise<unknown> {
     if (this.runs.has(options.runId)) {
       throw new Error(`System-test run ${options.runId} is already active in this runner`);
@@ -156,7 +170,14 @@ export class SystemTestRunnerDO extends DurableObjectBase {
           if (!status.result?.success) {
             throw new Error(status.result?.error ?? "system-test eval failed");
           }
-          return status.result.returnValue;
+          const stored = parseStoredSystemTestRecord(status.result.returnValue);
+          try {
+            return await this.readStoredSystemTestRecord(options.runId, stored);
+          } finally {
+            await this.rpc.call("main", "eval.deleteScopeValue", [
+              { subKey: options.runId, key: stored.scopeKey },
+            ]);
+          }
         }
         if (status.status === "cancelled" || status.status === "unknown") {
           throw new Error(`system-test eval became ${status.status}`);
@@ -168,21 +189,130 @@ export class SystemTestRunnerDO extends DurableObjectBase {
     }
   }
 
-  @rpc({ requires: SYSTEM_TEST_OPERATOR, sensitivity: "read" })
+  private async readStoredSystemTestRecord(
+    runId: string,
+    stored: StoredSystemTestRecord
+  ): Promise<unknown> {
+    const pageSize = 128 * 1024;
+    let text = "";
+    for (let offset = 0; offset < stored.length; offset += pageSize) {
+      const page = await this.rpc.call<{
+        length: number;
+        encoding: "utf16le-base64";
+        chunk: string;
+      }>("main", "eval.readScopeTextPage", [
+        {
+          subKey: runId,
+          key: stored.scopeKey,
+          offset,
+          limit: Math.min(pageSize, stored.length - offset),
+        },
+      ]);
+      if (page.length !== stored.length || page.encoding !== "utf16le-base64") {
+        throw new Error(`system-test record ${runId} changed while it was being read`);
+      }
+      text += decodeUtf16LeBase64(page.chunk);
+    }
+    if (text.length !== stored.length) {
+      throw new Error(
+        `system-test record ${runId} was truncated (${text.length}/${stored.length} UTF-16 units)`
+      );
+    }
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      throw new Error(
+        `system-test record ${runId} was not valid JSON: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  @rpc({ requires: SYSTEM_TEST_OPERATOR, effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
   async getSystemTestRunSnapshot(runId: string): Promise<SystemTestRunnerSnapshot | null> {
     const active = this.runs.get(runId);
     return active ? { progress: structuredClone(active.progress) } : null;
   }
 
-  @rpc({ requires: SYSTEM_TEST_OPERATOR, sensitivity: "write" })
-  async cancelSystemTestRun(runId: string): Promise<null> {
+  @rpc({ requires: SYSTEM_TEST_OPERATOR, effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  async cancelSystemTestRun(runId: string): Promise<unknown | null> {
     const active = this.runs.get(runId);
     if (!active) return null;
-    await this.rpc.call("main", "eval.cancel", [
-      { runId: active.evalRunId, subKey: runId },
-    ]);
-    return null;
+    try {
+      await this.rpc.call("main", "eval.cancel", [{ runId: active.evalRunId, subKey: runId }]);
+    } catch (error) {
+      throw new Error(
+        `System-test run ${runId} could not settle its inner eval cancellation: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error }
+      );
+    }
+    // The inner eval's registered cleanup owns the complete terminal record
+    // (messages, invocations, diagnostics, fixture cleanup). Cancellation must
+    // return that record to the outer durable owner before this runner is
+    // retired; a progress heartbeat is intentionally too bounded to replace it.
+    let recovered: EvalRunResult;
+    try {
+      recovered = await this.rpc.call<EvalRunResult>("main", "eval.run", [
+        {
+          subKey: runId,
+          syntax: "javascript",
+          code: `
+          const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
+            ? scope.systemTestRuns
+            : {};
+          const record = runs[${JSON.stringify(runId)}] ?? null;
+          delete runs[${JSON.stringify(runId)}];
+          scope.systemTestRuns = runs;
+          return record;
+        `,
+        },
+      ]);
+    } catch (error) {
+      throw new Error(
+        `System-test run ${runId} settled, but its terminal cleanup record could not be read: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error }
+      );
+    }
+    if (!recovered.success) {
+      throw new Error(
+        `System-test run ${runId} cleanup record could not be recovered: ${recovered.error ?? "eval failed"}`
+      );
+    }
+    return recovered.returnValue ?? null;
   }
+}
+
+function parseStoredSystemTestRecord(value: unknown): StoredSystemTestRecord {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    (value as Record<string, unknown>)["kind"] !== "system-test-record-v1" ||
+    typeof (value as Record<string, unknown>)["scopeKey"] !== "string" ||
+    !Number.isInteger((value as Record<string, unknown>)["length"]) ||
+    Number((value as Record<string, unknown>)["length"]) < 0
+  ) {
+    throw new Error("system-test eval completed without a stored record envelope");
+  }
+  return value as StoredSystemTestRecord;
+}
+
+function decodeUtf16LeBase64(value: string): string {
+  const binary = atob(value);
+  if (binary.length % 2 !== 0) throw new Error("invalid UTF-16LE scope page");
+  let result = "";
+  const chunkSize = 16_384;
+  for (let offset = 0; offset < binary.length; offset += chunkSize * 2) {
+    const end = Math.min(binary.length, offset + chunkSize * 2);
+    const units = new Uint16Array((end - offset) / 2);
+    for (let index = offset; index < end; index += 2) {
+      units[(index - offset) / 2] = binary.charCodeAt(index) | (binary.charCodeAt(index + 1) << 8);
+    }
+    result += String.fromCharCode(...units);
+  }
+  return result;
 }
 
 export default {

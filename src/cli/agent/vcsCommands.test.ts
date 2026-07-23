@@ -102,12 +102,17 @@ function semanticFixture(method: string, args: unknown[]): unknown {
       repoPath: repositoryId.slice("repository:".length),
       path: file.path,
       contentHash: "blob:1",
+      authoredChangeId: "change:source",
+      authoredByWorkUnitId: "work:source",
+      contentClass: "internal",
+      externalKeys: [],
       mode: 0o644,
       content: { kind: "text", text: "content" },
     };
   }
   if (method === "vcs.move" || method === "vcs.copy") {
     return {
+      commandId: input["commandId"],
       contextId: "context:1",
       workUnitId: "work:1",
       applicationId: "application:1",
@@ -115,6 +120,7 @@ function semanticFixture(method: string, args: unknown[]): unknown {
       changeIds: ["change:1"],
       incorporatedChangeCount: 0,
       incorporatedChangeIds: [],
+      decisionIds: [],
       workingHead: { kind: "application", applicationId: "application:1" },
     };
   }

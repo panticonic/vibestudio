@@ -209,5 +209,7 @@ describe("formatSkillIndex", () => {
     expect(lines[1]).toBe("## Available skills");
     expect(lines[2]).toBe("");
     expect(lines[3]).toBe("- **x** (packages/x) \u2014 X skill");
+    expect(out).toContain("read every skill whose description clearly matches the task");
+    expect(out).toContain("does not replace a more specific matching skill");
   });
 });

@@ -6,6 +6,7 @@ import { extensionSurfaceTests } from "./extensions-surface.js";
 import { filesystemTests } from "./filesystem.js";
 import { workerTests } from "./workers.js";
 import { workspaceTests } from "./workspace.js";
+import { completedScenarioEvidence } from "./_scenario-evidence.js";
 
 interface EvalStep {
   code: string;
@@ -71,6 +72,30 @@ function scenario(tests: { name: string }[], name: string) {
   return found as (typeof filesystemTests)[number];
 }
 
+describe("scenario tool protocol semantics", () => {
+  it("keeps pre-execution argument rejections diagnostic without calling them failed effects", () => {
+    const result = execution("I corrected the call and completed the task.", []);
+    result.messages.splice(1, 0, {
+      id: "rejected",
+      kind: "message",
+      senderId: "agent",
+      complete: true,
+      contentType: "invocation",
+      content: "tool failed",
+      invocation: {
+        id: "rejected-edit",
+        name: "edit",
+        status: "error",
+        terminalOutcome: "tool_error",
+        isError: true,
+        error: "Invalid arguments for tool edit: /newText: Expected required property",
+      },
+    } as unknown as TestExecutionResult["messages"][number]);
+
+    expect(completedScenarioEvidence(result, [])).toMatchObject({ passed: true });
+  });
+});
+
 describe("filesystem semantic validators", () => {
   const cases = [
     [
@@ -130,6 +155,16 @@ describe("build semantic validators", () => {
     expect(scenario(buildTests, "build-workspace-package").validate(result).passed).toBe(true);
     expect(
       scenario(buildTests, "build-workspace-package").validate(
+        execution("The build report completed successfully.", [
+          {
+            code: "return services.build.getBuildReport('panels/app');",
+            returnValue: { unit: "@workspace-panels/app", status: "ok", success: true },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      scenario(buildTests, "build-workspace-package").validate(
         execution("The build succeeded.", [
           { code: "return services.build.getBuild('panels/app');", returnValue: { ok: true } },
         ])
@@ -146,6 +181,26 @@ describe("build semantic validators", () => {
       },
     ]);
     expect(scenario(buildTests, "import-built-package").validate(result).passed).toBe(true);
+    expect(
+      scenario(buildTests, "import-built-package").validate(
+        execution("The package exports a ready function and its version.", [
+          {
+            code: "import * as unit from '@workspace-skills/workspace-dev'; return Object.keys(unit);",
+            returnValue: ["ready", "version"],
+          },
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      scenario(buildTests, "import-built-package").validate(
+        execution("The package exports a ready function and its version.", [
+          {
+            code: "const unit = await import('@workspace-skills/workspace-dev'); return Object.keys(unit);",
+            returnValue: ["ready", "version"],
+          },
+        ])
+      ).passed
+    ).toBe(true);
     expect(
       scenario(buildTests, "import-built-package").validate(
         execution("The package had useful exports.", [

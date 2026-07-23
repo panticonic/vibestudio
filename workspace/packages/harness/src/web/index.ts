@@ -31,6 +31,8 @@ export interface WebToolsDeps {
     rpc: {
         call: WebRpcCaller;
     };
+    /** Monotone session-latch recorder. It must settle before content is returned to the model. */
+    recordIngestion?: (entry: { key: string; via: string; classification: "external" | "derived" }) => Promise<void>;
     /**
      * Asks the host whether a credential exists for a given provider origin
      * (e.g. `https://api.tavily.com/`). The host implements this by querying
@@ -195,6 +197,10 @@ export function createWebTools(deps: WebToolsDeps): AgentTool[] {
                 const provider = await selectSearchProvider(deps.hasCredentialForOrigin);
                 const t0 = now();
                 const results = await runProvider(provider, query, limit, deps, withAbort(fetcher, signal));
+                if (deps.recordIngestion) {
+                    const domains = [...new Set(results.map((result) => hostnameOf(result.url)).filter((host): host is string => Boolean(host)))];
+                    await Promise.all(domains.map((host) => deps.recordIngestion!({ key: `web:${host}`, via: `web-search:${provider}`, classification: "external" })));
+                }
                 const elapsedMs = now() - t0;
                 const text = formatSearchResults(results, provider, query);
                 return {
@@ -224,11 +230,14 @@ export function createWebTools(deps: WebToolsDeps): AgentTool[] {
                 if (!/^https?:\/\//iu.test(url)) {
                     throw new Error("web_fetch: 'url' must start with http:// or https://");
                 }
+                const sourceHost = hostnameOf(url);
+                if (!sourceHost) throw new Error("web_fetch: URL has no canonical host");
                 const t0 = now();
                 const cached = urlCacheGet(url);
                 if (cached) {
                     const headSlice = await readUtf8BlobRange(deps.rpc, cached.digest, 0, headLength);
                     if (headSlice !== null) {
+                        await deps.recordIngestion?.({ key: `web:${sourceHost}`, via: "web-fetch-cache", classification: "external" });
                         const truncated = cached.size > headSlice.bytes;
                         const summary = [
                             `# ${cached.title}`,
@@ -258,6 +267,7 @@ export function createWebTools(deps: WebToolsDeps): AgentTool[] {
                     // Blob was pruned out from under us; fall through and re-fetch.
                 }
                 const page = await extractPage(url, withAbort(fetcher, signal) as never, signal);
+                await deps.recordIngestion?.({ key: `web:${sourceHost}`, via: "web-fetch", classification: "external" });
                 const stored = await deps.rpc.call<{
                     digest: string;
                     size: number;

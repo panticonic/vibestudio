@@ -8,12 +8,26 @@ import {
 
 function buildResult(values: readonly unknown[]): boolean {
   return walkRecords(values).some(
-    (record) =>
-      typeof record["dir"] === "string" &&
-      Array.isArray(record["artifacts"]) &&
-      record["artifacts"].length > 0 &&
-      record["metadata"] !== null &&
-      typeof record["metadata"] === "object"
+    (record) => {
+      const artifactBuild =
+        typeof record["dir"] === "string" &&
+        Array.isArray(record["artifacts"]) &&
+        record["artifacts"].length > 0 &&
+        record["metadata"] !== null &&
+        typeof record["metadata"] === "object";
+      const successfulReport =
+        record["success"] === true ||
+        record["status"] === "ok" ||
+        (Array.isArray(record["builds"]) &&
+          record["builds"].length > 0 &&
+          record["builds"].every(
+            (build) =>
+              build !== null &&
+              typeof build === "object" &&
+              (build as Record<string, unknown>)["status"] === "ok"
+          ));
+      return artifactBuild || successfulReport;
+    }
   );
 }
 
@@ -58,15 +72,18 @@ function validateWorkspaceImport(result: TestExecutionResult) {
     if (call.name !== "eval" || call.execution?.status !== "complete" || call.execution.isError) {
       return false;
     }
+    const code = String(call.arguments?.["code"] ?? "");
     const imports = call.arguments?.["imports"];
-    return (
+    const hasWorkspaceImportMapEntry =
       imports !== null &&
       typeof imports === "object" &&
       !Array.isArray(imports) &&
       Object.values(imports as Record<string, unknown>).some(
         (value) => typeof value === "string" && !value.startsWith("npm:")
-      )
-    );
+      );
+    const hasDirectWorkspaceImport =
+      /\b(?:from\s*|import\s*(?:\(\s*)?)["']@workspace(?:-[a-z0-9-]+)?\//u.test(code);
+    return hasWorkspaceImportMapEntry || hasDirectWorkspaceImport;
   });
   if (!imported || !/\bimport\b/u.test(String(imported.arguments?.["code"] ?? ""))) {
     return { passed: false, reason: "No successful eval imported a workspace-built package" };

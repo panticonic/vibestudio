@@ -26,6 +26,7 @@ export type WorkspaceRepoCreationScope =
   | { kind: "content"; section: "projects" }
   | { kind: "buildable-package"; section: "packages" }
   | { kind: "buildable-worker"; section: "workers" }
+  | { kind: "buildable-regular-worker"; section: "workers" }
   | { kind: "created-repository"; section: WorkspaceRepoSection }
   | { kind: "buildable-panel-with-derived"; section: "panels" };
 
@@ -153,8 +154,11 @@ export class WorkspaceRepoFixtureLifecycle {
       if (!this.repoName || !repoPath) {
         throw new Error(`Seeded workspace repository fixture ${this.testName} has no basename`);
       }
+      const seedFiles = repositorySeedFiles(this.repoName, this.fixture).sort((left, right) =>
+        left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+      );
       const files = await Promise.all(
-        repositorySeedFiles(this.repoName, this.fixture).map(async (file) => {
+        seedFiles.map(async (file) => {
           const stored = await this.port.blobstore.putText(file.content);
           return {
             path: file.path,
@@ -733,11 +737,57 @@ function repositorySeedFiles(
           "export class FixtureWorkerDO extends DurableObjectBase {",
           "  protected createTables(): void {}",
           "",
-          '  @rpc({ principals: ["host", "entity"], sensitivity: "write" })',
+          '  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })',
           "  async inspectProbe(): Promise<unknown> {",
           '    return this.env["SYSTEM_TEST_PROBE"] ?? null;',
           "  }",
           "}",
+          "",
+        ].join("\n"),
+      },
+    ];
+  }
+  if (fixture.kind === "buildable-regular-worker") {
+    return [
+      {
+        path: "package.json",
+        content: `${JSON.stringify(
+          {
+            name: repoName,
+            version: "0.0.0",
+            private: true,
+            type: "module",
+            vibestudio: {
+              title: `System Test ${repoName}`,
+              kind: "worker",
+              entry: "index.ts",
+            },
+            dependencies: { "@workspace/runtime": "workspace:*" },
+          },
+          null,
+          2
+        )}\n`,
+      },
+      {
+        path: "index.ts",
+        content: [
+          'import { createWorkerRuntime, handleWorkerRpc, type ExecutionContext, type WorkerEnv } from "@workspace/runtime/worker";',
+          "",
+          "let exposedFor: string | null = null;",
+          "",
+          "export default {",
+          "  async fetch(request: Request, env: WorkerEnv, _ctx: ExecutionContext) {",
+          "    const runtime = createWorkerRuntime(env);",
+          "    if (exposedFor !== env.WORKER_ID) {",
+          '      runtime.rpc.expose("inspectProbe", () => ({',
+          "        ready: true,",
+          '        systemTestProbe: env["SYSTEM_TEST_PROBE"] ?? null,',
+          "      }));",
+          "      exposedFor = env.WORKER_ID;",
+          "    }",
+          '    return handleWorkerRpc(runtime, request) ?? new Response("ready");',
+          "  },",
+          "};",
           "",
         ].join("\n"),
       },

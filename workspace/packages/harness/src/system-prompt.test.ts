@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { composeSystemPrompt, VIBESTUDIO_BASE_SYSTEM_PROMPT } from "./system-prompt.js";
 
 describe("composeSystemPrompt", () => {
+  it("keeps authored source distinct from live platform state", () => {
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "Filesystem tools show what is authored in the workspace"
+    );
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("documented live runtime/service APIs");
+  });
+
   it("appends Vibestudio, workspace, skills, and channel prompts by default", () => {
     const prompt = composeSystemPrompt({
       workspacePrompt: "WORKSPACE",
@@ -77,6 +84,13 @@ describe("composeSystemPrompt", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("`docs_search`/`docs_open`");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("Keep discovery bounded");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("instead of continuing broad source searches");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "not eval globals or `@workspace/runtime` exports"
+    );
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "never emit `docs.search` or `docs.open` inside eval code"
+    );
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("typed `workspace_service` tool");
   });
 
   it("includes core conversation fork and subagent operating guidance", () => {

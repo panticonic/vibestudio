@@ -151,7 +151,7 @@ describe("approval flow e2e", () => {
       approvalKind: "credential",
       actionsJson: JSON.stringify([
         { id: "once", title: "Once" },
-        { id: "version", title: "Trust Version" },
+        { id: "version", title: "Trust this version" },
         { id: "deny", title: "Deny" },
         { id: "open", title: "Open" },
         { id: "session", title: "Session" },

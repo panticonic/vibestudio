@@ -117,22 +117,25 @@ test.describe("Panel navigation convergence", () => {
         })
         .toContain("Start a chat");
       await expect
-        .poll(() => clickPanelSelector(testApp!.app, initialPanelId, 'a[href*="/panels/chat/"]'), {
-          timeout: 30_000,
-          intervals: [250, 500, 1_000],
-        })
-        .toBe(true);
-
-      await expect
         .poll(
           async () => {
             try {
               const panel = (await getPanelTree(testApp!.app))[0];
-              return (
+              const converged =
                 panel?.id === initialPanelId &&
                 panel.snapshot?.source === "panels/chat" &&
-                (await isPanelReady(testApp!.app, initialPanelId))
-              );
+                (await isPanelReady(testApp!.app, initialPanelId));
+              if (converged) return true;
+
+              // A dispatched native click is not the navigation outcome. Keep
+              // the idempotent user action coupled to the authoritative panel
+              // tree until the same panel has actually converged.
+              await clickPanelSelector(
+                testApp!.app,
+                initialPanelId,
+                'a[href*="/panels/chat/"]'
+              ).catch(() => false);
+              return false;
             } catch {
               return false;
             }

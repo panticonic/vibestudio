@@ -97,6 +97,7 @@ const LIVE_SESSION_ROW = {
   id: "session:work",
   kind: "session",
   source: "agent-cli",
+  key: "work",
   contextId: "ctx_1",
   title: "work",
   createdAt: 1,

@@ -18,6 +18,7 @@ import {
   clickPanelSelector,
   clickPanelText,
   createManagedTestWorkspace,
+  executePanelScript,
   getElectronClipboardText,
   getFocusedPanelWebContentsId,
   getPanelDiagnostics,
@@ -623,6 +624,102 @@ test.describe("Terminal Startup", () => {
         intervals: [250, 500, 1000],
       })
       .toContain("xterm");
+
+    const initialChrome = await executePanelScript<{
+      title: string;
+      sessionLabel: string | undefined;
+      settingsInHeader: boolean;
+      horizontalOverflow: number;
+    }>(
+      app,
+      terminalPanelId,
+      `(() => {
+        const viewport = document.querySelector('.xterm-viewport');
+        const settings = document.querySelector('[aria-label="Terminal settings"]');
+        const label = document.querySelector('.terminal-pane-header__identity');
+        return {
+          title: document.title,
+          sessionLabel: label?.textContent?.trim() || undefined,
+          settingsInHeader: Boolean(settings?.closest('.terminal-pane-header')),
+          horizontalOverflow: viewport
+            ? Math.max(0, viewport.scrollWidth - viewport.clientWidth)
+            : Number.POSITIVE_INFINITY,
+        };
+      })()`
+    );
+    expect(initialChrome).toMatchObject({
+      title: "Terminal",
+      settingsInHeader: true,
+      horizontalOverflow: 0,
+    });
+    expect(initialChrome.sessionLabel).not.toContain("shellIntegration-bash.sh");
+
+    expect(await clickPanelSelector(app, terminalPanelId, '[aria-label="Terminal settings"]')).toBe(
+      true
+    );
+    await expect
+      .poll(
+        () =>
+          executePanelScript<boolean>(
+            app,
+            terminalPanelId,
+            `Boolean(document.querySelector('[aria-label="Panel name"]'))`
+          ),
+        { timeout: 5_000, intervals: [100, 250, 500] }
+      )
+      .toBe(true);
+    await executePanelScript(
+      app,
+      terminalPanelId,
+      `(() => {
+        const input = document.querySelector('[aria-label="Panel name"]');
+        if (!(input instanceof HTMLInputElement)) throw new Error('Panel name input not found');
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        setter?.call(input, 'Project terminal');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      })()`
+    );
+    await expect
+      .poll(() => executePanelScript<string>(app, terminalPanelId, "document.title"), {
+        timeout: 5_000,
+        intervals: [100, 250, 500],
+      })
+      .toBe("Project terminal");
+    await expect
+      .poll(
+        () =>
+          app.evaluate((_electron, panelId) => {
+            type PanelNode = { id: string; title?: string; children?: PanelNode[] };
+            const tree = (
+              globalThis as { __testApi?: { getPanelTree: () => PanelNode[] } }
+            ).__testApi?.getPanelTree();
+            const visit = (nodes: PanelNode[]): string | undefined => {
+              for (const node of nodes) {
+                if (node.id === panelId) return node.title;
+                const nested = visit(node.children ?? []);
+                if (nested !== undefined) return nested;
+              }
+              return undefined;
+            };
+            return visit(tree ?? []);
+          }, terminalPanelId),
+        { timeout: 5_000, intervals: [100, 250, 500] }
+      )
+      .toBe("Project terminal");
+    expect(await clickPanelSelector(app, terminalPanelId, '[aria-label="Terminal settings"]')).toBe(
+      true
+    );
+
+    await executePanelScript(
+      app,
+      terminalPanelId,
+      `(() => {
+        const samples = [document.documentElement.clientWidth];
+        const observer = new ResizeObserver(() => samples.push(document.documentElement.clientWidth));
+        observer.observe(document.documentElement);
+        window.__terminalPanelWidthProbe = { samples, observer };
+      })()`
+    );
     expect(await clickPanelSelector(app, terminalPanelId, ".xterm")).toBe(true);
     await expect
       .poll(async () => getFocusedPanelWebContentsId(app), {
@@ -630,6 +727,17 @@ test.describe("Terminal Startup", () => {
         intervals: [100, 250, 500],
       })
       .toBe(terminalPanelId);
+    await delay(500);
+    const clickWidths = await executePanelScript<number[]>(
+      app,
+      terminalPanelId,
+      `(() => {
+        const probe = window.__terminalPanelWidthProbe;
+        probe?.observer?.disconnect();
+        return probe?.samples ?? [];
+      })()`
+    );
+    expect(new Set(clickWidths).size).toBe(1);
     await typePanelText(app, terminalPanelId, "\u0015printf 'vibestudio-keyboard-input\\n'\r");
     await expectScrollbackToContain(app, terminalPanelId, sessionRef, "vibestudio-keyboard-input");
     await expectRenderedToContain(app, terminalPanelId, sessionRef, "vibestudio-keyboard-input");

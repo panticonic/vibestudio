@@ -141,32 +141,26 @@ class MemoryCredentialUseGrantStore {
   }
 
   upsert(credentialId: string, grant: CredentialUseGrant): void {
-    const key = [
-      credentialId,
-      grant.bindingId,
-      grant.use,
-      grant.resource,
-      grant.action,
-      grant.scope,
-      grant.repoPath,
-      grant.effectiveVersion,
-    ].join("\x00");
+    const key = credentialUseGrantTestKey(credentialId, grant);
     const index = this.grants.findIndex(
-      (entry) =>
-        [
-          entry.credentialId,
-          entry.bindingId,
-          entry.use,
-          entry.resource,
-          entry.action,
-          entry.scope,
-          entry.repoPath,
-          entry.effectiveVersion,
-        ].join("\x00") === key
+      (entry) => credentialUseGrantTestKey(entry.credentialId, entry) === key
     );
     if (index >= 0) this.grants.splice(index, 1);
     this.grants.push({ credentialId, ...grant });
   }
+}
+
+function credentialUseGrantTestKey(credentialId: string, grant: CredentialUseGrant): string {
+  return [
+    credentialId,
+    grant.bindingId,
+    grant.use,
+    grant.resource,
+    grant.action,
+    grant.scope,
+    grant.scope === "version" ? grant.repoPath : grant.agentId,
+    grant.scope === "version" ? grant.effectiveVersion : "",
+  ].join("\x00");
 }
 
 class MemoryAuditLog {
@@ -387,18 +381,13 @@ describe("credentialService", () => {
     expect(listedByOtherCaller).toHaveLength(1);
     expect(JSON.stringify(listedByOtherCaller)).not.toContain("secret-token");
 
+    approvalQueue.request.mockClear();
     await service.handler(
       { caller: verifiedTestCaller("worker:test", "worker") },
       "revokeCredential",
       [{ credentialId: stored.id }]
     );
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "capability",
-        capability: "credential-revoke",
-        callerId: "worker:test",
-      })
-    );
+    expect(approvalQueue.request).not.toHaveBeenCalled();
     expect((await store.loadUrlBound(stored.id))?.revokedAt).toEqual(expect.any(Number));
     expect(auditLog.entries).toHaveLength(1);
   });
@@ -829,7 +818,7 @@ describe("credentialService", () => {
     expect(approvalQueue.requestCredentialInput).not.toHaveBeenCalled();
   });
 
-  it("prompts userland callers without owner or grant access before revoking credentials", async () => {
+  it("does not create a second approval after dispatcher admission for credential revocation", async () => {
     const store = new MemoryCredentialStore();
     const approvalQueue = approvingQueue("once");
     const service = createCredentialService({
@@ -850,67 +839,15 @@ describe("credentialService", () => {
       ]
     )) as StoredCredentialSummary;
 
+    approvalQueue.request.mockClear();
     await service.handler(
       { caller: verifiedTestCaller("worker:other", "worker") },
       "revokeCredential",
       [{ credentialId: stored.id }]
     );
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "capability",
-        capability: "credential-revoke",
-        severity: "severe",
-        callerId: "worker:other",
-        callerKind: "worker",
-        repoPath: "/other",
-        effectiveVersion: "hash-2",
-        title: "Revoke Example API",
-        resource: { type: "credential", label: "Credential", value: "Example API" },
-      })
-    );
+    expect(approvalQueue.request).not.toHaveBeenCalled();
     expect((await store.loadUrlBound(stored.id))?.revokedAt).toEqual(expect.any(Number));
-  });
-
-  it("does not revoke credentials when the out-of-band revocation approval is denied", async () => {
-    const store = new MemoryCredentialStore();
-    const approvalQueue = approvingQueue("once");
-    const service = createCredentialService({
-      credentialStore: store as never,
-      approvalQueue: approvalQueue as never,
-    });
-
-    const stored = (await service.handler(
-      { caller: verifiedTestCaller("worker:owner", "worker") },
-      "storeCredential",
-      [
-        {
-          label: "Example API",
-          audience: [{ url: "https://api.example.test/", match: "origin" }],
-          injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
-          material: { type: "bearer-token", token: "secret-token" },
-        },
-      ]
-    )) as StoredCredentialSummary;
-    approvalQueue.request.mockResolvedValue("deny");
-
-    await expect(
-      service.handler(
-        { caller: verifiedTestCaller("worker:other", "worker") },
-        "revokeCredential",
-        [{ credentialId: stored.id }]
-      )
-    ).rejects.toThrow(/Credential revocation denied/);
-
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "capability",
-        capability: "credential-revoke",
-        callerId: "worker:other",
-      })
-    );
-
-    expect((await store.loadUrlBound(stored.id))?.revokedAt).toBeUndefined();
   });
 
   it("defers resolveCredential approval for a deferrable DO caller instead of awaiting inline", async () => {
@@ -1780,6 +1717,8 @@ describe("credentialService", () => {
         reason: "Provided authentication token is expired. Please try signing in again.",
         failureCode: "auth_or_credentials",
       },
+      contentClass: "internal",
+      externalKeys: [],
       publishedAt: "2026-06-18T15:00:00.000Z",
     };
     const eventEnvelope = (payload: AgenticEvent, seq: number): ChannelEnvelope<AgenticEvent> => ({
@@ -1789,6 +1728,8 @@ describe("credentialService", () => {
       from: participant,
       payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
       payload,
+      contentClass: "internal",
+      externalKeys: [],
       publishedAt: payload.createdAt,
     });
     const opened: AgenticEvent<"turn.opened"> = {
@@ -2988,7 +2929,7 @@ describe("credentialService", () => {
     );
   });
 
-  it("authorizes client config status and prompts before deletion", async () => {
+  it("authorizes client config status and does not duplicate dispatcher deletion approval", async () => {
     const clientConfigStore = new MemoryClientConfigStore();
     await clientConfigStore.save({
       configId: "google-workspace",
@@ -3037,18 +2978,7 @@ describe("credentialService", () => {
       [{ configId: "google-workspace" }]
     );
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "capability",
-        capability: "client-config-delete",
-        callerId: "panel-other",
-        title: "Disable google-workspace",
-        operation: expect.objectContaining({
-          kind: "service-setup",
-          object: expect.objectContaining({ value: "google-workspace" }),
-        }),
-      })
-    );
+    expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(await clientConfigStore.load("google-workspace")).toMatchObject({ status: "deleted" });
   });
 
