@@ -172,6 +172,24 @@ describe("HeadlessSession", () => {
     expect(config.rpc.call).not.toHaveBeenCalled();
   });
 
+  it("provides a deterministic one-rejection validation recovery seam", async () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    const methods = (session as any).buildValidationRetryProbeMethods() as Record<
+      string,
+      { execute: (args: unknown) => Promise<unknown> }
+    >;
+    const probe = methods["validation_retry_probe"]!;
+
+    await expect(probe.execute({ value: "first" })).rejects.toThrow(
+      "Invalid arguments for tool validation_retry_probe"
+    );
+    await expect(probe.execute({ value: "corrected" })).resolves.toEqual({
+      ok: true,
+      recovered: true,
+      value: "corrected",
+    });
+  });
+
   it("dispose is idempotent", async () => {
     const session = HeadlessSession.create({
       config: createConfig(),

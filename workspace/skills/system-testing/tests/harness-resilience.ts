@@ -1,4 +1,5 @@
 import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "../types.js";
+import type { HeadlessSession } from "@workspace/agentic-session";
 import { getToolCalls } from "./_helpers.js";
 import { completedScenarioEvidence, invocationReturnValue } from "./_scenario-evidence.js";
 
@@ -153,23 +154,16 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function orchestrateFollowupTurn(
-  context: TestOrchestrationContext
+async function captureOrchestratedSession(
+  context: TestOrchestrationContext,
+  spawnOptions: Parameters<TestOrchestrationContext["runner"]["spawn"]>[0],
+  exercise: (session: HeadlessSession) => Promise<void>
 ): Promise<TestExecutionResult> {
   const startedAt = Date.now();
-  const session = await context.runner.spawn();
+  const session = await context.runner.spawn(spawnOptions);
   let error: string | undefined;
   try {
-    await context.sendAndWait(
-      session,
-      "Use a harmless read-only tool to inspect something small and summarize it.",
-      "initial tool-using turn"
-    );
-    await context.sendAndWait(
-      session,
-      "Now give me a fresh one-sentence recap of what you observed.",
-      "follow-up turn"
-    );
+    await exercise(session);
   } catch (cause) {
     error = formatError(cause);
   }
@@ -191,6 +185,39 @@ async function orchestrateFollowupTurn(
     execution.cleanupErrors = [...(execution.cleanupErrors ?? []), ...cleanupErrors];
   }
   return execution;
+}
+
+async function orchestrateFollowupTurn(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  return captureOrchestratedSession(context, undefined, async (session) => {
+    await context.sendAndWait(
+      session,
+      "Use a harmless read-only tool to inspect something small and summarize it.",
+      "initial tool-using turn"
+    );
+    await context.sendAndWait(
+      session,
+      "Now give me a fresh one-sentence recap of what you observed.",
+      "follow-up turn"
+    );
+  });
+}
+
+async function orchestrateValidationRetry(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  return captureOrchestratedSession(
+    context,
+    { validationRetryProbeTool: true },
+    async (session) => {
+      await context.sendAndWait(
+        session,
+        "Check whether the validation-recovery probe remains usable after it rejects a request.",
+        "validation retry turn"
+      );
+    }
+  );
 }
 
 function validateFollowupTurn(result: TestExecutionResult) {
@@ -273,7 +300,8 @@ export const harnessResilienceTests: TestCase[] = [
       "Tool validation errors are visible and retry succeeds without poisoning the transcript",
     category: "harness-resilience",
     prompt:
-      "Show that a malformed tool request is visible and a corrected request of the same kind still works.",
+      "Check whether the validation-recovery probe remains usable after it rejects a request.",
+    orchestrate: orchestrateValidationRetry,
     validate: (result) => recoverySequence(result, invalidToolArguments, "invalid-argument", true),
   },
   {

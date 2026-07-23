@@ -220,6 +220,11 @@ export class HeadlessRunner {
      * calls and typed UI event publication without a browser panel.
      */
     syntheticPanelUiTools?: boolean;
+    /**
+     * Advertise a deterministic first-call argument-rejection probe. This is a
+     * fault-injection seam for harness resilience tests, not a product tool.
+     */
+    validationRetryProbeTool?: boolean;
   }): Promise<HeadlessSession> {
     const policy = this.shared.modelPolicy;
     const model = policy.activeModel;
@@ -263,6 +268,7 @@ export class HeadlessRunner {
       className: opts?.className ?? "AiChatWorker",
       ...(agentContextId ? { contextId: agentContextId } : {}),
       includeSyntheticPanelUiMethods: opts?.syntheticPanelUiTools === true,
+      includeValidationRetryProbeMethod: opts?.validationRetryProbeTool === true,
       // The model rides the spawned agent's CREATION config (per-agent, seeded
       // from stateArgs.agentConfig) so it inherits the orchestrator's model.
       extraConfig: {
