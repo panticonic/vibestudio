@@ -107,6 +107,14 @@ export interface EgressProxyDeps {
   credentialUseGrantStore?: CredentialUseGrantStoreLike;
   credentialLifecycle?: Pick<CredentialLifecycle, "refreshIfNeeded" | "refreshCredential">;
   recordExternalIngestion?: (caller: VerifiedCaller, url: URL, via: string) => void | Promise<void>;
+  /**
+   * Structural mission egress gate. A true result requires redirect:manual so
+   * a redirect target cannot escape the reviewed origin set implicitly.
+   */
+  assertMissionNetworkExposure?: (
+    caller: VerifiedCaller,
+    targetUrl: URL
+  ) => boolean | Promise<boolean>;
   authorizeInternalRequest?: (input: {
     caller: VerifiedCaller;
     targetUrl: URL;
@@ -412,11 +420,12 @@ export class EgressProxy {
       credentialUse: "fetch",
       initialBytesOut: bytesOut,
       replaySafe: true,
-      execute: async (targetUrl, headers) => {
+      execute: async (targetUrl, headers, _authorization, manualRedirects) => {
         const response = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
+          redirect: manualRedirects ? "manual" : "follow",
         });
         const responseBody = new Uint8Array(await response.arrayBuffer());
         await this.deps.recordExternalIngestion?.(
@@ -504,12 +513,13 @@ export class EgressProxy {
       // entirely for the streaming path to keep the contract simple.
       replaySafe: false,
       maxRetries: 0,
-      execute: async (targetUrl, headers, authorization) => {
+      execute: async (targetUrl, headers, authorization, manualRedirects) => {
         const upstream = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
           signal: abortSignal,
+          redirect: manualRedirects ? "manual" : "follow",
           // undici requires half-duplex to be declared for stream bodies.
           ...(bodyIsStream ? { duplex: "half" } : {}),
         } as RequestInit);
@@ -628,11 +638,12 @@ export class EgressProxy {
       gitIntent: params.gitIntent,
       initialBytesOut: bytesOut,
       replaySafe: false,
-      execute: async (targetUrl, headers) => {
+      execute: async (targetUrl, headers, _authorization, manualRedirects) => {
         const response = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
+          redirect: manualRedirects ? "manual" : "follow",
         });
         const responseBody = new Uint8Array(await response.arrayBuffer());
         return {
@@ -854,6 +865,27 @@ export class EgressProxy {
     return headers;
   }
 
+  private async missionRequiresManualRedirects(
+    caller: VerifiedCaller,
+    targetUrl: URL
+  ): Promise<boolean> {
+    try {
+      return (await this.deps.assertMissionNetworkExposure?.(caller, targetUrl)) === true;
+    } catch (error) {
+      if (error instanceof ForwardRejection) throw error;
+      const code =
+        typeof (error as { code?: unknown })?.code === "string"
+          ? String((error as { code: string }).code)
+          : "mission-network-denied";
+      throw new ForwardRejection(
+        403,
+        error instanceof Error ? error.message : "Mission network egress denied",
+        code,
+        code
+      );
+    }
+  }
+
   private async executeAuthorizedRequest<T>(params: {
     caller: VerifiedCaller | null;
     method: string;
@@ -870,7 +902,8 @@ export class EgressProxy {
     execute: (
       targetUrl: URL,
       headers: OutgoingHttpHeaders,
-      authorization: Authorization
+      authorization: Authorization,
+      manualRedirects: boolean
     ) => Promise<RequestExecutionResult<T>>;
   }): Promise<T> {
     const startedAt = Date.now();
@@ -884,6 +917,9 @@ export class EgressProxy {
     let breakerState: AuditEntry["breakerState"] = "closed";
 
     try {
+      let manualRedirects = params.caller
+        ? await this.missionRequiresManualRedirects(params.caller, targetUrl)
+        : false;
       authorization = await this.authorizeRequest({
         caller: params.caller,
         targetUrl,
@@ -918,9 +954,19 @@ export class EgressProxy {
           params.method
         );
         targetUrl = prepared.targetUrl;
+        if (params.caller) {
+          manualRedirects =
+            (await this.missionRequiresManualRedirects(params.caller, targetUrl)) ||
+            manualRedirects === true;
+        }
         let result: RequestExecutionResult<T> | undefined;
         try {
-          result = await params.execute(targetUrl, prepared.headers, authorization);
+          result = await params.execute(
+            targetUrl,
+            prepared.headers,
+            authorization,
+            manualRedirects === true
+          );
           statusCode = result.statusCode;
           bytesIn = result.bytesIn;
           bytesOut = result.bytesOut;

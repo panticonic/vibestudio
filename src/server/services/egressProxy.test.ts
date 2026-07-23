@@ -1537,6 +1537,53 @@ describe("EgressProxy", () => {
     });
   });
 
+  it("gates mission origins before egress and disables implicit redirects", async () => {
+    const assertMissionNetworkExposure = vi.fn(() => true);
+    const proxy = createProxy(createCredential(), new MemoryAuditLog(), {
+      assertMissionNetworkExposure,
+    });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.redirect).toBe("manual");
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://unreviewed.example/escape" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await proxy.forwardProxyFetch({
+      caller: workerCaller("worker:mission"),
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/items",
+      method: "GET",
+    });
+    expect(response.status).toBe(302);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(assertMissionNetworkExposure).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: expect.objectContaining({ id: "worker:mission" }) }),
+      new URL("https://api.example.test/v1/items")
+    );
+
+    const blockedFetch = vi.fn();
+    vi.stubGlobal("fetch", blockedFetch);
+    const blocked = createProxy(createCredential(), new MemoryAuditLog(), {
+      assertMissionNetworkExposure: () => {
+        throw Object.assign(new Error("mission origin is outside its charter"), {
+          code: "EMISSIONSCOPE",
+        });
+      },
+    });
+    await expect(
+      blocked.forwardProxyFetch({
+        caller: workerCaller("worker:mission"),
+        credentialId: "cred-1",
+        url: "https://api.example.test/v1/items",
+        method: "GET",
+      })
+    ).rejects.toThrow(/outside its charter/);
+    expect(blockedFetch).not.toHaveBeenCalled();
+  });
+
   it("preserves multiple Set-Cookie headers across the wire", async () => {
     const auditLog = new MemoryAuditLog();
     const proxy = createProxy(createCredential(), auditLog);

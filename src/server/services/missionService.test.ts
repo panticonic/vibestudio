@@ -9,7 +9,7 @@ import { createMissionService } from "./missionService.js";
 
 const charter = (): MissionCharter => ({
   taskSpec: "Summarize the workspace",
-  harness: { unit: "workspace/workers/system-agent", ev: "a".repeat(64) },
+  harness: { unit: "workers/system-agent", ev: "a".repeat(64) },
   skills: [],
   toolExposure: {
     services: ["notification.post"],

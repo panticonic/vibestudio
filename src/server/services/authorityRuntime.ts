@@ -32,6 +32,18 @@ export interface AuthorityFacts {
   now?: number;
 }
 
+/** Exact mission-to-runtime join; both sides use canonical repo identity + EV. */
+export function callerMatchesMissionHarness(
+  caller: VerifiedCaller,
+  mission: import("@vibestudio/rpc").SessionMissionFact
+): boolean {
+  return Boolean(
+    caller.code?.executionDigest &&
+    caller.code.repoPath === mission.harness.unit &&
+    caller.code.effectiveVersion === mission.harness.ev
+  );
+}
+
 /**
  * Constructs the one authenticated authority vocabulary from verified host
  * records. R3A baseline grants are explicit, exact-resource grants that retain

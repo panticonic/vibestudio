@@ -7,6 +7,7 @@ import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/servi
 import {
   authorizeVerifiedCaller,
   attestDirectRpc,
+  callerMatchesMissionHarness,
   directAuthorityAudience,
   directAuthorityCapability,
 } from "./authorityRuntime.js";
@@ -19,6 +20,35 @@ import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 const digest = "a".repeat(64);
 
 describe("authority runtime", () => {
+  it("joins mission harnesses to the exact canonical sealed code identity", () => {
+    const caller = createVerifiedCaller("do:workers/system-agent:SystemAgentWorker:run", "do", {
+      callerId: "do:workers/system-agent:SystemAgentWorker:run",
+      callerKind: "do",
+      repoPath: "workers/system-agent",
+      effectiveVersion: digest,
+      executionDigest: "b".repeat(64),
+    });
+    const mission = {
+      missionId: "msn_system_agent",
+      closureDigest: "c".repeat(64),
+      harness: { unit: "workers/system-agent", ev: digest },
+    };
+
+    expect(callerMatchesMissionHarness(caller, mission)).toBe(true);
+    expect(
+      callerMatchesMissionHarness(caller, {
+        ...mission,
+        harness: { ...mission.harness, unit: "workers/other" },
+      })
+    ).toBe(false);
+    expect(
+      callerMatchesMissionHarness(caller, {
+        ...mission,
+        harness: { ...mission.harness, ev: "d".repeat(64) },
+      })
+    ).toBe(false);
+  });
+
   it("binds direct human critical calls to the exact authenticated session", () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-runtime-human-critical-")),

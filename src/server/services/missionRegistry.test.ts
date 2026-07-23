@@ -8,7 +8,7 @@ import { MissionRegistry } from "./missionRegistry.js";
 
 const charter = (): MissionCharter => ({
   taskSpec: "Post a nightly summary",
-  harness: { unit: "workspace/workers/system-agent", ev: "a".repeat(64) },
+  harness: { unit: "workers/system-agent", ev: "a".repeat(64) },
   skills: [],
   toolExposure: {
     services: ["notification.post"],
@@ -252,6 +252,64 @@ describe("MissionRegistry", () => {
         providerEv: "c".repeat(64),
       })
     ).toThrow(/does not expose/);
+    registry.close();
+    grants.close();
+  });
+
+  it("enforces reviewed network reach and requires explicit redirect mediation", () => {
+    const statePath = mkdtempSync(join(tmpdir(), "missions-"));
+    const grants = new CapabilityGrantStore({ statePath });
+    const registry = new MissionRegistry({
+      statePath,
+      grantStore: grants,
+      isConduitBlessed: () => true,
+    });
+    const start = (
+      name: string,
+      evalNetwork: MissionCharter["toolExposure"]["evalNetwork"],
+      declaredOrigins: string[]
+    ) => {
+      const draft = registry.createDraft({
+        name,
+        charter: {
+          ...charter(),
+          toolExposure: { ...charter().toolExposure, evalNetwork, declaredOrigins },
+        },
+        owner: { userId: "u", deviceId: "d" },
+      });
+      registry.approve({
+        missionId: draft.missionId,
+        permissions: [],
+        decidedBy: "user:u",
+        contextIntegrityReady: true,
+      });
+      const sessionId = `${name}-session`;
+      registry.startSession({
+        missionId: draft.missionId,
+        sessionId,
+        taskRef: "task",
+        runId: `${name}-run`,
+      });
+      return sessionId;
+    };
+
+    const offline = start("offline", "none", []);
+    expect(() => registry.assertNetworkExposure(offline, "https://example.com")).toThrow(
+      /does not expose network egress/
+    );
+
+    const declared = start("declared", "declared-origins", ["https://api.example.com"]);
+    expect(registry.assertNetworkExposure(declared, "https://api.example.com")).toBe(true);
+    expect(() => registry.assertNetworkExposure(declared, "https://other.example.com")).toThrow(
+      /does not expose network origin/
+    );
+
+    const unrestricted = start("unrestricted", "unrestricted", []);
+    expect(registry.assertNetworkExposure(unrestricted, "https://any.example.com")).toBe(false);
+    expect(registry.assertNetworkExposure("interactive-session", "https://any.example.com")).toBe(
+      false
+    );
+
     registry.close();
     grants.close();
   });

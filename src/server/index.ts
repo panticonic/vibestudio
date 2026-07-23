@@ -821,6 +821,10 @@ async function main() {
         classification: "external",
       });
     },
+    assertMissionNetworkExposure: (caller, targetUrl) => {
+      const sessionId = caller.agentBinding?.channelId ?? caller.runtime.id;
+      return missionRegistry.assertNetworkExposure(sessionId, targetUrl.origin);
+    },
   });
   let panelRuntimeCoordinatorForCleanup:
     | import("./panelRuntimeCoordinator.js").PanelRuntimeCoordinator
@@ -4353,7 +4357,8 @@ async function main() {
   rpcServerInstance.setWorkerInstanceResolver((targetId) =>
     workerdManager.resolveWorkerInstanceName(targetId)
   );
-  const { authorizeVerifiedCaller } = await import("./services/authorityRuntime.js");
+  const { authorizeVerifiedCaller, callerMatchesMissionHarness } =
+    await import("./services/authorityRuntime.js");
   dispatcher.setAuthorityResolver(
     ({ ctx, caller, service, method, capability, resourceKey, tier }) => {
       const sessionId = caller.agentBinding?.channelId ?? caller.runtime.id;
@@ -4364,8 +4369,7 @@ async function main() {
         caller.code?.executionDigest &&
         conduitBlessingStore.isBlessed(caller.code) &&
         (mission
-          ? caller.code.repoPath === mission.harness.unit &&
-            caller.code.effectiveVersion === mission.harness.ev
+          ? callerMatchesMissionHarness(caller, mission)
           : caller.code.evalOrigin?.purpose === "agentic-code-execution")
       );
       return authorizeVerifiedCaller(caller, {

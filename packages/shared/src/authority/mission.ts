@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { SessionMissionFact } from "@vibestudio/rpc";
+import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { canonicalJson } from "../canonicalJson.js";
+import { normalizeWorkspaceRepoPath } from "../runtime/entitySpec.js";
 
 export type MissionState = "draft" | "active" | "needs-reapproval" | "paused" | "retired";
 
@@ -46,6 +48,13 @@ export function validateMissionCharter(charter: MissionCharter): void {
   if (!charter.taskSpec || !charter.harness.unit || !HEX64.test(charter.harness.ev)) {
     throw new Error("Mission charter requires task text and an exact harness EV");
   }
+  try {
+    normalizeWorkspaceRepoPath(charter.harness.unit);
+  } catch {
+    throw new Error(
+      `Mission harness must name one canonical workspace repo: ${JSON.stringify(charter.harness.unit)}`
+    );
+  }
   const serviceSet = new Set<string>();
   for (const service of charter.toolExposure.services) {
     if (!service || service === "*" || service.includes("\0") || serviceSet.has(service)) {
@@ -61,7 +70,8 @@ export function validateMissionCharter(charter: MissionCharter): void {
     skillSet.add(skill.path);
   }
   for (const binding of charter.toolExposure.userlandServices) {
-    if (!binding.name || !binding.provider) throw new Error("Mission userland bindings must be resolved");
+    if (!binding.name || !binding.provider)
+      throw new Error("Mission userland bindings must be resolved");
     if (binding.upgradePolicy === "pinned" && !HEX64.test(binding.providerEv)) {
       throw new Error(`Pinned mission provider ${binding.provider} requires an exact EV`);
     }
@@ -77,7 +87,8 @@ export function validateMissionCharter(charter: MissionCharter): void {
   }
   for (const origin of charter.toolExposure.declaredOrigins) {
     const parsed = new URL(origin);
-    if (parsed.origin !== origin) throw new Error(`Mission network origin is not canonical: ${origin}`);
+    if (parsed.origin !== origin)
+      throw new Error(`Mission network origin is not canonical: ${origin}`);
   }
 }
 
@@ -91,7 +102,9 @@ export function missionClosureDigest(charter: MissionCharter): string {
   part("harness");
   part(charter.harness.unit);
   part(charter.harness.ev);
-  for (const skill of [...charter.skills].sort((a, b) => a.path.localeCompare(b.path))) {
+  for (const skill of [...charter.skills].sort((a, b) =>
+    compareUtf16CodeUnits(a.path, b.path)
+  )) {
     part("skill");
     part(skill.path);
     part(skill.contentHash);
@@ -102,7 +115,9 @@ export function missionClosureDigest(charter: MissionCharter): string {
   return hash.digest("hex");
 }
 
-export function missionSubject(record: Pick<MissionRecord, "missionId" | "closureDigest">): `mission:${string}` {
+export function missionSubject(
+  record: Pick<MissionRecord, "missionId" | "closureDigest">
+): `mission:${string}` {
   if (!record.missionId.startsWith("msn_") || !HEX64.test(record.closureDigest)) {
     throw new Error("Mission subject requires a canonical id and closure digest");
   }
@@ -123,7 +138,9 @@ export function missionFact(record: MissionRecord): SessionMissionFact {
 
 export function missionAllowsService(charter: MissionCharter, qualifiedMethod: string): boolean {
   return charter.toolExposure.services.some(
-    (entry) => entry === qualifiedMethod || (entry.endsWith(".*") && qualifiedMethod.startsWith(entry.slice(0, -1)))
+    (entry) =>
+      entry === qualifiedMethod ||
+      (entry.endsWith(".*") && qualifiedMethod.startsWith(entry.slice(0, -1)))
   );
 }
 

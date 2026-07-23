@@ -28,9 +28,9 @@ describe("resource prefix scopes", () => {
       kind: "prefix" as const,
       prefix: "workspace-repo-delete:projects/system-test-",
     };
-    expect(
-      scopeCovers(scope, "workspace-repo-delete:projects/system-test-vcs-push-a1b2c3d4")
-    ).toBe(true);
+    expect(scopeCovers(scope, "workspace-repo-delete:projects/system-test-vcs-push-a1b2c3d4")).toBe(
+      true
+    );
     expect(scopeCovers(scope, "workspace-repo-delete:projects/customer-data")).toBe(false);
     expect(scopeCovers(scope, "workspace-repo-delete:packages/system-test-helper")).toBe(false);
   });
@@ -70,7 +70,7 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
       mission: {
         missionId: "nightly",
         closureDigest: "b".repeat(64),
-        harness: { unit: "workspace/workers/system-agent", ev: "c".repeat(64) },
+        harness: { unit: "workers/system-agent", ev: "c".repeat(64) },
       },
     },
     contextIntegrity: {
@@ -85,9 +85,7 @@ function codeMediatedEvalContext(requestedCapability = "fs.write"): Authorizatio
   const context = sessionContext();
   context.executingCode = {
     principal: code,
-    requested: [
-      { capability: requestedCapability, resource: { kind: "exact", key: RESOURCE } },
-    ],
+    requested: [{ capability: requestedCapability, resource: { kind: "exact", key: RESOURCE } }],
     sourceLineage: { class: "internal", externalKeys: [] },
   };
   return context;

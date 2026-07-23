@@ -370,6 +370,43 @@ export class MissionRegistry {
     }
   }
 
+  /**
+   * Enforce the charter's network reach before egress. Returns true when the
+   * proxy must disable automatic redirects so every subsequent origin is a
+   * fresh, separately mediated request.
+   */
+  assertNetworkExposure(sessionId: string, origin: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT m.* FROM mission_sessions s JOIN missions m ON m.mission_id=s.mission_id
+      WHERE s.session_id=? AND s.ended_at IS NULL`
+      )
+      .get(sessionId) as Row | undefined;
+    if (!row) return false;
+    const mission = rowToMission(row);
+    if (
+      mission.state !== "active" ||
+      missionClosureDigest(mission.charter) !== mission.closureDigest ||
+      !this.opts.isConduitBlessed(mission.charter.harness)
+    ) {
+      throw coded(`Mission ${mission.missionId} cannot use network egress`, "EMISSIONSCOPE");
+    }
+    const policy = mission.charter.toolExposure.evalNetwork;
+    if (policy === "none") {
+      throw coded(`Mission ${mission.missionId} does not expose network egress`, "EMISSIONSCOPE");
+    }
+    if (
+      policy === "declared-origins" &&
+      !mission.charter.toolExposure.declaredOrigins.includes(origin)
+    ) {
+      throw coded(
+        `Mission ${mission.missionId} does not expose network origin ${origin}`,
+        "EMISSIONSCOPE"
+      );
+    }
+    return policy === "declared-origins";
+  }
+
   get(missionId: string): MissionRecord | null {
     const row = this.db.prepare("SELECT * FROM missions WHERE mission_id=?").get(missionId) as
       | Row
