@@ -43,6 +43,9 @@ vi.mock("child_process", () => ({
         listeners.get(event)?.delete(fn);
         return proc;
       }),
+      emit: (event: string, ...args: unknown[]) => {
+        for (const fn of listeners.get(event) ?? []) fn(...args);
+      },
       kill: vi.fn(() => {
         // Simulate process exit after kill
         setTimeout(() => {
@@ -1208,6 +1211,35 @@ describe("WorkerdManager", () => {
         })
       );
       expect(mgr.getBootGeneration()).toBe(initialGeneration + 1);
+    });
+
+    it("recovers an unexpectedly exited runtime and reports a crash generation", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      const begin = vi.fn();
+      const ready = vi.fn();
+      mgr.onRestartBegin(begin);
+      mgr.onRestartReady(ready);
+
+      await mgr.startWorker(startArgs());
+      const initialGeneration = mgr.getBootGeneration();
+      const crashed = vi.mocked(spawn).mock.results.at(-1)?.value as {
+        emit(event: string, ...args: unknown[]): void;
+      };
+
+      crashed.emit("exit", 1, null);
+
+      await vi.waitFor(() => {
+        expect(mgr.getBootGeneration()).toBe(initialGeneration + 1);
+      });
+      expect(begin).not.toHaveBeenCalled();
+      expect(ready).toHaveBeenCalledOnce();
+      expect(ready).toHaveBeenCalledWith(
+        expect.objectContaining({
+          generation: initialGeneration + 1,
+          previousGeneration: initialGeneration,
+          reason: "crash",
+        })
+      );
     });
 
     it("closes restart admission before shutdown takes process ownership", async () => {

@@ -220,7 +220,13 @@ export function AppBar({
               color={colors.textSecondary}
             />
           ) : null}
-          <IconButton icon={Plus} onPress={handleCreatePanel} label="Create new panel" size={23} />
+          <IconButton
+            icon={Plus}
+            onPress={handleCreatePanel}
+            label="Create new panel"
+            size={23}
+            disabled={!shellClient}
+          />
         </View>
       ) : (
         <View style={styles.content}>

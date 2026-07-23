@@ -585,18 +585,20 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
       }
       const rawCapabilities = packageJson.vibestudio?.app?.capabilities;
       if (
-        !Array.isArray(rawCapabilities) ||
-        rawCapabilities.some((value) => typeof value !== "string")
+        rawCapabilities !== undefined &&
+        (!Array.isArray(rawCapabilities) ||
+          rawCapabilities.some((value) => typeof value !== "string"))
       ) {
         throw new Error(`Candidate app ${candidate.unitName} has invalid capabilities`);
       }
+      const declaredCapabilities = rawCapabilities ?? [];
       const allowedCapabilities = new Set<string>(APP_CAPABILITIES_BY_TARGET[target]);
-      if (rawCapabilities.some((value) => !allowedCapabilities.has(value))) {
+      if (declaredCapabilities.some((value) => !allowedCapabilities.has(value))) {
         throw new Error(
           `Candidate app ${candidate.unitName} requests a capability invalid for ${target}`
         );
       }
-      const capabilities = [...new Set(rawCapabilities)].sort() as AppCapability[];
+      const capabilities = [...new Set(declaredCapabilities)].sort() as AppCapability[];
       const provider =
         target === "react-native"
           ? (this.deps.buildSystem.getBuildProviderDetails?.("react-native") ?? null)

@@ -17,6 +17,12 @@ interface EvalStep {
   result?: unknown;
 }
 
+interface ToolStep {
+  name: string;
+  arguments?: Record<string, unknown>;
+  result?: unknown;
+}
+
 function execution(finalMessage: string, steps: EvalStep[]): TestExecutionResult {
   const messages: TestExecutionResult["messages"] = [
     {
@@ -64,6 +70,35 @@ function execution(finalMessage: string, steps: EvalStep[]): TestExecutionResult
     content: finalMessage,
   } as TestExecutionResult["messages"][number]);
   return { duration: 0, messages };
+}
+
+function directExecution(finalMessage: string, steps: ToolStep[]): TestExecutionResult {
+  const result = execution(finalMessage, []);
+  result.messages.splice(
+    1,
+    0,
+    ...steps.map(
+      (step, index) =>
+        ({
+          id: `tool-${index}`,
+          kind: "message",
+          senderId: "agent",
+          complete: true,
+          contentType: "invocation",
+          content: "",
+          invocation: {
+            id: `tool-${index}`,
+            name: step.name,
+            status: "complete",
+            terminalOutcome: "success",
+            isError: false,
+            arguments: step.arguments ?? {},
+            result: step.result,
+          },
+        }) as unknown as TestExecutionResult["messages"][number]
+    )
+  );
+  return result;
 }
 
 function scenario(tests: { name: string }[], name: string) {
@@ -138,6 +173,94 @@ describe("filesystem semantic validators", () => {
       expect(validator.validate(execution("Everything worked perfectly.", [])).passed).toBe(false);
     });
   }
+
+  it("accepts equivalent named imports from the scoped Node filesystem facade", () => {
+    const validator = scenario(filesystemTests, "directory-ops");
+    expect(
+      validator.validate(
+        execution("I created, listed, and removed the temporary directory.", [
+          {
+            code: `
+              import { mkdir, readdir as list, rm } from "fs/promises";
+              await mkdir(".tmp/example");
+              const files = await list(".tmp/example");
+              await rm(".tmp/example", { recursive: true });
+              return files;
+            `,
+            returnValue: ["one.txt", "two.txt"],
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("accepts explicit post-removal existence evidence", () => {
+    const validator = scenario(filesystemTests, "remove");
+    expect(
+      validator.validate(
+        execution("I verified the directory no longer exists.", [
+          {
+            code: "await fs.mkdir(path); await fs.rm(path); return { existsAfterDir: false };",
+            returnValue: { existsAfterDir: false },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("accepts focused write/read tools as first-class filesystem evidence", () => {
+    const validator = scenario(filesystemTests, "read-write-text");
+    expect(
+      validator.validate(
+        directExecution("The text round trip matched exactly.", [
+          {
+            name: "write",
+            arguments: { path: ".tmp/example.txt", content: "same text" },
+            result: { details: { bytesWritten: 9 } },
+          },
+          {
+            name: "read",
+            arguments: { path: ".tmp/example.txt" },
+            result: { protocolContent: [{ type: "text", text: "same text" }] },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("accepts post-removal proof preserved in the user-visible result text", () => {
+    const validator = scenario(filesystemTests, "remove");
+    expect(
+      validator.validate(
+        execution("Verified baseExistsAfter: false.", [
+          {
+            code: "await fs.mkdir(path); await fs.rm(path); return { baseExistsAfter: false };",
+            result: {
+              protocolContent: [
+                { type: "text", text: '{"baseExistsAfter": false, "treeExistsAfter": false}' },
+              ],
+            },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("accepts concrete symbolic-link observations without a synthetic supported field", () => {
+    const validator = scenario(filesystemTests, "symlinks");
+    expect(
+      validator.validate(
+        execution("Temporary symbolic links are supported; isSymbolicLink() was true.", [
+          {
+            code: "await fs.symlink(target, link); return { isSym: (await fs.lstat(link)).isSymbolicLink() };",
+            result: {
+              protocolContent: [{ type: "text", text: '{"isSym": true}' }],
+            },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
 });
 
 describe("build semantic validators", () => {

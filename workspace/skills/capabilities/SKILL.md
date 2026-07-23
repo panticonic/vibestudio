@@ -59,6 +59,10 @@ if (service.kind !== "durable-object") throw new Error("Expected a Durable Objec
 return rpc.call(service.targetId, "methodName", []);
 ```
 
+Import only runtime values that the eval actually uses. TypeScript's `type`
+keyword is a modifier for a real imported type name, not an export named
+`type`; never write `import { workers, type } from "@workspace/runtime"`.
+
 There is no polling delay in this sequence. A docs result is the read-after-edit
 proof that the current semantic context can build and describe the declaration;
 absence is a concrete authoring diagnostic, not eventual success to wait for.
@@ -114,6 +118,15 @@ The shortest authoring loop is:
    resolution see the same semantic context.
 4. Resolve the protocol and call the returned target. Do not guess a source/class/key
    route or edit an authority catalog.
+
+`workspace-service` describes a declared service boundary, not every method on
+every workspace Durable Object. A disposable object intentionally addressed by
+source/class/key through `workers.resolveDurableObject(...)` instead declares
+`effect: { kind: "runtime-intrinsic" }`. The two routes fail closed when mixed:
+a raw target cannot exercise a receiver method declared as a workspace service,
+and changing the receiver effect merely to bypass a missing service declaration
+is not an authority fix. Add the live service declaration and use
+`resolveService(...)`, or keep the object explicitly lifecycle-owned and direct.
 
 ### Installed provider/consumer recipe
 
@@ -216,6 +229,13 @@ export default {
   },
 };
 ```
+
+The low-level installed-worker `runtime.rpc.call(...)` returns `unknown` unless
+the caller supplies a documented result type or uses a typed client. For a
+smoke/proof endpoint, return the provider result intact instead of guessing and
+projecting fields. If application code needs individual fields, define or
+import the provider's public result contract and call
+`runtime.rpc.call<ThatResult>(...)`; do not infer a shape from a method name.
 
 Build both units in the same context, ask live docs for
 `example.local-greeting.v1`, then exercise the installed consumer through the

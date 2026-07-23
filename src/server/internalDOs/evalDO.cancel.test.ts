@@ -211,10 +211,11 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     expect(result.success).toBe(true);
     expect(result.console.length).toBeLessThan(100_000);
-    expect(result.console).toContain("scope.$lastConsole");
+    expect(result.console).toContain("scope.$lastLargeConsole");
+    expect(result.console).toContain("slice(0, 1500)");
     expect(result.returnValue).toMatchObject({
       truncated: true,
-      scopeKey: "$lastReturn",
+      scopeKey: "$lastLargeReturn",
     });
 
     const persisted = priv<(id: string) => { status: string; result?: RunResult }>(
@@ -230,12 +231,49 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance } = await createTestDO(EvalDO);
     const scope: Record<string, unknown> = {};
 
-    priv<(scope: Record<string, unknown>, console: string, value: unknown) => void>(
-      instance,
-      "spillLargeOutput"
-    ).call(instance, scope, "", { methods: { inspect: true } });
+    priv<
+      (
+        scope: Record<string, unknown>,
+        console: string,
+        error: string | undefined,
+        value: unknown
+      ) => void
+    >(instance, "spillLargeOutput").call(instance, scope, "", undefined, {
+      methods: { inspect: true },
+    });
 
     expect(scope["$lastReturn"]).toEqual({ methods: { inspect: true } });
+  });
+
+  it("keeps large recovery slots stable across small follow-up inspectors", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const scope: Record<string, unknown> = {};
+    const spill = priv<
+      (
+        scope: Record<string, unknown>,
+        console: string,
+        error: string | undefined,
+        value: unknown
+      ) => void
+    >(instance, "spillLargeOutput");
+    const largeConsole = "c".repeat(90_000);
+    const largeError = "e".repeat(60_000);
+    const largeReturn = { body: "r".repeat(60_000) };
+
+    spill.call(instance, scope, largeConsole, largeError, largeReturn);
+    const savedReturn = scope["$lastLargeReturn"];
+    expect(scope).toMatchObject({
+      $lastLargeConsole: largeConsole,
+      $lastLargeError: largeError,
+      $lastReturn: savedReturn,
+    });
+
+    spill.call(instance, scope, "", undefined, { pageLength: 40_000 });
+
+    expect(scope["$lastReturn"]).toEqual({ pageLength: 40_000 });
+    expect(scope["$lastLargeConsole"]).toBe(largeConsole);
+    expect(scope["$lastLargeError"]).toBe(largeError);
+    expect(scope["$lastLargeReturn"]).toBe(savedReturn);
   });
 
   it("cancel(runId): an in-flight run wedged on an outbound call unwinds once cancelled", async () => {

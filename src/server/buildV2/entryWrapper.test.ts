@@ -10,9 +10,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import * as esbuild from "esbuild";
 import {
   generateModuleMapBootstrap,
   generateExposeModuleCode,
+  generatePanelExposeEntryCode,
   generateWorkerEntry,
   injectHtmlTransforms,
   resolveEntryPoint,
@@ -76,23 +79,23 @@ describe("generateExposeModuleCode", () => {
 
   it("emits literal lazy loaders for each exposed panel module", () => {
     const code = generateExposeModuleCode(["@workspace/runtime", "zod"]);
-    expect(code).toContain('import("@workspace/runtime")');
-    expect(code).toContain('import("zod")');
+    expect(code).toContain('import("./_expose_module_0.js")');
+    expect(code).toContain('import("./_expose_module_1.js")');
     expect(code).not.toContain("import * as");
     expect(code).toContain('globalThis.__vibestudioModuleMap__["zod"] = mod');
   });
 
   it("panel target does not preload the lightweight CDP client when runtime is exposed", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "panel");
-    expect(code).toContain('import("@workspace/runtime")');
+    expect(code).toContain('import("./_expose_module_0.js")');
     expect(code).not.toContain("@workspace/cdp-client");
   });
 
   it("preserves the order of exposed modules in the generated code", () => {
     const code = generateExposeModuleCode(["a", "b", "c"]);
-    const aIdx = code.indexOf('import("a")');
-    const bIdx = code.indexOf('import("b")');
-    const cIdx = code.indexOf('import("c")');
+    const aIdx = code.indexOf('import("./_expose_module_0.js")');
+    const bIdx = code.indexOf('import("./_expose_module_1.js")');
+    const cIdx = code.indexOf('import("./_expose_module_2.js")');
     expect(aIdx).toBeGreaterThan(-1);
     expect(bIdx).toBeGreaterThan(aIdx);
     expect(cIdx).toBeGreaterThan(bIdx);
@@ -121,7 +124,70 @@ describe("generateExposeModuleCode", () => {
   it("panel target produces the panel-flavored bootstrap", () => {
     const code = generateExposeModuleCode(["react"], "panel");
     expect(code).toContain("__vibestudioRequireAsync__");
-    expect(code).toContain('import("react")');
+    expect(code).toContain('import("./_expose_module_0.js")');
+  });
+
+  it("preserves exposed CommonJS named exports through a static namespace entry", () => {
+    expect(generatePanelExposeEntryCode("react")).toBe(
+      'import * as namespace from "react";\nexport default namespace;\n'
+    );
+  });
+
+  it("loads React lazily with the named exports required by compiled components", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-exposed-react-"));
+    const outdir = path.join(tempDir, "out");
+    const globals = globalThis as Record<string, unknown>;
+    const globalKeys = [
+      "__vibestudioModuleMap__",
+      "__vibestudioRequire__",
+      "__vibestudioModuleLoaders__",
+      "__vibestudioModuleLoadingPromises__",
+      "__vibestudioNativeImportSpecifiers__",
+      "__vibestudioRequireAsync__",
+    ] as const;
+    const previousGlobals = new Map(globalKeys.map((key) => [key, globals[key]]));
+
+    try {
+      for (const key of globalKeys) Reflect.deleteProperty(globals, key);
+      fs.writeFileSync(path.join(tempDir, "package.json"), '{"type":"module"}\n');
+      fs.writeFileSync(
+        path.join(tempDir, "_expose_module_0.js"),
+        generatePanelExposeEntryCode("react")
+      );
+      fs.writeFileSync(
+        path.join(tempDir, "_expose.js"),
+        generateExposeModuleCode(["react"], "panel")
+      );
+      fs.writeFileSync(
+        path.join(tempDir, "entry.js"),
+        'import "./_expose.js";\nexport const loadReact = () => globalThis.__vibestudioRequireAsync__("react");\n'
+      );
+
+      await esbuild.build({
+        entryPoints: [path.join(tempDir, "entry.js")],
+        bundle: true,
+        splitting: true,
+        format: "esm",
+        platform: "browser",
+        outdir,
+        entryNames: "entry",
+        nodePaths: [path.join(process.cwd(), "node_modules")],
+      });
+
+      const entry = (await import(pathToFileURL(path.join(outdir, "entry.js")).href)) as {
+        loadReact: () => Promise<Record<string, unknown>>;
+      };
+      const react = await entry.loadReact();
+      expect(react["useState"]).toBeTypeOf("function");
+      expect(react["createElement"]).toBeTypeOf("function");
+    } finally {
+      for (const key of globalKeys) {
+        const previous = previousGlobals.get(key);
+        if (previous === undefined) Reflect.deleteProperty(globals, key);
+        else globals[key] = previous;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("routes runtime and fs aliases through one lazy runtime flight", () => {

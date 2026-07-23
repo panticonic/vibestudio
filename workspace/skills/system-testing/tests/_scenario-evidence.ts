@@ -93,7 +93,9 @@ export function requireCodeOperations(
   code: string,
   alternatives: readonly (readonly string[])[]
 ): { passed: true; reason: undefined } | { passed: false; reason: string } {
-  const matched = alternatives.some((tokens) => tokens.every((token) => code.includes(token)));
+  const matched = alternatives.some((tokens) =>
+    tokens.every((token) => code.includes(token) || importedFsOperation(code, token))
+  );
   return matched
     ? { passed: true, reason: undefined }
     : {
@@ -102,6 +104,39 @@ export function requireCodeOperations(
           .map((tokens) => tokens.join(" + "))
           .join(" or ")}`,
       };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * Normalize the ordinary named-import spelling of scoped filesystem calls.
+ * Requiring `fs.mkdir(...)` specifically made semantic validation depend on a
+ * cosmetic import choice even though `import { mkdir } from "fs/promises"`
+ * reaches the exact same reviewed facade.
+ */
+function importedFsOperation(code: string, token: string): boolean {
+  const match = /^fs\.([A-Za-z_$][\w$]*)$/u.exec(token);
+  if (!match) return false;
+  const operation = match[1];
+  if (!operation) return false;
+
+  const imports =
+    /import\s*\{([^}]*)\}\s*from\s*["'](?:node:)?fs(?:\/promises)?["']/gu;
+  for (const declaration of code.matchAll(imports)) {
+    const members = declaration[1]?.split(",") ?? [];
+    for (const member of members) {
+      const parsed =
+        /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/u.exec(
+          member
+        );
+      if (parsed?.[1] !== operation) continue;
+      const localName = parsed[2] ?? parsed[1];
+      if (new RegExp(`\\b${escapeRegExp(localName)}\\s*\\(`, "u").test(code)) return true;
+    }
+  }
+  return false;
 }
 
 export function walkRecords(values: readonly unknown[]): Record<string, unknown>[] {

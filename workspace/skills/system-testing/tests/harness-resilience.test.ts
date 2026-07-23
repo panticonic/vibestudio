@@ -54,6 +54,18 @@ describe("harness resilience validation", () => {
       ).passed
     ).toBe(false);
   });
+
+  it("accepts argument rejection and recovery for any schema-validated tool", () => {
+    expect(
+      invalidArgsRecovery.validate(
+        execution([
+          invocation("grep", "error", true, "Invalid arguments for tool grep: expected string"),
+          invocation("grep", "complete", false, { matches: ["meta/AGENTS.md"] }),
+          finalMessage("The malformed grep was rejected and the corrected grep succeeded."),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
 });
 
 function invocation(

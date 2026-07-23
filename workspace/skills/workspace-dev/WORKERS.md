@@ -89,6 +89,15 @@ try {
 }
 ```
 
+`key` is a durable, immutable instance identity—not a mutable deployment slot.
+The same key can idempotently address the same build, but it never silently
+switches to code produced by a later edit. For disposable edit-and-run work,
+generate a fresh key after every code change. If an application deliberately
+owns a stable key, retire the old handle before creating the replacement. In
+both cases, keep the handle in scope and await `workers.destroy(handle)` from
+`finally`; an identity-collision error is evidence that an older instance still
+owns that key, not a signal to bypass runtime identity checks.
+
 Extra `env` values are string bindings delivered through the second argument of
 the worker's `fetch(request, env, ctx)` handler. Read them from `env` (typed as
 `WorkerEnv`), not from Node's `process.env`.
@@ -155,6 +164,22 @@ exports from `@workspace/runtime`; inside eval, use the documented `workers.*` a
 include a `docsId` for that same live catalog; pass that id to the agent's
 `docs_open` tool instead of scanning the provider source for methods. A declaration
 in another context is neither visible nor callable here.
+
+The receiver effect must match the route the caller is allowed to use:
+
+- A method exposed through a `meta/vibestudio.yml` service declares
+  `effect: { kind: "workspace-service" }` and callers use
+  `workers.resolveService(protocol, objectKey?)`.
+- A lifecycle-owned, context-local DO addressed directly by source/class/key
+  declares `effect: { kind: "runtime-intrinsic" }` and callers use
+  `workers.resolveDurableObject(source, className, objectKey)`.
+
+These are not interchangeable spellings. Direct resolution deliberately cannot
+bypass a declared workspace-service boundary; the receiver rejects an
+attestation whose effect does not match its literal `@rpc` contract. Prefer the
+declared-service route for application APIs. Use direct resolution only for
+objects whose lifecycle the caller explicitly owns, such as a disposable
+development probe, and retire/clear them when finished.
 
 If installed code consumes the service, declare an exact
 `workspace-service:<name>` request in its authority manifest. The request may precede

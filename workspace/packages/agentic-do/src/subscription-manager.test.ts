@@ -56,6 +56,7 @@ describe("SubscriptionManager", () => {
           ({
             result: { ok: true },
             closed: new Promise<void>(() => {}),
+            release: vi.fn(),
             close: vi.fn(),
           }) as unknown as Awaited<ReturnType<ChannelClient["openSubscription"]>>
       ),
@@ -85,6 +86,7 @@ describe("SubscriptionManager", () => {
         .mockResolvedValueOnce({
           result: { ok: true, participantId: "agent-1", envelope: { mode: "none" } },
           closed: firstClosed,
+          release: vi.fn(),
           close,
         })
         .mockResolvedValueOnce({
@@ -94,6 +96,7 @@ describe("SubscriptionManager", () => {
             envelope: { mode: "after", logEvents: [] },
           },
           closed: secondClosed,
+          release: vi.fn(),
           close,
         });
       const onRecovered = vi.fn(async () => {});
@@ -132,6 +135,7 @@ describe("SubscriptionManager", () => {
       const openSubscription = vi.fn(async () => ({
         result: { ok: true },
         closed,
+        release: vi.fn(() => finish()),
         close,
       })) as unknown as ChannelClient["openSubscription"];
       const { manager } = await makeManager({ openSubscription });
@@ -154,6 +158,7 @@ describe("SubscriptionManager", () => {
     try {
       const terminals: Array<() => void> = [];
       const close = vi.fn((index: number) => terminals[index]?.());
+      const release = vi.fn((index: number) => terminals[index]?.());
       const openSubscription = vi.fn(async () => {
         const index = terminals.length;
         let terminal!: () => void;
@@ -164,6 +169,7 @@ describe("SubscriptionManager", () => {
         return {
           result: { ok: true, participantId: "agent-1", envelope: { mode: "none" } },
           closed,
+          release: () => release(index),
           close: () => close(index),
         };
       }) as unknown as ChannelClient["openSubscription"];
@@ -183,7 +189,8 @@ describe("SubscriptionManager", () => {
       expect(manager.listChannelIds()).toEqual(["ch-1", "ch-2"]);
       await vi.advanceTimersByTimeAsync(10_000);
       expect(openSubscription).toHaveBeenCalledTimes(2);
-      expect(close).toHaveBeenCalledTimes(2);
+      expect(release).toHaveBeenCalledTimes(2);
+      expect(close).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

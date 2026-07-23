@@ -167,6 +167,7 @@ function NewPanelPage() {
         <Flex gap="2" direction={isMobile ? "column" : "row"}>
           <TextField.Root
             autoFocus
+            aria-label="Chat request"
             size="3"
             style={{ flex: 1 }}
             placeholder="Ask anything to open a new chat..."

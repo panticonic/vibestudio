@@ -56,6 +56,30 @@ describe("canonical write tool", () => {
     expect(vcs.lastEditInput).toBeUndefined();
   });
 
+  it("returns a recoverable scratch suggestion for a missing managed repository", async () => {
+    const vcs = new StubVcs();
+    const tool = createWriteTool(CWD, vcs, authority);
+    const result = await tool.execute("invocation:missing-repo", {
+      path: "projects/temporary-note.md",
+      content: "scratch",
+    });
+
+    expect(result.details).toMatchObject({
+      bytesWritten: 0,
+      path: "projects/temporary-note/temporary-note.md",
+      storage: "none",
+      diagnostic: "repository-not-present",
+      suggestedScratchPath: ".tmp/temporary-note.md",
+    });
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringMatching(/existing workspace repository.*\.tmp\/temporary-note\.md/),
+      }),
+    ]);
+    expect(vcs.lastEditInput).toBeUndefined();
+  });
+
   it("can expose its schema unbound but refuses a semantic mutation", async () => {
     const vcs = new StubVcs();
     const tool = createWriteTool(CWD, vcs, {

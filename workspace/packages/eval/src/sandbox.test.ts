@@ -235,6 +235,23 @@ describe("executeSandbox", () => {
     });
   });
 
+  it("returns any trailing expression like a notebook REPL", async () => {
+    const result = await executeSandbox(
+      "function factorial(n: number): number { return n <= 1 ? 1 : n * factorial(n - 1); }\nconst value = factorial(5);\nvalue;",
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({ success: true, returnValue: 120 });
+  });
+
+  it("does not replace an explicit return with an earlier expression", async () => {
+    const result = await executeSandbox("const value = 6 * 7;\nvalue;\nreturn 'explicit';", {
+      syntax: "typescript",
+    });
+
+    expect(result).toMatchObject({ success: true, returnValue: "explicit" });
+  });
+
   it("repairs transport-escaped whitespace outside literals", async () => {
     const result = await executeSandbox(
       String.raw`return { first: 1,\n second: 2, text: "keep,\\n literal" };`,
@@ -431,6 +448,25 @@ return fs.readFileSync("/tmp/a");`,
       error: "worker export uses an unsupported module feature",
       failureKind: "infrastructure",
       failureCode: "package_load_failed",
+    });
+  });
+
+  it("classifies an acquired package's initialization error as correctable user code", async () => {
+    const result = await executeSandbox('import "@workspace/panel-only"; return "unreachable";', {
+      syntax: "typescript",
+      imports: { "@workspace/panel-only": "workspace:*" },
+      loadImport: async () => ({
+        format: "cjs",
+        bundle:
+          'throw new Error("This package requires a panel runtime global that is unavailable here");',
+      }),
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "This package requires a panel runtime global that is unavailable here",
+      failureKind: "user-code",
+      failureCode: "guest_execution_failed",
     });
   });
 

@@ -100,7 +100,8 @@ entity and can change after a panel navigation or reopen.
   by the semantic adapter against the exact working head. Managed
   move/copy retains identity/provenance. Platform-ignored paths and paths outside
   workspace source repos are direct context-local scratch. For disposable files, prefer
-  `const path = await fs.mktemp("purpose")`; see
+  `const path = await fs.mktemp("purpose")`; for a directory use
+  `const dir = await fs.mkdtemp("purpose")`. See
   [EVAL.md](EVAL.md#filesystem-access) for copy/rename and cleanup examples.
 - Never use host absolute paths for workspace source such as
   `/home/user/.../workspace/panels/...`.

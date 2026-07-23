@@ -1,9 +1,7 @@
 import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "../types.js";
+import type { HeadlessSession } from "@workspace/agentic-session";
 import { getToolCalls } from "./_helpers.js";
-import {
-  completedScenarioEvidence,
-  invocationReturnValue,
-} from "./_scenario-evidence.js";
+import { completedScenarioEvidence, invocationReturnValue } from "./_scenario-evidence.js";
 
 type ToolCall = ReturnType<typeof getToolCalls>[number];
 
@@ -105,18 +103,18 @@ function validateHugeReturn(result: TestExecutionResult) {
       const marker = returned.value;
       const isBoundedMarker = Boolean(
         marker &&
-          typeof marker === "object" &&
-          !Array.isArray(marker) &&
-          (marker as Record<string, unknown>)["truncated"] === true &&
-          typeof (marker as Record<string, unknown>)["originalChars"] === "number" &&
-          ((marker as Record<string, unknown>)["originalChars"] as number) > 100_000 &&
-          (marker as Record<string, unknown>)["scopeKey"] === "$lastReturn"
+        typeof marker === "object" &&
+        !Array.isArray(marker) &&
+        (marker as Record<string, unknown>)["truncated"] === true &&
+        typeof (marker as Record<string, unknown>)["originalChars"] === "number" &&
+        ((marker as Record<string, unknown>)["originalChars"] as number) > 100_000 &&
+        (marker as Record<string, unknown>)["scopeKey"] === "$lastLargeReturn"
       );
       return (
         isBoundedMarker &&
         protocolText.length < 100_000 &&
         /truncated/iu.test(protocolText) &&
-        /scope\.\$lastReturn/u.test(protocolText)
+        /scope\.\$lastLargeReturn/u.test(protocolText)
       );
     } catch {
       return false;
@@ -145,9 +143,10 @@ function timedOutEval(call: ToolCall): boolean {
 
 function invalidToolArguments(call: ToolCall): boolean {
   return (
-    ["docs_search", "eval", "vcs"].includes(call.name) &&
     isFailure(call) &&
-    /invalid|schema validation/iu.test(errorText(call))
+    /invalid arguments?|schema validation|expected (?:string|number|boolean|object|array)/iu.test(
+      errorText(call)
+    )
   );
 }
 
@@ -155,23 +154,16 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function orchestrateFollowupTurn(
-  context: TestOrchestrationContext
+async function captureOrchestratedSession(
+  context: TestOrchestrationContext,
+  spawnOptions: Parameters<TestOrchestrationContext["runner"]["spawn"]>[0],
+  exercise: (session: HeadlessSession) => Promise<void>
 ): Promise<TestExecutionResult> {
   const startedAt = Date.now();
-  const session = await context.runner.spawn();
+  const session = await context.runner.spawn(spawnOptions);
   let error: string | undefined;
   try {
-    await context.sendAndWait(
-      session,
-      "Use a harmless read-only tool to inspect something small and summarize it.",
-      "initial tool-using turn"
-    );
-    await context.sendAndWait(
-      session,
-      "Now give me a fresh one-sentence recap of what you observed.",
-      "follow-up turn"
-    );
+    await exercise(session);
   } catch (cause) {
     error = formatError(cause);
   }
@@ -193,6 +185,39 @@ async function orchestrateFollowupTurn(
     execution.cleanupErrors = [...(execution.cleanupErrors ?? []), ...cleanupErrors];
   }
   return execution;
+}
+
+async function orchestrateFollowupTurn(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  return captureOrchestratedSession(context, undefined, async (session) => {
+    await context.sendAndWait(
+      session,
+      "Use a harmless read-only tool to inspect something small and summarize it.",
+      "initial tool-using turn"
+    );
+    await context.sendAndWait(
+      session,
+      "Now give me a fresh one-sentence recap of what you observed.",
+      "follow-up turn"
+    );
+  });
+}
+
+async function orchestrateValidationRetry(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  return captureOrchestratedSession(
+    context,
+    { validationRetryProbeTool: true },
+    async (session) => {
+      await context.sendAndWait(
+        session,
+        "Check whether the validation-recovery probe remains usable after it rejects a request.",
+        "validation retry turn"
+      );
+    }
+  );
 }
 
 function validateFollowupTurn(result: TestExecutionResult) {
@@ -275,12 +300,8 @@ export const harnessResilienceTests: TestCase[] = [
       "Tool validation errors are visible and retry succeeds without poisoning the transcript",
     category: "harness-resilience",
     prompt:
-      "Show that a malformed tool request is visible and a corrected request of the same kind still works.",
-    expectedToolFailures: [
-      { name: "docs_search", errorIncludes: "invalid" },
-      { name: "eval", errorIncludes: "invalid" },
-      { name: "vcs", errorIncludes: "schema validation" },
-    ],
+      "Check whether the validation-recovery probe remains usable after it rejects a request.",
+    orchestrate: orchestrateValidationRetry,
     validate: (result) => recoverySequence(result, invalidToolArguments, "invalid-argument", true),
   },
   {

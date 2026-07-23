@@ -179,6 +179,40 @@ describe("createReadTool", () => {
     );
   });
 
+  it("does not impose a default deadline on a slow file extension read", async () => {
+    vi.useFakeTimers();
+    try {
+      const fs = new StubFs();
+      const rpc = {
+        call: vi.fn().mockImplementation((_target: string, method: string) => {
+          if (method !== "extensions.invoke") return Promise.resolve([]);
+          return new Promise((resolve) => {
+            setTimeout(
+              () =>
+                resolve({
+                  content: [{ type: "text", text: "eventually available" }],
+                  details: { path: "slow.txt", engine: "node-file" },
+                }),
+              100_000
+            );
+          });
+        }),
+        stream: vi.fn(async () => new Response()),
+      };
+      const tool = createReadTool(CWD, fs, { rpc });
+
+      const resultPromise = tool.execute("call-1", { path: "slow.txt" });
+      await vi.advanceTimersByTimeAsync(100_000);
+
+      await expect(resultPromise).resolves.toMatchObject({
+        content: [{ type: "text", text: "eventually available" }],
+        details: { path: "slow.txt", engine: "node-file" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to runtime fs when the file extension read stalls", async () => {
     const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
     const rpc = {

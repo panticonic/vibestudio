@@ -75,6 +75,8 @@ import {
   type BroadcastDeps,
   closeDeliveryChain,
   cleanupDeliveryChain,
+  releaseDeliveryChain,
+  reopenDeliveryChain,
 } from "./broadcast.js";
 import { ChannelLog, type ChannelReplayContext, type MessageTypeDefinition } from "./log-store.js";
 import { PolicyHost, policyViewFromLogEnvelope } from "./policy-host.js";
@@ -1122,6 +1124,7 @@ export class PubSubChannel extends DurableObjectBase {
       if (!active || active.id !== participantId || active.kind !== "do") {
         throw new Error(`subscribe: Durable Object participant ${participantId} is not active`);
       }
+      reopenDeliveryChain(this.objectKey, participantId);
     }
 
     // Active response resources are the one source of subscription lifetime.
@@ -1241,6 +1244,26 @@ export class PubSubChannel extends DurableObjectBase {
   async unsubscribe(participantId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "unsubscribe");
     await this.unsubscribeParticipant(participantId, "graceful");
+  }
+
+  /**
+   * Acknowledged activation release. This closes the caller's exact response
+   * stream and cancels structured callbacks into that activation, but retains
+   * semantic membership for the replacement activation to reconstruct.
+   */
+  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  async releaseSubscription(participantId: string): Promise<void> {
+    this.assertParticipantCaller(participantId, "releaseSubscription");
+    const caller = this.caller;
+    const deliveryId = caller?.callerPanelId ?? caller?.callerId;
+    if (!deliveryId) {
+      throw new Error("releaseSubscription: authenticated delivery identity is required");
+    }
+    this.closeSubscriptionStream(participantId, deliveryId);
+    const metadata = this.getSenderMetadata(participantId);
+    if (metadata && participantIsAgentVessel(metadata)) {
+      await releaseDeliveryChain(this.objectKey, participantId);
+    }
   }
 
   private async unsubscribeParticipant(

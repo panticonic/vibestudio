@@ -120,7 +120,7 @@ file-loaded meaning. For substantial multi-file work, prefer a real entry file.
 | `sourcePath` | string                                           | —       | Virtual context-relative filename for inline code and relative imports                          |
 | `syntax`     | `"javascript" \| "typescript" \| "jsx" \| "tsx"` | `"tsx"` | Source syntax                                                                                   |
 | `imports`    | `Record<string, string>`                         | —       | Packages to build on-demand (workspace or npm)                                                  |
-| `timeoutMs`  | positive integer                                 | —       | Optional wall-clock deadline in milliseconds; omitted means no deadline                          |
+| `timeoutMs`  | positive integer                                 | —       | Optional wall-clock deadline in milliseconds; omitted means no deadline                         |
 
 ## Injected Variables
 
@@ -271,10 +271,11 @@ open the `about/server-logs` viewer for a live follow. See
 
 - `success` — whether the run completed without throwing.
 - `console` — captured console output. Oversized output is windowed in the
-  terminal result; a bounded saved copy is available as `scope.$lastConsole`.
+  terminal result; a bounded saved copy is available as
+  `scope.$lastLargeConsole`.
 - `returnValue` — the `return` value (or last expression), safe-serialized.
   Oversized values may be replaced with a structured truncation summary pointing
-  at `scope.$lastReturn`.
+  at `scope.$lastLargeReturn`.
 - `error` — present on failure.
 - `scopeKeys` — the keys currently held in the persistent `scope`.
 
@@ -283,7 +284,12 @@ to string representations in `returnValue`.
 
 The most recent defined return is also retained as `scope.$lastReturn` for a
 follow-up eval. Small returns keep their structured shape; oversized returns are
-stored as a bounded JSON/text string and can be paged with `.slice(...)`.
+stored as a bounded JSON/text string. A large return is additionally retained at
+`scope.$lastLargeReturn`; unlike `$lastReturn`, that recovery slot is not
+overwritten by the small summaries returned from follow-up inspectors. Large
+console and error text use the corresponding stable `$lastLargeConsole` and
+`$lastLargeError` slots. Each slot holds at most the latest bounded large value
+of its kind, so recovery remains pageable without accumulating output.
 
 Terminal eval results are always bounded so a huge return cannot strand the
 turn in `eval:pending`. For large data, return a compact summary and keep the
@@ -573,7 +579,11 @@ Pass an encoding such as `"utf-8"` when reading text. Without an encoding,
 
 Use `await help("fs")` for the live surface. Common methods include `readFile`,
 `writeFile`, `appendFile`, `readdir`, `stat`, `mkdir`, `rm`, `exists`,
-`copyFile`, `rename`, `open`, `grep`, `glob`, and `mktemp`.
+`copyFile`, `rename`, `open`, `grep`, `glob`, `mktemp`, and `mkdtemp`.
+
+`mktemp(prefix?)` returns an uncreated unique file path. `mkdtemp(prefix?)`
+creates and returns a unique directory. Use the form matching what you intend
+to create instead of treating a file path as an existing parent directory.
 
 `fs.open(path, flags?, mode?)` returns the portable low-level file-handle
 contract `{ fd, read, write, stat, close }` in eval, panels, workers, and
@@ -774,15 +784,21 @@ dumps, or full GAD payloads from `eval`. Large values are intentionally stored a
 blob refs in trajectory/channel storage; broad hydrated reads can pull them back
 into the transcript and hide the useful part of the report.
 
-Eval has a safety net for accidental large output: terminal console/return data
-is windowed before it is persisted or delivered. The tool result will point to
-`scope.$lastConsole` or `scope.$lastReturn` when a bounded saved copy exists.
-Read those values in pages, for example:
+Eval has a safety net for accidental large output: terminal
+console/error/return data is windowed before it is persisted or delivered. The
+tool result will point to `scope.$lastLargeConsole`, `scope.$lastLargeError`, or
+`scope.$lastLargeReturn` when a bounded saved copy exists. These stable recovery
+slots survive small follow-up eval results, so they can be read in multiple
+pages. Keep a returned page compact because it still travels through the same
+bounded eval result:
 
 ```ts
-return scope.$lastReturn.slice(0, 40_000);
+return {
+  length: scope.$lastLargeReturn.length,
+  sample: scope.$lastLargeReturn.slice(0, 1_500),
+};
 // or
-return /needle/.test(scope.$lastConsole);
+return /needle/.test(scope.$lastLargeConsole);
 ```
 
 That fallback is for recovery, not a reporting pattern. Prefer compact

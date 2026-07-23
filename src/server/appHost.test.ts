@@ -479,6 +479,35 @@ describe("AppHost", () => {
     ]);
   });
 
+  it("treats an omitted static app capability list as an empty declaration", async () => {
+    const readWorkspaceFileAtState = vi.fn(
+      async () => `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+    );
+    const { host, appPath } = makeHarness({ readWorkspaceFileAtState });
+    fs.writeFileSync(
+      path.join(appPath, "package.json"),
+      JSON.stringify({
+        name: "@workspace-apps/shell",
+        version: "1.0.0",
+        vibestudio: {
+          displayName: "Shell App",
+          app: { target: "electron", renderer: "index.tsx" },
+          authority: { requests: [], evalCeilings: [] },
+        },
+      })
+    );
+
+    const approval = await host.unitChangeApprovalForCommit("state:next");
+
+    expect(approval.units).toEqual([
+      expect.objectContaining({
+        unitKind: "app",
+        unitName: "@workspace-apps/shell",
+        capabilities: [],
+      }),
+    ]);
+  });
+
   it("builds, registers, and emits available Electron apps from trusted main", async () => {
     const { host, buildSystem, eventService, entityCache } = makeHarness();
 

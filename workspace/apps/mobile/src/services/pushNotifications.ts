@@ -25,6 +25,7 @@ import {
 } from "./backgroundActionQueue";
 import { isBackgroundDecision } from "./backgroundActionQueueCore";
 import { isNativeFirebaseConfigured } from "./nativeFirebase";
+import { getNativeAppStorage } from "./nativeAppStorage";
 declare const require: (moduleName: string) => unknown;
 const PERMISSION_DENIED_TOAST_KEY = "vibestudio:push:permission-denied-toast-at";
 const PERMISSION_DENIED_TOAST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -80,11 +81,6 @@ interface NotifeeEvent {
     };
   };
 }
-interface AsyncStorageLike {
-  getItem(key: string): Promise<string | null>;
-  setItem(key: string, value: string): Promise<void>;
-}
-
 /** Minimal remote message shape */
 export interface RemoteMessage {
   messageId?: string;
@@ -201,17 +197,6 @@ function getNotifee(): {
     return null;
   }
 }
-function getAsyncStorage(): AsyncStorageLike | null {
-  try {
-    const mod = require("@react-native-async-storage/async-storage") as {
-      default?: AsyncStorageLike;
-    } & AsyncStorageLike;
-    return mod.default ?? mod;
-  } catch {
-    return null;
-  }
-}
-
 async function registerToken(shellClient: ShellClient, token: string): Promise<void> {
   const platform = Platform.OS === "ios" ? "ios" : "android";
   const clientId = await getDeviceClientId();
@@ -229,9 +214,9 @@ function isAuthorizedStatus(
   return value === 1 || value === 2;
 }
 async function maybeShowDeniedToast(callbacks: PushRuntimeCallbacks): Promise<void> {
-  const storage = getAsyncStorage();
+  const storage = getNativeAppStorage();
   const now = Date.now();
-  const lastShown = storage ? Number((await storage.getItem(PERMISSION_DENIED_TOAST_KEY)) ?? 0) : 0;
+  const lastShown = Number((await storage.getItem(PERMISSION_DENIED_TOAST_KEY)) ?? 0);
   if (lastShown && now - lastShown < PERMISSION_DENIED_TOAST_INTERVAL_MS) return;
   callbacks.onToast?.({
     title: "Notifications are off",
@@ -239,7 +224,7 @@ async function maybeShowDeniedToast(callbacks: PushRuntimeCallbacks): Promise<vo
     tone: "warning",
     durationMs: 8000,
   });
-  if (storage) await storage.setItem(PERMISSION_DENIED_TOAST_KEY, String(now));
+  await storage.setItem(PERMISSION_DENIED_TOAST_KEY, String(now));
 }
 export async function displayApprovalNotification(
   message: RemoteMessage,

@@ -95,6 +95,12 @@ export class StubFs implements RuntimeFs {
     return `/.tmp/${prefix ?? "tmp-"}${this.tmpCounter}`;
   }
 
+  async mkdtemp(prefix?: string): Promise<string> {
+    const path = await this.mktemp(prefix);
+    await this.mkdir(path, { recursive: true });
+    return path;
+  }
+
   async readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer> {
     const normalized = nodePath.resolve(path);
     const data = this.files.get(normalized);
@@ -216,5 +222,13 @@ export class StubFs implements RuntimeFs {
     }
     this.files.delete(oldNormalized);
     this.files.set(newNormalized, data);
+  }
+
+  async copyFile(sourcePath: string, destinationPath: string): Promise<void> {
+    const source = this.files.get(nodePath.resolve(sourcePath));
+    if (!source) {
+      throw fsError("ENOENT", `ENOENT: no such file or directory, copyfile '${sourcePath}'`);
+    }
+    this.setFile(destinationPath, source);
   }
 }

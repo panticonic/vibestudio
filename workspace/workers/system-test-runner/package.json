@@ -607,6 +607,15 @@
               "evidence": "intentional-broad"
             },
             {
+              "capability": "workspace-repo-delete",
+              "resource": {
+                "kind": "prefix",
+                "prefix": "workspace-repo-delete:projects/system-test-"
+              },
+              "tier": "critical",
+              "evidence": "bounded-dynamic"
+            },
+            {
               "capability": "workspace-service:*",
               "resource": {
                 "kind": "prefix",

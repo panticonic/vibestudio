@@ -92,6 +92,18 @@ describe("createPrivateGuestGlobal", () => {
     expect(guest["Array"]).toBe(realm["Array"]);
     expect(guest["globalThis"]).toBe(guest);
     expect(guest["self"]).toBe(guest);
+    expect(guest["global"]).toBe(guest);
+  });
+
+  it("publishes reviewed endowments through every private global alias", () => {
+    const realm = tamedRealm();
+    const fs = Object.freeze({ marker: "scoped" });
+    const guest = createPrivateGuestGlobal(realm, { fs });
+
+    expect(guest["fs"]).toBe(fs);
+    expect((guest["global"] as Record<string, unknown>)["fs"]).toBe(fs);
+    expect((guest["globalThis"] as Record<string, unknown>)["fs"]).toBe(fs);
+    expect((guest["self"] as Record<string, unknown>)["fs"]).toBe(fs);
   });
 
   it("exposes logging through an immutable receiver-bound facade", () => {

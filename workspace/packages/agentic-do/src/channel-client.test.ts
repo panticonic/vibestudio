@@ -75,6 +75,56 @@ describe("ChannelClient.send attachments", () => {
 });
 
 describe("ChannelClient subscription lifetime", () => {
+  it("waits for acknowledged activation release without requesting a semantic unsubscribe", async () => {
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const calls: string[] = [];
+    const rpc = {
+      call: vi.fn(async (_target: string, method: string) => {
+        calls.push(method);
+        if (method === "workers.resolveService") {
+          return { kind: "durable-object", targetId: "chan-do" };
+        }
+        if (method === "releaseSubscription") {
+          streamController.close();
+          return undefined;
+        }
+        return undefined;
+      }),
+      stream: vi.fn(async (_target: string, _method: string, _args: unknown[], options: {
+        signal: AbortSignal;
+      }) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(
+              encodeChannelSubscriptionRecord({
+                kind: "subscribed",
+                result: {
+                  ok: true,
+                  participantId: "agent-1",
+                  envelope: { mode: "none" },
+                },
+              })
+            );
+            options.signal.addEventListener("abort", () => controller.error(options.signal.reason), {
+              once: true,
+            });
+          },
+        });
+        return new Response(body);
+      }),
+    };
+    const client = new ChannelClient(rpc as never, "chan-1");
+    const subscription = await client.openSubscription("agent-1", {
+      contextId: "ctx-1",
+    });
+
+    await subscription.release();
+    await subscription.closed;
+    expect(calls).toEqual(["workers.resolveService", "releaseSubscription"]);
+    expect(streamController).toBeDefined();
+  });
+
   it("does not report a graceful close until the channel acknowledges self-leave", async () => {
     let streamController!: ReadableStreamDefaultController<Uint8Array>;
     let acknowledgeLeave!: () => void;

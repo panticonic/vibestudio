@@ -1340,11 +1340,13 @@ export function generateExposeModuleCode(
   }
   if (target === "panel") {
     const loaderLines: string[] = [];
-    for (const dep of effectiveExposeModules) {
+    for (const [index, dep] of effectiveExposeModules.entries()) {
       if (dep === RUNTIME_MODULE) continue;
+      const entrySpecifier = panelExposeEntrySpecifier(index);
       loaderLines.push(
         `globalThis.__vibestudioModuleLoaders__[${JSON.stringify(dep)}] = function() {
-  return import(${JSON.stringify(dep)}).then(function(mod) {
+  return import(${JSON.stringify(entrySpecifier)}).then(function(entry) {
+    var mod = entry.default;
     globalThis.__vibestudioModuleMap__[${JSON.stringify(dep)}] = mod;
     return mod;
   });
@@ -1353,10 +1355,13 @@ export function generateExposeModuleCode(
     }
 
     if (effectiveExposeModules.includes(RUNTIME_MODULE)) {
+      const runtimeIndex = effectiveExposeModules.indexOf(RUNTIME_MODULE);
+      const runtimeEntrySpecifier = panelExposeEntrySpecifier(runtimeIndex);
       loaderLines.push(`var __vibestudioRuntimeLoadPromise__;
 function __vibestudioLoadRuntime__() {
   if (__vibestudioRuntimeLoadPromise__) return __vibestudioRuntimeLoadPromise__;
-  __vibestudioRuntimeLoadPromise__ = import(${JSON.stringify(RUNTIME_MODULE)}).then(function(mod) {
+  __vibestudioRuntimeLoadPromise__ = import(${JSON.stringify(runtimeEntrySpecifier)}).then(function(entry) {
+    var mod = entry.default;
     var map = globalThis.__vibestudioModuleMap__;
     map[${JSON.stringify(RUNTIME_MODULE)}] = mod;
     var _fs = mod["fs"];
@@ -1420,6 +1425,20 @@ ${loaderLines.join("\n")}
 ${importLines.join("\n")}
 ${registerLines.join("\n")}
 ${shimLines.join("\n")}
+`;
+}
+
+function panelExposeEntryFilename(index: number): string {
+  return `_expose_module_${index}.js`;
+}
+
+function panelExposeEntrySpecifier(index: number): string {
+  return `./${panelExposeEntryFilename(index)}`;
+}
+
+export function generatePanelExposeEntryCode(specifier: string): string {
+  return `import * as namespace from ${JSON.stringify(specifier)};
+export default namespace;
 `;
 }
 
@@ -1879,6 +1898,12 @@ async function buildPanel(
 
   // Generate expose/wrapper entries.
   const exposePath = path.join(outdir, "_expose.js");
+  for (const [index, specifier] of exposeModules.entries()) {
+    fs.writeFileSync(
+      path.join(outdir, panelExposeEntryFilename(index)),
+      generatePanelExposeEntryCode(specifier)
+    );
+  }
   fs.writeFileSync(
     exposePath,
     generateExposeModuleCode(exposeModules, "panel", externalSpecifiers)

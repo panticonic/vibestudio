@@ -12,6 +12,7 @@
  */
 
 import type { ComponentType } from "react";
+import { parse } from "acorn";
 import { transformCode } from "./transform.js";
 import {
   execute,
@@ -261,7 +262,10 @@ async function loadLibraryBundle(
       ) {
         throw originalError;
       }
-      const dependencyArtifact = await loadImport(dependency, undefined, Object.keys(moduleMap));
+      const dependencyArtifact = await runInfrastructurePhase(
+        "package_load_failed",
+        () => loadImport(dependency, undefined, Object.keys(moduleMap))
+      );
       await loadLibraryBundle(
         dependency,
         dependencyArtifact,
@@ -308,7 +312,15 @@ async function loadImports(
     const ref = refValue === "latest" ? undefined : refValue;
     // Recompute externals each iteration so earlier imports are externalized
     const externals = Object.keys(moduleMap);
-    const artifact = await loadImport(specifier, ref, externals);
+    // Building/acquiring the artifact is host infrastructure. Executing the
+    // acquired package is authored module behavior and intentionally remains
+    // outside this wrapper, so an environment-specific or throwing package can
+    // be corrected by the agent instead of terminating the whole turn as an
+    // infrastructure outage.
+    const artifact = await runInfrastructurePhase(
+      "package_load_failed",
+      () => loadImport(specifier, ref, externals)
+    );
     await loadLibraryBundle(
       specifier,
       artifact,
@@ -360,7 +372,10 @@ function installLazyImportLoader(
     const moduleMap = getModuleMap(moduleMapOverride);
     if (moduleMap[specifier]) return moduleMap[specifier];
     const ref = refValue === "latest" ? undefined : refValue;
-    const artifact = await loadImport(specifier, ref, Object.keys(moduleMap));
+    const artifact = await runInfrastructurePhase(
+      "package_load_failed",
+      () => loadImport(specifier, ref, Object.keys(moduleMap))
+    );
     await loadLibraryBundle(
       specifier,
       artifact,
@@ -524,6 +539,42 @@ function safeSerialize(value: unknown, maxDepth = 10): unknown {
 
 function wrapForTopLevelAwait(code: string): string {
   return `return (async () => {\n${code}\n})()`;
+}
+
+/**
+ * Eval is a notebook/REPL surface, so a final expression is its completion
+ * value. Apply this after TypeScript/JSX and import transforms: Acorn then sees
+ * plain JavaScript, and source ranges let us preserve every preceding byte
+ * without regex-guessing where an expression begins.
+ */
+function returnTrailingExpression(code: string): string {
+  let program: {
+    body: Array<{
+      type: string;
+      start: number;
+      end: number;
+      expression?: { start: number; end: number };
+    }>;
+  };
+  try {
+    program = parse(code, {
+      ecmaVersion: "latest",
+      sourceType: "script",
+      allowAwaitOutsideFunction: true,
+    }) as typeof program;
+  } catch {
+    // The normal execution compiler owns syntax diagnostics. Completion-value
+    // detection must never replace a more useful parse/transform error.
+    return code;
+  }
+  const statement = program.body.at(-1);
+  const expression = statement?.type === "ExpressionStatement" ? statement.expression : undefined;
+  if (!statement || !expression) return code;
+  return (
+    code.slice(0, statement.start) +
+    `return (${code.slice(expression.start, expression.end)});` +
+    code.slice(statement.end)
+  );
 }
 
 /**
@@ -1150,21 +1201,16 @@ export async function executeSandbox(
       if (!options.loadImport) {
         throw new Error("loadImport callback required when imports are specified");
       }
-      await runInfrastructurePhase(
-        "package_load_failed",
-        () =>
-          withAbort(
-            loadImports(
-              options.imports!,
-              options.loadImport!,
-              moduleMap,
-              requireFn,
-              options.compileFunction,
-              options.harden,
-              options.confinement
-            ),
-            signal
-          ),
+      await withAbort(
+        loadImports(
+          options.imports!,
+          options.loadImport!,
+          moduleMap,
+          requireFn,
+          options.compileFunction,
+          options.harden,
+          options.confinement
+        ),
         signal
       );
     }
@@ -1227,10 +1273,11 @@ export async function executeSandbox(
     }
     throwIfAborted(signal);
     const { transformed } = built;
+    const completionAwareCode = returnTrailingExpression(transformed.code);
     const deadlineInstrumented = options.deadline
-      ? instrumentDeadlineCheckpoints(transformed.code)
+      ? instrumentDeadlineCheckpoints(completionAwareCode)
       : null;
-    const executableCode = deadlineInstrumented?.code ?? transformed.code;
+    const executableCode = deadlineInstrumented?.code ?? completionAwareCode;
     let executionBindings = bindings;
     if (deadlineInstrumented && options.deadline) {
       const now = Date.now.bind(Date);
@@ -1275,21 +1322,16 @@ export async function executeSandbox(
       if (Object.keys(autoImports).length > 0) {
         throwIfAborted(signal);
         options.onConsole?.(`[eval] Auto-loading: ${Object.keys(autoImports).join(", ")}...`);
-        await runInfrastructurePhase(
-          "package_load_failed",
-          () =>
-            withAbort(
-              loadImports(
-                autoImports,
-                options.loadImport!,
-                moduleMap,
-                requireFn,
-                options.compileFunction,
-                options.harden,
-                options.confinement
-              ),
-              signal
-            ),
+        await withAbort(
+          loadImports(
+            autoImports,
+            options.loadImport!,
+            moduleMap,
+            requireFn,
+            options.compileFunction,
+            options.harden,
+            options.confinement
+          ),
           signal
         );
         validation = validateRequires(transformed.requires, requireFn);

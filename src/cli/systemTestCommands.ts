@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { evalMethods } from "@vibestudio/service-schemas/eval";
+import { EVAL_RESULT_RETURN_PREVIEW_CHARS, evalMethods } from "@vibestudio/service-schemas/eval";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
 import {
   CliError,
@@ -36,11 +36,14 @@ type EvalStatus = Awaited<ReturnType<EvalClient["getRun"]>>;
 
 const DEFAULT_POLL_MS = 1_000;
 const MAX_CONSECUTIVE_STATUS_READ_FAILURES = 5;
-// Stay below EvalDO's 60k structured-return preview threshold even after wire
-// serialization. Pages are returned as UTF-16LE base64 (2 bytes per JS code
-// unit, then 4/3 expansion), so 20k source chars remain ~53.4k plus a tiny
-// object envelope regardless of quotes, backslashes, control chars, or Unicode.
-const EVAL_RETURN_PAGE_CHARS = 20_000;
+// The first page is returned through eval itself. Reserve an object-envelope
+// budget and assume worst-case JSON escaping (one code unit → six characters)
+// so the pager can never compact its own response into another truncation
+// envelope. Later pages use the direct scope reader.
+const EVAL_RETURN_PAGE_ENVELOPE_CHARS = 1_024;
+const EVAL_RETURN_PAGE_CHARS = Math.floor(
+  (EVAL_RESULT_RETURN_PREVIEW_CHARS - EVAL_RETURN_PAGE_ENVELOPE_CHARS) / 6
+);
 // Once the first eval has cached the source string, direct owner-scoped scope
 // reads bypass the EvalDO run-result envelope. A 128 Ki-code-unit page becomes
 // ~342 KiB as UTF-16LE base64, comfortably bounded while reducing round trips.
@@ -615,7 +618,8 @@ async function expandTruncatedReturn(
   const truncated = truncatedReturn(value);
   if (!truncated) return value;
 
-  // Ordinary large eval returns are recovered from scope.$lastReturn. Callers
+  // Ordinary large eval returns are recovered from the stable scope key named
+  // by the truncation envelope (currently scope.$lastLargeReturn). Callers
   // that can deterministically reconstruct the value (notably persisted full
   // trajectories) provide pageCode instead: EvalDO deliberately caps the
   // generic scope spill at 1 MiB, while pathological trajectories can exceed
@@ -632,8 +636,9 @@ async function expandTruncatedReturn(
     let offset = 0;
     while (offset < targetLength) {
       const requestedChars = offset === 0 ? EVAL_RETURN_PAGE_CHARS : DIRECT_SCOPE_PAGE_CHARS;
-      // The first page is an eval because it atomically snapshots either
-      // `$lastReturn` or a deterministic reconstruction into `pageKey`. Every
+      // The first page is an eval because it atomically snapshots either the
+      // envelope's stable spill key or a deterministic reconstruction into
+      // `pageKey`. Every
       // subsequent page is a direct scope read: no compilation, no run row,
       // no result compaction, and no repeated trajectory serialization.
       let resolvedRow: {

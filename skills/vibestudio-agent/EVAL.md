@@ -27,7 +27,7 @@ top-level `await`, `return`, or the trailing IIFE so failures reach the caller.
 
 | Binding                                  | What it is                                                                                                                                                                                                                          |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rpc.call(method, args)`                 | Raw RPC: `await rpc.call("vcs.status", [{ contextId: ctx.contextId }])`                                                                                                                                                |
+| `rpc.call(method, args)`                 | Raw RPC: `await rpc.call("vcs.status", [{ contextId: ctx.contextId }])`                                                                                                                                                             |
 | `rpc.callTarget(targetId, method, args)` | Call a runtime entity (DO/worker) by target id, e.g. after `workers.resolveService`: `const svc = await rpc.call("workers.resolveService", ["vibestudio.testkit-driver.v1", null]); await rpc.callTarget(svc.targetId, "ping", [])` |
 | `services`                               | Proxy over rpc: `await services.docs.listServices()` ≡ `rpc.call("docs.listServices", [])`                                                                                                                                          |
 | `fs`                                     | Context-bound fs service — the session contextId is injected as the first arg: `await fs.readdir("/")`, `await fs.grep("TODO", {})`                                                                                                 |
@@ -129,6 +129,14 @@ The `eval` service returns `{success, console, returnValue?, error?, scopeKeys?}
 where `console` is the formatted console output captured during the run and
 `scopeKeys` lists the keys currently held in the persistent scope.
 
+- Oversized terminal fields are replaced by bounded summaries. Follow the
+  summary's `scopeKey`: large return, console, and error values are retained in
+  `scope.$lastLargeReturn`, `scope.$lastLargeConsole`, and
+  `scope.$lastLargeError`. These stable recovery slots survive small follow-up
+  eval results, so inspect them with compact summaries, searches, or small
+  samples (for example `.slice(0, 1_500)`) instead of returning the whole value
+  again. Ordinary `scope.$lastReturn` remains the most recent REPL return and
+  is overwritten on every defined result.
 - **Text mode (TTY):** the captured `console` prints to stderr, then the
   `return` value prints to stdout (pretty-printed JSON for objects). On
   failure the `error` is reported (exit `1`).

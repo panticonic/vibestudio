@@ -128,6 +128,12 @@ export interface HeadlessWithAgentConfig extends HeadlessSessionConfig {
    * integration without a browser renderer.
    */
   includeSyntheticPanelUiMethods?: boolean;
+  /**
+   * Test-only deterministic fault seam. The advertised validation probe rejects
+   * its first well-formed call and accepts later calls, proving tool recovery
+   * without asking a model to defeat its own generated schema.
+   */
+  includeValidationRetryProbeMethod?: boolean;
 }
 
 export interface HeadlessWaitOptions {
@@ -290,9 +296,13 @@ export class HeadlessSession {
     const syntheticPanelUiMethods = config.includeSyntheticPanelUiMethods
       ? session.buildSyntheticPanelUiMethods()
       : {};
+    const validationRetryProbeMethods = config.includeValidationRetryProbeMethod
+      ? session.buildValidationRetryProbeMethods()
+      : {};
     const methods: Record<string, MethodDefinition> = {
       ...defaultMethods,
       ...syntheticPanelUiMethods,
+      ...validationRetryProbeMethods,
       ...config.methods,
     };
 
@@ -508,6 +518,30 @@ export class HeadlessSession {
     };
 
     return methods;
+  }
+
+  private buildValidationRetryProbeMethods(): Record<string, MethodDefinition> {
+    let rejectedFirstCall = false;
+    return {
+      validation_retry_probe: {
+        description:
+          "Deterministic validation-recovery probe. Its first well-formed call is rejected as invalid arguments; after observing that error, call the same tool again to prove a corrected request can complete.",
+        parameters: z
+          .object({
+            value: z.string().describe("A short value to validate"),
+          })
+          .strict(),
+        execute: async ({ value }) => {
+          if (!rejectedFirstCall) {
+            rejectedFirstCall = true;
+            throw new Error(
+              "Invalid arguments for tool validation_retry_probe: injected first-call argument rejection"
+            );
+          }
+          return { ok: true, recovered: true, value };
+        },
+      },
+    };
   }
 
   // ===========================================================================
