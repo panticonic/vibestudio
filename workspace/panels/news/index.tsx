@@ -1071,21 +1071,6 @@ export default function NewsPanel() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectable, selectedIndex, narrow, mobilePane, markReadLocal, setSavedLocal, handleDeepDive]);
 
-  if (!channelName) {
-    return (
-      <ErrorBoundary>
-        <Theme appearance={theme} {...appTheme}>
-          <Flex align="center" justify="center" gap="2" style={{ height: "100dvh" }}>
-            <Spinner />
-            <Text size="2" color="gray">
-              Starting news…
-            </Text>
-          </Flex>
-        </Theme>
-      </ErrorBoundary>
-    );
-  }
-
   const feeds = overview?.setup.feeds ?? [];
   const topics = overview?.setup.followedTopics ?? [];
   const existingFeedUrls = new Set(feeds.map((feed) => feed.url));
@@ -1136,6 +1121,21 @@ export default function NewsPanel() {
       void callAgent("markRead", { articleIds: unreadIds.slice(0, 200) });
     else if (id === "news-view-unread") setView("unread");
   });
+
+  if (!channelName) {
+    return (
+      <ErrorBoundary>
+        <Theme appearance={theme} {...appTheme}>
+          <Flex align="center" justify="center" gap="2" style={{ height: "100dvh" }}>
+            <Spinner />
+            <Text size="2" color="gray">
+              Starting news…
+            </Text>
+          </Flex>
+        </Theme>
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <ErrorBoundary>
