@@ -104,23 +104,25 @@ for (const row of authorityLedger.rows) {
     recordCapabilityTier(row.capability, row.tier, `${row.owner}:${row.method}`);
   }
 }
-for (const capability of [
-  "context.boundary",
-  "clipboard",
-  "external-browser-open",
-  "external-network-fetch",
-  "incoming-pair-links",
-  "internal-model-runtime.use",
-  "keychain",
-  "native-menus",
-  "notifications",
-  "open-external",
-  "panel-hosting",
-  "window-management",
-  "workspace-main-advance",
-  "workspace-repo-delete",
-])
-  recordCapabilityTier(capability, "gated", "reviewed intrinsic capability");
+const REVIEWED_INTRINSIC_CAPABILITIES = new Map([
+  ["context.boundary", "critical"],
+  ["clipboard", "gated"],
+  ["external-browser-open", "gated"],
+  ["external-network-fetch", "gated"],
+  ["incoming-pair-links", "gated"],
+  ["internal-model-runtime.use", "gated"],
+  ["keychain", "gated"],
+  ["native-menus", "gated"],
+  ["notifications", "gated"],
+  ["open-external", "gated"],
+  ["panel-hosting", "gated"],
+  ["window-management", "gated"],
+  ["workspace-main-advance", "gated"],
+  ["workspace-repo-delete", "critical"],
+]);
+for (const [capability, tier] of REVIEWED_INTRINSIC_CAPABILITIES) {
+  recordCapabilityTier(capability, tier, "reviewed intrinsic capability");
+}
 
 function reviewedCapabilityTier(capability) {
   if (capability.startsWith("workspace-service:")) return "gated";
@@ -179,21 +181,11 @@ for (const row of authorityLedger.rows.filter(
 }
 const evalCeilingCapabilities = [
   ...new Set([
-    ...authorityLedger.rows
-      .filter(
-        (row) =>
-          row.authorityPrincipals.includes("code") &&
-          !(row.rpcPlane === "workspace-do" && row.tier === "open")
-      )
-      .map(
-        (row) =>
-          row.capability ??
-          (row.rpcPlane === "host-service"
-            ? `service:${row.owner}.${row.method}`
-            : `rpc:${row.method}`)
-      )
-      .map(toManifestCapability)
-      .filter((capability) => capability !== null && !capability.endsWith("*")),
+    // This is the vocabulary of statically reviewed host capabilities, not an
+    // authority source. Requests and grants still come only from explicit
+    // manifests and human decisions. Reusing the reviewed tier table avoids a
+    // second, narrower census that silently rejects intrinsic capabilities.
+    ...capabilityTiers.keys(),
     // Agentic eval is intentionally able to encounter services authored after
     // this checkout was built. This is a reachability ceiling, never a grant:
     // the live declaration, exact provider EV, session/mission envelope, and
