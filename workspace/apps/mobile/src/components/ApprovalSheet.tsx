@@ -37,6 +37,7 @@ import type {
   PendingExternalAgentApproval,
   PendingUnitBatchApproval,
   PendingUserlandApproval,
+  UnitBatchEntry,
   UserlandApprovalOption,
   ApprovalRequesterKind,
 } from "@vibestudio/shared/approvals";
@@ -60,6 +61,8 @@ import {
   originForUrl,
   shouldOpenApprovalDetails,
 } from "@vibestudio/shared/approvalCopy";
+import { unitKindLabel } from "@vibestudio/shared/bootstrapLaunchGate";
+import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import { useAtomValue } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
 import {
@@ -121,7 +124,10 @@ function resolveCallerInfo(approval: PendingApproval): CallerInfo {
   if (approval.requester) {
     return {
       label: approval.requester.title ?? approval.callerTitle ?? prettifyId(approval.callerId),
-      kindLabel: getRequesterCategoryLabel(approval.requester.category),
+      kindLabel:
+        approval.requester.category === "unknown"
+          ? (approval.requester.title ?? "App")
+          : getRequesterCategoryLabel(approval.requester.category),
       kind: approval.requester.kind,
       panelId:
         approval.requester.panel?.id ??
@@ -179,6 +185,7 @@ function resolveCallerInfo(approval: PendingApproval): CallerInfo {
 export interface ApprovalSheetProps {
   approvals: PendingApproval[];
   onResolve: (approvalId: string, decision: ApprovalDecision) => Promise<void> | void;
+  onBlockCapability: (approvalId: string) => Promise<void> | void;
   onSubmitClientConfig: (
     approvalId: string,
     values: Record<string, string>
@@ -200,6 +207,7 @@ export interface ApprovalSheetProps {
 
 type PendingAction =
   | ApprovalDecision
+  | "block-capability"
   | "submit-client-config"
   | "submit-credential-input"
   | "submit-secret-input"
@@ -215,6 +223,7 @@ const SECONDARY_GRANT_DECISIONS: Array<
 export function ApprovalSheet({
   approvals,
   onResolve,
+  onBlockCapability,
   onSubmitClientConfig,
   onSubmitCredentialInput,
   onSubmitSecretInput,
@@ -571,6 +580,11 @@ export function ApprovalSheet({
                     onChoose={(decision) =>
                       runAction(decision, () => onResolve(current.approvalId, decision))
                     }
+                    onBlock={() =>
+                      runAction("block-capability", () =>
+                        onBlockCapability(current.approvalId)
+                      )
+                    }
                   />
                 )}
               </View>
@@ -912,15 +926,19 @@ function SecretConfigFields({
     <View style={styles.fields}>
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>
         {approval.kind === "secret-input"
-          ? "Secrets are entered in Vibestudio's shell UI, not exposed to panels or workers, and used once without being stored."
-          : "Secrets are entered in Vibestudio's shell UI, not exposed to panels or workers, and stored encrypted after submission."}
+          ? HOST_APPROVAL_COPY.forms.ephemeralSecretHelp
+          : HOST_APPROVAL_COPY.forms.storedSecretHelp}
       </Text>
       {approval.fields.map((field) => (
         <View key={field.name} style={styles.fieldBlock}>
           <View style={styles.fieldLabelRow}>
             <Text style={[styles.fieldLabel, { color: colors.text }]}>{field.label}</Text>
-            {field.required ? <Badge label="Required" tone="warning" /> : null}
-            {field.type === "secret" ? <Badge label="Secret" /> : null}
+            {field.required ? (
+              <Badge label={HOST_APPROVAL_COPY.chrome.required} tone="warning" />
+            ) : null}
+            {field.type === "secret" ? (
+              <Badge label={HOST_APPROVAL_COPY.chrome.secret} />
+            ) : null}
           </View>
           <TextInput
             accessibilityLabel={field.label}
@@ -953,12 +971,16 @@ function SecretConfigFields({
 function requesterBreadcrumbSummary(approval: PendingApproval): string | null {
   const breadcrumbs = approval.requester?.breadcrumbs ?? [];
   if (breadcrumbs.length <= 1) return null;
-  return breadcrumbs
-    .map((breadcrumb) => {
-      const kind = getRequesterCategoryLabel(breadcrumb.category);
-      return breadcrumb.label ? `${kind}: ${breadcrumb.label}` : kind;
-    })
-    .join(" > ");
+  return (
+    breadcrumbs
+      .map((breadcrumb) => {
+        if (breadcrumb.category === "unknown") return breadcrumb.label;
+        const kind = getRequesterCategoryLabel(breadcrumb.category);
+        return breadcrumb.label ? `${kind}: ${breadcrumb.label}` : kind;
+      })
+      .filter(Boolean)
+      .join(" > ") || null
+  );
 }
 
 function evalSummary(approval: PendingApproval): string | null {
@@ -1274,13 +1296,58 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
         />
       ) : null}
       {approval.units.map((entry) => (
-        <React.Fragment key={`${entry.unitKind}:${entry.unitName}`}>
-          <DetailRow
-            icon={Lock}
-            label={entry.unitKind === "app" ? "App" : "Extension"}
-            value={entry.unitName}
-            code
-          />
+        <UnitBatchEntryDetails key={`${entry.unitKind}:${entry.unitName}`} entry={entry} />
+      ))}
+    </>
+  );
+}
+
+function UnitBatchEntryDetails({ entry }: { entry: UnitBatchEntry }) {
+  const colors = useAtomValue(themeColorsAtom);
+  const [open, setOpen] = useState(false);
+  const addedGroups = entry.authority?.groups.filter((group) => group.addedCount > 0) ?? [];
+  const addedEval =
+    entry.authority?.eval.filter((review) => review.groups.some((group) => group.addedCount > 0)) ??
+    [];
+  const addedCount =
+    addedGroups.reduce((count, group) => count + group.addedCount, 0) +
+    addedEval.reduce(
+      (count, review) => count + review.groups.reduce((sum, group) => sum + group.addedCount, 0),
+      0
+    );
+  const changeSummary =
+    addedGroups.length > 0 || addedEval.length > 0
+      ? `New: ${[
+          ...addedGroups.map((group) => group.label),
+          ...addedEval.map((review) => review.label),
+        ].join(", ")}`
+      : entry.authority
+        ? HOST_APPROVAL_COPY.chrome.noNewPermissions
+        : "Review exact version";
+  return (
+    <View style={styles.detailsBlock}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((current) => !current)}
+        style={styles.detailsSummary}
+        testID={`unit-review-${entry.unitKind}-${entry.unitName}`}
+      >
+        <ChevronDown size={14} color={colors.textSecondary} />
+        <View style={styles.unitReviewSummary}>
+          <Text style={[styles.detailsSummaryText, { color: colors.text }]}>
+            {entry.displayName}
+            {entry.version ? ` · v${entry.version}` : ""}
+          </Text>
+          <Text style={[styles.unitReviewChange, { color: colors.textSecondary }]}>
+            {changeSummary}
+            {addedCount > 0 ? ` (${addedCount})` : ""}
+          </Text>
+        </View>
+      </Pressable>
+      {open ? (
+        <View style={styles.detailRows}>
+          <DetailRow icon={Lock} label={unitKindLabel(entry)} value={entry.unitName} code />
           <DetailRow
             icon={Globe}
             label="Source"
@@ -1305,11 +1372,111 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
               code
             />
           ) : null}
+          {entry.authority ? <UnitAuthorityDetails authority={entry.authority} /> : null}
           {entry.capabilities.length > 0 ? (
-            <DetailRow icon={Lock} label="Access" value={entry.capabilities.join(", ")} code />
+            <DetailRow
+              icon={Settings2}
+              label="Host integration"
+              value={entry.capabilities.join(", ")}
+              code
+            />
           ) : null}
-        </React.Fragment>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function UnitAuthorityDetails({
+  authority,
+}: {
+  authority: NonNullable<PendingUnitBatchApproval["units"][number]["authority"]>;
+}) {
+  const colors = useAtomValue(themeColorsAtom);
+  const [unchangedOpen, setUnchangedOpen] = useState(false);
+  const addedGroups = authority.groups.filter((group) => group.addedCount > 0);
+  const addedEval = authority.eval.filter((review) =>
+    review.groups.some((group) => group.addedCount > 0)
+  );
+  const unchanged = [
+    ...authority.groups.flatMap((group) =>
+      group.items.filter((item) => !item.added).map((item) => ({ label: group.label, item }))
+    ),
+    ...authority.eval.flatMap((review) =>
+      review.groups.flatMap((group) =>
+        group.items.filter((item) => !item.added).map((item) => ({ label: review.label, item }))
+      )
+    ),
+  ];
+  const removedCount =
+    authority.removedCount +
+    authority.eval.reduce((count, review) => count + review.removedCount, 0);
+  return (
+    <>
+      {addedGroups.length === 0 && addedEval.length === 0 ? (
+        <DetailRow
+          icon={Lock}
+          label="Permission changes"
+          value={HOST_APPROVAL_COPY.chrome.noNewPermissions}
+        />
+      ) : null}
+      {addedGroups.map((group) => (
+        <DetailRow
+          key={`authority:${group.id}`}
+          icon={Lock}
+          label={`+ ${group.label}`}
+          value={`${group.items
+            .filter((item) => item.added)
+            .map((item) => item.title)
+            .join(", ")}. ${group.description}`}
+        />
       ))}
+      {addedEval.map((review) => (
+        <DetailRow
+          key={`authority-eval:${review.purpose}`}
+          icon={Lock}
+          label={`+ ${review.label}`}
+          value={`${review.groups
+            .flatMap((group) => group.items)
+            .filter((item) => item.added)
+            .map((item) => item.title)
+            .join(", ")}. ${HOST_APPROVAL_COPY.unitReview.evaluatedCodeExplanation}`}
+        />
+      ))}
+      {removedCount > 0 ? (
+        <DetailRow
+          icon={Lock}
+          label={HOST_APPROVAL_COPY.chrome.removedPermissions}
+          value={`${removedCount} request${removedCount === 1 ? "" : "s"}`}
+        />
+      ) : null}
+      {unchanged.length > 0 ? (
+        <View style={styles.detailsBlock}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: unchangedOpen }}
+            onPress={() => setUnchangedOpen((open) => !open)}
+            style={styles.detailsSummary}
+          >
+            <ChevronDown size={14} color={colors.textSecondary} />
+            <Text style={[styles.detailsSummaryText, { color: colors.textSecondary }]}>
+              {unchanged.length} unchanged permission{unchanged.length === 1 ? "" : "s"}
+            </Text>
+          </Pressable>
+          {unchangedOpen ? (
+            <View style={styles.detailRows}>
+              {unchanged.map(({ label, item }) => (
+                <DetailRow
+                  key={`${label}:${item.capability}`}
+                  icon={Lock}
+                  label={label}
+                  value={item.title}
+                />
+              ))}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
     </>
   );
 }
@@ -1323,7 +1490,9 @@ function DeviceCodePanel({ approval }: { approval: PendingDeviceCodeApproval }) 
         { backgroundColor: colors.surfaceSunken, borderColor: colors.borderSubtle },
       ]}
     >
-      <Text style={[styles.helperText, { color: colors.textSecondary }]}>Enter this code:</Text>
+      <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+        {HOST_APPROVAL_COPY.deviceSignIn.enterCode}
+      </Text>
       <Text
         accessibilityLabel={`Device code ${approval.userCode}`}
         selectable
@@ -1338,8 +1507,7 @@ function DeviceCodePanel({ approval }: { approval: PendingDeviceCodeApproval }) 
         </Text>
       </Text>
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-        The browser was opened to the verification page. The connection will complete automatically
-        once you approve there.
+        {HOST_APPROVAL_COPY.deviceSignIn.verificationHelp}
       </Text>
     </View>
   );
@@ -1357,8 +1525,8 @@ function DeviceCodeActions({
   return (
     <View style={styles.actionRow}>
       <DecisionButton
-        label="Cancel"
-        description="Stop waiting for the device sign-in."
+        label={HOST_APPROVAL_COPY.forms.cancel}
+        description={HOST_APPROVAL_COPY.forms.cancelDeviceSignInDescription}
         variant="outline"
         disabled={busy}
         loading={pendingAction === "dismiss"}
@@ -1406,8 +1574,8 @@ function ExternalAgentActions({
   return (
     <View style={styles.actionRow}>
       <DecisionButton
-        label="Allow"
-        description="Let the linked Claude Code session run this tool once."
+        label={HOST_APPROVAL_COPY.externalAgent.allow}
+        description={HOST_APPROVAL_COPY.externalAgent.allowDescription}
         variant="primary"
         disabled={busy}
         loading={pendingAction === "external-agent:allow"}
@@ -1415,8 +1583,8 @@ function ExternalAgentActions({
         testID="approval-action-allow"
       />
       <DecisionButton
-        label="Deny"
-        description="Do not let the session run this tool."
+        label={HOST_APPROVAL_COPY.externalAgent.deny}
+        description={HOST_APPROVAL_COPY.externalAgent.denyDescription}
         variant="danger"
         disabled={busy}
         loading={pendingAction === "external-agent:deny"}
@@ -1466,6 +1634,8 @@ function DetailRow({
   const content =
     format === "markdown" ? (
       <ApprovalMarkdown source={value} tone={danger ? "danger" : "default"} compact />
+    ) : format === "tree" ? (
+      <CollapsibleTree value={value} colors={colors} />
     ) : (
       <Text
         style={[
@@ -1503,33 +1673,84 @@ function DetailRow({
   );
 }
 
+function CollapsibleTree({
+  value,
+  colors,
+}: {
+  value: string;
+  colors: { text: string; codeBackground: string; textSecondary: string };
+}) {
+  const [open, setOpen] = useState(false);
+  const lines = value.split("\n");
+  const summary = lines[0] ?? "";
+  const hasBody = lines.length > 1;
+  if (!hasBody) {
+    return <Text style={[styles.detailValue, { color: colors.text }]}>{summary}</Text>;
+  }
+  return (
+    <View>
+      <Pressable onPress={() => setOpen((prev) => !prev)} style={{ flexDirection: "row", gap: 4 }}>
+        <Text style={[styles.detailValue, { color: colors.textSecondary, flexShrink: 0 }]}>
+          {open ? "▾" : "▸"}
+        </Text>
+        <Text style={[styles.detailValue, { color: colors.text }]}>{summary}</Text>
+      </Pressable>
+      {open ? (
+        <Text
+          style={[
+            styles.detailValue,
+            styles.codeText,
+            {
+              color: colors.text,
+              backgroundColor: colors.codeBackground,
+              marginTop: 4,
+              padding: 6,
+              borderRadius: 6,
+            },
+          ]}
+        >
+          {lines.slice(1).join("\n")}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function StandardActions({
   approval,
   busy,
   pendingAction,
   onChoose,
+  onBlock,
 }: {
   approval: PendingCredentialApproval | PendingCapabilityApproval;
   busy: boolean;
   pendingAction: PendingAction | null;
   onChoose: (decision: ApprovalDecision) => void;
+  onBlock: () => void;
 }) {
   const copy = getStandardActionCopy(approval);
   const recommendedDecision = getRecommendedStandardDecision(approval);
+  const permits = (decision: ApprovalDecision) =>
+    approval.kind !== "capability" ||
+    approval.allowedDecisions === undefined ||
+    approval.allowedDecisions.includes(decision);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
   return (
     <View style={styles.actionGroups}>
       <View style={styles.actionRow}>
-        <DecisionButton
-          label={copy.once.label}
-          description={copy.once.description}
-          variant={recommendedDecision === "once" ? "primary" : "surface"}
-          disabled={busy}
-          loading={pendingAction === "once"}
-          onPress={() => onChoose("once")}
-          testID="approval-action-once"
-        />
-        {copy.version && (
+        {permits("once") ? (
+          <DecisionButton
+            label={copy.once.label}
+            description={copy.once.description}
+            variant={recommendedDecision === "once" ? "primary" : "surface"}
+            disabled={busy}
+            loading={pendingAction === "once"}
+            onPress={() => onChoose("once")}
+            testID="approval-action-once"
+          />
+        ) : null}
+        {copy.version && permits("version") && (
           <DecisionButton
             label={copy.version.label}
             description={copy.version.description}
@@ -1547,21 +1768,23 @@ function StandardActions({
             testID="approval-action-version"
           />
         )}
-        <DecisionButton
-          label="Deny"
-          description={copy.denyDescription}
-          variant="danger"
-          disabled={busy}
-          loading={pendingAction === "deny"}
-          icon={XCircle}
-          onPress={() => onChoose("deny")}
-          testID="approval-action-deny"
-        />
+        {permits("deny") ? (
+          <DecisionButton
+            label={HOST_APPROVAL_COPY.chrome.deny}
+            description={copy.denyDescription}
+            variant="danger"
+            disabled={busy}
+            loading={pendingAction === "deny"}
+            icon={XCircle}
+            onPress={() => onChoose("deny")}
+            testID="approval-action-deny"
+          />
+        ) : null}
       </View>
       <View style={styles.actionRow}>
         {SECONDARY_GRANT_DECISIONS.map((decision) => {
           const decisionCopy = copy[decision];
-          if (!decisionCopy) return null;
+          if (!decisionCopy || !permits(decision)) return null;
           return (
             <DecisionButton
               key={decision}
@@ -1575,6 +1798,20 @@ function StandardActions({
             />
           );
         })}
+        {approval.kind === "capability" &&
+        approval.snapshot &&
+        approval.cardType !== "confirm.critical" ? (
+          <DecisionButton
+            label={HOST_APPROVAL_COPY.chrome.block}
+            description={HOST_APPROVAL_COPY.chrome.blockDescription}
+            variant="danger"
+            disabled={busy}
+            loading={pendingAction === "block-capability"}
+            icon={XCircle}
+            onPress={onBlock}
+            testID="approval-action-block"
+          />
+        ) : null}
       </View>
     </View>
   );
@@ -1664,9 +1901,9 @@ function SecretInputActions(props: {
     <InputApprovalActions
       {...props}
       submitAction="submit-secret-input"
-      submitLabel="Continue"
-      submitDescription="Use this secret once."
-      denyDescription="Do not provide this secret."
+      submitLabel={HOST_APPROVAL_COPY.forms.continue}
+      submitDescription={HOST_APPROVAL_COPY.forms.useSecretOnceDescription}
+      denyDescription={HOST_APPROVAL_COPY.forms.secretDenied}
     />
   );
 }
@@ -1679,9 +1916,9 @@ function InputApprovalActions({
   onSubmit,
   onDeny,
   submitAction,
-  submitLabel = "Save service",
-  submitDescription = "Save this connected service.",
-  denyDescription = "Do not save this connected service.",
+  submitLabel = HOST_APPROVAL_COPY.forms.saveService,
+  submitDescription = HOST_APPROVAL_COPY.forms.saveServiceDescription,
+  denyDescription = HOST_APPROVAL_COPY.forms.saveServiceDenied,
 }: {
   approval:
     | PendingClientConfigApproval
@@ -1712,7 +1949,7 @@ function InputApprovalActions({
         testID="approval-submit"
       />
       <DecisionButton
-        label="Deny"
+        label={HOST_APPROVAL_COPY.chrome.deny}
         description={denyDescription}
         variant="danger"
         disabled={busy}
@@ -1879,8 +2116,8 @@ function RememberedHint({
       <Info size={14} color={colors.textSecondary} />
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>
         {approval.promptOptions === "scoped"
-          ? "Use the trust option to remember this approval."
-          : `Remembered for ${caller.kindLabel.toLowerCase()} "${caller.label}" until revoked.`}
+          ? HOST_APPROVAL_COPY.chrome.scopedChoiceHint
+          : HOST_APPROVAL_COPY.chrome.rememberedForRequesterHint(caller.kindLabel, caller.label)}
       </Text>
     </View>
   );
@@ -2122,6 +2359,14 @@ const styles = StyleSheet.create({
   detailsSummaryText: {
     ...typeRamp.caption,
     fontWeight: "600",
+  },
+  unitReviewSummary: {
+    flex: 1,
+    gap: 2,
+  },
+  unitReviewChange: {
+    fontSize: 12,
+    fontWeight: "400",
   },
   detailRows: {
     gap: 9,

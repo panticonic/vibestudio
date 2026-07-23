@@ -141,7 +141,7 @@ describe("ApprovalCard", () => {
       .closest(".approval-card") as HTMLElement;
     expect(card.getAttribute("data-approval-tone")).toBe("red");
 
-    const trustButton = screen.getByText("Trust version").closest("button");
+    const trustButton = screen.getByText("Trust this version").closest("button");
     expect(trustButton?.getAttribute("data-accent-color")).toBe("red");
     expect(
       screen.getByText("Allow once").closest("button")?.getAttribute("data-accent-color")
@@ -173,7 +173,7 @@ describe("ApprovalCard", () => {
     const { emit } = renderCard(credential);
 
     expect(
-      screen.getByText("Trust version").closest("button")?.getAttribute("data-accent-color")
+      screen.getByText("Trust this version").closest("button")?.getAttribute("data-accent-color")
     ).toBe("sky");
     expect(screen.getByText("Use once").closest("button")?.getAttribute("data-accent-color")).toBe(
       ""
@@ -217,7 +217,7 @@ describe("ApprovalCard", () => {
       .closest("details") as HTMLDetailsElement;
     expect(firstUnit.open).toBe(false);
 
-    fireEvent.click(screen.getByText("Approve change"));
+    fireEvent.click(screen.getByText("Approve update"));
     expect(emit).toHaveBeenCalledWith({
       type: "decide",
       decision: "once",
@@ -229,6 +229,111 @@ describe("ApprovalCard", () => {
       decision: "deny",
       approvalId: "extensions",
     });
+  });
+
+  it("puts added permissions on the unit summary and hides unchanged permissions", () => {
+    const approval = unitBatchApproval({ approvalId: "permission-diff" });
+    approval.units[0]!.authority = {
+      requests: [
+        {
+          capability: "notifications",
+          resource: { kind: "prefix", prefix: "" },
+          tier: "gated",
+          evidence: "intentional-broad",
+        },
+        {
+          capability: "service:account.getProfile",
+          resource: { kind: "prefix", prefix: "" },
+          tier: "gated",
+          evidence: "intentional-broad",
+        },
+      ],
+      evalCeilings: [
+        {
+          audience: "eval",
+          purpose: "tool-eval",
+          capabilities: [
+            {
+              capability: "workspace-service:notes",
+              resource: { kind: "prefix", prefix: "" },
+              tier: "gated",
+              evidence: "intentional-broad",
+            },
+          ],
+        },
+      ],
+      groups: [
+        {
+          id: "notifications",
+          label: "Notifications",
+          description: "Display workspace notifications",
+          requestCount: 1,
+          addedCount: 1,
+          items: [
+            {
+              capability: "notifications",
+              title: "Show notifications",
+              description: "Display workspace notifications",
+              added: true,
+            },
+          ],
+        },
+        {
+          id: "runtime",
+          label: "Agents and workspace runtimes",
+          description: "Use runtime services",
+          requestCount: 1,
+          addedCount: 0,
+          items: [
+            {
+              capability: "service:account.getProfile",
+              title: "Get profile",
+              description: "Read the existing profile",
+              added: false,
+            },
+          ],
+        },
+      ],
+      removedCount: 0,
+      eval: [
+        {
+          purpose: "tool-eval",
+          label: "Code run by this tool",
+          groups: [
+            {
+              id: "runtime",
+              label: "Workspace services",
+              description: "Use services from this workspace",
+              requestCount: 1,
+              addedCount: 1,
+              items: [
+                {
+                  capability: "workspace-service:notes",
+                  title: "Team Notes",
+                  description: "Read and update team notes",
+                  added: true,
+                },
+              ],
+            },
+          ],
+          removedCount: 0,
+        },
+      ],
+    };
+
+    renderCard(approval);
+    expect(screen.getByText("+ Notifications")).toBeTruthy();
+    expect(screen.getByText("+ Code run by this tool")).toBeTruthy();
+    expect(screen.getByText("+ Team Notes")).toBeTruthy();
+    const unchangedItem = screen.getByText("Get profile");
+    const unchangedDetails = unchangedItem.closest("details") as HTMLDetailsElement;
+    expect(unchangedDetails.open).toBe(false);
+
+    fireEvent.click(screen.getByText("Extension 1 · v0.1.0"));
+    expect(screen.getByText("+ Show notifications")).toBeTruthy();
+    expect(unchangedDetails.open).toBe(false);
+    fireEvent.click(screen.getByText("Unchanged permissions"));
+    expect(unchangedDetails.open).toBe(true);
   });
 
   it("emits a minimize intent from the header control", () => {

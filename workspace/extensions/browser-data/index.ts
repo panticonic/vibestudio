@@ -34,7 +34,7 @@ import type {
 
 interface InvocationLike {
   current(): {
-    caller: { callerId?: string; callerKind: string };
+    caller: { callerId?: string; callerKind: string; callerTitle?: string };
     chainCaller?: { callerId: string; callerKind: string };
   } | null;
 }
@@ -165,39 +165,39 @@ const DANGEROUS_METHODS = new Set<string>([
 
 /** Human-facing labels for the approval prompt, keyed by method name. */
 const METHOD_LABELS: Record<string, string> = {
-  getCookies: "Read stored cookies",
-  getPasswords: "Read stored passwords",
-  getPasswordForSite: "Read the stored password for a site",
-  getHistory: "Read full browsing history",
-  searchHistory: "Search full browsing history",
-  searchHistoryForAutocomplete: "Read browsing history for autocomplete",
-  getAutofillSuggestions: "Read stored autofill values",
-  getAutocompleteDebug: "Inspect address-bar autocomplete (full URLs)",
-  exportBookmarks: "Export bookmarks",
-  exportPasswords: "Export passwords",
-  exportCookies: "Export cookies",
-  exportAll: "Export all browser data",
+  getCookies: "Read your cookies",
+  getPasswords: "Read your saved passwords",
+  getPasswordForSite: "Read a saved password",
+  getHistory: "Read your browsing history",
+  searchHistory: "Search your browsing history",
+  searchHistoryForAutocomplete: "Suggest sites from your history",
+  getAutofillSuggestions: "Read your saved form entries",
+  getAutocompleteDebug: "Read full addresses from your address bar suggestions",
+  exportBookmarks: "Export your bookmarks",
+  exportPasswords: "Export your passwords",
+  exportCookies: "Export your cookies",
+  exportAll: "Export all your browser data",
   startImport: "Import browser data",
-  openTabsAsPanels: "Open browser tabs as panels",
+  openTabsAsPanels: "Show your browser tabs in Vibestudio",
   addBookmark: "Add a bookmark",
-  updateBookmark: "Modify a bookmark",
+  updateBookmark: "Change a bookmark",
   deleteBookmark: "Delete a bookmark",
   moveBookmark: "Move a bookmark",
   addPassword: "Save a password",
-  updatePassword: "Modify a saved password",
-  updatePasswordLastUsed: "Update saved-password usage",
-  addNeverSavePassword: "Add a never-save origin",
-  removeNeverSavePassword: "Allow password saves for a site again",
-  recordHistoryVisit: "Record a history visit",
-  updateHistoryTitle: "Update a history title",
-  setPermission: "Change a site permission",
-  setDefaultEngine: "Change the default search engine",
+  updatePassword: "Change a saved password",
+  updatePasswordLastUsed: "Mark a password as recently used",
+  addNeverSavePassword: "Stop saving passwords for a site",
+  removeNeverSavePassword: "Resume saving passwords for a site",
+  recordHistoryVisit: "Add to your browsing history",
+  updateHistoryTitle: "Update a page title in your history",
+  setPermission: "Change a website's permission",
+  setDefaultEngine: "Change your default search engine",
   deleteCookie: "Delete a cookie",
-  clearCookies: "Clear cookies",
+  clearCookies: "Clear all cookies",
   deletePassword: "Delete a saved password",
   deleteHistoryEntry: "Delete a history entry",
-  deleteHistoryRange: "Delete a range of history",
-  clearAllHistory: "Clear all browsing history",
+  deleteHistoryRange: "Delete history from a time range",
+  clearAllHistory: "Clear all your browsing history",
 };
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
@@ -231,16 +231,16 @@ export async function activate(ctx: ExtensionContextLike) {
     }
     const label = METHOD_LABELS[method] ?? method;
     const dangerous = DANGEROUS_METHODS.has(method);
+    const callerLabel = caller.callerTitle ?? callerKind ?? "Something";
     const choice = await ctx.approvals.request({
       subject: { id: `browser-data:${method}`, label },
       title: `${label}?`,
-      summary: `A ${callerKind} (${caller.callerId}) is requesting to ${label.toLowerCase()}.`,
+      summary: `${callerLabel} wants to ${label.toLowerCase()}.`,
       ...(dangerous
-        ? { warning: "This exposes or modifies sensitive imported browser data." }
+        ? { warning: `Your saved browser data (passwords, cookies, history) will be ${label.startsWith("Delete") || label.startsWith("Clear") ? "changed or deleted" : label.startsWith("Export") ? "exported" : "accessible"}.` }
         : {}),
       details: [
-        { label: "Operation", value: method },
-        { label: "Caller", value: `${callerKind}:${caller.callerId}` },
+        { label: "Requested by", value: callerLabel },
       ],
       severity: dangerous ? "dangerous" : "standard",
       defaultAction: "deny",

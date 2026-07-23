@@ -523,6 +523,9 @@ export async function activate(ctx: ExtensionContext) {
             ...openReq,
             command: launch.command,
             args: launch.args,
+            // Shell-integration rewrites are transport details. Never turn
+            // their generated init-script paths into the user-facing name.
+            label: parsed.label ?? (parsed.command ? [command, ...args].join(" ") : "Shell"),
             cwd,
             env: launch.env,
             ...(parsed.contextId ? { contextId: parsed.contextId } : {}),

@@ -469,6 +469,15 @@ export function MainScreen() {
     },
     [refreshPendingApprovals, removeResolvedApproval, shellClient]
   );
+  const blockCapability = useCallback(
+    async (approvalId: string) => {
+      if (!shellClient) throw new Error("Shell client not available");
+      await shellClient.shellApproval.blockCapability(approvalId);
+      removeResolvedApproval(approvalId);
+      void refreshPendingApprovals().catch(() => {});
+    },
+    [refreshPendingApprovals, removeResolvedApproval, shellClient]
+  );
   const submitClientConfig = useCallback(
     async (approvalId: string, values: Record<string, string>) => {
       if (!shellClient) throw new Error("Shell client not available");
@@ -1774,6 +1783,7 @@ export function MainScreen() {
       <ApprovalSheet
         approvals={visibleApprovals}
         onResolve={resolveApproval}
+        onBlockCapability={blockCapability}
         onSubmitClientConfig={submitClientConfig}
         onSubmitCredentialInput={submitCredentialInput}
         onSubmitSecretInput={submitSecretInput}

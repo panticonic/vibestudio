@@ -41,13 +41,12 @@ export function buildExecApproval(req: {
       id: `user.exec.${digest([req.command, ...req.args, req.cwd, req.shell ? "sh" : "argv"])}`,
       label: subjectLabel(command),
     },
-    title: "Run command",
+    title: "Run a command",
     summary: summaryValue(["Run this command:", "", markdownShellBlock(command)].join("\n")),
-    warning: req.shell ? "Runs through /bin/sh -c; shell metacharacters will be interpreted." : undefined,
+    warning: req.shell ? "Runs as a shell command. Special characters like |, &, and * have meaning and will be acted on." : undefined,
     details: [
       { label: "Command", value: detailValue(markdownShellBlock(command)), format: "markdown" },
-      { label: "Directory", value: detailValue(req.cwd) },
-      { label: "Mode", value: req.shell ? "shell" : "argv" },
+      { label: "Folder", value: detailValue(req.cwd) },
     ],
     options,
   };
@@ -66,15 +65,15 @@ export function buildOpenApproval(req: {
       id: `user.open.${digest([req.command, ...req.args, req.cwd])}`,
       label: subjectLabel(req.label ?? command),
     },
-    title: "Open terminal session",
+    title: "Open a terminal",
     summary: summaryValue([
-      req.label ? `Open ${req.label} with:` : "Open a terminal session with:",
+      req.label ? `Open ${req.label} running:` : "Open a terminal running:",
       "",
       markdownShellBlock(command),
     ].join("\n")),
     details: [
       { label: "Command", value: detailValue(markdownShellBlock(command)), format: "markdown" },
-      { label: "Directory", value: detailValue(req.cwd) },
+      { label: "Folder", value: detailValue(req.cwd) },
     ],
     options,
   };
@@ -90,16 +89,14 @@ export function buildContextAttachApproval(req: {
       id: `user.context-attach.${digest([req.contextId])}`,
       label: subjectLabel(req.contextId),
     },
-    title: "Attach to context",
+    title: "Work with files from another part of your project",
     summary: summaryValue(
-      `Allow this ${req.operation === "exec" ? "command" : "terminal session"} to attach to context ${req.contextId}?`
+      `Let this ${req.operation === "exec" ? "command" : "terminal"} access files in ${req.contextId}.`
     ),
     details: [
-      { label: "Context", value: detailValue(req.contextId) },
-      { label: "Caller", value: detailValue(req.callerId) },
-      { label: "Operation", value: req.operation },
+      { label: "Project area", value: detailValue(req.contextId) },
     ],
-    warning: "This gives the shell extension access to the context's materialized working folder.",
+    warning: "The command will be able to read and change files from that part of your project.",
     defaultAction: "deny",
     promptOptions: "scoped",
   };
@@ -121,11 +118,11 @@ export function buildUrlOpenApproval(req: { url: string }): UserlandApprovalRequ
       id: `user.open-url.${digest([parsed.origin])}`,
       label: subjectLabel(parsed.origin),
     },
-    title: "Open URL",
-    summary: summaryValue(req.url),
+    title: "Open a link",
+    summary: summaryValue(`Open this in your browser:\n${req.url}`),
     details: [
-      { label: "URL", value: detailValue(req.url) },
-      { label: "Origin", value: detailValue(parsed.origin) },
+      { label: "Address", value: detailValue(req.url) },
+      { label: "Site", value: detailValue(parsed.origin) },
     ],
     options,
   };

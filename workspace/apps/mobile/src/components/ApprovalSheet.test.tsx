@@ -128,6 +128,57 @@ const unitBatch: PendingApproval = {
       source: { kind: "workspace-repo", repo: "apps/mobile", ref: "abc123" },
       ev: "ev-mobile",
       capabilities: ["panel-hosting"],
+      authority: {
+        requests: [
+          {
+            capability: "notifications",
+            resource: { kind: "prefix", prefix: "" },
+            tier: "gated",
+            evidence: "intentional-broad",
+          },
+          {
+            capability: "service:account.getProfile",
+            resource: { kind: "prefix", prefix: "" },
+            tier: "gated",
+            evidence: "intentional-broad",
+          },
+        ],
+        evalCeilings: [],
+        groups: [
+          {
+            id: "notifications",
+            label: "Notifications",
+            description: "Display workspace notifications",
+            requestCount: 1,
+            addedCount: 1,
+            items: [
+              {
+                capability: "notifications",
+                title: "Show notifications",
+                description: "Display workspace notifications",
+                added: true,
+              },
+            ],
+          },
+          {
+            id: "runtime",
+            label: "Agents and workspace runtimes",
+            description: "Use runtime services",
+            requestCount: 1,
+            addedCount: 0,
+            items: [
+              {
+                capability: "service:account.getProfile",
+                title: "Get profile",
+                description: "Read the existing profile",
+                added: false,
+              },
+            ],
+          },
+        ],
+        removedCount: 0,
+        eval: [],
+      },
     },
     {
       unitKind: "extension",
@@ -154,6 +205,7 @@ function renderSheet(
   const props = {
     approvals: Array.isArray(approval) ? approval : [approval],
     onResolve: jest.fn(async () => undefined),
+    onBlockCapability: jest.fn(async () => undefined),
     onSubmitClientConfig: jest.fn(async () => undefined),
     onSubmitCredentialInput: jest.fn(async () => undefined),
     onSubmitSecretInput: jest.fn(async () => undefined),
@@ -174,10 +226,23 @@ describe("ApprovalSheet", () => {
     [secretInput, "Enter sudo password"],
     [userland, "Allow foo?"],
     [deviceCode, "Sign in to GitHub"],
-    [unitBatch, "Run 2 workspace units"],
+    [unitBatch, "Start 1 extension and 1 app"],
   ] as const)("renders %s", (approval, title) => {
     const { getByText } = renderSheet(approval);
     expect(getByText(title)).toBeTruthy();
+  });
+
+  it("shows added unit permissions before unchanged permission details", () => {
+    const { getByText, getByTestId, queryByText } = renderSheet(unitBatch);
+    expect(getByText("New: Notifications (1)")).toBeTruthy();
+    expect(queryByText("+ Notifications")).toBeNull();
+
+    fireEvent.press(getByTestId("unit-review-app-mobile"));
+    expect(getByText("+ Notifications")).toBeTruthy();
+    expect(queryByText("Get profile")).toBeNull();
+
+    fireEvent.press(getByText("1 unchanged permission"));
+    expect(getByText("Get profile")).toBeTruthy();
   });
 
   it.each(["once", "session", "version", "deny"] as const)(
@@ -248,12 +313,17 @@ describe("ApprovalSheet", () => {
 
   it("renders OAuth mismatch warning conditionally", () => {
     const { getByText, queryByText, rerender } = renderSheet(credential);
-    expect(getByText("The sign-in domain differs from the service domain.")).toBeTruthy();
+    expect(
+      getByText(
+        "The sign-in site is different from the service's site. Make sure you recognize both."
+      )
+    ).toBeTruthy();
 
     rerender(
       <ApprovalSheet
         approvals={[{ ...credential, oauthAudienceDomainMismatch: false }]}
         onResolve={jest.fn()}
+        onBlockCapability={jest.fn()}
         onSubmitClientConfig={jest.fn()}
         onSubmitCredentialInput={jest.fn()}
         onSubmitSecretInput={jest.fn()}
@@ -268,7 +338,7 @@ describe("ApprovalSheet", () => {
     const onResolveExternalAgent = jest.fn(async () => undefined);
     const { getByText, getByTestId } = renderSheet(externalAgent, { onResolveExternalAgent });
 
-    expect(getByText("External agent wants to run Bash")).toBeTruthy();
+    expect(getByText("Bash")).toBeTruthy();
     expect(getByText("npm install")).toBeTruthy();
 
     fireEvent.press(getByTestId("approval-action-allow"));
@@ -368,11 +438,16 @@ describe("ApprovalSheet", () => {
 
     expect(getByText("Workspace")).toBeTruthy();
     expect(getByText("workspace")).toBeTruthy();
-    expect(getByText("App")).toBeTruthy();
+    expect(getByText(/Mobile/)).toBeTruthy();
+    expect(getByText("Git Tools")).toBeTruthy();
+
+    fireEvent.press(getByTestId("unit-review-app-mobile"));
+    fireEvent.press(getByTestId("unit-review-extension-git-tools"));
+    expect(getByText("Mobile")).toBeTruthy();
     expect(getByText("mobile")).toBeTruthy();
-    expect(getByText("Extension")).toBeTruthy();
+    expect(getByText("Terminal")).toBeTruthy();
     expect(getByText("git-tools")).toBeTruthy();
-    expect(getAllByText("Access")).toHaveLength(2);
+    expect(getAllByText("Host integration")).toHaveLength(2);
     expect(getByText("panel-hosting")).toBeTruthy();
 
     fireEvent.press(getByTestId("approval-action-once"));
@@ -394,7 +469,7 @@ describe("ApprovalSheet", () => {
 
     expect(getByText("Act on Shell's context")).toBeTruthy();
     expect(
-      getByText("This can affect another workspace branch and the work running in it.")
+      getByText("This can affect files and running work in a different part of your project.")
     ).toBeTruthy();
     expect(getByTestId("approval-accent-stripe").props.style).toEqual(
       expect.arrayContaining([
@@ -411,7 +486,7 @@ describe("ApprovalSheet", () => {
       ])
     );
     expect(getByTestId("approval-action-version").props.accessibilityLabel).toContain(
-      "Trust version"
+      "Trust this version"
     );
     expect(getByTestId("approval-action-version").props.style).toEqual(
       expect.arrayContaining([
@@ -441,10 +516,12 @@ describe("ApprovalSheet", () => {
       <ApprovalSheet
         approvals={[{ ...credentialInput, approvalId: "approval-2" }]}
         onResolve={jest.fn()}
+        onBlockCapability={jest.fn()}
         onSubmitClientConfig={jest.fn()}
         onSubmitCredentialInput={jest.fn()}
         onSubmitSecretInput={jest.fn()}
         onResolveUserland={jest.fn()}
+        onResolveExternalAgent={jest.fn()}
       />
     );
     expect(getByText("Add Acme API")).toBeTruthy();
