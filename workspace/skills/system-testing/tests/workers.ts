@@ -362,12 +362,19 @@ function requireInstalledWorkspaceServiceConsumerEvidence(result: TestExecutionR
     return { passed: false, reason: "The installed consumer did not resolve a live service" };
   }
 
-  const exercisedInstalledCode = /(?:workers\.create|runtime\.createEntity)\s*\(/u.test(
-    base.evidence.evalCode
-  );
-  const calledCreatedTarget =
-    /rpc\.call(?:<[^>]*>)?\s*\(\s*[^,\n]*(?:\.targetId|\btargetId\b)/u.test(base.evidence.evalCode);
-  if (!exercisedInstalledCode || !calledCreatedTarget) {
+  const createdHandles = [
+    ...base.evidence.evalCode.matchAll(
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+(?:workers\.create|runtime\.createEntity)\s*\(/gu
+    ),
+  ].map((match) => match[1]!);
+  const calledCreatedTarget = createdHandles.some((handle) => {
+    const escaped = handle.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    return new RegExp(
+      `\\brpc\\.call(?:<[^>]*>)?\\s*\\(\\s*${escaped}\\.(?:id|targetId)\\s*,`,
+      "u"
+    ).test(base.evidence.evalCode);
+  });
+  if (createdHandles.length === 0 || !calledCreatedTarget) {
     return {
       passed: false,
       reason: "The proof did not execute and call the context-built installed unit",

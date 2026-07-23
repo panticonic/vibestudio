@@ -635,6 +635,38 @@ describe("worker test validators", () => {
     result.messages.splice(1, 0, ...calls);
     expect(test("installed-workspace-service-consumer").validate(result).passed).toBe(true);
 
+    const publicId = structuredClone(result);
+    const evalMessage = publicId.messages.find(
+      (message) => message.kind === "message" && message.invocation?.id === "call-eval"
+    );
+    if (evalMessage?.kind === "message" && evalMessage.invocation) {
+      evalMessage.invocation.arguments = {
+        code: [
+          'const worker = await workers.create("workers/probe", { key: "installed-probe" });',
+          'const observed = await rpc.call(worker.id, "consumeTestkitService", []);',
+          "await workers.destroy(worker);",
+        ].join("\n"),
+      };
+    }
+    expect(test("installed-workspace-service-consumer").validate(publicId).passed).toBe(true);
+
+    const unrelatedTarget = structuredClone(result);
+    const unrelatedEval = unrelatedTarget.messages.find(
+      (message) => message.kind === "message" && message.invocation?.id === "call-eval"
+    );
+    if (unrelatedEval?.kind === "message" && unrelatedEval.invocation) {
+      unrelatedEval.invocation.arguments = {
+        code: [
+          'const handle = await workers.create("workers/probe", { key: "installed-probe" });',
+          'const observed = await rpc.call(other.id, "consumeLocalService", []);',
+          "await workers.destroy(handle);",
+        ].join("\n"),
+      };
+    }
+    expect(test("installed-workspace-service-consumer").validate(unrelatedTarget).passed).toBe(
+      false
+    );
+
     const wildcard = structuredClone(result);
     const manifest = wildcard.messages.find(
       (message) => message.kind === "message" && message.invocation?.id === "manifest"
