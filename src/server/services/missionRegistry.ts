@@ -12,6 +12,7 @@ import {
   missionSubject,
   type MissionCharter,
   type MissionRecord,
+  type MissionStandingRestriction,
   type MissionState,
 } from "@vibestudio/shared/authority/mission";
 import { stateLayout } from "../stateLayout.js";
@@ -21,6 +22,16 @@ import { MISSION_MIGRATION_PLAN } from "./missionSchema.js";
 export interface MissionPermission {
   capability: string;
   resource: ResourceScope;
+}
+
+export interface SeededMissionInput {
+  productSnapshotState: string;
+  missionId: string;
+  name: string;
+  charter: MissionCharter;
+  permissions: readonly MissionPermission[];
+  standingRestrictions?: readonly MissionStandingRestriction[];
+  now?: number;
 }
 
 /** Host-owned mission identity, revisions, session bindings, and closure enforcement. */
@@ -156,6 +167,7 @@ export class MissionRegistry {
   approve(input: {
     missionId: string;
     permissions: readonly MissionPermission[];
+    standingRestrictions?: readonly MissionStandingRestriction[];
     decidedBy: `user:${string}`;
     contextIntegrityReady: boolean;
     now?: number;
@@ -179,8 +191,12 @@ export class MissionRegistry {
         "EACCES"
       );
     }
+    const permissions = normalizePermissions(input.permissions);
+    const standingRestrictions = normalizeStandingRestrictions(
+      input.standingRestrictions ?? current.standingRestrictions ?? []
+    );
     const subject = missionSubject(current);
-    for (const permission of input.permissions) {
+    for (const permission of permissions) {
       if (!missionAllowsCapability(current.charter, permission.capability)) {
         throw coded(
           `Mission permission ${permission.capability} exceeds tool exposure`,
@@ -193,15 +209,11 @@ export class MissionRegistry {
     // Mint while the mission is still inert, then expose it with the final
     // state flip: every interruption therefore fails closed.
     for (const grant of this.opts.grantStore.listAuthorityGrants()) {
-      if (
-        grant.effect === "allow" &&
-        grant.subject.startsWith(`mission:${current.missionId}@`) &&
-        grant.id
-      ) {
+      if (grant.subject.startsWith(`mission:${current.missionId}@`) && grant.id) {
         this.opts.grantStore.revoke(grant.id, now);
       }
     }
-    for (const permission of input.permissions) {
+    for (const permission of permissions) {
       this.opts.grantStore.issue({
         effect: "allow",
         capability: permission.capability,
@@ -213,10 +225,161 @@ export class MissionRegistry {
         createdAt: now,
       });
     }
+    for (const restriction of standingRestrictions) {
+      this.opts.grantStore.issue({
+        effect: "deny",
+        capability: restriction.capability,
+        resource: { kind: "exact", key: restriction.resourceKey },
+        subject,
+        constraints: { lineageAtConsent: [] },
+        issuedBy: input.decidedBy,
+        provenance: "acquisition",
+        createdAt: now,
+      });
+    }
     this.db
-      .prepare("UPDATE missions SET state='active', updated_at=? WHERE mission_id=?")
-      .run(now, current.missionId);
+      .prepare(
+        "UPDATE missions SET state='active', standing_restrictions_json=?, updated_at=? WHERE mission_id=?"
+      )
+      .run(canonicalJson(standingRestrictions), now, current.missionId);
     return this.require(current.missionId);
+  }
+
+  /**
+   * Reconcile one host-shipped mission against an immutable product snapshot.
+   *
+   * The mission is made inert in the registry before grants are touched. Since
+   * the mission registry and grant store are separate canonical databases,
+   * this ordering is the cross-store transaction boundary: interruption can
+   * leave an inert mission with partial/unreachable grants, never an active
+   * mission with incomplete authority.
+   */
+  upsertSeeded(input: SeededMissionInput): MissionRecord {
+    if (!/^state:[0-9a-f]{64}$/u.test(input.productSnapshotState)) {
+      throw new Error("Seeded missions require a canonical product snapshot state");
+    }
+    if (!/^msn_[A-Za-z0-9_-]+$/u.test(input.missionId) || !input.name.trim()) {
+      throw new Error("Seeded missions require a canonical mission id and name");
+    }
+    if (!this.opts.isConduitBlessed(input.charter.harness)) {
+      throw coded("Seeded mission harness is not blessed from this product snapshot", "EACCES");
+    }
+    const permissions = normalizePermissions(input.permissions);
+    for (const permission of permissions) {
+      if (!missionAllowsCapability(input.charter, permission.capability)) {
+        throw coded(
+          `Seeded mission permission ${permission.capability} exceeds tool exposure`,
+          "EMISSIONSCOPE"
+        );
+      }
+    }
+    const standingRestrictions = normalizeStandingRestrictions(input.standingRestrictions ?? []);
+    const closureDigest = missionClosureDigest(input.charter);
+    const existing = this.get(input.missionId);
+    if (existing && existing.seeded !== true) {
+      throw coded(`Mission id ${input.missionId} is already user-owned`, "EACCES");
+    }
+    const subject = missionSubject({ missionId: input.missionId, closureDigest });
+    if (
+      existing?.state === "active" &&
+      existing.closureDigest === closureDigest &&
+      this.seedSnapshotState(input.missionId) === input.productSnapshotState &&
+      this.hasExactActiveSeedGrants(subject, permissions, standingRestrictions)
+    ) {
+      return existing;
+    }
+
+    const now = input.now ?? Date.now();
+    this.transaction(() => {
+      if (existing) {
+        if (existing.closureDigest !== closureDigest) {
+          this.db
+            .prepare(
+              `INSERT INTO mission_revisions
+               (mission_id,revision,charter_json,closure_digest,recorded_at)
+               VALUES (?,?,?,?,?)`
+            )
+            .run(
+              existing.missionId,
+              existing.revision,
+              canonicalJson(existing.charter),
+              existing.closureDigest,
+              now
+            );
+        }
+        this.db
+          .prepare(
+            `UPDATE missions
+             SET name=?,revision=?,charter_json=?,owner_user_id='system',
+                 owner_device_id='system',state='needs-reapproval',closure_digest=?,
+                 standing_restrictions_json=?,seeded=1,seed_snapshot_state=?,updated_at=?
+             WHERE mission_id=?`
+          )
+          .run(
+            input.name,
+            existing.revision + (existing.closureDigest === closureDigest ? 0 : 1),
+            canonicalJson(input.charter),
+            closureDigest,
+            canonicalJson(standingRestrictions),
+            input.productSnapshotState,
+            now,
+            input.missionId
+          );
+      } else {
+        this.db
+          .prepare(
+            `INSERT INTO missions
+             (mission_id,name,revision,charter_json,owner_user_id,owner_device_id,state,
+              closure_digest,standing_restrictions_json,seeded,created_at,updated_at,
+              seed_snapshot_state)
+             VALUES (?,?,1,?,'system','system','needs-reapproval',?,?,1,?,?,?)`
+          )
+          .run(
+            input.missionId,
+            input.name,
+            canonicalJson(input.charter),
+            closureDigest,
+            canonicalJson(standingRestrictions),
+            now,
+            now,
+            input.productSnapshotState
+          );
+      }
+    });
+
+    for (const grant of this.opts.grantStore.listAuthorityGrants()) {
+      if (grant.subject.startsWith(`mission:${input.missionId}@`) && grant.id) {
+        this.opts.grantStore.revoke(grant.id, now);
+      }
+    }
+    for (const permission of permissions) {
+      this.opts.grantStore.issue({
+        effect: "allow",
+        capability: permission.capability,
+        resource: permission.resource,
+        subject,
+        constraints: { lineageAtConsent: [] },
+        issuedBy: "host:product-seed",
+        provenance: "seed",
+        createdAt: now,
+      });
+    }
+    for (const restriction of standingRestrictions) {
+      this.opts.grantStore.issue({
+        effect: "deny",
+        capability: restriction.capability,
+        resource: { kind: "exact", key: restriction.resourceKey },
+        subject,
+        constraints: { lineageAtConsent: [] },
+        issuedBy: "host:product-seed",
+        provenance: "seed",
+        createdAt: now,
+      });
+    }
+    this.db
+      .prepare("UPDATE missions SET state='active',updated_at=? WHERE mission_id=?")
+      .run(now, input.missionId);
+    return this.require(input.missionId);
   }
 
   pause(missionId: string, actingUserId: string, now = Date.now()): MissionRecord {
@@ -268,6 +431,12 @@ export class MissionRegistry {
     now?: number;
   }): SessionMissionFact {
     const current = this.require(input.missionId);
+    if (
+      current.state !== "active" ||
+      missionClosureDigest(current.charter) !== current.closureDigest
+    ) {
+      throw coded(`Mission ${current.missionId} is not active at its approved closure`, "EACCES");
+    }
     if (!this.opts.isConduitBlessed(current.charter.harness)) {
       throw coded("Mission harness is no longer a product-blessed conduit", "EACCES");
     }
@@ -437,6 +606,51 @@ export class MissionRegistry {
     return found;
   }
 
+  private seedSnapshotState(missionId: string): string | null {
+    const row = this.db
+      .prepare("SELECT seed_snapshot_state FROM missions WHERE mission_id=?")
+      .get(missionId) as { seed_snapshot_state?: SQLOutputValue } | undefined;
+    return row?.seed_snapshot_state == null ? null : String(row.seed_snapshot_state);
+  }
+
+  private hasExactActiveSeedGrants(
+    subject: `mission:${string}`,
+    permissions: readonly MissionPermission[],
+    restrictions: readonly MissionStandingRestriction[]
+  ): boolean {
+    const actual = this.opts.grantStore
+      .listActiveAuthorityGrants()
+      .filter((grant) => grant.subject === subject)
+      .map((grant) =>
+        canonicalJson({
+          effect: grant.effect,
+          capability: grant.capability,
+          resource: grant.resource,
+          provenance: grant.provenance,
+        })
+      )
+      .sort();
+    const expected = [
+      ...permissions.map((permission) =>
+        canonicalJson({
+          effect: "allow",
+          capability: permission.capability,
+          resource: permission.resource,
+          provenance: "seed",
+        })
+      ),
+      ...restrictions.map((restriction) =>
+        canonicalJson({
+          effect: "deny",
+          capability: restriction.capability,
+          resource: { kind: "exact", key: restriction.resourceKey },
+          provenance: "seed",
+        })
+      ),
+    ].sort();
+    return canonicalJson(actual) === canonicalJson(expected);
+  }
+
   private assertOwnedBy(
     mission: MissionRecord,
     userId: string,
@@ -494,6 +708,50 @@ function missionAllowsCapability(charter: MissionCharter, capability: string): b
     return charter.toolExposure.userlandServices.some((binding) => binding.name === name);
   }
   return missionAllowsService(charter, capabilityMethod(capability));
+}
+
+function normalizePermissions(input: readonly MissionPermission[]): MissionPermission[] {
+  const normalized = input.map((permission) => {
+    const capability = permission.capability.trim();
+    if (!capability) throw new Error("Mission permission capability is required");
+    validateResourceScope(permission.resource);
+    return { capability, resource: permission.resource };
+  });
+  assertNoDuplicateCanonicalRows(normalized, "mission permission");
+  return normalized.sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+}
+
+function normalizeStandingRestrictions(
+  input: readonly MissionStandingRestriction[]
+): MissionStandingRestriction[] {
+  const normalized = input.map((restriction) => {
+    const capability = restriction.capability.trim();
+    if (!capability || !restriction.resourceKey) {
+      throw new Error("Mission standing restriction capability and resource are required");
+    }
+    return { capability, resourceKey: restriction.resourceKey };
+  });
+  assertNoDuplicateCanonicalRows(normalized, "mission standing restriction");
+  return normalized.sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+}
+
+function validateResourceScope(resource: ResourceScope): void {
+  const key =
+    resource.kind === "exact"
+      ? resource.key
+      : resource.kind === "prefix"
+        ? resource.prefix
+        : resource.kind === "origin"
+          ? resource.origin
+          : resource.kind === "domain"
+            ? resource.domain
+            : resource.value;
+  if (!key) throw new Error("Mission permission resource is required");
+}
+
+function assertNoDuplicateCanonicalRows(input: readonly unknown[], label: string): void {
+  const keys = input.map(canonicalJson);
+  if (new Set(keys).size !== keys.length) throw new Error(`Duplicate ${label}`);
 }
 
 function coded(message: string, code: string): Error {

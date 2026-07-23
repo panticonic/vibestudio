@@ -29,6 +29,12 @@ asarUnpack:
   - "packages/**/*"
 
 extraResources:
+  # Reviewed first-party mission charters. These are admission inputs; runtime
+  # code resolves only their @seed pins from the immutable product snapshot.
+  - from: "seed"
+    to: "seed"
+    filter:
+      - "missions/*.json"
   # Default workspace template (used to create first workspace on fresh install).
   # Whitelist only source directories — exclude Electron session data, build cache, etc.
   - from: "workspace"

@@ -50,6 +50,13 @@ export class ConduitBlessingStore {
     return this.productSnapshotState !== null;
   }
 
+  isSeededFor(productSnapshotState: string): boolean {
+    if (!/^state:[0-9a-f]{64}$/u.test(productSnapshotState)) {
+      throw new Error("Conduit blessing lookup requires a canonical product snapshot state");
+    }
+    return this.productSnapshotState === productSnapshotState;
+  }
+
   /**
    * Replace the seed only from the trusted product-snapshot bootstrap path.
    * Callers must never pass identities resolved from mutable protected main.

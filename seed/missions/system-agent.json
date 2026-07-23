@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "missionId": "msn_system_agent",
+  "name": "System Agent",
+  "charter": {
+    "taskSpec": "Help the user understand and operate the Vibestudio workspace and shell.",
+    "harness": {
+      "unit": "workers/system-agent",
+      "ev": "@seed"
+    },
+    "skills": [],
+    "toolExposure": {
+      "services": [],
+      "userlandServices": [],
+      "evalNetwork": "none",
+      "declaredOrigins": []
+    },
+    "model": {
+      "modelId": "openai-codex:gpt-5.3-codex-spark",
+      "params": {}
+    },
+    "trigger": {
+      "kind": "event",
+      "event": {
+        "source": "system-agent.user-turn",
+        "filter": {
+          "kind": "all"
+        }
+      }
+    }
+  },
+  "permissions": [],
+  "standingRestrictions": []
+}

@@ -1,12 +1,6 @@
 import type { CanonicalSqliteMigrationPlan, CanonicalSqliteSchema } from "@vibestudio/sqlite";
 
-export const MISSION_SCHEMA: CanonicalSqliteSchema = {
-  version: 1,
-  objects: [
-    {
-      type: "table",
-      name: "missions",
-      sql: `CREATE TABLE missions (
+const MISSIONS_V1_SQL = `CREATE TABLE missions (
       mission_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       revision INTEGER NOT NULL CHECK (revision > 0),
@@ -19,7 +13,32 @@ export const MISSION_SCHEMA: CanonicalSqliteSchema = {
       seeded INTEGER NOT NULL DEFAULT 0 CHECK (seeded IN (0,1)),
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
-    )`,
+    )`;
+
+// SQLite rewrites the source text in this exact form when ADD COLUMN migrates
+// v1. Fresh and upgraded databases deliberately share that canonical shape.
+const MISSIONS_V2_SQL = `CREATE TABLE missions (
+      mission_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK (revision > 0),
+      charter_json TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL,
+      owner_device_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('draft','active','needs-reapproval','paused','retired')),
+      closure_digest TEXT NOT NULL,
+      standing_restrictions_json TEXT NOT NULL DEFAULT '[]',
+      seeded INTEGER NOT NULL DEFAULT 0 CHECK (seeded IN (0,1)),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+    seed_snapshot_state TEXT)`;
+
+const MISSION_SCHEMA_V1: CanonicalSqliteSchema = {
+  version: 1,
+  objects: [
+    {
+      type: "table",
+      name: "missions",
+      sql: MISSIONS_V1_SQL,
     },
     {
       type: "table",
@@ -66,7 +85,26 @@ export const MISSION_SCHEMA: CanonicalSqliteSchema = {
   ],
 };
 
+export const MISSION_SCHEMA: CanonicalSqliteSchema = {
+  ...MISSION_SCHEMA_V1,
+  version: 2,
+  objects: MISSION_SCHEMA_V1.objects.map((object) =>
+    object.type === "table" && object.name === "missions"
+      ? { ...object, sql: MISSIONS_V2_SQL }
+      : object
+  ),
+};
+
 export const MISSION_MIGRATION_PLAN: CanonicalSqliteMigrationPlan = {
   current: MISSION_SCHEMA,
-  migrations: [],
+  migrations: [
+    {
+      name: "bind-seeded-missions-to-product-snapshot",
+      from: MISSION_SCHEMA_V1,
+      to: MISSION_SCHEMA,
+      migrate(db) {
+        db.exec("ALTER TABLE missions ADD COLUMN seed_snapshot_state TEXT");
+      },
+    },
+  ],
 };

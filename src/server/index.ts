@@ -1381,7 +1381,7 @@ async function main() {
         }
       );
       const snapshotState = productSeedStateHash;
-      if (snapshotState && !conduitBlessingStore.hasSeed()) {
+      if (snapshotState) {
         const { PRODUCT_CONDUIT_UNITS } = await import("./productConduitPolicy.js");
         const resolutions = await buildSystem.resolveBuildUnits(
           PRODUCT_CONDUIT_UNITS,
@@ -1399,7 +1399,20 @@ async function main() {
             effectiveVersion: resolved.effectiveVersion,
           };
         });
-        conduitBlessingStore.seedProductSnapshot(snapshotState, identities);
+        if (!conduitBlessingStore.isSeededFor(snapshotState)) {
+          conduitBlessingStore.seedProductSnapshot(snapshotState, identities);
+        }
+        const { loadMissionSeedDefinitions, reconcileSeededMissions } =
+          await import("./services/seededMissions.js");
+        const definitions = loadMissionSeedDefinitions(path.join(appRoot, "seed", "missions"));
+        reconcileSeededMissions({
+          productSnapshotState: snapshotState,
+          definitions,
+          harnessVersions: new Map(
+            identities.map((identity) => [identity.repoPath, identity.effectiveVersion])
+          ),
+          registry: missionRegistry,
+        });
       }
       return buildSystem;
     },

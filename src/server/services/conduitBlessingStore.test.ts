@@ -33,8 +33,18 @@ describe("ConduitBlessingStore", () => {
     store.seedProductSnapshot(`state:${"c".repeat(64)}`, [identity]);
 
     const reloaded = new ConduitBlessingStore({ statePath: root });
+    expect(reloaded.isSeededFor(`state:${"c".repeat(64)}`)).toBe(true);
     expect(reloaded.isBlessed(identity)).toBe(true);
     expect(reloaded.isBlessed({ ...identity, effectiveVersion: "d".repeat(64) })).toBe(false);
+
+    const replacement = {
+      repoPath: "workers/system-agent",
+      effectiveVersion: "e".repeat(64),
+    };
+    reloaded.seedProductSnapshot(`state:${"f".repeat(64)}`, [replacement]);
+    expect(reloaded.isSeededFor(`state:${"f".repeat(64)}`)).toBe(true);
+    expect(reloaded.isBlessed(identity)).toBe(false);
+    expect(reloaded.isBlessed(replacement)).toBe(true);
   });
 
   it("fails closed on unknown schemas and empty seeds", () => {

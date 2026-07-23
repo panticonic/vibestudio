@@ -6,6 +6,14 @@ import { normalizeWorkspaceRepoPath } from "../runtime/entitySpec.js";
 
 export type MissionState = "draft" | "active" | "needs-reapproval" | "paused" | "retired";
 
+export type MissionEventFilter =
+  | { kind: "all" }
+  | {
+      kind: "field-equals";
+      path: readonly [string, ...string[]];
+      value: string | number | boolean | null;
+    };
+
 export interface MissionCharter {
   taskSpec: string;
   harness: { unit: string; ev: string };
@@ -25,7 +33,7 @@ export interface MissionCharter {
   trigger:
     | { kind: "manual" }
     | { kind: "cron"; cron: string }
-    | { kind: "event"; event: { source: string; filter: string } };
+    | { kind: "event"; event: { source: string; filter: MissionEventFilter } };
 }
 
 export interface MissionRecord {
@@ -39,7 +47,12 @@ export interface MissionRecord {
   createdAt: number;
   updatedAt: number;
   seeded?: boolean;
-  standingRestrictions?: readonly { capability: string; resourceKey: string }[];
+  standingRestrictions?: readonly MissionStandingRestriction[];
+}
+
+export interface MissionStandingRestriction {
+  capability: string;
+  resourceKey: string;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -89,6 +102,25 @@ export function validateMissionCharter(charter: MissionCharter): void {
     const parsed = new URL(origin);
     if (parsed.origin !== origin)
       throw new Error(`Mission network origin is not canonical: ${origin}`);
+  }
+  if (charter.trigger.kind === "event") {
+    if (!/^[a-z][a-z0-9.-]{0,127}$/u.test(charter.trigger.event.source)) {
+      throw new Error("Mission event source is not canonical");
+    }
+    const filter = charter.trigger.event.filter;
+    if (
+      filter.kind === "field-equals" &&
+      (filter.path.length === 0 ||
+        filter.path.some(
+          (part) =>
+            !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/u.test(part) ||
+            part === "__proto__" ||
+            part === "prototype" ||
+            part === "constructor"
+        ))
+    ) {
+      throw new Error("Mission event filter contains an invalid field path");
+    }
   }
 }
 
@@ -142,6 +174,22 @@ export function missionAllowsService(charter: MissionCharter, qualifiedMethod: s
       entry === qualifiedMethod ||
       (entry.endsWith(".*") && qualifiedMethod.startsWith(entry.slice(0, -1)))
   );
+}
+
+export function missionEventMatches(filter: MissionEventFilter, payload: unknown): boolean {
+  if (filter.kind === "all") return true;
+  let value = payload;
+  for (const part of filter.path) {
+    if (
+      value === null ||
+      typeof value !== "object" ||
+      !Object.prototype.hasOwnProperty.call(value, part)
+    ) {
+      return false;
+    }
+    value = (value as Record<string, unknown>)[part];
+  }
+  return Object.is(value, filter.value);
 }
 
 function sha256(value: string): string {

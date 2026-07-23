@@ -35,11 +35,12 @@ export function createMissionService(deps: {
           forkOwner: owner,
         });
       },
-      approve: (ctx, [missionId, permissions]) => {
+      approve: (ctx, [missionId, permissions, standingRestrictions]) => {
         const owner = humanOwner(ctx);
         return deps.registry.approve({
           missionId,
           permissions,
+          ...(standingRestrictions === undefined ? {} : { standingRestrictions }),
           decidedBy: `user:${owner.userId}`,
           contextIntegrityReady: deps.contextIntegrityReady(),
         });

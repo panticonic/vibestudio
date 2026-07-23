@@ -4,6 +4,23 @@ import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority
 import { AuthorityResourceScopeSchema } from "./build.js";
 
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/);
+const eventField = z
+  .string()
+  .regex(/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/)
+  .refine(
+    (value) => value !== "__proto__" && value !== "prototype" && value !== "constructor",
+    "reserved event field"
+  );
+const missionEventFilterSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("all") }).strict(),
+  z
+    .object({
+      kind: z.literal("field-equals"),
+      path: z.array(eventField).nonempty(),
+      value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+    })
+    .strict(),
+]);
 
 export const missionCharterSchema = z
   .object({
@@ -34,7 +51,12 @@ export const missionCharterSchema = z
       z
         .object({
           kind: z.literal("event"),
-          event: z.object({ source: z.string().min(1), filter: z.string() }).strict(),
+          event: z
+            .object({
+              source: z.string().regex(/^[a-z][a-z0-9.-]{0,127}$/),
+              filter: missionEventFilterSchema,
+            })
+            .strict(),
         })
         .strict(),
     ]),
@@ -43,6 +65,10 @@ export const missionCharterSchema = z
 
 export const missionPermissionSchema = z
   .object({ capability: z.string().min(1), resource: AuthorityResourceScopeSchema })
+  .strict();
+
+export const missionStandingRestrictionSchema = z
+  .object({ capability: z.string().min(1), resourceKey: z.string().min(1) })
   .strict();
 
 export const missionRecordSchema = z
@@ -57,9 +83,7 @@ export const missionRecordSchema = z
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
     seeded: z.boolean().optional(),
-    standingRestrictions: z
-      .array(z.object({ capability: z.string(), resourceKey: z.string() }).strict())
-      .optional(),
+    standingRestrictions: z.array(missionStandingRestrictionSchema).optional(),
   })
   .strict();
 
@@ -102,7 +126,11 @@ export const missionMethods = defineServiceMethods({
   },
   approve: {
     description: "Approve the exact current mission closure and its exposed permission rows.",
-    args: z.tuple([z.string(), z.array(missionPermissionSchema)]),
+    args: z.tuple([
+      z.string(),
+      z.array(missionPermissionSchema),
+      z.array(missionStandingRestrictionSchema).optional(),
+    ]),
     returns: missionRecordSchema,
     authority: USER_HOST,
     access: { sensitivity: "admin" },

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   missionAllowsService,
   missionClosureDigest,
+  missionEventMatches,
   missionSubject,
   type MissionCharter,
 } from "./mission.js";
@@ -50,5 +51,44 @@ describe("mission closure", () => {
         harness: { ...charter().harness, unit: "workspace/workers/system-agent" },
       })
     ).toThrow(/canonical workspace repo/);
+  });
+
+  it("uses a closed data-only event filter grammar", () => {
+    expect(() =>
+      missionClosureDigest({
+        ...charter(),
+        trigger: {
+          kind: "event",
+          event: {
+            source: "workspace.file.changed",
+            filter: { kind: "field-equals", path: ["repo", "kind"], value: "worker" },
+          },
+        },
+      })
+    ).not.toThrow();
+    expect(() =>
+      missionClosureDigest({
+        ...charter(),
+        trigger: {
+          kind: "event",
+          event: {
+            source: "workspace.file.changed",
+            filter: { kind: "field-equals", path: ["__proto__"], value: true },
+          },
+        },
+      })
+    ).toThrow(/invalid field path/);
+    expect(
+      missionEventMatches(
+        { kind: "field-equals", path: ["repo", "kind"], value: "worker" },
+        { repo: { kind: "worker" } }
+      )
+    ).toBe(true);
+    expect(
+      missionEventMatches(
+        { kind: "field-equals", path: ["repo", "kind"], value: "worker" },
+        Object.create({ repo: { kind: "worker" } }) as unknown
+      )
+    ).toBe(false);
   });
 });
