@@ -125,9 +125,9 @@ export async function activate(ctx: ExtensionContext) {
       const command = formatCommand(process.execPath, [script, ...args]);
       await requireApproval(ctx, {
         id: `mobile.install.${raw?.device ?? "default"}`,
-        title: "Install Android app",
+        title: "Install app on Android device",
         summary: [
-          "Build/install runs app code on the attached Android device.",
+          "Build and install the app on your connected Android device.",
           "",
           markdownShellBlock(command),
         ].join("\n"),
@@ -161,9 +161,9 @@ export async function activate(ctx: ExtensionContext) {
       const command = formatCommand(process.execPath, [script, ...args]);
       await requireApproval(ctx, {
         id: `mobile.ios.install.${raw?.device ?? "simulator"}`,
-        title: "Install iOS app",
+        title: "Install app on iOS device",
         summary: [
-          "Build/install runs app code on the selected iOS simulator or device.",
+          "Build and install the app on your iOS device or simulator.",
           "",
           markdownShellBlock(command),
         ].join("\n"),
@@ -204,15 +204,15 @@ export async function activate(ctx: ExtensionContext) {
       );
       await requireApproval(ctx, {
         id: `mobile.clear.${raw?.device ?? "default"}.${packageName}`,
-        title: "Clear Android app data",
+        title: "Reset app on Android device",
         summary: [
-          "This deletes the app's local pairing credentials and state.",
+          "Clears all the app's saved data. You'll need to sign in again.",
           "",
           markdownShellBlock(command),
         ].join("\n"),
         details: [
           { label: "Command", value: markdownShellBlock(command), format: "markdown" },
-          { label: "Package", value: packageName },
+          { label: "App", value: packageName },
           ...(raw?.device ? [{ label: "Device", value: raw.device }] : []),
         ],
       });
@@ -302,9 +302,9 @@ export async function activate(ctx: ExtensionContext) {
       );
       await requireApproval(ctx, {
         id: `mobile.shell.${raw.device ?? "default"}.${raw.command}`,
-        title: "Run Android shell command",
+        title: "Run a command on Android device",
         summary: [
-          "Run this command on the attached Android device:",
+          "Run a command directly on your connected Android device:",
           "",
           markdownShellBlock(command),
         ].join("\n"),

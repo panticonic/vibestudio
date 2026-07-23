@@ -111,6 +111,20 @@ describe("@workspace-extensions/shell", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps generated shell-integration paths out of the session label", async () => {
+    const { api } = await makeApi("allow");
+    const { sessionId } = await api.open({});
+    const info = await api.get(sessionId);
+
+    expect(info.label).toBe("Shell");
+    if (info.command.argv.some((part) => part === "--init-file")) {
+      expect(info.command.argv.join(" ")).toContain("shellIntegration-bash.sh");
+    }
+
+    await api.kill(sessionId);
+    await api.dispose(sessionId);
+  });
+
   it("runs approved argv-style exec without invoking a shell", async () => {
     const { api } = await makeApi("allow");
     const result = await api.exec({
@@ -463,7 +477,7 @@ describe("@workspace-extensions/shell", () => {
 
     expect(request).toHaveBeenCalledTimes(1);
     expect(request.mock.calls[0]![0]).toMatchObject({
-      title: "Attach to context",
+      title: "Work with files from another part of your project",
       subject: { label: "ctx-existing" },
     });
     expect(ensureContextFolder).not.toHaveBeenCalled();
@@ -492,7 +506,7 @@ describe("@workspace-extensions/shell", () => {
 
     expect(ensureContextFolder).toHaveBeenCalledWith("ctx-new");
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls[0]![0]).toMatchObject({ title: "Open terminal session" });
+    expect(request.mock.calls[0]![0]).toMatchObject({ title: "Open a terminal" });
   });
 
   it("does not prompt again once the caller already has a session attached to the context", async () => {
@@ -512,9 +526,9 @@ describe("@workspace-extensions/shell", () => {
     await api.awaitExit(first.sessionId);
     await api.awaitExit(second.sessionId);
     expect(request.mock.calls.map((call) => call[0].title)).toEqual([
-      "Attach to context",
-      "Open terminal session",
-      "Open terminal session",
+      "Work with files from another part of your project",
+      "Open a terminal",
+      "Open a terminal",
     ]);
   });
 
@@ -664,7 +678,7 @@ describe("@workspace-extensions/shell", () => {
     expect(request).toHaveBeenCalledTimes(2);
     const urlApproval = (request.mock.calls[1] as unknown[] | undefined)?.[0];
     expect(urlApproval).toMatchObject({
-      title: "Open URL",
+      title: "Open a link",
       subject: { label: "https://blocked.example.test" },
     });
     await expect(api.getMeta(sessionId, "snugOpenUrl")).resolves.toBeUndefined();

@@ -62,6 +62,8 @@ import {
   shouldOpenApprovalDetails,
 } from "@vibestudio/shared/approvalCopy";
 import type { ApprovalDecision } from "@vibestudio/shared/approvals";
+import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
+import { unitKindLabel } from "@vibestudio/shared/bootstrapLaunchGate";
 import {
   parseApprovalMarkdown,
   type ApprovalMarkdownInline,
@@ -605,17 +607,25 @@ function StandardApprovalActions({
 }) {
   const copy = getStandardActionCopy(approval);
   const recommendedDecision = getRecommendedStandardDecision(approval);
+  const permits = (decision: ApprovalDecision) =>
+    approval.kind !== "capability" ||
+    approval.allowedDecisions === undefined ||
+    approval.allowedDecisions.includes(decision);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
-      <DecisionButton
-        label={copy.once.label}
-        description={copy.once.description}
-        color={recommendedDecision === "once" ? (isSevereCapability ? "amber" : "sky") : undefined}
-        variant={recommendedDecision === "once" ? "solid" : "surface"}
-        onClick={() => decide("once")}
-      />
-      {copy.session && (
+      {permits("once") ? (
+        <DecisionButton
+          label={copy.once.label}
+          description={copy.once.description}
+          color={
+            recommendedDecision === "once" ? (isSevereCapability ? "amber" : "sky") : undefined
+          }
+          variant={recommendedDecision === "once" ? "solid" : "surface"}
+          onClick={() => decide("once")}
+        />
+      ) : null}
+      {copy.session && permits("session") && (
         <DecisionButton
           label={copy.session.label}
           description={copy.session.description}
@@ -623,7 +633,7 @@ function StandardApprovalActions({
           onClick={() => decide("session")}
         />
       )}
-      {copy.version && (
+      {copy.version && permits("version") && (
         <DecisionButton
           label={copy.version.label}
           description={copy.version.description}
@@ -634,24 +644,28 @@ function StandardApprovalActions({
           onClick={() => decide("version")}
         />
       )}
-      <DecisionButton
-        label="Deny"
-        description={copy.denyDescription}
-        color="red"
-        icon={<CrossCircledIcon />}
-        style={{ marginLeft: 6 }}
-        onClick={() => decide("deny")}
-      />
-      {approval.kind === "capability" ? (
+      {permits("deny") ? (
         <DecisionButton
-          label="Block"
-          description="Deny this request and stop asking for this exact code version. Revoke it later in Permissions."
+          label={HOST_APPROVAL_COPY.chrome.deny}
+          description={copy.denyDescription}
+          color="red"
+          icon={<CrossCircledIcon />}
+          style={{ marginLeft: 6 }}
+          onClick={() => decide("deny")}
+        />
+      ) : null}
+      {approval.kind === "capability" &&
+      approval.snapshot &&
+      approval.cardType !== "confirm.critical" ? (
+        <DecisionButton
+          label={HOST_APPROVAL_COPY.chrome.block}
+          description={HOST_APPROVAL_COPY.chrome.blockDescription}
           color="red"
           variant="surface"
           onClick={onBlock}
         />
       ) : null}
-      <Tooltip content="Dismiss">
+      <Tooltip content={HOST_APPROVAL_COPY.chrome.dismiss}>
         <IconButton size="1" variant="ghost" color="gray" onClick={() => decide("dismiss")}>
           <Cross2Icon />
         </IconButton>
@@ -693,7 +707,7 @@ function UnitBatchActions({
         style={{ marginLeft: 6 }}
         onClick={() => decide("deny")}
       />
-      <Tooltip content="Dismiss">
+      <Tooltip content={HOST_APPROVAL_COPY.chrome.dismiss}>
         <IconButton size="1" variant="ghost" color="gray" onClick={() => decide("dismiss")}>
           <Cross2Icon />
         </IconButton>
@@ -722,22 +736,24 @@ function ClientConfigActions({
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       <Tooltip
         content={
-          missingRequired ? "Enter the required fields first." : "Save this connected service."
+          missingRequired
+            ? HOST_APPROVAL_COPY.forms.missingFields
+            : HOST_APPROVAL_COPY.forms.saveServiceDescription
         }
       >
         <Button size="1" variant="solid" color="sky" disabled={missingRequired} onClick={onSubmit}>
           <CheckCircledIcon />
-          Save service
+          {HOST_APPROVAL_COPY.forms.saveService}
         </Button>
       </Tooltip>
       <DecisionButton
-        label="Deny"
-        description="Do not save this connected service."
+        label={HOST_APPROVAL_COPY.chrome.deny}
+        description={HOST_APPROVAL_COPY.forms.saveServiceDenied}
         color="red"
         icon={<CrossCircledIcon />}
         onClick={onDeny}
       />
-      <Tooltip content="Dismiss">
+      <Tooltip content={HOST_APPROVAL_COPY.chrome.dismiss}>
         <IconButton size="1" variant="ghost" color="gray" onClick={onDismiss}>
           <Cross2Icon />
         </IconButton>
@@ -765,21 +781,25 @@ function SecretInputActions({
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       <Tooltip
-        content={missingRequired ? "Enter the required values first." : "Submit and continue."}
+        content={
+          missingRequired
+            ? HOST_APPROVAL_COPY.forms.missingValues
+            : HOST_APPROVAL_COPY.forms.submitDescription
+        }
       >
         <Button size="1" variant="solid" color="sky" disabled={missingRequired} onClick={onSubmit}>
           <CheckCircledIcon />
-          Submit
+          {HOST_APPROVAL_COPY.forms.submit}
         </Button>
       </Tooltip>
       <DecisionButton
-        label="Deny"
-        description="Do not provide this input."
+        label={HOST_APPROVAL_COPY.chrome.deny}
+        description={HOST_APPROVAL_COPY.forms.inputDenied}
         color="red"
         icon={<CrossCircledIcon />}
         onClick={onDeny}
       />
-      <Tooltip content="Dismiss">
+      <Tooltip content={HOST_APPROVAL_COPY.chrome.dismiss}>
         <IconButton size="1" variant="ghost" color="gray" onClick={onDismiss}>
           <Cross2Icon />
         </IconButton>
@@ -808,22 +828,24 @@ function CredentialInputActions({
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       <Tooltip
         content={
-          missingRequired ? "Enter the required secret first." : "Save this connected service."
+          missingRequired
+            ? HOST_APPROVAL_COPY.forms.missingSecret
+            : HOST_APPROVAL_COPY.forms.saveServiceDescription
         }
       >
         <Button size="1" variant="solid" color="sky" disabled={missingRequired} onClick={onSubmit}>
           <CheckCircledIcon />
-          Save service
+          {HOST_APPROVAL_COPY.forms.saveService}
         </Button>
       </Tooltip>
       <DecisionButton
-        label="Deny"
-        description="Do not save this connected service."
+        label={HOST_APPROVAL_COPY.chrome.deny}
+        description={HOST_APPROVAL_COPY.forms.saveServiceDenied}
         color="red"
         icon={<CrossCircledIcon />}
         onClick={onDeny}
       />
-      <Tooltip content="Dismiss">
+      <Tooltip content={HOST_APPROVAL_COPY.chrome.dismiss}>
         <IconButton size="1" variant="ghost" color="gray" onClick={onDismiss}>
           <Cross2Icon />
         </IconButton>
@@ -861,14 +883,14 @@ function UserlandApprovalActions({
         ))}
         {oneTimeOption ? (
           <DecisionButton
-            label="Only this time"
-            description={`${oneTimeOption.label}, without remembering the choice.`}
+            label={HOST_APPROVAL_COPY.chrome.onlyThisTime}
+            description={HOST_APPROVAL_COPY.chrome.onlyThisTimeDescription}
             variant="surface"
             icon={<CheckCircledIcon />}
             onClick={() => onChoose(`once:${oneTimeOption.value}`)}
           />
         ) : null}
-        <Tooltip content="Dismiss">
+        <Tooltip content={HOST_APPROVAL_COPY.chrome.dismiss}>
           <IconButton size="1" variant="ghost" color="gray" onClick={() => onChoose("dismiss")}>
             <Cross2Icon />
           </IconButton>
@@ -876,8 +898,8 @@ function UserlandApprovalActions({
       </Flex>
       <Text size="1" color="gray">
         {approval.promptOptions === "scoped"
-          ? "Use the trust option to remember this approval."
-          : "Choices are remembered unless you select Only this time."}
+          ? HOST_APPROVAL_COPY.chrome.scopedChoiceHint
+          : HOST_APPROVAL_COPY.chrome.rememberedChoiceHint}
       </Text>
     </Flex>
   );
@@ -887,15 +909,15 @@ function ExternalAgentActions({ onDecide }: { onDecide: (behavior: "allow" | "de
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       <DecisionButton
-        label="Allow"
-        description="Let the linked Claude Code session run this tool once."
+        label={HOST_APPROVAL_COPY.externalAgent.allow}
+        description={HOST_APPROVAL_COPY.externalAgent.allowDescription}
         color="sky"
         variant="solid"
         onClick={() => onDecide("allow")}
       />
       <DecisionButton
-        label="Deny"
-        description="Do not let the session run this tool."
+        label={HOST_APPROVAL_COPY.externalAgent.deny}
+        description={HOST_APPROVAL_COPY.externalAgent.denyDescription}
         color="red"
         icon={<CrossCircledIcon />}
         onClick={() => onDecide("deny")}
@@ -1002,7 +1024,7 @@ function DeviceCodeBody({ approval }: { approval: PendingDeviceCodeApproval }) {
     >
       <Flex direction="column" gap="2">
         <Text size="1" color="gray">
-          Enter this code:
+          {HOST_APPROVAL_COPY.deviceSignIn.enterCode}
         </Text>
         <Code
           size="6"
@@ -1021,8 +1043,7 @@ function DeviceCodeBody({ approval }: { approval: PendingDeviceCodeApproval }) {
           at <InlineCode>{originForUrl(approval.verificationUri)}</InlineCode>
         </Text>
         <Text size="1" color="gray" style={{ lineHeight: 1.35 }}>
-          The browser was opened to the verification page. The connection completes automatically
-          once you approve there.
+          {HOST_APPROVAL_COPY.deviceSignIn.verificationHelp}
         </Text>
       </Flex>
     </Box>
@@ -1032,7 +1053,7 @@ function DeviceCodeBody({ approval }: { approval: PendingDeviceCodeApproval }) {
 function DeviceCodeActions({ onCancel }: { onCancel: () => void }) {
   return (
     <Button onClick={onCancel} size="2" variant="soft" color="gray">
-      Cancel
+      {HOST_APPROVAL_COPY.forms.cancel}
     </Button>
   );
 }
@@ -1197,19 +1218,28 @@ function RequesterBreadcrumbs({ approval }: { approval: PendingApproval }) {
   const breadcrumbs = approval.requester?.breadcrumbs ?? [];
   return (
     <Flex align="center" gap="1" wrap="wrap" style={{ minWidth: 0 }}>
-      {breadcrumbs.map((breadcrumb, index) => (
-        <Flex key={`${breadcrumb.id}:${index}`} align="center" gap="1" style={{ minWidth: 0 }}>
-          {index > 0 ? (
-            <Text size="1" color="gray" style={{ flexShrink: 0 }}>
-              &gt;
-            </Text>
-          ) : null}
-          <Badge color="gray" variant="soft" style={{ maxWidth: 260 }}>
-            {getRequesterCategoryLabel(breadcrumb.category)}
-            {breadcrumb.label ? `: ${breadcrumb.label}` : ""}
-          </Badge>
-        </Flex>
-      ))}
+      {breadcrumbs.flatMap((breadcrumb, index) => {
+        const categoryLabel =
+          breadcrumb.category === "unknown" ? null : getRequesterCategoryLabel(breadcrumb.category);
+        const text = categoryLabel
+          ? breadcrumb.label
+            ? `${categoryLabel}: ${breadcrumb.label}`
+            : categoryLabel
+          : breadcrumb.label;
+        if (!text) return [];
+        return [
+          <Flex key={`${breadcrumb.id}:${index}`} align="center" gap="1" style={{ minWidth: 0 }}>
+            {index > 0 ? (
+              <Text size="1" color="gray" style={{ flexShrink: 0 }}>
+                &gt;
+              </Text>
+            ) : null}
+            <Badge color="gray" variant="soft" style={{ maxWidth: 260 }}>
+              {text}
+            </Badge>
+          </Flex>,
+        ];
+      })}
     </Flex>
   );
 }
@@ -1229,8 +1259,9 @@ function SecretConfigFields({
   return (
     <Flex direction="column" gap="2" pt="1" style={{ maxWidth: 620 }}>
       <Text size="1" color="gray" style={{ lineHeight: 1.35 }}>
-        Secrets are entered in Vibestudio's shell UI, not exposed to panels or workers, and stored
-        encrypted after submission.
+        {approval.kind === "secret-input"
+          ? HOST_APPROVAL_COPY.forms.ephemeralSecretHelp
+          : HOST_APPROVAL_COPY.forms.storedSecretHelp}
       </Text>
       {approval.fields.map((field) => (
         <Flex key={field.name} direction="column" gap="1">
@@ -1240,12 +1271,12 @@ function SecretConfigFields({
             </Text>
             {field.required ? (
               <Badge color="amber" variant="soft">
-                Required
+                {HOST_APPROVAL_COPY.chrome.required}
               </Badge>
             ) : null}
             {field.type === "secret" ? (
               <Badge color="gray" variant="soft">
-                Secret
+                {HOST_APPROVAL_COPY.chrome.secret}
               </Badge>
             ) : null}
           </Flex>
@@ -1592,23 +1623,52 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
       ) : null}
       {approval.units.length === 0 ? (
         <Text size="1" color="gray">
-          No new units - this change only edits workspace configuration.
+          {HOST_APPROVAL_COPY.unitReview.noDeclaredComponents}
         </Text>
       ) : null}
       {approval.units.map((entry) => {
         const deps = Object.entries(entry.dependencyEvs ?? {});
         const external = Object.entries(entry.externalDeps ?? {});
+        const addedPermissionCount =
+          (entry.authority?.groups.reduce((count, group) => count + group.addedCount, 0) ?? 0) +
+          (entry.authority?.eval.reduce(
+            (count, review) =>
+              count + review.groups.reduce((sum, group) => sum + group.addedCount, 0),
+            0
+          ) ?? 0);
+        const removedPermissionCount =
+          (entry.authority?.removedCount ?? 0) +
+          (entry.authority?.eval.reduce((count, review) => count + review.removedCount, 0) ?? 0);
         return (
           <details key={`${entry.unitKind}:${entry.unitName}`} className="approval-details">
             <summary>
               <ChevronDownIcon className="approval-details-chevron" width={13} height={13} />
               {entry.displayName}
               {entry.version ? ` · v${entry.version}` : ""}
+              {entry.authority?.groups
+                .filter((group) => group.addedCount > 0)
+                .map((group) => (
+                  <Badge key={group.id} color="green" variant="soft" ml="1">
+                    + {group.label}
+                  </Badge>
+                ))}
+              {entry.authority?.eval
+                .filter((review) => review.groups.some((group) => group.addedCount > 0))
+                .map((review) => (
+                  <Badge key={review.purpose} color="green" variant="soft" ml="1">
+                    + {review.label}
+                  </Badge>
+                ))}
+              {entry.authority && addedPermissionCount === 0 ? (
+                <Badge color="gray" variant="soft" ml="1">
+                  {HOST_APPROVAL_COPY.chrome.noNewPermissions}
+                </Badge>
+              ) : null}
             </summary>
             <Flex direction="column" gap="2" pt="2">
               <Detail
                 icon={<ExclamationTriangleIcon />}
-                label={entry.unitKind === "app" ? "App" : "Extension"}
+                label={unitKindLabel(entry)}
                 value={<InlineCode>{entry.unitName}</InlineCode>}
               />
               {entry.target ? (
@@ -1642,19 +1702,130 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
                   }
                 />
               ) : null}
-              <Detail
-                icon={<ExclamationTriangleIcon />}
-                label="Access"
-                value={
-                  <Flex align="center" gap="1" wrap="wrap">
-                    {entry.capabilities.map((capability) => (
-                      <Badge key={capability} color="amber" variant="soft">
-                        {capability}
-                      </Badge>
-                    ))}
-                  </Flex>
-                }
-              />
+              {entry.authority ? (
+                <Detail
+                  icon={<LockClosedIcon />}
+                  label="Permissions"
+                  value={
+                    <Flex direction="column" gap="2">
+                      {entry.authority.groups
+                        .filter((group) => group.addedCount > 0)
+                        .map((group) => (
+                          <Flex key={group.id} direction="column" gap="1">
+                            <Flex align="center" gap="1" wrap="wrap">
+                              <Tooltip content={group.description}>
+                                <Badge color="amber" variant="soft">
+                                  {group.label}
+                                </Badge>
+                              </Tooltip>
+                              {group.addedCount > 0 ? (
+                                <Badge color="green" variant="soft">
+                                  +{group.addedCount} new
+                                </Badge>
+                              ) : null}
+                            </Flex>
+                            {group.items
+                              .filter((item) => item.added)
+                              .map((item) => (
+                                <Tooltip key={item.capability} content={item.description}>
+                                  <Text size="1" color="green">
+                                    + {item.title}
+                                  </Text>
+                                </Tooltip>
+                              ))}
+                          </Flex>
+                        ))}
+                      {entry.authority.eval
+                        .filter((review) => review.groups.some((group) => group.addedCount > 0))
+                        .map((review) => (
+                          <Flex key={review.purpose} direction="column" gap="1">
+                            <Tooltip
+                              content={HOST_APPROVAL_COPY.unitReview.evaluatedCodeExplanation}
+                            >
+                              <Badge color="amber" variant="soft">
+                                {review.label}
+                              </Badge>
+                            </Tooltip>
+                            {review.groups.flatMap((group) =>
+                              group.items
+                                .filter((item) => item.added)
+                                .map((item) => (
+                                  <Tooltip
+                                    key={`${review.purpose}:${item.capability}`}
+                                    content={item.description}
+                                  >
+                                    <Text size="1" color="green">
+                                      + {item.title}
+                                    </Text>
+                                  </Tooltip>
+                                ))
+                            )}
+                          </Flex>
+                        ))}
+                      {entry.authority.groups.some((group) =>
+                        group.items.some((item) => !item.added)
+                      ) ||
+                      entry.authority.eval.some((review) =>
+                        review.groups.some((group) => group.items.some((item) => !item.added))
+                      ) ? (
+                        <details className="approval-details">
+                          <summary>{HOST_APPROVAL_COPY.chrome.unchangedPermissions}</summary>
+                          <Flex direction="column" gap="1" pt="1">
+                            {entry.authority.groups.flatMap((group) =>
+                              group.items
+                                .filter((item) => !item.added)
+                                .map((item) => (
+                                  <Tooltip key={item.capability} content={item.description}>
+                                    <Text size="1" color="gray">
+                                      {item.title}
+                                    </Text>
+                                  </Tooltip>
+                                ))
+                            )}
+                            {entry.authority.eval.flatMap((review) =>
+                              review.groups.flatMap((group) =>
+                                group.items
+                                  .filter((item) => !item.added)
+                                  .map((item) => (
+                                    <Tooltip
+                                      key={`${review.purpose}:${item.capability}`}
+                                      content={item.description}
+                                    >
+                                      <Text size="1" color="gray">
+                                        {review.label}: {item.title}
+                                      </Text>
+                                    </Tooltip>
+                                  ))
+                              )
+                            )}
+                          </Flex>
+                        </details>
+                      ) : null}
+                      {removedPermissionCount > 0 ? (
+                        <Text size="1" color="gray">
+                          {removedPermissionCount} permission request
+                          {removedPermissionCount === 1 ? "" : "s"} removed
+                        </Text>
+                      ) : null}
+                    </Flex>
+                  }
+                />
+              ) : null}
+              {entry.capabilities.length > 0 ? (
+                <Detail
+                  icon={<GearIcon />}
+                  label="Host integration"
+                  value={
+                    <Flex align="center" gap="1" wrap="wrap">
+                      {entry.capabilities.map((capability) => (
+                        <Badge key={capability} color="gray" variant="soft">
+                          {capability}
+                        </Badge>
+                      ))}
+                    </Flex>
+                  }
+                />
+              ) : null}
               {deps.length > 0 ? (
                 <Detail
                   icon={<LockClosedIcon />}
@@ -1849,6 +2020,7 @@ function ApprovalMarkdownInlineNodes({ nodes }: { nodes: ApprovalMarkdownInline[
 
 function FormattedDetailValue({ value, format }: { value: string; format?: ApprovalDetailFormat }) {
   if (format === "markdown") return <ApprovalMarkdown source={value} compact />;
+  if (format === "tree") return <CollapsibleTree value={value} />;
   if (format === "plain") {
     return (
       <Text size="1" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
@@ -1857,6 +2029,52 @@ function FormattedDetailValue({ value, format }: { value: string; format?: Appro
     );
   }
   return <InlineCode>{value}</InlineCode>;
+}
+
+function CollapsibleTree({ value }: { value: string }) {
+  const [open, setOpen] = useState(false);
+  const lines = value.split("\n");
+  const summary = lines[0] ?? "";
+  const hasBody = lines.length > 1;
+  if (!hasBody) {
+    return (
+      <Text size="1" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
+        {summary}
+      </Text>
+    );
+  }
+  return (
+    <Flex direction="column" gap="1">
+      <Flex
+        align="center"
+        gap="1"
+        onClick={() => setOpen((prev) => !prev)}
+        style={{ cursor: "pointer", userSelect: "none" }}
+      >
+        <Text size="1" style={{ lineHeight: 1.35, color: "var(--gray-11)", flexShrink: 0 }}>
+          {open ? "▾" : "▸"}
+        </Text>
+        <Text size="1" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
+          {summary}
+        </Text>
+      </Flex>
+      {open ? (
+        <pre
+          style={{
+            margin: 0,
+            maxWidth: "100%",
+            overflowX: "auto",
+            borderRadius: 6,
+            padding: "6px 8px",
+            background: "var(--gray-a3)",
+            fontSize: 12,
+          }}
+        >
+          <code>{lines.slice(1).join("\n")}</code>
+        </pre>
+      ) : null}
+    </Flex>
+  );
 }
 
 function InlineCode({ children }: { children: ReactNode }) {

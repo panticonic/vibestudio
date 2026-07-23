@@ -137,7 +137,9 @@ function injectionLabel(credential: ManagedCredentialSummary): string {
 }
 
 function scopeLabel(grant: CredentialAccessGrantSummary): string {
-  return `${grant.repoPath} @ ${grant.effectiveVersion}`;
+  return grant.scope === "agent"
+    ? `Agent ${grant.agentId ?? "unknown"}`
+    : `${grant.repoPath} @ ${grant.effectiveVersion}`;
 }
 
 function subjectLabel(subject: CredentialAccessSubjectSummary): string {
@@ -173,6 +175,7 @@ function matchesQuery(credential: ManagedCredentialSummary, query: string): bool
       grant.scope,
       grant.repoPath,
       grant.effectiveVersion,
+      grant.agentId,
       ...grant.subjects.flatMap((subject) => [
         subject.id,
         subject.title,

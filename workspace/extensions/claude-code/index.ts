@@ -167,25 +167,25 @@ function buildLaunchApproval(input: {
   return {
     subject: {
       id: `claude-code.launch.${input.channelId}`,
-      label: `Launch Claude Code in ${input.channelId}`,
+      label: `Start Claude Code in ${input.channelId}`,
     },
-    title: "Launch Claude Code agent",
+    title: "Start a Claude Code agent",
     summary: [
-      "Let a Claude Code session join this conversation as a linked agent.",
-      "It runs in the conversation's context working tree with the `vibestudio` CLI",
-      "auto-scoped to that context. Its tool-use permission prompts flow into approvals.",
+      "Start a Claude Code session in this conversation.",
+      "It can read and change files, run commands, and use tools",
+      "— each action will ask for your approval.",
     ].join(" "),
     warning:
-      "The session receives an agent credential and can act on the channel and context on your behalf.",
+      "The agent can act on your behalf in this conversation and its workspace.",
     details: [
-      { label: "Channel", value: input.channelId },
-      { label: "Context", value: input.contextId },
+      { label: "Conversation", value: input.channelId },
+      { label: "Working in", value: input.contextId },
       { label: "Command", value: `\`\`\`sh\n${input.argv.join(" ")}\n\`\`\``, format: "markdown" },
     ],
     severity: "dangerous",
     defaultAction: "deny",
     options: [
-      { value: "allow", label: "Launch", tone: "primary" },
+      { value: "allow", label: "Start", tone: "primary" },
       { value: "deny", label: "Cancel", tone: "danger" },
     ],
   };
