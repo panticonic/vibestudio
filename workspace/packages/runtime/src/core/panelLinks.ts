@@ -5,6 +5,7 @@ import {
   type PanelLocation,
 } from "@vibestudio/shared/panelLocation";
 import { selectedWorkspaceNameFromUrl } from "@vibestudio/shared/connect";
+import type { PanelPlacementHint } from "@vibestudio/shared/types";
 
 /**
  * Link builders for HTTP-based panel navigation.
@@ -33,6 +34,8 @@ export interface BuildPanelLinkOptions {
   focus?: boolean;
   /** Explicit placement when the link is intercepted by host chrome. */
   disposition?: PanelDisposition;
+  /** Visual layout hint for a newly-created target panel. */
+  placement?: PanelPlacementHint;
   /** Override the workspace embedded in canonical share/deep links. */
   workspace?: string;
 }
@@ -67,6 +70,7 @@ function panelLocation(source: string, options?: BuildPanelLinkOptions): PanelLo
     ...(options?.name !== undefined ? { name: options.name } : {}),
     ...(options?.focus !== undefined ? { focus: options.focus } : {}),
     ...(options?.disposition !== undefined ? { disposition: options.disposition } : {}),
+    ...(options?.placement !== undefined ? { placement: options.placement } : {}),
   };
 }
 
@@ -112,6 +116,15 @@ export function buildPanelLink(source: string, options?: BuildPanelLinkOptions):
   if (options?.name !== undefined) params.set("name", options.name);
   if (options?.focus !== undefined) params.set("focus", String(options.focus));
   if (options?.disposition !== undefined) params.set("disposition", options.disposition);
+  if (options?.placement?.disposition !== undefined) {
+    params.set("placement", options.placement.disposition);
+  }
+  if (options?.placement?.preferredWidth !== undefined) {
+    params.set("preferredWidth", String(options.placement.preferredWidth));
+  }
+  if (options?.placement?.minWidth !== undefined) {
+    params.set("minWidth", String(options.placement.minWidth));
+  }
 
   const query = params.toString();
   const configuredGatewayServerUrl = gatewayServerUrl();

@@ -6,6 +6,7 @@
  */
 
 import { PAIR_LINK_ORIGIN } from "./connect.js";
+import type { PanelPlacementHint } from "./types.js";
 
 export const PANEL_LOCATION_PROTOCOL_VERSION = 1 as const;
 export const PANEL_DEEP_LINK_HOST = "panel" as const;
@@ -32,6 +33,12 @@ export interface PanelLocation {
   focus?: boolean;
   /** Placement relative to the panel from which navigation originates. */
   disposition?: PanelDisposition;
+  /**
+   * Layout hint applied when the location creates a panel. This is independent
+   * of `disposition`: use `disposition: "child"` to choose tree placement and
+   * `placement.disposition: "side"` to request its visual placement.
+   */
+  placement?: PanelPlacementHint;
 }
 
 export type ParsedPanelLocationLink =
@@ -48,6 +55,9 @@ const PARAMETER_KEYS = new Set([
   "name",
   "focus",
   "disposition",
+  "placement",
+  "preferredWidth",
+  "minWidth",
 ]);
 const SOURCE_RE = /^[A-Za-z0-9._@-]+\/[A-Za-z0-9._@-]+$/;
 
@@ -96,6 +106,25 @@ export function validatePanelLocation(location: PanelLocation): void {
   ) {
     throw new Error("Panel disposition must be current, child, or root");
   }
+  if (location.placement !== undefined) {
+    const { disposition, preferredWidth, minWidth } = location.placement;
+    if (
+      disposition !== undefined &&
+      disposition !== "side" &&
+      disposition !== "replace" &&
+      disposition !== "split-below"
+    ) {
+      throw new Error("Panel placement must be side, replace, or split-below");
+    }
+    for (const [label, value] of [
+      ["preferredWidth", preferredWidth],
+      ["minWidth", minWidth],
+    ] as const) {
+      if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
+        throw new Error(`Panel ${label} must be a positive finite number`);
+      }
+    }
+  }
   if (location.stateArgs !== undefined) {
     if (!isPanelStateArgs(location.stateArgs)) {
       throw new Error("Panel stateArgs must be a JSON object");
@@ -130,6 +159,15 @@ function encodePanelLocationParams(location: PanelLocation): string {
   if (location.name !== undefined) pairs.push(["name", location.name]);
   if (location.focus !== undefined) pairs.push(["focus", String(location.focus)]);
   if (location.disposition !== undefined) pairs.push(["disposition", location.disposition]);
+  if (location.placement?.disposition !== undefined) {
+    pairs.push(["placement", location.placement.disposition]);
+  }
+  if (location.placement?.preferredWidth !== undefined) {
+    pairs.push(["preferredWidth", String(location.placement.preferredWidth)]);
+  }
+  if (location.placement?.minWidth !== undefined) {
+    pairs.push(["minWidth", String(location.placement.minWidth)]);
+  }
   const encoded = pairs
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
     .join("&");
@@ -235,6 +273,27 @@ export function parsePanelLocationLink(raw: string): ParsedPanelLocationLink {
   ) {
     return { kind: "error", reason: "Panel link has an invalid disposition" };
   }
+  const placementValue = decoded.get("placement");
+  if (
+    placementValue !== undefined &&
+    placementValue !== "side" &&
+    placementValue !== "replace" &&
+    placementValue !== "split-below"
+  ) {
+    return { kind: "error", reason: "Panel link has an invalid placement" };
+  }
+  const parsePositiveNumber = (key: "preferredWidth" | "minWidth"): number | string | undefined => {
+    const raw = decoded.get(key);
+    if (raw === undefined) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0
+      ? value
+      : `Panel link \`${key}\` must be a positive finite number`;
+  };
+  const preferredWidth = parsePositiveNumber("preferredWidth");
+  if (typeof preferredWidth === "string") return { kind: "error", reason: preferredWidth };
+  const minWidth = parsePositiveNumber("minWidth");
+  if (typeof minWidth === "string") return { kind: "error", reason: minWidth };
 
   let stateArgs: Record<string, unknown> | undefined;
   const rawStateArgs = decoded.get("stateArgs");
@@ -260,6 +319,19 @@ export function parsePanelLocationLink(raw: string): ParsedPanelLocationLink {
     ...(focusValue !== undefined ? { focus: focusValue === "true" } : {}),
     ...(dispositionValue !== undefined
       ? { disposition: dispositionValue as PanelDisposition }
+      : {}),
+    ...(placementValue !== undefined || preferredWidth !== undefined || minWidth !== undefined
+      ? {
+          placement: {
+            ...(placementValue !== undefined
+              ? {
+                  disposition: placementValue as NonNullable<PanelPlacementHint["disposition"]>,
+                }
+              : {}),
+            ...(preferredWidth !== undefined ? { preferredWidth } : {}),
+            ...(minWidth !== undefined ? { minWidth } : {}),
+          },
+        }
       : {}),
   };
   try {

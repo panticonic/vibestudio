@@ -265,6 +265,27 @@ describe("PanelView plain panel links", () => {
     });
   });
 
+  it("passes managed link layout hints into child creation", async () => {
+    const { panelId, panelView, windowOpen, panelOrchestrator } = createHarness();
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    windowOpen({
+      url: "http://127.0.0.1:1234/panels/chat/?disposition=child&placement=side&preferredWidth=640&minWidth=440",
+    });
+
+    await vi.waitFor(() => {
+      expect(panelOrchestrator.createPanel).toHaveBeenCalledWith(
+        panelId,
+        "panels/chat",
+        {
+          placement: { disposition: "side", preferredWidth: 640, minWidth: 440 },
+        },
+        undefined,
+        undefined
+      );
+    });
+  });
+
   it("creates browser child panels for same-frame external links", async () => {
     const { panelId, panelView, webContents, panelOrchestrator } = createHarness();
     await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");

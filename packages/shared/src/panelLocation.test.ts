@@ -15,6 +15,7 @@ const LOCATION: PanelLocation = {
   name: "Research",
   focus: false,
   disposition: "child",
+  placement: { disposition: "side", preferredWidth: 640, minWidth: 440 },
 };
 
 describe("panel location links", () => {
@@ -57,6 +58,9 @@ describe("panel location links", () => {
       link.replace("about%2Fserver-logs", "not-a-source"),
       `${link}&focus=maybe`,
       `${link}&disposition=popup`,
+      `${link}&placement=popup`,
+      `${link}&preferredWidth=wide`,
+      `${link}&minWidth=0`,
     ]) {
       expect(parsePanelLocationLink(invalid).kind).toBe("error");
     }

@@ -31,7 +31,7 @@ import {
 } from "@vibestudio/shared/panelLocation";
 import { selectedWorkspaceNameFromUrl } from "@vibestudio/shared/connect";
 import { isBrowserPanelSource, panelSourceFromBrowserUrl } from "@vibestudio/shared/panelChrome";
-import type { PanelNavigationState } from "@vibestudio/shared/types";
+import type { PanelNavigationState, PanelPlacementHint } from "@vibestudio/shared/types";
 import { logMemorySnapshot } from "./memoryMonitor.js";
 import type { BrowserHistoryRecorder, BrowserNavigationIntent } from "./browserHistoryRecorder.js";
 // Persistence removed — server panel service handles all persistence
@@ -60,6 +60,7 @@ interface PanelOrchestratorLike {
       ref?: string;
       focus?: boolean;
       isRoot?: boolean;
+      placement?: PanelPlacementHint;
     },
     stateArgs?: Record<string, unknown>,
     scopedCaller?: PanelLinkCaller
@@ -851,12 +852,14 @@ export class PanelView implements PanelViewLike {
     ref?: string;
     focus?: boolean;
     isRoot?: boolean;
+    placement?: PanelPlacementHint;
   } {
     return {
       ...(parsed.options.name !== undefined ? { name: parsed.options.name } : {}),
       ...(parsed.contextId !== undefined ? { contextId: parsed.contextId } : {}),
       ...(parsed.ref !== undefined ? { ref: parsed.ref } : {}),
       ...(parsed.options.focus !== undefined ? { focus: parsed.options.focus } : {}),
+      ...(parsed.placement !== undefined ? { placement: parsed.placement } : {}),
     };
   }
 

@@ -21,16 +21,17 @@ describe("buildPanelLink", () => {
     expect(buildPanelLink("about/server-logs")).toBe("/_workspace/dev-123/about/server-logs/");
   });
 
-  it("preserves ref, state, focus, and disposition in HTTP navigation links", () => {
+  it("preserves ref, state, focus, tree disposition, and layout placement in HTTP links", () => {
     expect(
       buildPanelLink("panels/chat", {
         ref: "state:abc",
         stateArgs: { prompt: "hello" },
         focus: false,
-        disposition: "current",
+        disposition: "child",
+        placement: { disposition: "side", preferredWidth: 640, minWidth: 440 },
       })
     ).toBe(
-      "/panels/chat/?ref=state%3Aabc&stateArgs=%7B%22prompt%22%3A%22hello%22%7D&focus=false&disposition=current"
+      "/panels/chat/?ref=state%3Aabc&stateArgs=%7B%22prompt%22%3A%22hello%22%7D&focus=false&disposition=child&placement=side&preferredWidth=640&minWidth=440"
     );
   });
 
@@ -46,6 +47,7 @@ describe("buildPanelLink", () => {
       contextId: "ctx-1",
       stateArgs: { prompt: "hi" },
       disposition: "root" as const,
+      placement: { disposition: "split-below" as const, minWidth: 480 },
     };
     for (const link of [
       buildPanelDeepLink("panels/chat", options),
@@ -59,6 +61,7 @@ describe("buildPanelLink", () => {
           contextId: "ctx-1",
           stateArgs: { prompt: "hi" },
           disposition: "root",
+          placement: { disposition: "split-below", minWidth: 480 },
         },
       });
     }

@@ -7,7 +7,7 @@ import {
 } from "./runtimeSurface.core.js";
 
 const panelTreeDescription =
-  "Runtime property, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. self/get are sync; async methods refresh metadata as needed.";
+  "Runtime property, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. PanelHandle.focus({ placement?, anchorPanelId? }) can present an existing panel beside, below, or in place relative to an anchor. self/get are sync; async methods refresh metadata as needed.";
 
 export const workerRuntimeSurface: RuntimeSurface = {
   target: "workerRuntime",
@@ -20,7 +20,9 @@ export const workerRuntimeSurface: RuntimeSurface = {
       "Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles.",
       "workspace"
     ),
-    openPanel: valueEntry("Open a workspace or browser panel and return a PanelHandle."),
+    openPanel: valueEntry(
+      'Open a workspace or browser panel and return a PanelHandle. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth.'
+    ),
     listPanels: valueEntry("Alias for runtime.panelTree.list()."),
     getPanelHandle: valueEntry("Alias for runtime.panelTree.get(id, kind?)."),
     panelTree: namespaceEntry(PANEL_TREE_MEMBERS, panelTreeDescription),

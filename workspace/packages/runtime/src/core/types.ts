@@ -5,7 +5,14 @@
 
 import type { ZodType } from "zod";
 import type * as Rpc from "./rpc.js";
-import type { PanelLifecycleResult } from "@vibestudio/shared/types";
+import type { PanelLifecycleResult, PanelPlacementHint } from "@vibestudio/shared/types";
+
+export interface PanelFocusOptions {
+  /** Visual placement request; omitted preserves ordinary focus behavior. */
+  placement?: PanelPlacementHint;
+  /** Panel to place this panel relative to; defaults to the previously focused panel. */
+  anchorPanelId?: string;
+}
 
 // =============================================================================
 // Event Schema Types (zod-based validation)
@@ -296,7 +303,7 @@ export interface PanelHandle<
   rebuildPanel(): Promise<PanelLifecycleResult>;
   rebuildAndReload(): Promise<PanelLifecycleResult>;
   updatePanelState(state: Record<string, unknown>): Promise<void>;
-  focus(): Promise<unknown>;
+  focus(options?: PanelFocusOptions): Promise<unknown>;
   snapshot(): Promise<unknown>;
   tree(): Promise<unknown>;
   state(): Promise<unknown>;

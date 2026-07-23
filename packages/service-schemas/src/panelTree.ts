@@ -158,6 +158,18 @@ export const PanelTreeCreateOptionsSchema = z
   })
   .optional();
 
+export const PanelTreeFocusOptionsSchema = z.object({
+  placement: PanelPlacementHintSchema.optional().describe(
+    "Visual placement request for the panel; omitted preserves ordinary focus behavior."
+  ),
+  anchorPanelId: z
+    .string()
+    .optional()
+    .describe(
+      "Panel to place the target relative to; defaults to the panel focused before this request."
+    ),
+});
+
 export const PanelTreeNavigateOptionsSchema = z
   .object({
     ref: z.string().optional().describe("Optional ref / version pin to navigate the panel to."),
@@ -219,8 +231,12 @@ export const panelTreeMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   focus: {
-    description: "Focus a panel, loading its runtime first if it is not already loaded.",
-    args: z.tuple([PanelIdSchema]),
+    description:
+      "Focus a panel, loading its runtime first if needed, with an optional client-local visual placement request.",
+    args: z.union([
+      z.tuple([PanelIdSchema]),
+      z.tuple([PanelIdSchema, PanelTreeFocusOptionsSchema]),
+    ]),
     returns: PanelFocusResultSchema,
     access: WRITE_ACCESS,
   },

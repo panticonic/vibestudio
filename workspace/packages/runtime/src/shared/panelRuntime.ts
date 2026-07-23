@@ -1,6 +1,6 @@
 import type { RpcClient } from "@vibestudio/rpc";
-import type { PanelLifecycleResult } from "@vibestudio/shared/types";
-import type { PanelHandle, PanelNavigateOptions } from "../core/index.js";
+import type { PanelLifecycleResult, PanelPlacementHint } from "@vibestudio/shared/types";
+import type { PanelFocusOptions, PanelHandle, PanelNavigateOptions } from "../core/index.js";
 import { createCdpAutomation, type CdpAutomation } from "../panel/cdpAutomation.js";
 import {
   createNonPanelRuntimeHandle,
@@ -41,6 +41,8 @@ export interface OpenPanelOptions {
   contextId?: string;
   ref?: string;
   stateArgs?: Record<string, unknown>;
+  /** Per-call visual placement override; wins over the target manifest default. */
+  placement?: PanelPlacementHint;
 }
 
 export interface PanelRuntimeTree {
@@ -209,7 +211,15 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       return result;
     },
     updatePanelState: (id, state) => callPanel("updatePanelState", [id, state]),
-    focus: (id) => callPanel("focus", [id]),
+    focus: (id, focusOptions) => {
+      if (!focusOptions) return callPanel("focus", [id]);
+      const anchorPanelId = focusOptions.anchorPanelId ?? requesterPanelId();
+      const resolved: PanelFocusOptions = {
+        ...focusOptions,
+        ...(anchorPanelId ? { anchorPanelId } : {}),
+      };
+      return callPanel("focus", [id, resolved]);
+    },
     stateArgs: {
       get: (id) => callPanel("getStateArgs", [id]),
       set: async (id, updates) => {
@@ -294,7 +304,10 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     },
   };
 
-  const openPanel = async (source: string, openOptions?: OpenPanelOptions): Promise<PanelHandle> => {
+  const openPanel = async (
+    source: string,
+    openOptions?: OpenPanelOptions
+  ): Promise<PanelHandle> => {
     const parentId =
       openOptions?.parentId !== undefined ? openOptions.parentId : defaultOpenParentId();
     const result = await callPanel<{

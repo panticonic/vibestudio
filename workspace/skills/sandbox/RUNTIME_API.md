@@ -44,16 +44,16 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
 | `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
-| `openPanel` | value |  |  |
+| `openPanel` | value |  | Create a child panel and return its handle. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth. |
 | `listPanels` | value |  |  |
 | `getPanelHandle` | value |  |  |
-| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Top-level export, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle \| null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. self/get are sync; async methods refresh metadata as needed. |
+| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Top-level export, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle \| null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. PanelHandle.focus({ placement?, anchorPanelId? }) can present an existing panel beside, below, or in place relative to an anchor. self/get are sync; async methods refresh metadata as needed. |
 | `Rpc` | value |  | RPC helpers namespace export. |
 | `z` | value |  | Zod export. |
 | `defineContract` | value |  |  |
-| `buildPanelLink` | value |  |  |
-| `buildPanelDeepLink` | value |  |  |
-| `buildPanelShareLink` | value |  |  |
+| `buildPanelLink` | value |  | Build a managed panel URL; options.disposition controls tree placement and options.placement supplies visual side/replace/split-below hints. |
+| `buildPanelDeepLink` | value |  | Build a canonical panel deep link with optional tree disposition and visual placement hints. |
+| `buildPanelShareLink` | value |  | Build a canonical panel share link with optional tree disposition and visual placement hints. |
 | `parseContextId` | value |  |  |
 | `isValidContextId` | value |  |  |
 | `getInstanceId` | value |  |  |

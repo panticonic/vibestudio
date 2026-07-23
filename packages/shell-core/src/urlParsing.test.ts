@@ -180,6 +180,28 @@ describe("parsePanelUrl()", () => {
     expect(result!.options.focus).toBe(true);
   });
 
+  it("parses visual placement hints independently from tree disposition", () => {
+    const result = parsePanelUrl(
+      "https://vibestudio.example.com/panels/chat?disposition=child&placement=side&preferredWidth=640&minWidth=440",
+      host
+    );
+
+    expect(result).toMatchObject({
+      disposition: "child",
+      placement: { disposition: "side", preferredWidth: 640, minWidth: 440 },
+    });
+  });
+
+  it("rejects malformed visual placement hints", () => {
+    expect(
+      parsePanelUrl("https://vibestudio.example.com/panels/chat?placement=popup", host)
+    ).toBeNull();
+    expect(
+      parsePanelUrl("https://vibestudio.example.com/panels/chat?preferredWidth=wide", host)
+    ).toBeNull();
+    expect(parsePanelUrl("https://vibestudio.example.com/panels/chat?minWidth=0", host)).toBeNull();
+  });
+
   it("returns null for URL with trailing slash on a 3-segment path", () => {
     const result = parsePanelUrl("https://vibestudio.example.com/panels/chat/extra/", host);
     expect(result).toBeNull();

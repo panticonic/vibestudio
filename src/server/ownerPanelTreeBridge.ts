@@ -892,9 +892,25 @@ export async function createServerPanelTreeBridge(
       }
       case "focus": {
         const panelId = String(args[0]);
+        const options = (args[1] ?? {}) as {
+          anchorPanelId?: string;
+          placement?: import("@vibestudio/shared/types").PanelPlacementHint;
+        };
+        const anchorPanelId =
+          typeof options.anchorPanelId === "string" && options.anchorPanelId.length > 0
+            ? options.anchorPanelId
+            : (registry.getFocusedPanelId() ?? undefined);
         const loaded = await ensureDefaultLoaded(panelId);
         await panelManager.notifyFocused(asPanelSlotId(panelId));
         emitTreeSnapshot();
+        if (options.placement) {
+          deps.eventService?.emit("navigate-to-panel", {
+            panelId,
+            ...(anchorPanelId ? { anchorPanelId } : {}),
+            hint: options.placement,
+            intentId: `focus:${randomUUID()}`,
+          });
+        }
         return { ...loaded, status: loaded.loaded ? "focused" : loaded.status, focused: true };
       }
       case "ensureLoaded": {

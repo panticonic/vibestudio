@@ -7,6 +7,7 @@
  */
 
 import type { PanelDisposition, PanelLocation } from "@vibestudio/shared/panelLocation";
+import type { PanelPlacementHint } from "@vibestudio/shared/types";
 import { isPanelStateArgs } from "@vibestudio/shared/panelLocation";
 
 export interface ParsedPanelUrl extends PanelLocation {
@@ -165,6 +166,36 @@ export function parsePanelUrl(
   ) {
     return null;
   }
+  const placementDisposition = parsed.queryParams.get("placement");
+  if (
+    placementDisposition !== undefined &&
+    placementDisposition !== "side" &&
+    placementDisposition !== "replace" &&
+    placementDisposition !== "split-below"
+  ) {
+    return null;
+  }
+  const parsePositiveNumber = (key: "preferredWidth" | "minWidth"): number | null | undefined => {
+    const raw = parsed.queryParams.get(key);
+    if (raw === undefined) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  };
+  const preferredWidth = parsePositiveNumber("preferredWidth");
+  const minWidth = parsePositiveNumber("minWidth");
+  if (preferredWidth === null || minWidth === null) return null;
+  const placement: PanelPlacementHint | undefined =
+    placementDisposition !== undefined || preferredWidth !== undefined || minWidth !== undefined
+      ? {
+          ...(placementDisposition !== undefined
+            ? {
+                disposition: placementDisposition as NonNullable<PanelPlacementHint["disposition"]>,
+              }
+            : {}),
+          ...(preferredWidth !== undefined ? { preferredWidth } : {}),
+          ...(minWidth !== undefined ? { minWidth } : {}),
+        }
+      : undefined;
   const rawStateArgs = parsed.queryParams.get("stateArgs");
   let stateArgs: Record<string, unknown> | undefined;
   if (rawStateArgs !== undefined) {
@@ -188,6 +219,7 @@ export function parsePanelUrl(
     ...(name !== undefined ? { name } : {}),
     ...(focus !== undefined ? { focus: focus === "true" } : {}),
     ...(disposition !== undefined ? { disposition: disposition as PanelDisposition } : {}),
+    ...(placement !== undefined ? { placement } : {}),
     options: {
       contextId: contextId ?? undefined,
       ref: ref ?? undefined,

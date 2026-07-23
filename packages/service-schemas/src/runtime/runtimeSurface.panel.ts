@@ -7,7 +7,7 @@ import {
 } from "./runtimeSurface.core.js";
 
 const panelTreeDescription =
-  "Top-level export, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. self/get are sync; async methods refresh metadata as needed.";
+  "Top-level export, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. PanelHandle.focus({ placement?, anchorPanelId? }) can present an existing panel beside, below, or in place relative to an anchor. self/get are sync; async methods refresh metadata as needed.";
 
 // Panel-only affordances, grouped under one `panel` namespace (was ~16 flat
 // top-level exports). Identity/introspection/theme/focus/lifecycle + stateArgs.
@@ -39,7 +39,9 @@ export const panelRuntimeSurface: RuntimeSurface = {
       "Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles.",
       "workspace"
     ),
-    openPanel: valueEntry(),
+    openPanel: valueEntry(
+      'Create a child panel and return its handle. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth.'
+    ),
     listPanels: valueEntry(),
     getPanelHandle: valueEntry(),
     panelTree: namespaceEntry(PANEL_TREE_MEMBERS, panelTreeDescription),
@@ -47,9 +49,15 @@ export const panelRuntimeSurface: RuntimeSurface = {
     Rpc: valueEntry("RPC helpers namespace export."),
     z: valueEntry("Zod export."),
     defineContract: valueEntry(),
-    buildPanelLink: valueEntry(),
-    buildPanelDeepLink: valueEntry(),
-    buildPanelShareLink: valueEntry(),
+    buildPanelLink: valueEntry(
+      "Build a managed panel URL; options.disposition controls tree placement and options.placement supplies visual side/replace/split-below hints."
+    ),
+    buildPanelDeepLink: valueEntry(
+      "Build a canonical panel deep link with optional tree disposition and visual placement hints."
+    ),
+    buildPanelShareLink: valueEntry(
+      "Build a canonical panel share link with optional tree disposition and visual placement hints."
+    ),
     parseContextId: valueEntry(),
     isValidContextId: valueEntry(),
     getInstanceId: valueEntry(),

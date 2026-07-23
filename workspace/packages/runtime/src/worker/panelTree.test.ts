@@ -392,9 +392,13 @@ describe("worker panelTree handles", () => {
       PARENT_KIND: "panel",
     });
 
-    const direct = await runtime.openPanel("panels/direct", { focus: true });
+    const direct = await runtime.openPanel("panels/direct", {
+      focus: true,
+      placement: { disposition: "side", preferredWidth: 640 },
+    });
     const listed = await runtime.listPanels();
     const browser = runtime.getPanelHandle("browser-slot", "browser");
+    await browser.focus({ placement: { disposition: "split-below" } });
     runtime.destroy();
 
     expect(direct.id).toBe("created-slot");
@@ -406,13 +410,32 @@ describe("worker panelTree handles", () => {
         type: "call",
         targetId: "main",
         method: "panelTree.create",
-        args: ["panels/direct", { focus: true, parentId: "parent-slot" }],
+        args: [
+          "panels/direct",
+          {
+            focus: true,
+            parentId: "parent-slot",
+            placement: { disposition: "side", preferredWidth: 640 },
+          },
+        ],
       },
       {
         type: "call",
         targetId: "main",
         method: "panelTree.list",
         args: [null],
+      },
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelTree.focus",
+        args: [
+          "browser-slot",
+          {
+            anchorPanelId: "parent-slot",
+            placement: { disposition: "split-below" },
+          },
+        ],
       },
     ]);
   });

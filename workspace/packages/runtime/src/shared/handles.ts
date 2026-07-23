@@ -3,6 +3,7 @@ import type { PanelLifecycleResult } from "@vibestudio/shared/types";
 import type {
   CdpAutomation,
   PanelContract,
+  PanelFocusOptions,
   PanelHandle,
   PanelHandleContractRole,
   PanelHandleFromContract,
@@ -44,7 +45,7 @@ export interface PanelHandleHostOps {
   rebuildPanel?(id: string): Promise<PanelLifecycleResult>;
   rebuildAndReload?(id: string): Promise<PanelLifecycleResult>;
   updatePanelState?(id: string, state: Record<string, unknown>): Promise<void>;
-  focus?(id: string): Promise<unknown>;
+  focus?(id: string, options?: PanelFocusOptions): Promise<unknown>;
   stateArgs?: {
     get<T = Record<string, unknown>>(id: string): Promise<T>;
     set(id: string, updates: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -240,7 +241,8 @@ export function createPanelHandle<
       }
       await ops.updatePanelState(metadata.id, state);
     },
-    focus: () => ops?.focus?.(metadata.id) ?? Promise.resolve(undefined),
+    focus: (focusOptions?: PanelFocusOptions) =>
+      ops?.focus?.(metadata.id, focusOptions) ?? Promise.resolve(undefined),
     snapshot: () => ops?.snapshot?.(metadata.id) ?? Promise.resolve(undefined),
     tree: () => ops?.callAgent?.(metadata.id, "_agent.tree", []) ?? Promise.resolve(undefined),
     state: () => ops?.callAgent?.(metadata.id, "_agent.state", []) ?? Promise.resolve(undefined),

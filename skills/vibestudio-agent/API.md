@@ -401,7 +401,7 @@ Authority principals: `code`, `host`, `user`
 | `panelTree.getFocusedPanelId` | Return the id of the currently focused panel, or null if none is focused. |
 | `panelTree.create` | Create a new panel from a workspace source path, optionally nested under a parent and focused. |
 | `panelTree.ensureLoaded` | Ensure the panel's runtime is loaded (building/restoring it if needed) without changing focus. |
-| `panelTree.focus` | Focus a panel, loading its runtime first if it is not already loaded. |
+| `panelTree.focus` | Focus a panel, loading its runtime first if needed, with an optional client-local visual placement request. |
 | `panelTree.getRuntimeLease` | Return the current runtime lease held on a panel (which host/connection owns it), or null if unleased. |
 | `panelTree.getStateArgs` | Return the validated state-args currently bound to a panel. |
 | `panelTree.setStateArgs` | Merge a patch into a panel's ordinary application state (null removes a key); returns the full resulting validated state. contextId is reserved for the panel's host-bound workspace branch and must be changed through explicit panel navigation, never state args. |

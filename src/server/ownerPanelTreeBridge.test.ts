@@ -167,6 +167,7 @@ async function createSinglePanelBridge(options?: {
   const ensureDefaultCdpHostForSlot =
     options?.ensureDefaultCdpHostForSlot ??
     vi.fn(() => ({ assigned: true, lease: { holderLabel: "Desktop" } }));
+  const eventService = { emit: vi.fn() };
   const bridge = await createServerPanelTreeBridge({
     container: {
       get: vi.fn((name: string) => (name === "rpcServer" ? { server: { callTarget } } : cdpBridge)),
@@ -186,9 +187,17 @@ async function createSinglePanelBridge(options?: {
       })),
       ensureDefaultCdpHostForSlot,
     },
-    eventService: { emit: vi.fn() },
+    eventService,
   } as never);
-  return { bridge, callTarget, cdpBridge, ensureDefaultCdpHostForSlot, slot, dispatch };
+  return {
+    bridge,
+    callTarget,
+    cdpBridge,
+    ensureDefaultCdpHostForSlot,
+    slot,
+    dispatch,
+    eventService,
+  };
 }
 
 describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
@@ -255,6 +264,33 @@ describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
       loaded: true,
     });
     expect(ensureDefaultCdpHostForSlot).toHaveBeenCalled();
+  });
+
+  it("publishes an agent-requested presentation hint after focusing the panel", async () => {
+    const { bridge, eventService, slot } = await createSinglePanelBridge();
+
+    await bridge({
+      callerId: "server",
+      callerKind: "server",
+      method: "focus",
+      args: [
+        slot.slot_id,
+        {
+          anchorPanelId: "panel:tree/anchor",
+          placement: { disposition: "side", preferredWidth: 640 },
+        },
+      ],
+    });
+
+    expect(eventService.emit).toHaveBeenCalledWith(
+      "navigate-to-panel",
+      expect.objectContaining({
+        panelId: slot.slot_id,
+        anchorPanelId: "panel:tree/anchor",
+        hint: { disposition: "side", preferredWidth: 640 },
+        intentId: expect.stringMatching(/^focus:/),
+      })
+    );
   });
 
   it("uses the hosted DOM snapshot when a panel has no agent snapshot API", async () => {

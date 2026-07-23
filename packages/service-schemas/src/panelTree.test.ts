@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { PanelPlacementHintSchema, PanelTreeCreateOptionsSchema } from "./panelTree.js";
+import {
+  PanelPlacementHintSchema,
+  PanelTreeCreateOptionsSchema,
+  PanelTreeFocusOptionsSchema,
+  panelTreeMethods,
+} from "./panelTree.js";
 
 describe("PanelPlacementHintSchema", () => {
   it("accepts every disposition plus width fields", () => {
@@ -30,5 +35,23 @@ describe("PanelTreeCreateOptionsSchema", () => {
   it("keeps placement optional", () => {
     expect(PanelTreeCreateOptionsSchema.parse({ focus: true })?.placement).toBeUndefined();
     expect(PanelTreeCreateOptionsSchema.parse(undefined)).toBeUndefined();
+  });
+});
+
+describe("PanelTreeFocusOptionsSchema", () => {
+  it("accepts placement controls for focusing an existing panel", () => {
+    expect(
+      PanelTreeFocusOptionsSchema.parse({
+        anchorPanelId: "panel:tree/anchor",
+        placement: { disposition: "side", preferredWidth: 640 },
+      })
+    ).toEqual({
+      anchorPanelId: "panel:tree/anchor",
+      placement: { disposition: "side", preferredWidth: 640 },
+    });
+  });
+
+  it("keeps the existing one-argument focus call valid", () => {
+    expect(panelTreeMethods.focus.args.parse(["panel:tree/target"])).toEqual(["panel:tree/target"]);
   });
 });

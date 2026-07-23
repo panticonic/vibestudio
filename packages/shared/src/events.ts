@@ -196,6 +196,8 @@ export interface EventPayloads {
   "navigate-to-panel": {
     panelId: string;
     parentId?: string;
+    /** Presentation anchor for a non-creation display request. */
+    anchorPanelId?: string;
     hint?: PanelPlacementHint;
     intentId?: string;
   };
