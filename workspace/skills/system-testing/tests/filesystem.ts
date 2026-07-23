@@ -5,15 +5,28 @@ import {
   walkArrays,
   walkRecords,
 } from "./_scenario-evidence.js";
-import { findLastAgentMessage } from "./_helpers.js";
+import type { InvocationCardPayloadLike } from "./_helpers.js";
 
-const DIRECT_FS_TOOL_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
+const FOCUSED_FS_TOOL_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   write: ["fs.writeFile"],
   read: ["fs.readFile"],
   ls: ["fs.readdir"],
   move_file: ["fs.rename"],
   copy_file: ["fs.copyFile"],
 };
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function focusedFsOperations(call: InvocationCardPayloadLike): readonly string[] {
+  const operations = FOCUSED_FS_TOOL_OPERATIONS[call.name] ?? [];
+  if (!["write", "move_file", "copy_file"].includes(call.name)) return operations;
+  const details = record(record(call.execution?.result)?.["details"]);
+  return details?.["storage"] === "scratch" ? operations : [];
+}
 
 function strings(values: readonly unknown[]): string[] {
   const found: string[] = [];
@@ -44,43 +57,67 @@ function duplicateNonEmptyArray(values: readonly unknown[]): boolean {
   );
 }
 
+function structuredInvocationEvidence(values: readonly unknown[]): unknown[] {
+  const evidence = [...values];
+  const seen = new Set<object>();
+  const visit = (value: unknown): void => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (
+        (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))
+      ) {
+        try {
+          evidence.push(JSON.parse(trimmed));
+        } catch {
+          // Tool output is often ordinary text. Only valid JSON adds structured evidence.
+        }
+      }
+      return;
+    }
+    if (!value || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    for (const child of Object.values(value)) visit(child);
+  };
+  for (const value of values) visit(value);
+  return evidence;
+}
+
 function checkedFs(
   result: TestExecutionResult,
   operations: readonly (readonly string[])[],
   prove: (values: readonly unknown[]) => boolean,
-  reason: string
+  reason: string,
+  options: { allowFocusedTools?: boolean } = {}
 ) {
   const base = completedScenarioEvidence(result, []);
   if (!base.passed) return base;
-  const directOperations = new Set(
-    base.evidence.calls
-      .filter(
-        (call) => call.execution?.status === "complete" && call.execution.isError !== true
-      )
-      .flatMap((call) => DIRECT_FS_TOOL_OPERATIONS[call.name] ?? [])
+  const successfulCalls = base.evidence.calls.filter(
+    (call) => call.execution?.status === "complete" && call.execution.isError !== true
+  );
+  const focusedOperations = new Set(
+    options.allowFocusedTools ? successfulCalls.flatMap(focusedFsOperations) : []
   );
   const exercised = operations.some((alternative) =>
     alternative.every(
       (operation) =>
-        directOperations.has(operation) ||
+        focusedOperations.has(operation) ||
         requireCodeOperations(base.evidence.evalCode, [[operation]]).passed
     )
-  )
-    ? { passed: true as const, reason: undefined }
-    : requireCodeOperations(base.evidence.evalCode, operations);
-  if (!exercised.passed) return exercised;
-  const values = [
+  );
+  if (!exercised) {
+    return requireCodeOperations(base.evidence.evalCode, operations);
+  }
+  const focusedCalls = options.allowFocusedTools
+    ? successfulCalls.filter((call) => focusedFsOperations(call).length > 0)
+    : [];
+  const evalCalls = successfulCalls.filter((call) => call.name === "eval");
+  const values = structuredInvocationEvidence([
     ...base.evidence.evalValues,
-    ...base.evidence.calls
-      .filter(
-        (call) => call.execution?.status === "complete" && call.execution.isError !== true
-      )
-      .flatMap((call) => [call.arguments, call.execution?.result]),
-    findLastAgentMessage(result),
-  ];
-  return prove(values)
-    ? { passed: true, reason: undefined }
-    : { passed: false, reason };
+    ...focusedCalls.flatMap((call) => [call.arguments, call.execution?.result]),
+    ...evalCalls.map((call) => call.execution?.result),
+  ]);
+  return prove(values) ? { passed: true, reason: undefined } : { passed: false, reason };
 }
 
 export const filesystemTests: TestCase[] = [
@@ -94,7 +131,8 @@ export const filesystemTests: TestCase[] = [
         result,
         [["fs.writeFile", "fs.readFile"]],
         duplicateNonEmptyString,
-        "The completed file operations did not return matching written and read text"
+        "The completed file operations did not return matching written and read text",
+        { allowFocusedTools: true }
       ),
   },
   {
@@ -128,11 +166,11 @@ export const filesystemTests: TestCase[] = [
     name: "directory-ops",
     description: "Create nested directories and list contents",
     category: "filesystem",
-    prompt: "Create a temporary nested directory with two files, inspect it, and clean it up.",
+    prompt: "Create a temporary nested directory with two files and inspect what is inside.",
     validate: (result) =>
       checkedFs(
         result,
-        [["fs.mkdir", "fs.readdir", "fs.rm"]],
+        [["fs.mkdir", "fs.readdir"]],
         (values) =>
           walkArrays(values).some(
             (value) => value.length === 2 && value.every((entry) => typeof entry === "string")
@@ -164,8 +202,7 @@ export const filesystemTests: TestCase[] = [
     name: "rename-copy",
     description: "Copy or rename a file and verify the result",
     category: "filesystem",
-    prompt:
-      "Copy or relocate a temporary file, verify its content at the destination, and clean up.",
+    prompt: "Copy or relocate a temporary file and verify its content at the destination.",
     validate: (result) =>
       checkedFs(
         result,
@@ -174,7 +211,8 @@ export const filesystemTests: TestCase[] = [
           ["fs.copyFile", "fs.readFile"],
         ],
         duplicateNonEmptyString,
-        "The completed transfer probe did not return matching source and destination content"
+        "The completed transfer probe did not return matching source and destination content",
+        { allowFocusedTools: true }
       ),
   },
   {
@@ -196,12 +234,6 @@ export const filesystemTests: TestCase[] = [
               Object.entries(record).some(
                 ([key, value]) => /exists.*after|after.*exists/iu.test(key) && value === false
               )
-          ) ||
-          strings(values).some(
-            (value) =>
-              /(?:exists[^\n]{0,40}after|after[^\n]{0,40}exists)[^a-z0-9]{0,8}false/iu.test(
-                value
-              ) || /(?:gone|absent)[^a-z0-9]{0,8}true/iu.test(value)
           ),
         "The completed removal probe did not prove the directory is absent"
       ),
@@ -225,12 +257,8 @@ export const filesystemTests: TestCase[] = [
               record["supported"] === true ||
               record["symlinkCreated"] === true ||
               record["isSym"] === true ||
+              record["isSymbolicLink"] === true ||
               (record["supported"] === false && typeof record["reason"] === "string")
-          ) ||
-          strings(values).some(
-            (value) =>
-              /(?:symbolic links?|symlinks?)[^\n]{0,50}\bsupported\b/iu.test(value) ||
-              /(?:isSym|isSymbolicLink|symlinkCreated)[^a-z0-9]{0,12}true/iu.test(value)
           ),
         "The completed symlink probe exposed neither verified support nor a concrete limitation"
       ),

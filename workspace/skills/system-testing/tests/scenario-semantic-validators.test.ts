@@ -133,29 +133,21 @@ describe("scenario tool protocol semantics", () => {
 
 describe("filesystem semantic validators", () => {
   const cases = [
-    [
-      "read-write-text",
-      "fs.writeFile(); fs.readFile(); fs.rm();",
-      { written: "alpha", read: "alpha" },
-    ],
+    ["read-write-text", "fs.writeFile(); fs.readFile();", { written: "alpha", read: "alpha" }],
     [
       "read-write-binary",
-      "fs.writeFile(); fs.readFile(); fs.rm();",
+      "fs.writeFile(); fs.readFile();",
       { written: [1, 2, 3], read: [1, 2, 3] },
     ],
-    ["append-file", "fs.writeFile(); fs.appendFile(); fs.readFile(); fs.rm();", "first\nsecond"],
-    ["directory-ops", "fs.mkdir(); fs.readdir(); fs.rm();", ["one.txt", "two.txt"]],
-    ["file-stats", "fs.writeFile(); fs.stat(); fs.rm();", { size: 5, mtimeMs: 123 }],
-    [
-      "rename-copy",
-      "fs.copyFile(); fs.readFile(); fs.rm();",
-      { source: "same", destination: "same" },
-    ],
+    ["append-file", "fs.writeFile(); fs.appendFile(); fs.readFile();", "first\nsecond"],
+    ["directory-ops", "fs.mkdir(); fs.readdir();", ["one.txt", "two.txt"]],
+    ["file-stats", "fs.writeFile(); fs.stat();", { size: 5, mtimeMs: 123 }],
+    ["rename-copy", "fs.copyFile(); fs.readFile();", { source: "same", destination: "same" }],
     ["remove", "fs.mkdir(); fs.rm();", { exists: false }],
-    ["symlinks", "fs.symlink(); fs.readlink(); fs.rm();", { supported: true }],
+    ["symlinks", "fs.symlink(); fs.readlink();", { supported: true }],
     [
       "file-handles",
-      "const handle = fs.open(); await handle.close(); fs.rm();",
+      "const handle = fs.open(); await handle.close();",
       { written: "through-handle", read: "through-handle" },
     ],
   ] as const;
@@ -194,21 +186,7 @@ describe("filesystem semantic validators", () => {
     ).toBe(true);
   });
 
-  it("accepts explicit post-removal existence evidence", () => {
-    const validator = scenario(filesystemTests, "remove");
-    expect(
-      validator.validate(
-        execution("I verified the directory no longer exists.", [
-          {
-            code: "await fs.mkdir(path); await fs.rm(path); return { existsAfterDir: false };",
-            returnValue: { existsAfterDir: false },
-          },
-        ])
-      ).passed
-    ).toBe(true);
-  });
-
-  it("accepts focused write/read tools as first-class filesystem evidence", () => {
+  it("accepts focused write/read tools as first-class scratch filesystem evidence", () => {
     const validator = scenario(filesystemTests, "read-write-text");
     expect(
       validator.validate(
@@ -216,7 +194,7 @@ describe("filesystem semantic validators", () => {
           {
             name: "write",
             arguments: { path: ".tmp/example.txt", content: "same text" },
-            result: { details: { bytesWritten: 9 } },
+            result: { details: { bytesWritten: 9, storage: "scratch" } },
           },
           {
             name: "read",
@@ -228,11 +206,78 @@ describe("filesystem semantic validators", () => {
     ).toBe(true);
   });
 
-  it("accepts post-removal proof preserved in the user-visible result text", () => {
+  it("accepts focused scratch copy/read evidence without pretending it exercised eval", () => {
+    const validator = scenario(filesystemTests, "rename-copy");
+    expect(
+      validator.validate(
+        directExecution("The copied content matched.", [
+          {
+            name: "write",
+            arguments: { path: ".tmp/source.txt", content: "same text" },
+            result: { details: { bytesWritten: 9, storage: "scratch" } },
+          },
+          {
+            name: "copy_file",
+            arguments: {
+              source: ".tmp/source.txt",
+              destination: ".tmp/destination.txt",
+            },
+            result: { details: { operation: "copied", storage: "scratch" } },
+          },
+          {
+            name: "read",
+            arguments: { path: ".tmp/destination.txt" },
+            result: { protocolContent: [{ type: "text", text: "same text" }] },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("does not accept text-only focused tools as binary filesystem evidence", () => {
+    const validator = scenario(filesystemTests, "read-write-binary");
+    expect(
+      validator.validate(
+        directExecution("The text matched.", [
+          {
+            name: "write",
+            arguments: { path: ".tmp/example.txt", content: "same text" },
+          },
+          {
+            name: "read",
+            arguments: { path: ".tmp/example.txt" },
+            result: { protocolContent: [{ type: "text", text: "same text" }] },
+          },
+        ])
+      ).passed
+    ).toBe(false);
+  });
+
+  it("does not misclassify a managed VCS write as scratch filesystem evidence", () => {
+    const validator = scenario(filesystemTests, "read-write-text");
+    expect(
+      validator.validate(
+        directExecution("The managed file content matched.", [
+          {
+            name: "write",
+            arguments: { path: "projects/example/file.txt", content: "same text" },
+            result: { details: { bytesWritten: 9, storage: "vcs" } },
+          },
+          {
+            name: "read",
+            arguments: { path: "projects/example/file.txt" },
+            result: { protocolContent: [{ type: "text", text: "same text" }] },
+          },
+        ])
+      ).passed
+    ).toBe(false);
+  });
+
+  it("accepts post-removal proof preserved in structured tool result content", () => {
     const validator = scenario(filesystemTests, "remove");
     expect(
       validator.validate(
-        execution("Verified baseExistsAfter: false.", [
+        execution("I verified the directory no longer exists.", [
           {
             code: "await fs.mkdir(path); await fs.rm(path); return { baseExistsAfter: false };",
             result: {
@@ -246,16 +291,41 @@ describe("filesystem semantic validators", () => {
     ).toBe(true);
   });
 
-  it("accepts concrete symbolic-link observations without a synthetic supported field", () => {
+  it("accepts a concrete symbolic-link observation without a synthetic supported field", () => {
     const validator = scenario(filesystemTests, "symlinks");
     expect(
       validator.validate(
-        execution("Temporary symbolic links are supported; isSymbolicLink() was true.", [
+        execution("The link identified itself as symbolic.", [
           {
             code: "await fs.symlink(target, link); return { isSym: (await fs.lstat(link)).isSymbolicLink() };",
             result: {
               protocolContent: [{ type: "text", text: '{"isSym": true}' }],
             },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("does not treat the final prose claim as filesystem effect evidence", () => {
+    const validator = scenario(filesystemTests, "remove");
+    expect(
+      validator.validate(
+        execution("Verified existsAfterDir: false.", [
+          { code: "await fs.mkdir(path); await fs.rm(path);" },
+        ])
+      ).passed
+    ).toBe(false);
+  });
+
+  it("accepts explicit post-removal existence evidence", () => {
+    const validator = scenario(filesystemTests, "remove");
+    expect(
+      validator.validate(
+        execution("I verified the directory no longer exists.", [
+          {
+            code: "await fs.mkdir(path); await fs.rm(path); return { existsAfterDir: false };",
+            returnValue: { existsAfterDir: false },
           },
         ])
       ).passed
