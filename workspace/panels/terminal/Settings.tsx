@@ -22,6 +22,7 @@ import {
 
 export function Settings(props: {
   open: boolean;
+  panelTitle: string;
   fontSize: number;
   fontFamily: string;
   scrollbackBytes: number;
@@ -32,6 +33,7 @@ export function Settings(props: {
   onOpenChange(open: boolean): void;
   onChange(
     next: Partial<{
+      panelTitle: string;
       fontSize: number;
       fontFamily: string;
       scrollbackBytes: number;
@@ -61,6 +63,22 @@ export function Settings(props: {
           <Text size="2" weight="medium">
             Terminal settings
           </Text>
+          <Flex direction="column" gap="1">
+            <Text size="1" color="gray">
+              Panel name
+            </Text>
+            <TextField.Root
+              size="2"
+              value={props.panelTitle}
+              maxLength={80}
+              placeholder="Terminal"
+              aria-label="Panel name"
+              onChange={(event) => props.onChange({ panelTitle: event.target.value })}
+            />
+            <Text size="1" color="gray">
+              Shown in your panel list. Terminal sessions keep their own names.
+            </Text>
+          </Flex>
           <Flex direction="column" gap="1">
             <Text size="1" color="gray">
               Font size
@@ -193,7 +211,9 @@ export function Settings(props: {
                         </Text>
                         <TextField.Root
                           size="1"
-                          value={displayChord(props.keybindings[action] ?? defaultKeybindings[action]).join("+")}
+                          value={displayChord(
+                            props.keybindings[action] ?? defaultKeybindings[action]
+                          ).join("+")}
                           placeholder={displayChord(defaultKeybindings[action]).join("+")}
                           color={issue ? "red" : undefined}
                           readOnly
@@ -202,7 +222,13 @@ export function Settings(props: {
                             event.preventDefault();
                             event.stopPropagation();
                             if (event.key === "Backspace" || event.key === "Delete") {
-                              props.onChange({ keybindings: updateKeybindingOverride(props.keybindings, action, "") });
+                              props.onChange({
+                                keybindings: updateKeybindingOverride(
+                                  props.keybindings,
+                                  action,
+                                  ""
+                                ),
+                              });
                               return;
                             }
                             if (["Control", "Meta", "Alt", "Shift"].includes(event.key)) return;

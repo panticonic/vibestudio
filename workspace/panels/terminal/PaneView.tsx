@@ -9,7 +9,7 @@ import {
   TextField,
 } from "@radix-ui/themes";
 import { ArrowDownIcon } from "@radix-ui/react-icons";
-import { extensions, notifications, openExternal, openPanel, panel } from "@workspace/runtime";
+import { extensions, notifications, openExternal, openPanel } from "@workspace/runtime";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { DropOverlay } from "./DropOverlay.js";
@@ -295,7 +295,6 @@ export function PaneView(props: {
 
   function activatePane(target: EventTarget | null) {
     props.onFocus();
-    void panel.focusPanel(panel.slotId).catch(() => {});
     window.focus();
     if (isPaneControl(target)) return;
     requestAnimationFrame(() => terminalRef.current?.focus?.());
@@ -734,7 +733,17 @@ export function PaneView(props: {
           </Flex>
         ) : null}
       </div>
-      <Box px="2" py="1">
+      <Box
+        px="2"
+        py="1"
+        style={{
+          flexShrink: 0,
+          minWidth: 0,
+          overflow: "hidden",
+          borderTop: "1px solid var(--surface-border)",
+          background: "var(--surface-chrome)",
+        }}
+      >
         <Text
           size="1"
           color={
@@ -742,6 +751,9 @@ export function PaneView(props: {
               ? "red"
               : "gray"
           }
+          truncate
+          title={sessionFooterText(props.session)}
+          style={{ display: "block", width: "100%", minWidth: 0, maxWidth: "100%" }}
         >
           {sessionFooterText(props.session)}
         </Text>

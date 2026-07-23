@@ -1,51 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { compactHomePath, documentTitleForSession } from "./documentTitle.js";
-import type { SessionInfo } from "./types.js";
+import { documentTitleForPanel } from "./documentTitle.js";
 
-describe("documentTitleForSession", () => {
-  it("uses a descriptive label when one is available", () => {
-    expect(documentTitleForSession(session({ label: "vim package.json" }))).toBe(
-      "vim package.json"
-    );
+describe("documentTitleForPanel", () => {
+  it("uses the stable panel title instead of session implementation details", () => {
+    expect(documentTitleForPanel("Development terminal")).toBe("Development terminal");
   });
 
-  it("compacts absolute home paths in terminal-provided labels", () => {
-    expect(documentTitleForSession(session({ label: "/home/alice/project" }))).toBe("~/project");
+  it("defaults empty titles to Terminal", () => {
+    expect(documentTitleForPanel(undefined)).toBe("Terminal");
+    expect(documentTitleForPanel("   ")).toBe("Terminal");
   });
 
-  it("falls back to the cwd when the label is generic", () => {
-    expect(documentTitleForSession(session({ label: "Shell", cwd: "/home/alice/project" }))).toBe(
-      "~/project"
-    );
+  it("normalizes whitespace and bounds titles", () => {
+    expect(documentTitleForPanel("  Build   terminal  ")).toBe("Build terminal");
+    expect(documentTitleForPanel("x".repeat(100))).toHaveLength(80);
   });
 });
-
-describe("compactHomePath", () => {
-  it("compacts common home directory prefixes", () => {
-    expect(compactHomePath("/home/alice")).toBe("~");
-    expect(compactHomePath("/home/alice/src/vibestudio")).toBe("~/src/vibestudio");
-    expect(compactHomePath("/Users/alice/src/vibestudio")).toBe("~/src/vibestudio");
-    expect(compactHomePath("C:\\Users\\alice\\src\\vibestudio")).toBe("~\\src\\vibestudio");
-  });
-
-  it("leaves other titles alone", () => {
-    expect(compactHomePath("/var/log")).toBe("/var/log");
-    expect(compactHomePath("pnpm dev")).toBe("pnpm dev");
-  });
-});
-
-function session(opts: { label?: string; cwd?: string }): SessionInfo {
-  return {
-    sessionId: "session-1",
-    label: opts.label ?? "Shell",
-    command: { argv: ["/bin/bash"], cwd: opts.cwd ?? "/repo" },
-    cols: 80,
-    rows: 24,
-    alive: true,
-    detectedPorts: [],
-    detectedUrls: [],
-    lastActivityAt: 0,
-    bytesOut: 0,
-    meta: {},
-  };
-}

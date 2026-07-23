@@ -10,7 +10,9 @@ import {
 describe("terminal state migration", () => {
   it("fills defaults for missing or invalid persisted state", () => {
     expect(migrateState(null)).toEqual(defaultTerminalState());
-    expect(migrateState({ fontSize: Number.NaN, themeOverride: "sepia", pasteMode: "html" })).toMatchObject({
+    expect(
+      migrateState({ fontSize: Number.NaN, themeOverride: "sepia", pasteMode: "html" })
+    ).toMatchObject({
       fontSize: 13,
       themeOverride: "auto",
       pasteMode: "path",
@@ -18,11 +20,19 @@ describe("terminal state migration", () => {
     });
   });
 
+  it("keeps a bounded stable panel title independent of sessions", () => {
+    expect(migrateState({ panelTitle: "  Build   terminal  " }).panelTitle).toBe("Build terminal");
+    expect(migrateState({ panelTitle: "   " }).panelTitle).toBe("Terminal");
+    expect(migrateState({ panelTitle: "x".repeat(100) }).panelTitle).toHaveLength(80);
+  });
+
   it("clamps numeric settings and caps palette history", () => {
     const migrated = migrateState({
       fontSize: 100,
       scrollbackBytes: 99 * 1024 * 1024,
-      paletteHistory: Array.from({ length: 25 }, (_, index) => index % 2 ? `cmd-${index}` : index),
+      paletteHistory: Array.from({ length: 25 }, (_, index) =>
+        index % 2 ? `cmd-${index}` : index
+      ),
     });
 
     expect(migrated.fontSize).toBe(24);
@@ -60,24 +70,39 @@ describe("terminal state migration", () => {
   it("sanitizes per-session restore state", () => {
     const migrated = migrateState({
       perSession: {
-        s1: { label: "App", cwd: "/repo", originalArgv: ["pnpm", 1, "dev"], readCursor: -1, lastSeenAt: Number.POSITIVE_INFINITY, extra: true },
+        s1: {
+          label: "App",
+          cwd: "/repo",
+          originalArgv: ["pnpm", 1, "dev"],
+          readCursor: -1,
+          lastSeenAt: Number.POSITIVE_INFINITY,
+          extra: true,
+        },
         s2: null,
         s3: { cwd: "", readCursor: 12, lastSeenAt: 13 },
       },
     });
 
     expect(migrated.perSession).toEqual({
-      s1: { label: "App", cwd: "/repo", originalArgv: ["pnpm", "dev"], readCursor: 0, lastSeenAt: 0 },
+      s1: {
+        label: "App",
+        cwd: "/repo",
+        originalArgv: ["pnpm", "dev"],
+        readCursor: 0,
+        lastSeenAt: 0,
+      },
       s3: { cwd: ".", readCursor: 12, lastSeenAt: 13 },
     });
   });
 
   it("normalizes minimal notifications", () => {
     const migrated = migrateState({
-      notifications: [{
-        sessionId: "s1",
-        message: "build done",
-      }],
+      notifications: [
+        {
+          sessionId: "s1",
+          message: "build done",
+        },
+      ],
     });
 
     expect(migrated.notifications[0]).toMatchObject({
@@ -92,16 +117,18 @@ describe("terminal state migration", () => {
 
   it("sanitizes malformed notification fields", () => {
     const migrated = migrateState({
-      notifications: [{
-        notifId: "",
-        sessionId: 123,
-        severity: "urgent",
-        title: 42,
-        message: 99,
-        timestamp: Number.POSITIVE_INFINITY,
-        read: "yes",
-        source: "external",
-      }],
+      notifications: [
+        {
+          notifId: "",
+          sessionId: 123,
+          severity: "urgent",
+          title: 42,
+          message: 99,
+          timestamp: Number.POSITIVE_INFINITY,
+          read: "yes",
+          source: "external",
+        },
+      ],
     });
 
     expect(migrated.notifications[0]).toMatchObject({

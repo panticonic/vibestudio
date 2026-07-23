@@ -3,7 +3,13 @@ import { SplitPane } from "./SplitPane.js";
 import type { ReactNode } from "react";
 import type { ParsedNotification } from "./notificationParser.js";
 import type { TerminalAppearance } from "./paneTheme.js";
-import type { NotificationSeverity, SessionInfo, ShellApi, SplitNode, TerminalNotification } from "./types.js";
+import type {
+  NotificationSeverity,
+  SessionInfo,
+  ShellApi,
+  SplitNode,
+  TerminalNotification,
+} from "./types.js";
 
 export function SplitTree(props: {
   node: SplitNode;
@@ -49,7 +55,9 @@ export function SplitTree(props: {
         imagePasteRelative={props.imagePasteRelative}
         resizeKey={props.resizeKey}
         focused={props.focusedSessionId === session.sessionId}
-        settingsControl={props.focusedSessionId === session.sessionId ? props.settingsControl : undefined}
+        settingsControl={
+          props.focusedSessionId === session.sessionId ? props.settingsControl : undefined
+        }
         severity={sessionSeverity(session, props.notifications)}
         onFocus={() => props.onFocus(session.sessionId)}
         onClose={() => props.onClose(session.sessionId)}
@@ -80,9 +88,14 @@ export function SplitTree(props: {
   );
 }
 
-export function sessionSeverity(session: Pick<SessionInfo, "sessionId" | "alive" | "exit">, notifications: TerminalNotification[]): NotificationSeverity {
+export function sessionSeverity(
+  session: Pick<SessionInfo, "sessionId" | "alive" | "exit">,
+  notifications: TerminalNotification[]
+): NotificationSeverity {
   if (!session.alive && (session.exit?.code !== 0 || session.exit?.signal)) return "failure";
-  const severities = notifications.filter((item) => item.sessionId === session.sessionId && !item.read).map((item) => item.severity);
+  const severities = notifications
+    .filter((item) => item.sessionId === session.sessionId && !item.read)
+    .map((item) => item.severity);
   if (severities.includes("failure")) return "failure";
   if (severities.includes("approval")) return "approval";
   if (severities.includes("waiting")) return "waiting";
