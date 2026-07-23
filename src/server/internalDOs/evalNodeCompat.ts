@@ -1,7 +1,9 @@
 import * as nodePath from "node:path";
 import * as nodeUtil from "node:util";
 import * as nodeCrypto from "node:crypto";
-import { Buffer } from "node:buffer";
+import * as nodeBuffer from "node:buffer";
+
+const { Buffer } = nodeBuffer;
 
 const TWO_PATH_METHODS = new Set(["copyFile", "cp", "link", "rename", "symlink"]);
 
@@ -104,6 +106,10 @@ export function createEvalNodeCompat(runtimeFs: Record<string, unknown>): Record
   cryptoFacade["default"] = cryptoFacade;
   Object.defineProperty(cryptoFacade, "__esModule", { value: true });
 
+  const bufferFacade: Record<string, unknown> = { ...nodeBuffer };
+  bufferFacade["default"] = bufferFacade;
+  Object.defineProperty(bufferFacade, "__esModule", { value: true });
+
   return {
     // Node accepts both the explicit `node:` specifiers and their historical
     // bare aliases. Keep them identity-equal so packages that mix the two
@@ -111,10 +117,12 @@ export function createEvalNodeCompat(runtimeFs: Record<string, unknown>): Record
     // module loader.
     fs: fsFacade,
     "fs/promises": fsPromises,
+    buffer: bufferFacade,
     crypto: cryptoFacade,
     os: osFacade,
     path: nodePath,
     util: utilFacade,
+    "node:buffer": bufferFacade,
     "node:crypto": cryptoFacade,
     "node:fs": fsFacade,
     "node:fs/promises": fsPromises,

@@ -13,7 +13,7 @@ const SAFE_GUEST_GLOBALS = [
   "SharedArrayBuffer", "String", "Symbol", "SyntaxError", "TextDecoder", "TextEncoder",
   "TypeError", "URIError", "URL", "URLSearchParams", "Uint16Array", "Uint32Array",
   "Uint8Array", "Uint8ClampedArray", "WeakMap", "WeakRef", "WeakSet", "WebAssembly",
-  "atob", "btoa", "clearInterval", "clearTimeout", "crypto", "decodeURI",
+  "Buffer", "atob", "btoa", "clearInterval", "clearTimeout", "crypto", "decodeURI",
   "decodeURIComponent", "encodeURI", "encodeURIComponent", "escape", "isFinite",
   "isNaN", "parseFloat", "parseInt", "performance", "queueMicrotask", "setInterval",
   "setTimeout", "structuredClone", "undefined", "unescape",
@@ -226,7 +226,8 @@ export function getRealmCompiler(
  * can check.
  */
 export function createPrivateGuestGlobal(
-  realm: Record<string, unknown> = globalThis as Record<string, unknown>
+  realm: Record<string, unknown> = globalThis as Record<string, unknown>,
+  endowments: Readonly<Record<string, unknown>> = {}
 ): Record<PropertyKey, unknown> {
   if (isCodegenReachable(realm)) {
     throw new TypeError(
@@ -245,6 +246,11 @@ export function createPrivateGuestGlobal(
         ? value.bind(realm)
         : value;
   }
+  // Eval's named bindings are already reviewed endowments of this guest
+  // invocation. Publish the same objects on the private facade so ordinary
+  // Node-style `global.fs` and web-style `globalThis.fs` agree with the free
+  // `fs` binding instead of exposing a second, weaker ambient contract.
+  Object.assign(target, endowments);
   const realmConsole = realm["console"];
   if (realmConsole && typeof realmConsole === "object") {
     const guestConsole = Object.create(null) as Record<string, unknown>;
@@ -259,10 +265,11 @@ export function createPrivateGuestGlobal(
     has: () => true,
     get: (scope, property) => {
       if (property === Symbol.unscopables) return undefined;
-      // Worker-targeted libraries commonly resolve their realm through either
-      // globalThis or the standard WorkerGlobalScope alias `self`. Both point
-      // at the confined facade, never the evaluator isolate's real global.
-      if (property === "globalThis" || property === "self") return guest;
+      // Cross-target libraries commonly resolve their realm through
+      // globalThis, the WorkerGlobalScope alias `self`, or Node's `global`.
+      // Every spelling points at the confined facade, never the evaluator
+      // isolate's real global.
+      if (property === "globalThis" || property === "self" || property === "global") return guest;
       return Reflect.get(scope, property);
     },
     set: (scope, property, value) => Reflect.set(scope, property, value),

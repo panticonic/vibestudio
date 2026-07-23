@@ -216,11 +216,21 @@ describe("execute", () => {
 
     it("keeps strict-mode this semantics and explicit endowments", () => {
       const result = confined(
-        `return { receiver: (function () { return this; })(), answer: secret + 1 };`,
+        `return {
+          receiver: (function () { return this; })(),
+          answer: secret + 1,
+          globalAnswer: global.secret + 1,
+          globalThisAnswer: globalThis.secret + 1,
+        };`,
         { secret: 41 }
       );
 
-      expect(result.returnValue).toEqual({ receiver: undefined, answer: 42 });
+      expect(result.returnValue).toEqual({
+        receiver: undefined,
+        answer: 42,
+        globalAnswer: 42,
+        globalThisAnswer: 42,
+      });
     });
 
     it("retains the private lexical boundary in callbacks that outlive execution", () => {

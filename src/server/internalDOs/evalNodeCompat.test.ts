@@ -18,6 +18,7 @@ describe("createEvalNodeCompat", () => {
     expect(modules["path"]).toBe(modules["node:path"]);
     expect(modules["util"]).toBe(modules["node:util"]);
     expect(modules["crypto"]).toBe(modules["node:crypto"]);
+    expect(modules["buffer"]).toBe(modules["node:buffer"]);
     const os = modules["node:os"] as typeof import("node:os");
     const path = modules["node:path"] as typeof import("node:path");
     const util = modules["node:util"] as typeof import("node:util");
@@ -43,6 +44,8 @@ describe("createEvalNodeCompat", () => {
     expect(util.inspect({ ok: true })).toContain("ok");
     const crypto = modules["node:crypto"] as typeof import("node:crypto");
     expect(crypto.createHash("sha256").update("ok").digest("hex")).toHaveLength(64);
+    const buffer = modules["node:buffer"] as typeof import("node:buffer");
+    expect(buffer.Buffer.byteLength("α", "utf8")).toBe(2);
     expect(modules).not.toHaveProperty("node:child_process");
   });
 });
