@@ -30,6 +30,10 @@ import {
 import { settingsMethods } from "@vibestudio/service-schemas/settings";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { shellPresenceMethods } from "@vibestudio/service-schemas/shellPresence";
+import {
+  systemAgentMethods,
+  type SystemAgentConversation,
+} from "@vibestudio/service-schemas/systemAgent";
 import { autofillMethods } from "@vibestudio/service-schemas/autofill";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import { viewMethods } from "@vibestudio/service-schemas/view";
@@ -98,6 +102,11 @@ const shellApprovalClient = createTypedServiceClient(
 const shellPresenceClient = createTypedServiceClient(
   "shellPresence",
   shellPresenceMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const systemAgentClient = createTypedServiceClient(
+  "systemAgent",
+  systemAgentMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const appClient = createTypedServiceClient("app", appMethods, (service, method, args) =>
@@ -775,6 +784,13 @@ export const userNotifications = {
       stateArgs: { channelName: channelId },
     });
   },
+};
+// =============================================================================
+// Product-owned System Agent (same per-user conversation on desktop and mobile)
+// =============================================================================
+export type ShellSystemAgentConversation = SystemAgentConversation;
+export const systemAgent = {
+  resolveConversation: () => systemAgentClient.resolveConversation(),
 };
 // =============================================================================
 // Events Service

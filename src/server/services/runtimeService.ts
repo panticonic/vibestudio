@@ -132,6 +132,20 @@ export interface RuntimeEntityHooks {
   }) => Promise<void>;
 }
 
+export interface RuntimeServiceInternal {
+  createEntity(caller: VerifiedCaller, spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  createContext(
+    ctx: Pick<ServiceContext, "caller" | "chainCaller">,
+    args: { contextId?: string }
+  ): Promise<WorkspaceContext>;
+  resolveContext(id: string): Promise<string | null>;
+}
+
+export interface RuntimeServiceResult {
+  definition: ServiceDefinition;
+  internal: RuntimeServiceInternal;
+}
+
 export interface PreparedRuntimeExecution {
   effectiveVersion: string;
   buildKey?: string;
@@ -214,7 +228,7 @@ function deriveEntityKey(srcKey: string, targetKey: string, srcId: string): stri
   return `${srcKey}~fork~${h}`;
 }
 
-export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinition {
+export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceResult {
   const store = deps.entityStore;
   const retirementChains = new Map<string, Promise<unknown>>();
 
@@ -712,7 +726,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
    * frontier and provenance timeline.
    */
   async function createContext(
-    ctx: ServiceContext,
+    ctx: Pick<ServiceContext, "caller" | "chainCaller">,
     args: { contextId?: string }
   ): Promise<WorkspaceContext> {
     const caller = ctx.caller;
@@ -1220,7 +1234,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     return await store.resolveContext(id);
   }
 
-  return {
+  const definition: ServiceDefinition = {
     name: "runtime",
     description: "Runtime entity creation and retirement",
     authority: { principals: ["code", "user", "host"] },
@@ -1362,5 +1376,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         });
       },
     }),
+  };
+  return {
+    definition,
+    internal: {
+      createEntity,
+      createContext,
+      resolveContext,
+    },
   };
 }

@@ -193,7 +193,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     contextFolders,
     setEntityTitle: opts.setEntityTitle,
     semanticContexts,
-  });
+  }).definition;
   const dispatcher = new ServiceDispatcher();
   dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) => {
     const resolved = testAuthority(caller, capability, resourceKey);

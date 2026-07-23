@@ -530,6 +530,16 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `shellPresence.heartbeat` | Mark the calling shell active and return the current active-shell count. |
 
+## `systemAgent`
+
+Product-owned per-user System Agent conversation lifecycle
+
+Authority principals: `code`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `systemAgent.resolveConversation` | Resolve the current human's product-owned System Agent conversation. User, device, workspace, code version, context, channel, and agent identity are derived by the host; the caller supplies no identity coordinates. |
+
 ## `vcs`
 
 One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.

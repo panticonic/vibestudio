@@ -2116,8 +2116,7 @@ async function main() {
   // mints or retires entity rows. Cleanup hooks fire post-retire (see §10).
   {
     const { createRuntimeService } = await import("./services/runtimeService.js");
-    let runtimeDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition | null =
-      null;
+    let runtimeResult: import("./services/runtimeService.js").RuntimeServiceResult | null = null;
     container.registerManaged({
       name: "runtime",
       dependencies: [
@@ -2175,7 +2174,7 @@ async function main() {
             authorityEvalCeilings: authority.evalCeilings,
           };
         };
-        runtimeDefinition = createRuntimeService({
+        runtimeResult = createRuntimeService({
           entityStore: ensureEntityStore(doDispatch),
           contextFolders: contextFolderManager,
           // GAD-owned semantic context lifecycle for runtime entities.
@@ -2279,12 +2278,52 @@ async function main() {
             tokenManager.revokeToken(`agent:${entityId}`);
           },
         });
+        return runtimeResult;
       },
       getServiceDefinition() {
-        if (!runtimeDefinition) {
+        if (!runtimeResult) {
           throw new Error("runtime service not initialized");
         }
-        return runtimeDefinition;
+        return runtimeResult.definition;
+      },
+    });
+  }
+
+  // ── Product-owned System Agent conversation lifecycle ──
+  // The service depends on runtime + the live relay, but selects code only from
+  // the immutable shipped snapshot used to seed conduit blessings.
+  {
+    const { createSystemAgentService } = await import("./services/systemAgentService.js");
+    let systemAgentDefinition:
+      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+      | null = null;
+    container.registerManaged({
+      name: "systemAgent",
+      dependencies: ["runtime", "rpcServer", "buildSystem"],
+      async start(resolve) {
+        const runtime = assertPresent(
+          resolve<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
+        );
+        const rpcServer = assertPresent(
+          resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
+        );
+        systemAgentDefinition = createSystemAgentService({
+          workspaceId,
+          productSnapshotState: productSeedStateHash,
+          runtime: runtime.internal,
+          conduitBlessings: conduitBlessingStore,
+          callTarget: (targetId, method, args) =>
+            rpcServer.server.callTarget(targetId, method, args),
+          hasAppCapability: (callerId, capability) =>
+            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+        });
+        return systemAgentDefinition;
+      },
+      getServiceDefinition() {
+        if (!systemAgentDefinition) {
+          throw new Error("systemAgent service not initialized");
+        }
+        return systemAgentDefinition;
       },
     });
   }

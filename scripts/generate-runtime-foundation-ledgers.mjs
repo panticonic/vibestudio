@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { format, resolveConfig } from "prettier";
 import YAML from "yaml";
@@ -443,6 +444,69 @@ for (const row of authorityRows) {
   if (row.rpcPlane === "workspace-do" && row.tier !== "open" && !row.capability) {
     throw new Error(`${row.owner}:${row.method} has no manifest-facing semantic capability`);
   }
+}
+
+/**
+ * The generator may describe reviewed authority, but it must never approve a
+ * changed census merely because code was added. This compact admission input is
+ * edited only as part of authority review; ordinary generation checks its
+ * digest and then renders the derived ledgers.
+ */
+const authorityReview = JSON.parse(
+  fs.readFileSync(path.join(root, "scripts/runtime-authority-review.json"), "utf8")
+);
+if (
+  authorityReview.version !== 1 ||
+  typeof authorityReview.censusDigest !== "string" ||
+  !/^sha256:[0-9a-f]{64}$/.test(authorityReview.censusDigest) ||
+  !authorityReview.decisions ||
+  typeof authorityReview.decisions !== "object" ||
+  Array.isArray(authorityReview.decisions)
+) {
+  throw new Error("scripts/runtime-authority-review.json has an unsupported schema");
+}
+const reviewProjection = authorityRows.map((row) => ({
+  id: row.id,
+  rpcPlane: row.rpcPlane,
+  owner: row.owner,
+  ...(row.source ? { source: row.source } : {}),
+  method: row.method,
+  resourceDerivation: row.resourceDerivation,
+  authorityPrincipals: row.authorityPrincipals,
+  sensitivity: row.sensitivity,
+  ...(row.tier ? { tier: row.tier } : {}),
+  ...(row.capability ? { capability: row.capability } : {}),
+  r3aRequirement: row.r3aRequirement,
+}));
+const censusDigest = `sha256:${createHash("sha256")
+  .update(JSON.stringify(reviewProjection))
+  .digest("hex")}`;
+if (authorityReview.censusDigest !== censusDigest) {
+  throw new Error(
+    `Runtime authority census is not reviewed: expected ${authorityReview.censusDigest}, observed ${censusDigest}. ` +
+      "Review the authority projection and update scripts/runtime-authority-review.json explicitly."
+  );
+}
+const rowsById = new Map(authorityRows.map((row) => [row.id, row]));
+for (const [id, decision] of Object.entries(authorityReview.decisions)) {
+  if (!rowsById.has(id)) {
+    throw new Error(`Runtime authority review names unknown row ${id}`);
+  }
+  if (
+    !decision ||
+    typeof decision !== "object" ||
+    Object.keys(decision).sort().join(",") !== "change,review" ||
+    typeof decision.review !== "string" ||
+    decision.review.length === 0 ||
+    typeof decision.change !== "string" ||
+    decision.change.length === 0
+  ) {
+    throw new Error(`Runtime authority review for ${id} is invalid`);
+  }
+}
+for (const row of authorityRows) {
+  const decision = authorityReview.decisions[row.id];
+  if (decision) row.r3b = decision;
 }
 
 const evalRuntimeBoundaries = JSON.parse(

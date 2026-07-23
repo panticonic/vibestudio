@@ -5323,6 +5323,47 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:attachChannel",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "attachChannel",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:attachChannel",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:attachChannel)",
+      "r3b": {
+        "review": "host-lifecycle-attachment",
+        "change": "Adds a host-only lifecycle operation that attaches an existing exact agent entity to a channel; the channel independently authenticates the subscribing Durable Object identity."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:canFork",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -11138,6 +11179,47 @@
       "r3b": {
         "review": "unchanged-parity",
         "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:initializeLockedChannel",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "initializeLockedChannel",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "workspace-service:<live-declaration>",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:initializeLockedChannel)",
+      "r3b": {
+        "review": "host-locked-membership-initialization",
+        "change": "Adds host-only atomic initialization of an immutable exact-participant channel boundary; user and code callers cannot create, replace, or widen the locked membership policy."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },

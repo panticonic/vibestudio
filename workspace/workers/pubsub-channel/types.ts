@@ -84,6 +84,16 @@ export function participantIsAgentVessel(
   return metadata?.["receivesChannelEnvelopes"] === true;
 }
 
+/**
+ * An authorization boundary independent of the live roster. Exact participant
+ * identities are fixed by a host-owned initialization operation; subscribing
+ * still requires each participant to prove that identity.
+ */
+export interface LockedChannelMembershipPolicy {
+  kind: "locked";
+  participants: string[];
+}
+
 /** Channel config (mirrors PubSub client ChannelConfig). */
 export interface ChannelConfig {
   title?: string;
@@ -96,6 +106,8 @@ export interface ChannelConfig {
   agentHopLimit?: number;
   /** Named channel policies (fixed registry); default agentic.conversation.v1. */
   policies?: string[];
+  /** Optional host-owned authorization boundary for private channels. */
+  membershipPolicy?: LockedChannelMembershipPolicy;
   [key: string]: unknown;
 }
 

@@ -2229,6 +2229,9 @@ importers:
 
   workers/pubsub-channel:
     dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared

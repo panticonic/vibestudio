@@ -1780,6 +1780,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:attachChannel",
+    rpcPlane: "workspace-do",
+    capability: "rpc:attachChannel",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    source: "packages/agentic-do",
+    method: "attachChannel",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
     id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:canFork",
     rpcPlane: "workspace-do",
     capability: "rpc:canFork",
@@ -3706,6 +3720,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     source: "workers/pubsub-channel",
     method: "getReplayBefore",
     sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    },
+  },
+  {
+    id: "direct:workspace/workers/pubsub-channel/channel-do.ts:initializeLockedChannel",
+    rpcPlane: "workspace-do",
+    capability: "workspace-service:<live-declaration>",
+    authorityPrincipals: ["host"],
+    owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    source: "workers/pubsub-channel",
+    method: "initializeLockedChannel",
+    sensitivity: "write",
     resourceDerivation: {
       kind: "direct-target",
       owner: "workspace/workers/pubsub-channel/channel-do.ts",

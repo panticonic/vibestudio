@@ -1748,6 +1748,21 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return { ok: result.ok, participantId: result.participantId };
   }
 
+  /**
+   * Host lifecycle counterpart to the code-owned subscription API. Product
+   * orchestration may attach an already-created vessel without impersonating a
+   * code caller; channel.subscribe still authenticates this exact DO identity.
+   */
+  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  async attachChannel(opts: {
+    channelId: string;
+    contextId: string;
+    config?: unknown;
+    replay?: boolean;
+  }): Promise<{ ok: boolean; participantId: string }> {
+    return this.subscribeChannel(opts);
+  }
+
   private async ingestSubscriptionReplay(
     channelId: string,
     envelope: ChannelReplayEnvelope | undefined,

@@ -46,6 +46,10 @@ import { pushMethods } from "@vibestudio/service-schemas/push";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import {
+  systemAgentMethods,
+  type SystemAgentConversation,
+} from "@vibestudio/service-schemas/systemAgent";
+import {
   createDurableObjectServiceClient,
   createGadServiceClient,
 } from "@vibestudio/shared/workspaceServiceRpc";
@@ -652,6 +656,9 @@ export class ShellClient {
   readonly credentialService: CredentialsClient;
   readonly push: PushClient;
   readonly recovery: RecoveryCoordinator;
+  readonly systemAgent: {
+    resolveConversation(): Promise<SystemAgentConversation>;
+  };
   readonly userNotifications: {
     list(): Promise<UserNotification[]>;
     acknowledge(id: string): Promise<boolean>;
@@ -757,6 +764,14 @@ export class ShellClient {
       },
     };
     this.workspaces = new WorkspaceClient(this.transport);
+    const systemAgentClient = createTypedServiceClient(
+      "systemAgent",
+      systemAgentMethods,
+      (service, method, args) => this.transport.call("main", `${service}.${method}`, args)
+    );
+    this.systemAgent = {
+      resolveConversation: () => systemAgentClient.resolveConversation(),
+    };
     this.hubControl = createHubControlClient(this.transport);
     this.settings = new SettingsClient(this.transport);
     this.events = new EventsClient(this.transport, this.recovery);

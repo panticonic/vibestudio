@@ -23,6 +23,7 @@ import {
   type DurableObjectServiceClient,
   type UserlandApprovalChoice,
 } from "@workspace/runtime/worker";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import type { ChannelEvent } from "@workspace/harness";
 import {
   channelSubscriptionQueuingStrategy,
@@ -64,6 +65,7 @@ import {
   participantIsAgentVessel,
   type SubscribeResult,
   type ChannelConfig,
+  type LockedChannelMembershipPolicy,
   type PresencePayload,
   type StoredAttachment,
 } from "./types.js";
@@ -738,6 +740,43 @@ export class PubSubChannel extends DurableObjectBase {
     }
   }
 
+  private normalizeLockedMembershipPolicy(value: unknown): LockedChannelMembershipPolicy {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      (value as { kind?: unknown }).kind !== "locked" ||
+      !Array.isArray((value as { participants?: unknown }).participants)
+    ) {
+      throw new Error("Locked channel membership policy is invalid");
+    }
+    const participants = (value as { participants: unknown[] }).participants;
+    if (
+      participants.length === 0 ||
+      participants.some(
+        (participantId) => typeof participantId !== "string" || participantId.length === 0
+      )
+    ) {
+      throw new Error("Locked channel membership requires non-empty participant identities");
+    }
+    const normalized = [...new Set(participants as string[])].sort();
+    if (normalized.length !== participants.length) {
+      throw new Error("Locked channel membership contains duplicate participant identities");
+    }
+    return { kind: "locked", participants: normalized };
+  }
+
+  private lockedMembershipPolicy(): LockedChannelMembershipPolicy | null {
+    const policy = this.getChannelConfig()?.membershipPolicy;
+    return policy === undefined ? null : this.normalizeLockedMembershipPolicy(policy);
+  }
+
+  private assertLockedMembership(participantId: string): void {
+    const policy = this.lockedMembershipPolicy();
+    if (policy && !policy.participants.includes(participantId)) {
+      throw new Error(`Participant ${participantId} is not admitted by this locked channel`);
+    }
+  }
+
   private assertParticipantCaller(participantId: string, method: string): void {
     if (!this.isAuthorizedParticipantCaller(participantId)) {
       const caller = this.caller;
@@ -1086,6 +1125,10 @@ export class PubSubChannel extends DurableObjectBase {
 
     const contextId = metadata["contextId"] as string | undefined;
     const channelConfigRaw = metadata["channelConfig"] as Record<string, unknown> | undefined;
+    if (channelConfigRaw && "membershipPolicy" in channelConfigRaw) {
+      throw new Error("subscribe: locked channel membership can only be initialized by the host");
+    }
+    this.assertLockedMembership(participantId);
     if (contextId) {
       this.initChannel(contextId, channelConfigRaw);
     }
@@ -1986,8 +2029,53 @@ export class PubSubChannel extends DurableObjectBase {
     return this.getChannelConfig();
   }
 
+  /**
+   * Atomically bind a new private channel to its context, exact config, and
+   * immutable participant set. Repeated identical initialization is safe;
+   * any drift is a programming error rather than an implicit policy update.
+   */
+  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  async initializeLockedChannel(
+    contextId: string,
+    config: ChannelConfig & { membershipPolicy: LockedChannelMembershipPolicy }
+  ): Promise<ChannelConfig> {
+    if (!contextId) throw new Error("initializeLockedChannel: contextId is required");
+    const normalizedConfig: ChannelConfig = {
+      ...config,
+      membershipPolicy: this.normalizeLockedMembershipPolicy(config.membershipPolicy),
+    };
+    const existingContextId = this.getStateValue("contextId");
+    const existingConfig = this.getChannelConfig();
+    if (existingContextId) {
+      if (
+        existingContextId !== contextId ||
+        !existingConfig ||
+        canonicalJson(existingConfig) !== canonicalJson(normalizedConfig)
+      ) {
+        throw new Error("initializeLockedChannel: existing channel definition does not match");
+      }
+      return existingConfig;
+    }
+    this.ctx.storage.transactionSync(() => {
+      if (this.getStateValue("contextId")) {
+        throw new Error("initializeLockedChannel: channel was initialized concurrently");
+      }
+      this.setStateValue("contextId", contextId);
+      this.setStateValue("createdAt", String(Date.now()));
+      this.setStateValue("config", JSON.stringify(normalizedConfig));
+    });
+    this.policyHost.invalidatePolicySelection();
+    void this.refreshOwnTitle();
+    return normalizedConfig;
+  }
+
   @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
   async updateConfig(config: Partial<ChannelConfig>): Promise<ChannelConfig> {
+    if ("membershipPolicy" in config) {
+      throw new Error(
+        "updateConfig: locked membership is immutable; initialize a different channel instead"
+      );
+    }
     const newConfig = { ...this.getChannelConfig(), ...config };
     this.setStateValue("config", JSON.stringify(newConfig));
     this.policyHost.invalidatePolicySelection();

@@ -285,6 +285,100 @@ async function createGadBackedChannel(
 }
 
 describe("PubSubChannel", () => {
+  it("enforces host-initialized locked membership independently of the live roster", async () => {
+    const workerId = "do:workers/system-agent:SystemAgentWorker:user-alice";
+    const { instance } = await createGadBackedChannel({
+      rpcCall: (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
+        if (target === workerId && method === "onChannelEnvelope") return null;
+        return undefined;
+      },
+    });
+    setRpcCaller(instance, "server:test", "server");
+    await expect(
+      instance.initializeLockedChannel("ctx-system-alice", {
+        title: "System Agent",
+        policies: ["agentic.conversation.v1"],
+        membershipPolicy: {
+          kind: "locked",
+          participants: [workerId, "user:alice"],
+        },
+      })
+    ).resolves.toMatchObject({
+      membershipPolicy: {
+        kind: "locked",
+        participants: [workerId, "user:alice"].sort(),
+      },
+    });
+
+    setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "alice");
+    await expect(
+      instance.subscribe("client-asserted-id-is-ignored", {
+        contextId: "ctx-system-alice",
+        name: "Alice",
+        type: "panel",
+      })
+    ).resolves.toMatchObject({ participantId: "user:alice" });
+
+    setRpcCaller(instance, "panel:bob", "panel", "panel:bob", "bob");
+    await expect(
+      instance.subscribe("anything", {
+        contextId: "ctx-system-alice",
+        name: "Bob",
+        type: "panel",
+      })
+    ).rejects.toThrow("Participant user:bob is not admitted by this locked channel");
+
+    setRpcCaller(instance, workerId, "durable-object");
+    await expect(
+      instance.subscribe(workerId, {
+        contextId: "ctx-system-alice",
+        name: "System Agent",
+        type: "agent",
+        receivesChannelEnvelopes: true,
+      })
+    ).resolves.toMatchObject({ participantId: workerId });
+  });
+
+  it("does not let subscribe or generic config updates create or widen locked membership", async () => {
+    const { instance } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "alice");
+    await expect(
+      instance.subscribe("ignored", {
+        contextId: "ctx-private",
+        name: "Alice",
+        type: "panel",
+        channelConfig: {
+          membershipPolicy: { kind: "locked", participants: ["user:alice"] },
+        },
+      })
+    ).rejects.toThrow("locked channel membership can only be initialized by the host");
+
+    setRpcCaller(instance, "server:test", "server");
+    await instance.initializeLockedChannel("ctx-private", {
+      membershipPolicy: { kind: "locked", participants: ["user:alice"] },
+    });
+    await expect(
+      instance.updateConfig({
+        membershipPolicy: { kind: "locked", participants: ["user:alice", "user:bob"] },
+      })
+    ).rejects.toThrow("locked membership is immutable");
+    await expect(
+      instance.initializeLockedChannel("ctx-private", {
+        membershipPolicy: { kind: "locked", participants: ["user:alice"] },
+      })
+    ).resolves.toMatchObject({
+      membershipPolicy: { kind: "locked", participants: ["user:alice"] },
+    });
+    await expect(
+      instance.initializeLockedChannel("ctx-private", {
+        membershipPolicy: { kind: "locked", participants: ["user:alice", "user:bob"] },
+      })
+    ).rejects.toThrow("existing channel definition does not match");
+  });
+
   it("terminates a subscription instead of buffering an unread live tail without bound", async () => {
     const { instance } = await createGadBackedChannel();
     const internal = instance as unknown as {

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "censusDigest": "sha256:9874a1036a19f58b12b8c3f01e6d63015313b37f1813e32bc8ea050757a97b05",
+  "decisions": {
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:attachChannel": {
+      "review": "host-lifecycle-attachment",
+      "change": "Adds a host-only lifecycle operation that attaches an existing exact agent entity to a channel; the channel independently authenticates the subscribing Durable Object identity."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:initializeLockedChannel": {
+      "review": "host-locked-membership-initialization",
+      "change": "Adds host-only atomic initialization of an immutable exact-participant channel boundary; user and code callers cannot create, replace, or widen the locked membership policy."
+    }
+  }
+}
