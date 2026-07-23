@@ -690,6 +690,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return [];
   }
 
+  /**
+   * Provider-side enforcement for channel participant methods. Descriptors are
+   * discovery/UI metadata; subclasses with a reduced control surface must also
+   * close the method at the receiver.
+   */
+  protected isParticipantMethodEnabled(_methodName: string): boolean {
+    return true;
+  }
+
+  /** Whether this vessel exposes workspace-history search to the model. */
+  protected includeMemoryRecallTool(): boolean {
+    return true;
+  }
+
   /** Step policies composed onto the pure loop (silent agents, card flows…). */
   protected getStepPolicies(_channelId: string): StepPolicy[] {
     return defaultPolicies();
@@ -1593,7 +1607,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<Map<string, AgentTool>> {
     if (execution) {
       const registry = new Map<string, AgentTool>();
-      registry.set("memory_recall", this.createMemoryRecallTool());
+      if (this.includeMemoryRecallTool()) {
+        registry.set("memory_recall", this.createMemoryRecallTool());
+      }
       for (const tool of this.getLoopTools(channelId, execution)) {
         registry.set(tool.name, tool);
       }
@@ -1602,8 +1618,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     let registry = this.localTools.get(channelId);
     if (!registry) {
       registry = new Map();
-      // Standard tools every vessel gets, regardless of getLoopTools overrides.
-      registry.set("memory_recall", this.createMemoryRecallTool());
+      if (this.includeMemoryRecallTool()) {
+        registry.set("memory_recall", this.createMemoryRecallTool());
+      }
       for (const tool of this.getLoopTools(channelId)) {
         registry.set(tool.name, tool);
       }
@@ -2467,6 +2484,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     methodName: string,
     args: unknown
   ): Promise<{ result: unknown; isError?: boolean } | null> {
+    if (!this.isParticipantMethodEnabled(methodName)) return null;
     if (isAgentInspectionMethod(methodName)) {
       return this.readStandardAgentInspection(channelId, methodName);
     }

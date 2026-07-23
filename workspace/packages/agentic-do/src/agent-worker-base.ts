@@ -368,7 +368,10 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
    *  `attachments` names image files in the agent's working tree (the same fs
    *  the read/write tools use), so a captured screenshot reaches the user by
    *  path — the bytes never travel through the model. */
-  private createSayTool(channelId: string, fs: ReturnType<typeof createRpcFs>): AgentTool<never> {
+  protected createSayTool(
+    channelId: string,
+    fs: ReturnType<typeof createRpcFs>
+  ): AgentTool<never> {
     return {
       name: "say",
       label: "say",

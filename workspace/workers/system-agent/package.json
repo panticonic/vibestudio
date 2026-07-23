@@ -1,0 +1,658 @@
+{
+  "name": "@workspace-workers/system-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "entry": "index.ts",
+    "durable": {
+      "classes": [
+        {
+          "className": "SystemAgentWorker"
+        }
+      ]
+    },
+    "agent": {
+      "displayName": "System Agent",
+      "description": "Product-owned workspace and shell operator",
+      "icon": "✦"
+    },
+    "exposeModules": [
+      "@workspace/runtime",
+      "@workspace/pubsub",
+      "zod"
+    ],
+    "authority": {
+      "requests": [
+        {
+          "capability": "accounts.connect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "agent.credentials.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "automations.register",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "context.clone",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "context.boundary",
+          "resource": {
+            "kind": "prefix",
+            "prefix": "context"
+          },
+          "tier": "critical",
+          "evidence": "bounded-dynamic"
+        },
+        {
+          "capability": "context.materialize",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "credential.use",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "subagents.create",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "user-approval.request",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:channel",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:gad.workspace",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:models",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        }
+      ],
+      "evalCeilings": [
+        {
+          "audience": "eval",
+          "purpose": "agentic-code-execution",
+          "capabilities": [
+            {
+              "capability": "account.profile.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "account.profile.update",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "accounts.connect",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "accounts.disconnect",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "critical",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "adblock.manage",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "application.update",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "automations.control",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "browser-data.delete",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "browser-data.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "browser-data.write",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "context.clone",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "context.materialize",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "credential.use",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "credentials.audit.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "devices.pair",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "devices.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "devices.revoke",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "critical",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "extensions.diagnose",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "extensions.reload",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "external.open",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "git.project.import",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "git.publish",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "git.pull",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "git.remotes.manage",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "governance.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "mobile.devices.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "mobile.install",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "mobile.pair",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "network.response.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "panel.inspect",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "panel.presence.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "presence.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "remote-client.clear",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "critical",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "remote-client.connect",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "remote-client.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "runtime.inspect",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "security.audit.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "server-logs.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "settings.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "webhooks.manage",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace-host.manage",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace-panels.manage",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace-service:*",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace-units.manage",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace.build-cache.manage",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace.configure",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace.dependencies.inspect",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace.dependencies.install",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace.gateway.access",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace.members.manage",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace.members.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspace.members.remove",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "critical",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspaces.create",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspaces.delete",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "critical",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspaces.open",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            },
+            {
+              "capability": "workspaces.read",
+              "resource": {
+                "kind": "prefix",
+                "prefix": ""
+              },
+              "tier": "gated",
+              "evidence": "intentional-broad"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "@workspace/agentic-do": "workspace:*",
+    "@workspace/harness": "workspace:*",
+    "@workspace/pi-core": "workspace:*",
+    "@workspace/pubsub": "workspace:*",
+    "@workspace/runtime": "workspace:*",
+    "zod": "^3.24.0"
+  }
+}

@@ -2272,6 +2272,27 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
 
+  workers/system-agent:
+    dependencies:
+      '@workspace/agentic-do':
+        specifier: workspace:*
+        version: link:../../packages/agentic-do
+      '@workspace/harness':
+        specifier: workspace:*
+        version: link:../../packages/harness
+      '@workspace/pi-core':
+        specifier: workspace:*
+        version: link:../../packages/pi-core
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../../packages/pubsub
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+
   workers/system-test-runner:
     dependencies:
       '@workspace/runtime':
