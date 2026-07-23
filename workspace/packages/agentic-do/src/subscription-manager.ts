@@ -149,8 +149,13 @@ export class SubscriptionManager {
    */
   async releaseActivation(): Promise<number> {
     const live = [...this.liveSubscriptions.entries()];
-    await Promise.all(live.map(([channelId]) => this.closeLiveSubscription(channelId)));
-    await Promise.all(live.map(([, entry]) => entry.subscription.closed.catch(() => {})));
+    for (const [channelId, entry] of live) {
+      if (this.liveSubscriptions.get(channelId)?.generation === entry.generation) {
+        this.liveSubscriptions.delete(channelId);
+        if (entry.retryTimer) clearTimeout(entry.retryTimer);
+      }
+    }
+    await Promise.all(live.map(([, entry]) => entry.subscription.release()));
     return live.length;
   }
 

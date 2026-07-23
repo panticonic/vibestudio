@@ -236,6 +236,10 @@ class TestVessel extends AgentVesselBase {
             participantId,
           },
           closed,
+          release: vi.fn(() => {
+            operationLog.push(`channel:${channelId}:release`);
+            resolveClosed();
+          }),
           close: vi.fn(() => {
             operationLog.push(`channel:${channelId}:close`);
             resolveClosed();
@@ -459,7 +463,7 @@ describe("AgentVesselBase lifecycle release", () => {
     expect(instance.subscriptionIdsForTest()).toEqual([CHANNEL]);
     expect(instance.operationLog).toEqual([
       `channel:${CHANNEL}:subscribe`,
-      `channel:${CHANNEL}:close`,
+      `channel:${CHANNEL}:release`,
     ]);
 
     await instance.resumeAfterRestart(resumeInput);

@@ -72,6 +72,15 @@ export interface ChannelSubscription {
   /** Settles when the routed response body reaches its terminal state. */
   closed: Promise<void>;
   /**
+   * Relinquish only this activation's routed response resource.
+   *
+   * Lifecycle replacement must not perform a semantic channel leave: that can
+   * wait for the channel's ordered delivery lane to call back into the very
+   * activation being suspended. The replacement activation reconstructs the
+   * same durable membership with replay.
+   */
+  release(): Promise<void>;
+  /**
    * Perform an acknowledged graceful leave, then close the response body.
    * Resolving this promise proves that the channel has removed membership and
    * drained every structured delivery it accepted for this participant.
@@ -248,9 +257,24 @@ export class ChannelClient {
     })();
     closed.catch(() => {});
     let closePromise: Promise<void> | null = null;
+    let releasePromise: Promise<void> | null = null;
     return {
       result: first.value.result,
       closed,
+      release: () => {
+        explicitlyClosed = true;
+        if (!releasePromise) {
+          releasePromise = (async () => {
+            try {
+              await this.call<void>("releaseSubscription", participantId);
+              await closed;
+            } finally {
+              controller.abort();
+            }
+          })();
+        }
+        return releasePromise;
+      },
       close: () => {
         explicitlyClosed = true;
         if (!closePromise) {

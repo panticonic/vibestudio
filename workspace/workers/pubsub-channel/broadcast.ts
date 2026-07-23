@@ -25,6 +25,7 @@ export interface BroadcastDeps {
  *  agent DOs handle ordering via their own checkpoints. */
 const deliveryChains = new Map<string, Promise<void>>();
 const closingDeliveryChains = new Set<string>();
+const activeDeliveryControllers = new Map<string, AbortController>();
 
 function deliveryKey(channelId: string, participantId: string): string {
   return `${channelId}\u0000${participantId}`;
@@ -60,9 +61,42 @@ export async function closeDeliveryChain(
   if (deliveryChains.get(key) === pending) deliveryChains.delete(key);
 }
 
+/**
+ * Release the transport resources owned by one live activation while retaining
+ * its durable channel membership. Unlike closeDeliveryChain(), this cancels
+ * the active callback instead of draining it: lifecycle preparation can be
+ * invoked by the same recipient, so waiting for that callback would create a
+ * cross-DO reentrancy cycle.
+ *
+ * The lane stays closed until the replacement activation subscribes.
+ */
+export async function releaseDeliveryChain(
+  channelId: string,
+  participantId: string
+): Promise<void> {
+  const key = deliveryKey(channelId, participantId);
+  closingDeliveryChains.add(key);
+  activeDeliveryControllers.get(key)?.abort(
+    new Error(`Participant activation released: ${participantId}`)
+  );
+  const pending = deliveryChains.get(key);
+  if (pending) await pending;
+  if (deliveryChains.get(key) === pending) deliveryChains.delete(key);
+  activeDeliveryControllers.delete(key);
+}
+
+/** Re-open a transport lane when a replacement activation subscribes. */
+export function reopenDeliveryChain(channelId: string, participantId: string): void {
+  closingDeliveryChains.delete(deliveryKey(channelId, participantId));
+}
+
 /** Clean up delivery state after the participant row has been deleted. */
 export function cleanupDeliveryChain(channelId: string, participantId: string): void {
   const key = deliveryKey(channelId, participantId);
+  activeDeliveryControllers.get(key)?.abort(
+    new Error(`Participant delivery state removed: ${participantId}`)
+  );
+  activeDeliveryControllers.delete(key);
   deliveryChains.delete(key);
   closingDeliveryChains.delete(key);
 }
@@ -76,15 +110,24 @@ export function queueDoEnvelope(
 ): Promise<void> {
   const key = deliveryKey(deps.objectKey, participantId);
   if (closingDeliveryChains.has(key)) return Promise.resolve();
-  return serializeByKey(deliveryChains, key, () =>
-    deps.rpc
-      .call(participantId, "onChannelEnvelope", [deps.objectKey, envelope])
-      .then(() => {})
-      .catch((err) => {
-        const handled = onFatalDelivery?.(err as { code?: string });
-        if (!handled) console.error(`[Channel] delivery failed for ${participantId}:`, err);
-      })
-  );
+  return serializeByKey(deliveryChains, key, async () => {
+    if (closingDeliveryChains.has(key)) return;
+    const controller = new AbortController();
+    activeDeliveryControllers.set(key, controller);
+    try {
+      await deps.rpc.call(participantId, "onChannelEnvelope", [deps.objectKey, envelope], {
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      const handled = onFatalDelivery?.(err as { code?: string });
+      if (!handled) console.error(`[Channel] delivery failed for ${participantId}:`, err);
+    } finally {
+      if (activeDeliveryControllers.get(key) === controller) {
+        activeDeliveryControllers.delete(key);
+      }
+    }
+  });
 }
 
 // ── Broadcast ────────────────────────────────────────────────────────────────
