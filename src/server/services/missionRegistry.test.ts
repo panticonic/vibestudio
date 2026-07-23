@@ -101,9 +101,65 @@ describe("MissionRegistry", () => {
       }).missionId
     ).toBe(draft.missionId);
     expect(
-      registry.edit(draft.missionId, { charter: { ...charter(), taskSpec: "Different" } }).state
+      registry.edit(draft.missionId, {
+        charter: { ...charter(), taskSpec: "Different" },
+        actingUserId: "u",
+      }).state
     ).toBe("needs-reapproval");
     expect(registry.factForSession("chat-2")).toBeNull();
+    registry.close();
+    grants.close();
+  });
+
+  it("keeps user-owned missions private and owner-controlled", () => {
+    const statePath = mkdtempSync(join(tmpdir(), "missions-"));
+    const grants = new CapabilityGrantStore({ statePath });
+    const registry = new MissionRegistry({
+      statePath,
+      grantStore: grants,
+      isConduitBlessed: () => true,
+    });
+    const alice = registry.createDraft({
+      name: "Alice nightly",
+      charter: charter(),
+      owner: { userId: "alice", deviceId: "alice-laptop" },
+    });
+    registry.createDraft({
+      name: "Bob nightly",
+      charter: charter(),
+      owner: { userId: "bob", deviceId: "bob-phone" },
+    });
+
+    expect(registry.listForUser("alice").map((mission) => mission.name)).toEqual(["Alice nightly"]);
+    expect(registry.getForUser(alice.missionId, "bob")).toBeNull();
+    expect(() =>
+      registry.edit(alice.missionId, {
+        name: "Stolen",
+        actingUserId: "bob",
+      })
+    ).toThrow(/not owned/);
+    expect(() =>
+      registry.approve({
+        missionId: alice.missionId,
+        permissions: [],
+        decidedBy: "user:bob",
+        contextIntegrityReady: true,
+      })
+    ).toThrow(/not owned/);
+
+    registry.approve({
+      missionId: alice.missionId,
+      permissions: [],
+      decidedBy: "user:alice",
+      contextIntegrityReady: true,
+    });
+    expect(() => registry.pause(alice.missionId, "bob")).toThrow(/not owned/);
+    expect(registry.pause(alice.missionId, "alice").state).toBe("paused");
+    expect(() => registry.resume(alice.missionId, "bob")).toThrow(/not owned/);
+    expect(registry.resume(alice.missionId, "alice").state).toBe("active");
+    expect(() => registry.retire(alice.missionId, "bob")).toThrow(/not owned/);
+    expect(registry.retire(alice.missionId, "alice").state).toBe("retired");
+
     registry.close();
     grants.close();
   });

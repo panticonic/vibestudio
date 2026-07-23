@@ -99,13 +99,14 @@ export class MissionRegistry {
       name?: string;
       charter?: MissionCharter;
       now?: number;
+      actingUserId: string;
       forkOwner?: { userId: string; deviceId: string };
     }
   ): MissionRecord {
     const current = this.require(missionId);
     if (current.state === "retired") throw coded("Retired missions cannot be edited", "EACCES");
     if (current.seeded) {
-      if (!input.forkOwner) {
+      if (!input.forkOwner || input.forkOwner.userId !== input.actingUserId) {
         throw coded("Editing a product mission requires a human-owned fork", "EACCES");
       }
       return this.createDraft({
@@ -115,6 +116,7 @@ export class MissionRegistry {
         ...(input.now === undefined ? {} : { now: input.now }),
       });
     }
+    this.assertOwnedBy(current, input.actingUserId);
     const now = input.now ?? Date.now();
     const charter = input.charter ?? current.charter;
     const digest = missionClosureDigest(charter);
@@ -161,6 +163,7 @@ export class MissionRegistry {
     if (!input.contextIntegrityReady)
       throw coded("Unattended automations require the trust update", "EAGAIN");
     const current = this.require(input.missionId);
+    this.assertOwnedBy(current, userIdFromPrincipal(input.decidedBy));
     if (current.state !== "draft" && current.state !== "needs-reapproval") {
       throw coded(
         `Mission ${current.missionId} cannot be approved from ${current.state}`,
@@ -216,8 +219,9 @@ export class MissionRegistry {
     return this.require(current.missionId);
   }
 
-  pause(missionId: string, now = Date.now()): MissionRecord {
+  pause(missionId: string, actingUserId: string, now = Date.now()): MissionRecord {
     const current = this.require(missionId);
+    this.assertOwnedBy(current, actingUserId, { allowSeeded: true });
     if (current.state !== "active") throw coded("Only active missions can be paused", "EACCES");
     this.db
       .prepare("UPDATE missions SET state='paused',updated_at=? WHERE mission_id=?")
@@ -225,8 +229,9 @@ export class MissionRegistry {
     return this.require(missionId);
   }
 
-  resume(missionId: string, now = Date.now()): MissionRecord {
+  resume(missionId: string, actingUserId: string, now = Date.now()): MissionRecord {
     const current = this.require(missionId);
+    this.assertOwnedBy(current, actingUserId, { allowSeeded: true });
     if (
       current.state !== "paused" ||
       missionClosureDigest(current.charter) !== current.closureDigest ||
@@ -240,8 +245,9 @@ export class MissionRegistry {
     return this.require(missionId);
   }
 
-  retire(missionId: string, now = Date.now()): MissionRecord {
+  retire(missionId: string, actingUserId: string, now = Date.now()): MissionRecord {
     const current = this.require(missionId);
+    this.assertOwnedBy(current, actingUserId);
     if (current.state === "retired") return current;
     const prefix = `mission:${missionId}@`;
     for (const grant of this.opts.grantStore.listAuthorityGrants()) {
@@ -377,10 +383,32 @@ export class MissionRegistry {
     );
   }
 
+  getForUser(missionId: string, userId: string): MissionRecord | null {
+    const mission = this.get(missionId);
+    return mission && (mission.seeded === true || mission.owner.userId === userId) ? mission : null;
+  }
+
+  listForUser(userId: string): MissionRecord[] {
+    return this.list().filter(
+      (mission) => mission.seeded === true || mission.owner.userId === userId
+    );
+  }
+
   private require(missionId: string): MissionRecord {
     const found = this.get(missionId);
     if (!found) throw coded(`Unknown mission ${missionId}`, "ENOENT");
     return found;
+  }
+
+  private assertOwnedBy(
+    mission: MissionRecord,
+    userId: string,
+    opts: { allowSeeded?: boolean } = {}
+  ): void {
+    if (mission.seeded === true && opts.allowSeeded === true) return;
+    if (mission.seeded === true || mission.owner.userId !== userId) {
+      throw coded(`Mission ${mission.missionId} is not owned by this user`, "EACCES");
+    }
   }
 
   private transaction(work: () => void): void {
@@ -433,4 +461,10 @@ function missionAllowsCapability(charter: MissionCharter, capability: string): b
 
 function coded(message: string, code: string): Error {
   return Object.assign(new Error(message), { code });
+}
+
+function userIdFromPrincipal(principal: `user:${string}`): string {
+  const userId = principal.slice("user:".length);
+  if (!userId) throw coded("Mission approval requires a human user", "EACCES");
+  return userId;
 }
