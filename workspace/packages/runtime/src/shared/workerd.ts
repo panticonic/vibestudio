@@ -132,7 +132,13 @@ export type ResolvedWorkspaceService = {
 export interface WorkerdClient {
   /** List every launchable worker source and its real manifest entry point. */
   listSources(): Promise<WorkerSourceInfo[]>;
-  /** Launch a regular worker in the caller's context through the canonical lifecycle. */
+  /**
+   * Launch a regular worker in the caller's context through the canonical lifecycle.
+   * options.key is an immutable instance identity, including its selected code
+   * version and context. Use a fresh key for a replacement or after editing
+   * disposable code. Dispose short-lived handles in finally; long-lived instances
+   * need an explicit owner and retirement lifecycle.
+   */
   create(source: string, options?: WorkerCreateOptions): Promise<WorkerEntityHandle>;
   /** List live regular-worker instances. */
   list(): Promise<WorkerEntityInfo[]>;
@@ -165,12 +171,7 @@ export function createWorkerdClient(rpc: RpcCaller): WorkerdClient {
     destroy: (entity) =>
       rpc.call<void>("main", "runtime.retireEntity", [
         {
-          id:
-            typeof entity === "string"
-              ? entity
-              : "id" in entity
-                ? entity.id
-                : entity.targetId,
+          id: typeof entity === "string" ? entity : "id" in entity ? entity.id : entity.targetId,
         },
       ]),
     listServices: () => callWorkers<WorkspaceServiceInfo[]>("listServices"),

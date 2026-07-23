@@ -468,7 +468,7 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `runtime.createEntity` | Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Omitted contextId inherits the verified caller's context; root callers without one mint a fresh context. Reuses/reactivates an existing row for the same canonical key. Returns the entity handle (id + runtime targetId). |
+| `runtime.createEntity` | Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Omitted contextId inherits the verified caller's context; root callers without one mint a fresh context. A canonical key is an immutable identity and never silently switches source, context, or effective code version. Reuses or reactivates only a compatible row. Retirement does not release that identity; replacing an instance or launching edited disposable code requires a fresh key. Returns the entity handle (id + runtime targetId). |
 | `runtime.retireEntity` | Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context. |
 | `runtime.listEntities` | List exact live runtime instances (id, kind, source, key, contextId, title, createdAt). For running workers use kind='worker'; workspace.units.list provides aggregate status per source rather than instance ids. |
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |

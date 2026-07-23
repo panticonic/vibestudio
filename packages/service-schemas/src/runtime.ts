@@ -294,7 +294,7 @@ export type CloneContextResult = z.infer<typeof CloneContextResultSchema>;
 export const runtimeMethods = defineServiceMethods({
   createEntity: {
     description:
-      "Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Omitted contextId inherits the verified caller's context; root callers without one mint a fresh context. Reuses/reactivates an existing row for the same canonical key. Returns the entity handle (id + runtime targetId).",
+      "Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Omitted contextId inherits the verified caller's context; root callers without one mint a fresh context. A canonical key is an immutable identity and never silently switches source, context, or effective code version. Reuses or reactivates only a compatible row. Retirement does not release that identity; replacing an instance or launching edited disposable code requires a fresh key. Returns the entity handle (id + runtime targetId).",
     args: z.tuple([CreateEntitySpecSchema]),
     returns: RuntimeEntityHandleSchema,
     authority: runtimeContextBoundaryAuthority("createEntity"),
