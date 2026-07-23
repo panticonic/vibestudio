@@ -297,6 +297,7 @@ class ServerSupervisor {
       if (typeof pid === "number" && pid > 0) serverPids[kind] = pid;
     }
     const owner: OwnerInfo = {
+      schemaVersion: 1,
       pid: process.pid,
       bootId: this.bootId,
       ports: this.ports,
@@ -311,6 +312,17 @@ class ServerSupervisor {
   private readOwnerInfo(): OwnerInfo | null {
     const value = readJsonFile<OwnerInfo>(this.paths.owner);
     if (!value) return null;
+    if (
+      value.schemaVersion !== 1 ||
+      Object.keys(value).some(
+        (key) =>
+          !["schemaVersion", "pid", "bootId", "ports", "workspaceId", "since", "serverPids"].includes(
+            key
+          )
+      )
+    ) {
+      return null;
+    }
     if (!validPort(value.ports?.utility) || !validPort(value.ports?.main)) return null;
     if (!Number.isInteger(value.pid) || typeof value.bootId !== "string") return null;
     if (typeof value.workspaceId !== "string" || typeof value.since !== "number") return null;
