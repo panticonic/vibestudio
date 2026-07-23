@@ -23,8 +23,8 @@ import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspace
 import type { WorkspaceNode } from "@vibestudio/shared/types";
 import { APP_CAPABILITIES_BY_TARGET } from "@vibestudio/shared/unitManifest";
 import { pendingUnitBatchApprovalSchema } from "./shellApproval.js";
-import { CapabilityScopeSchema } from "./build.js";
-import { EvalAuthorityDelegationSchema } from "./authority/evalDelegation.js";
+import { UnitAuthorityRequestSchema } from "./build.js";
+import { EvalAuthorityCeilingSchema } from "./authority/evalCeiling.js";
 
 // ─── Access descriptors ───────────────────────────────────────────────────────
 // Mirrors the blobstore idiom of a shared `*_ACCESS` constant for the pure-read
@@ -131,8 +131,8 @@ export const HostTargetLaunchResultSchema = z.discriminatedUnion("status", [
       capabilities: z.array(AppCapabilitySchema).optional(),
       effectiveVersion: z.string().nullable().optional(),
       executionDigest: z.string().regex(/^[0-9a-f]{64}$/),
-      authorityRequests: z.array(CapabilityScopeSchema).readonly(),
-      authorityDelegations: z.array(EvalAuthorityDelegationSchema).readonly(),
+      authorityRequests: z.array(UnitAuthorityRequestSchema).readonly(),
+      authorityEvalCeilings: z.array(EvalAuthorityCeilingSchema).readonly(),
       adoptionPolicy: z.enum(["immediate", "prompt", "artifact-only"]).optional(),
     })
     .strict(),
@@ -506,6 +506,14 @@ export const workspaceMethods = defineServiceMethods({
     returns: WorkspaceConfigSchema,
     access: READ_ACCESS,
   },
+  validateConfig: {
+    description:
+      "Validate complete meta/vibestudio.yml content against the current host schema without changing workspace state.",
+    args: z.tuple([z.string().describe("Complete YAML document to validate.")]),
+    returns: z.object({ valid: z.literal(true) }).strict(),
+    authority: { principals: ["user", "code", "host"] },
+    access: READ_ACCESS,
+  },
   setInitPanels: {
     description:
       "Replace the set of panels opened when this workspace starts; approval-gated for userland.",
@@ -559,7 +567,7 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
     // Linked external sessions receive the workspace skill catalog through
     // their exact entity principal; runtime kinds are not authorization.
-    authority: { principals: ["host", "user", "code", "entity"] },
+    authority: { principals: ["host", "user", "code"] },
   },
   readSkill: {
     description:
@@ -568,7 +576,7 @@ export const workspaceMethods = defineServiceMethods({
     returns: z.string(),
     access: READ_ACCESS,
     // Read-only entity-principal access mirrors listSkills.
-    authority: { principals: ["host", "user", "code", "entity"] },
+    authority: { principals: ["host", "user", "code"] },
     examples: [{ args: ["skills/code-review"] }, { args: ["packages/foo"] }, { args: ["meta"] }],
   },
   sourceTree: {
@@ -601,7 +609,7 @@ export const workspaceMethods = defineServiceMethods({
   },
   "units.list": {
     description:
-      "List operational status rows for all workspace units (panels, workers, extensions, apps), including build/health state.",
+      "List installed unit definitions and their aggregate build/runtime health. A worker row can show whether that source has a running instance, but does not enumerate instance ids; use runtime.listEntities({ kind: 'worker' }) or workers.list() for the exact live-instance roster.",
     args: z.tuple([]),
     returns: z.array(WorkspaceUnitStatusSchema),
     access: READ_ACCESS,

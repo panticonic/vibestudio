@@ -150,6 +150,10 @@ function makeProjectedReadBridge(root: string): FsVcsBridge {
         path: filePath,
         content: { kind: "bytes", base64: bytes.toString("base64") },
         contentHash: `test-projection:${bytes.toString("base64")}`,
+        authoredChangeId: `change:${filePath}`,
+        authoredByWorkUnitId: `work:${filePath}`,
+        contentClass: "internal" as const,
+        externalKeys: [],
         mode: stat.mode & 0o777,
       };
     },
@@ -325,6 +329,10 @@ function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
         repoPath,
         path: filePath,
         contentHash: `blob:${repoPath}/${filePath}`,
+        authoredChangeId: `change:${repoPath}/${filePath}`,
+        authoredByWorkUnitId: `work:${repoPath}/${filePath}`,
+        contentClass: "internal" as const,
+        externalKeys: [],
         mode: 0o644,
         content,
       };
@@ -411,24 +419,32 @@ function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
   return { bridge, applyCalls, moveCalls, copyCalls, readCalls, files };
 }
 
+const INTERNAL_AUTHORIZATION = {
+  contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
+} as unknown as NonNullable<ServiceContext["authorization"]>;
+
+function testContext(caller: ServiceContext["caller"]): ServiceContext {
+  return { caller, authorization: INTERNAL_AUTHORIZATION };
+}
+
 function makeWorkerCtx(callerId: string): ServiceContext {
-  return { caller: createVerifiedCaller(callerId, "worker") };
+  return testContext(createVerifiedCaller(callerId, "worker"));
 }
 
 function makeAppCtx(callerId: string): ServiceContext {
-  return { caller: createVerifiedCaller(callerId, "app") };
+  return testContext(createVerifiedCaller(callerId, "app"));
 }
 
 function makeDoCtx(callerId: string): ServiceContext {
-  return { caller: createVerifiedCaller(callerId, "do") };
+  return testContext(createVerifiedCaller(callerId, "do"));
 }
 
 function makeExtensionCtx(callerId: string): ServiceContext {
-  return { caller: createVerifiedCaller(callerId, "extension") };
+  return testContext(createVerifiedCaller(callerId, "extension"));
 }
 
 function makeShellCtx(callerId: string): ServiceContext {
-  return { caller: createVerifiedCaller(callerId, "shell") };
+  return testContext(createVerifiedCaller(callerId, "shell"));
 }
 
 function makeAgentCtx(entityId: string, contextId: string): ServiceContext {
@@ -439,6 +455,7 @@ function makeAgentCtx(entityId: string, contextId: string): ServiceContext {
       channelId: "chan-1",
       agentId: `agent:${entityId}`,
     }),
+    authorization: INTERNAL_AUTHORIZATION,
   };
 }
 
@@ -1199,6 +1216,41 @@ describe("FsService", () => {
         file: { kind: "path", path: "authority.txt" },
       });
       expect(readFileSync(projected, "utf8")).toBe("stale projected bytes");
+    });
+
+    it("advances the agent context latch before managed bytes are returned", async () => {
+      const { bridge } = makeMockBridge();
+      const observed: Array<{
+        key: string;
+        via: string;
+        classification: "derived";
+        derivedClass: "internal" | "external";
+      }> = [];
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion: async (_ctx, input) => {
+          observed.push(input);
+        },
+      });
+      const ctx = makeAgentCtx("semantic-ingestion", "ctx-semantic-ingestion");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-semantic-ingestion");
+      const writer = makeWorkerCtx("do:semantic-ingestion-writer");
+      registerContext(writer.caller.runtime.id, "do", "ctx-semantic-ingestion");
+      await svc.handleCall(writer, "writeFile", ["/packages/lib/note.txt", "remember me"]);
+
+      await expect(
+        svc.handleCall(ctx, "readFile", ["/packages/lib/note.txt", "utf8"])
+      ).resolves.toBe("remember me");
+      expect(observed).toEqual([
+        {
+          key: expect.stringMatching(
+            /^file:repository%3Apackages%2Flib\/file%3Apackages%2Flib%2Fnote\.txt@/
+          ),
+          via: "fs-read-file",
+          classification: "derived",
+          derivedClass: "internal",
+        },
+      ]);
     });
 
     it("leaves scratch-path writes (.tmp) on direct disk", async () => {

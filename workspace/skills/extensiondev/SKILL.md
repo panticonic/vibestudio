@@ -63,7 +63,7 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
     "displayName": "Hello",
     "entry": "index.ts",
     "sourcemap": true,
-    "extension": { "activationEvents": ["*"] }
+    "extension": { "activationEvents": ["onInvoke"] }
   }
 }
 ```

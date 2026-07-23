@@ -43,15 +43,16 @@ Agents read skills by the path shown in the generated skill index, for example
 
 ## Files
 
-| Document                               | Content                                                                                                                                                          |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [WORKFLOW.md](WORKFLOW.md)             | Canonical agent workflow: scaffold, open, inspect, edit, rebuild/reload, close                                                                                   |
-| [PANEL_API.md](PANEL_API.md)           | Runtime panel API reference                                                                                                                                      |
-| [WORKERS.md](WORKERS.md)               | Workers & Durable Objects: DO-backed app databases, AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
-| [RPC.md](RPC.md)                       | Typed parent-child contracts                                                                                                                                     |
-| [BROWSER.md](BROWSER.md)               | Browser automation (Playwright/CDP)                                                                                                                              |
-| [TOOLS.md](TOOLS.md)                   | Agent tools reference                                                                                                                                            |
-| [create-project.ts](create-project.ts) | Project scaffolding helpers (importable via eval `imports` parameter)                                                                                            |
+| Document                                 | Content                                                                                                                                                          |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [WORKFLOW.md](WORKFLOW.md)               | Canonical agent workflow: scaffold, open, inspect, edit, rebuild/reload, close                                                                                   |
+| [PANEL_API.md](PANEL_API.md)             | Runtime panel API reference                                                                                                                                      |
+| [WORKERS.md](WORKERS.md)                 | Workers & Durable Objects: DO-backed app databases, AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
+| [capabilities](../capabilities/SKILL.md) | Explicit requests, dynamic workspace service discovery, host grants, userland approvals, and content provenance                                                  |
+| [RPC.md](RPC.md)                         | Typed parent-child contracts                                                                                                                                     |
+| [BROWSER.md](BROWSER.md)                 | Browser automation (Playwright/CDP)                                                                                                                              |
+| [TOOLS.md](TOOLS.md)                     | Agent tools reference                                                                                                                                            |
+| [create-project.ts](create-project.ts)   | Project scaffolding helpers (importable via eval `imports` parameter)                                                                                            |
 
 For host-process debugging while developing workspace units, pair the relevant
 unit/panel diagnostics below with the [server-logs](../server-logs/SKILL.md)
@@ -70,6 +71,7 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERN
 4. **Use eval only for runtime operations** — project creation, typecheck, tests, launching panels
 5. **Eval injected globals + package imports** — in eval, the **ambient-only** globals `services`, `scope`, `scopes`, `db`, `ctx`, `help`, and (in agent eval) `chat` are injected free variables; do **not** `import` them (the engine rejects it). `rpc` and `fs` are injected ambiently **and** importable from `@workspace/runtime`. `@workspace/runtime` is importable in eval and exposes the same portable surface as panels — including `openPanel`/`listPanels`/`getPanelHandle`/`panelTree`, `vcs`/`workspace`/`gad`/`credentials`/`git`. Both static `import` and dynamic `await import(...)` work. See `sandbox/EVAL.md` for the full surface.
 6. **Close panels you open for temporary work** — keep the one development panel the user is reviewing, but close duplicate, browser, child, and diagnostic panels with `await handle.close()` when done. Use `listPanels()` to reuse existing panels instead of opening another copy.
+7. **Read the capabilities skill before adding authority** — workspace services are resolved from the caller's live semantic context; manifests request but never grant; generated catalogs are not authoring surfaces.
 
 ## Quick Start Workflow
 

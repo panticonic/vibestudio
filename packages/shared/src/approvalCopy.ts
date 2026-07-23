@@ -9,6 +9,7 @@ import type {
   PendingSecretInputApproval,
   PendingUnitBatchApproval,
 } from "./approvals.js";
+import { HOST_APPROVAL_COPY } from "./hostApprovalCopy.js";
 
 /** Both git transports carry `gitOperation` metadata from the egress proxy. */
 function isGitCredentialUse(use: unknown): boolean {
@@ -38,94 +39,66 @@ function isIdentityScopedVersionApproval(approval: PendingApproval): boolean {
   return approval.effectiveVersion === "internal" || approval.repoPath === "vibestudio/internal";
 }
 
+function identityTrustKind(approval: PendingApproval): "agent" | "service" {
+  const category = approval.requester?.category;
+  return category === "agent" || category === "eval" || category === "worker" || category === "durable-object"
+    ? "agent"
+    : "service";
+}
+
 function trustVersionLabel(approval: PendingApproval, fallback = "Trust version"): string {
-  return isIdentityScopedVersionApproval(approval) ? "Trust identity" : fallback;
+  if (isIdentityScopedVersionApproval(approval)) {
+    return identityTrustKind(approval) === "agent"
+      ? HOST_APPROVAL_COPY.trust.agentIdentityLabel
+      : HOST_APPROVAL_COPY.trust.serviceIdentityLabel;
+  }
+  return fallback === "Trust version" ? HOST_APPROVAL_COPY.trust.versionLabel : fallback;
 }
 
 function trustSubject(approval: PendingApproval): string {
-  return isIdentityScopedVersionApproval(approval)
-    ? "this requester identity"
-    : "this code version";
+  if (isIdentityScopedVersionApproval(approval)) {
+    return identityTrustKind(approval) === "agent"
+      ? HOST_APPROVAL_COPY.trust.agentIdentitySubject
+      : HOST_APPROVAL_COPY.trust.serviceIdentitySubject;
+  }
+  return HOST_APPROVAL_COPY.trust.versionSubject;
 }
 
 function exactTrustSubject(approval: PendingApproval): string {
-  return isIdentityScopedVersionApproval(approval)
-    ? "this exact runtime identity"
-    : "this exact code version";
+  if (isIdentityScopedVersionApproval(approval)) {
+    return identityTrustKind(approval) === "agent"
+      ? HOST_APPROVAL_COPY.trust.exactAgentIdentitySubject
+      : HOST_APPROVAL_COPY.trust.exactServiceIdentitySubject;
+  }
+  return HOST_APPROVAL_COPY.trust.exactVersionSubject;
 }
 
 function networkTrustLabel(approval: PendingApproval): string {
-  return isIdentityScopedVersionApproval(approval)
-    ? "Trust identity with network"
-    : "Trust version with network";
+  if (isIdentityScopedVersionApproval(approval)) {
+    return identityTrustKind(approval) === "agent"
+      ? HOST_APPROVAL_COPY.trust.agentIdentityWithNetworkLabel
+      : HOST_APPROVAL_COPY.trust.serviceIdentityWithNetworkLabel;
+  }
+  return HOST_APPROVAL_COPY.trust.versionWithNetworkLabel;
 }
 
 function corsTrustLabel(approval: PendingApproval): string {
-  return isIdentityScopedVersionApproval(approval)
-    ? "Trust identity with CORS"
-    : "Trust version with CORS";
+  if (isIdentityScopedVersionApproval(approval)) {
+    return identityTrustKind(approval) === "agent"
+      ? HOST_APPROVAL_COPY.trust.agentIdentityWithCorsLabel
+      : HOST_APPROVAL_COPY.trust.serviceIdentityWithCorsLabel;
+  }
+  return HOST_APPROVAL_COPY.trust.versionWithCorsLabel;
 }
 
 export type ApprovalRiskTone = "standard" | "caution" | "danger";
 
 export function getRequesterCategoryLabel(category: ApprovalRequesterCategory): string {
-  switch (category) {
-    case "panel":
-      return "Panel";
-    case "workspace-app":
-      return "App";
-    case "agent":
-      return "Agent";
-    case "eval":
-      return "Eval";
-    case "worker":
-      return "Worker";
-    case "durable-object":
-      return "DO";
-    case "extension":
-      return "Extension";
-    case "system":
-      return "Workspace";
-    case "internal-service":
-      return "Internal service";
-    case "unknown":
-      return "Requester";
-  }
+  return HOST_APPROVAL_COPY.requesterCategories[category];
 }
 
 export function getApprovalOperationKindLabel(kind: ApprovalOperationDescriptor["kind"]): string {
-  switch (kind) {
-    case "browser":
-      return "Browser";
-    case "credential":
-      return "Credential";
-    case "filesystem":
-      return "Filesystem";
-    case "git":
-      return "Git";
-    case "inspection":
-      return "Inspection";
-    case "network":
-      return "Network access";
-    case "panel":
-      return "Panel";
-    case "runtime":
-      return "Runtime";
-    case "worker-lifecycle":
-      return "Worker lifecycle";
-    case "workspace":
-      return "Workspace";
-    case "service-setup":
-      return "Service setup";
-    case "userland":
-      return "User request";
-    case "external-agent":
-      return "Agent tool";
-    case "device-code":
-      return "Device sign-in";
-    case "unknown":
-      return "Operation";
-  }
+  return HOST_APPROVAL_COPY.operationKinds[kind];
 }
 
 export function getApprovalRiskTone(approval: PendingApproval): ApprovalRiskTone {
@@ -144,79 +117,90 @@ export function getApprovalRiskTone(approval: PendingApproval): ApprovalRiskTone
 export function getApprovalCategoryLabel(approval: PendingApproval): string {
   if (approval.kind === "credential") {
     if (isOAuthCredentialConnectionApproval(approval)) {
-      return "Connection request";
+      return HOST_APPROVAL_COPY.categories.connectionRequest;
     }
     if (isGitCredentialUse(approval.credentialUse)) {
-      return approval.gitOperation?.action === "write" ? "Git write" : "Git read";
+      return approval.gitOperation?.action === "write"
+        ? HOST_APPROVAL_COPY.categories.gitWrite
+        : HOST_APPROVAL_COPY.categories.gitRead;
     }
-    return "Access request";
+    return HOST_APPROVAL_COPY.categories.accessRequest;
   }
   if (approval.kind === "client-config") {
-    return "Service setup";
+    return HOST_APPROVAL_COPY.categories.serviceSetup;
   }
   if (approval.kind === "credential-input") {
-    return "Service setup";
+    return HOST_APPROVAL_COPY.categories.serviceSetup;
   }
   if (approval.kind === "secret-input") {
-    return "Privileged input";
+    return HOST_APPROVAL_COPY.categories.privilegedInput;
   }
   if (approval.kind === "userland") {
-    if (approval.severity === "dangerous") return "Privileged action";
+    if (approval.severity === "dangerous") return HOST_APPROVAL_COPY.categories.privilegedAction;
     return `${userlandCallerKindLabel(approval.callerKind)} request`;
   }
   if (approval.kind === "external-agent") {
-    return "Agent tool";
+    return HOST_APPROVAL_COPY.categories.agentTool;
   }
   if (approval.kind === "device-code") {
-    return "Device sign-in";
+    return HOST_APPROVAL_COPY.categories.deviceSignIn;
   }
   if (approval.kind === "unit-batch") {
     if (approval.trigger === "management") {
-      if (approval.units.every((unit) => unit.unitKind === "app")) return "App management";
+      if (approval.units.every((unit) => unit.unitKind === "app"))
+        return HOST_APPROVAL_COPY.categories.appManagement;
       if (approval.units.every((unit) => unit.unitKind === "extension"))
-        return "Extension management";
-      return "Unit management";
+        return HOST_APPROVAL_COPY.categories.extensionManagement;
+      return HOST_APPROVAL_COPY.categories.unitManagement;
     }
     if (approval.trigger === "source-change") {
-      if (approval.units.every((unit) => unit.unitKind === "app")) return "App source";
-      if (approval.units.every((unit) => unit.unitKind === "extension")) return "Extension source";
-      return "Unit source";
+      if (approval.units.every((unit) => unit.unitKind === "app"))
+        return HOST_APPROVAL_COPY.categories.appSource;
+      if (approval.units.every((unit) => unit.unitKind === "extension"))
+        return HOST_APPROVAL_COPY.categories.extensionSource;
+      return HOST_APPROVAL_COPY.categories.unitSource;
     }
-    if (approval.units.every((unit) => unit.unitKind === "app")) return "App setup";
-    if (approval.units.every((unit) => unit.unitKind === "extension")) return "Extension setup";
-    return "Workspace setup";
+    if (approval.units.every((unit) => unit.unitKind === "app"))
+      return HOST_APPROVAL_COPY.categories.appSetup;
+    if (approval.units.every((unit) => unit.unitKind === "extension"))
+      return HOST_APPROVAL_COPY.categories.extensionSetup;
+    return HOST_APPROVAL_COPY.categories.workspaceSetup;
   }
   if (approval.capability === "workspace-main-advance") {
     const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith(
       "workspace-source-change:"
     );
     if (isWorkspaceSourceChange) {
-      return "Workspace source";
+      return HOST_APPROVAL_COPY.categories.workspaceSource;
     }
-    return approval.resource?.value === "meta" ? "Config edit" : "Write request";
+    return approval.resource?.value === "meta"
+      ? HOST_APPROVAL_COPY.categories.configEdit
+      : HOST_APPROVAL_COPY.categories.writeRequest;
   }
   if (approval.capability === "workspace-shared-git-remote") {
-    return "Remote config";
+    return HOST_APPROVAL_COPY.categories.remoteConfig;
   }
   if (approval.capability === "workspace-project-import") {
-    return "Project import";
+    return HOST_APPROVAL_COPY.categories.projectImport;
   }
   if (approval.capability === "external-network-fetch") {
-    return "Network access";
+    return HOST_APPROVAL_COPY.categories.networkAccess;
   }
   if (approval.capability === "cors-response-read") {
-    return "Network access";
+    return HOST_APPROVAL_COPY.categories.networkAccess;
   }
   if (approval.capability === "workerd.inspector") {
-    return "Inspection";
+    return HOST_APPROVAL_COPY.categories.inspection;
   }
   if (approval.capability === "client-config-delete") {
-    return "Service setup";
+    return HOST_APPROVAL_COPY.categories.serviceSetup;
   }
   if (isBrowserOpenApproval(approval)) {
-    return isOAuthExternalApproval(approval) ? "Sign-in action" : "Browser action";
+    return isOAuthExternalApproval(approval)
+      ? HOST_APPROVAL_COPY.categories.signInAction
+      : HOST_APPROVAL_COPY.categories.browserAction;
   }
-  return "Capability request";
+  return HOST_APPROVAL_COPY.categories.capabilityRequest;
 }
 
 export interface ApprovalActionCopy {
@@ -227,26 +211,27 @@ export interface ApprovalActionCopy {
   denyDescription: string;
 }
 
-export function getStandardActionCopy(
+function buildStandardActionCopy(
   approval: PendingCredentialApproval | PendingCapabilityApproval
 ): ApprovalActionCopy {
+  if (approval.kind === "capability" && approval.cardType === "confirm.critical") {
+    return {
+      once: HOST_APPROVAL_COPY.actions.critical.once,
+      session: null,
+      version: null,
+      denyDescription: HOST_APPROVAL_COPY.actions.critical.deny,
+    };
+  }
   if (approval.kind === "credential") {
     if (isOAuthCredentialConnectionApproval(approval)) {
       return {
-        once: {
-          label: "Connect once",
-          description:
-            "Save this credential, use it for this request, and ask again before future use.",
-        },
-        session: {
-          label: "Connect this session",
-          description: "Save and allow use until Vibestudio restarts.",
-        },
+        once: HOST_APPROVAL_COPY.actions.oauthConnect.once,
+        session: HOST_APPROVAL_COPY.actions.oauthConnect.session,
         version: {
           label: trustVersionLabel(approval),
           description: `Save and allow ${exactTrustSubject(approval)} to use it.`,
         },
-        denyDescription: "Do not connect this service.",
+        denyDescription: HOST_APPROVAL_COPY.actions.oauthConnect.deny,
       };
     }
     if (isGitCredentialUse(approval.credentialUse)) {
@@ -255,63 +240,55 @@ export function getStandardActionCopy(
         // Force pushes are once-only by design: no durable grant may cover
         // overwriting remote history.
         return {
-          once: {
-            label: "Allow once",
-            description: "Allow this force push once.",
-          },
+          once: HOST_APPROVAL_COPY.actions.forcePush.once,
           session: null,
           version: null,
-          denyDescription: "Do not allow this force push.",
+          denyDescription: HOST_APPROVAL_COPY.actions.forcePush.deny,
         };
       }
       return {
-        once: {
-          label: isWrite ? "Push once" : "Read once",
-          description: isWrite ? "Allow this git push once." : "Allow this git read once.",
-        },
-        session: {
-          label: isWrite ? "Push this session" : "Read this session",
-          description: isWrite
-            ? "Allow git pushes to this remote until Vibestudio restarts."
-            : "Allow git reads from this remote until Vibestudio restarts.",
-        },
+        once: isWrite
+          ? HOST_APPROVAL_COPY.actions.gitWrite.once
+          : HOST_APPROVAL_COPY.actions.gitRead.once,
+        session: isWrite
+          ? HOST_APPROVAL_COPY.actions.gitWrite.session
+          : HOST_APPROVAL_COPY.actions.gitRead.session,
         version: {
           label: trustVersionLabel(approval),
           description: isWrite
             ? `Allow ${exactTrustSubject(approval)} to push to this remote.`
             : `Allow ${exactTrustSubject(approval)} to read from this remote.`,
         },
-        denyDescription: isWrite ? "Do not allow this git push." : "Do not allow this git read.",
+        denyDescription: isWrite
+          ? HOST_APPROVAL_COPY.actions.gitWrite.deny
+          : HOST_APPROVAL_COPY.actions.gitRead.deny,
       };
     }
     return {
       once: {
-        label: "Use once",
+        label: HOST_APPROVAL_COPY.actions.credentialUse.onceLabel,
         description: `Use ${formatCredentialUseTarget(approval)} for this request only.`,
       },
       session: {
-        label: "Use this session",
-        description: `Reuse ${formatCredentialUseTarget(approval)} until Vibestudio restarts.`,
+        label: HOST_APPROVAL_COPY.actions.credentialUse.sessionLabel,
+        description: `Keep using ${formatCredentialUseTarget(approval)} until you restart.`,
       },
       version: {
         label: trustVersionLabel(approval),
         description: `Allow ${exactTrustSubject(approval)} to use ${formatCredentialUseTarget(approval)}.`,
       },
-      denyDescription: "Do not use this service.",
+      denyDescription: HOST_APPROVAL_COPY.actions.credentialUse.deny,
     };
   }
   if (isOAuthExternalApproval(approval)) {
     return {
-      once: { label: "Connect once", description: "Open this sign-in flow once." },
-      session: {
-        label: "Connect this session",
-        description: "Allow this sign-in origin until Vibestudio restarts.",
-      },
+      once: HOST_APPROVAL_COPY.actions.browserSignIn.once,
+      session: HOST_APPROVAL_COPY.actions.browserSignIn.session,
       version: {
         label: trustVersionLabel(approval),
         description: `Allow this sign-in origin for ${exactTrustSubject(approval)}.`,
       },
-      denyDescription: "Do not open this sign-in flow.",
+      denyDescription: HOST_APPROVAL_COPY.actions.browserSignIn.deny,
     };
   }
   if (approval.capability === "workspace-main-advance") {
@@ -321,84 +298,70 @@ export function getStandardActionCopy(
     if (isWorkspaceSourceChange) {
       const destination = approval.resource?.value ?? "this workspace source tree";
       return {
-        once: {
-          label: "Commit once",
-          description: "Allow this workspace source change once.",
-        },
+        once: HOST_APPROVAL_COPY.actions.workspaceSource.once,
         session: {
-          label: "Commit this session",
-          description: `Allow committed changes to ${destination} until Vibestudio restarts.`,
+          label: HOST_APPROVAL_COPY.actions.workspaceSource.sessionLabel,
+          description: `Allow code updates to ${destination} until you restart.`,
         },
         version: {
           label: trustVersionLabel(approval),
           description: `Allow ${trustSubject(approval)} to update ${destination}.`,
         },
-        denyDescription: "Do not allow this workspace source change.",
+        denyDescription: HOST_APPROVAL_COPY.actions.workspaceSource.deny,
       };
     }
     const isMeta = approval.resource?.value === "meta";
     return {
-      once: {
-        label: isMeta ? "Edit once" : "Write once",
-        description: isMeta ? "Allow this config push once." : "Allow this git write once.",
-      },
-      session: {
-        label: isMeta ? "Edit this session" : "Write this session",
-        description: isMeta
-          ? "Allow config pushes until Vibestudio restarts."
-          : "Allow writes to this repository until Vibestudio restarts.",
-      },
+      once: isMeta
+        ? HOST_APPROVAL_COPY.actions.workspaceConfig.once
+        : HOST_APPROVAL_COPY.actions.workspaceWrite.once,
+      session: isMeta
+        ? HOST_APPROVAL_COPY.actions.workspaceConfig.session
+        : HOST_APPROVAL_COPY.actions.workspaceWrite.session,
       version: {
         label: trustVersionLabel(approval),
         description: isMeta
           ? `Allow ${trustSubject(approval)} to edit workspace config.`
           : `Allow ${trustSubject(approval)} to write to this repository.`,
       },
-      denyDescription: isMeta ? "Do not allow this config edit." : "Do not allow this git write.",
+      denyDescription: isMeta
+        ? HOST_APPROVAL_COPY.actions.workspaceConfig.deny
+        : HOST_APPROVAL_COPY.actions.workspaceWrite.deny,
     };
   }
   if (approval.capability === "workspace-shared-git-remote") {
     return {
-      once: { label: "Change once", description: "Allow this shared remote change once." },
-      session: {
-        label: "Change this session",
-        description: "Allow shared remote changes until Vibestudio restarts.",
-      },
+      once: HOST_APPROVAL_COPY.actions.sharedRemote.once,
+      session: HOST_APPROVAL_COPY.actions.sharedRemote.session,
       version: {
         label: trustVersionLabel(approval),
         description: `Allow ${trustSubject(approval)} to change shared remotes.`,
       },
-      denyDescription: "Do not change this shared remote.",
+      denyDescription: HOST_APPROVAL_COPY.actions.sharedRemote.deny,
     };
   }
   if (approval.capability === "workspace-project-import") {
     return {
-      once: { label: "Import once", description: "Allow this project import once." },
-      session: {
-        label: "Import this session",
-        description: "Allow project imports until Vibestudio restarts.",
-      },
+      once: HOST_APPROVAL_COPY.actions.projectImport.once,
+      session: HOST_APPROVAL_COPY.actions.projectImport.session,
       version: {
         label: trustVersionLabel(approval),
         description: `Allow ${trustSubject(approval)} to import project repos.`,
       },
-      denyDescription: "Do not import this project.",
+      denyDescription: HOST_APPROVAL_COPY.actions.projectImport.deny,
     };
   }
   if (approval.capability === "external-network-fetch") {
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     return {
-      once: {
-        label: "Connect once",
-        description: "Allow this network request once.",
-      },
+      once: HOST_APPROVAL_COPY.actions.network.once,
       session: {
-        label: "Allow this origin",
-        description: `Allow network requests to ${destination} until Vibestudio restarts.`,
+        label: HOST_APPROVAL_COPY.actions.network.originLabel,
+        description: `Allow internet requests to ${destination} until you restart.`,
       },
       version: {
         label: networkTrustLabel(approval),
-        description: `Allow ${exactTrustSubject(approval)} to use network access without asking for each origin.`,
+        description: `Allow ${exactTrustSubject(approval)} to use the internet without asking for each site.`,
       },
       denyDescription: `Do not connect to ${destination}.`,
     };
@@ -406,41 +369,35 @@ export function getStandardActionCopy(
   if (approval.capability === "cors-response-read") {
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     return {
-      once: {
-        label: "Read once",
-        description: "Allow this cross-origin response read once.",
-      },
+      once: HOST_APPROVAL_COPY.actions.cors.once,
       session: {
-        label: "Read this origin",
-        description: `Allow cross-origin response reads from ${destination} until Vibestudio restarts.`,
+        label: HOST_APPROVAL_COPY.actions.cors.originLabel,
+        description: `Allow reading data from ${destination} until you restart.`,
       },
       version: {
         label: corsTrustLabel(approval),
-        description: `Allow ${exactTrustSubject(approval)} to read cross-origin responses without asking for each origin.`,
+        description: `Allow ${exactTrustSubject(approval)} to read data from other sites without asking for each one.`,
       },
       denyDescription: `Do not read responses from ${destination}.`,
     };
   }
   if (isBrowserOpenApproval(approval)) {
     return {
-      once: { label: "Open once", description: "Open this browser action once." },
-      session: {
-        label: "Open this session",
-        description: "Allow this browser origin until Vibestudio restarts.",
-      },
+      once: HOST_APPROVAL_COPY.actions.browserOpen.once,
+      session: HOST_APPROVAL_COPY.actions.browserOpen.session,
       version: {
         label: trustVersionLabel(approval),
         description: `Allow this browser origin for ${exactTrustSubject(approval)}.`,
       },
-      denyDescription: "Do not open this site.",
+      denyDescription: HOST_APPROVAL_COPY.actions.browserOpen.deny,
     };
   }
   const target = genericCapabilityTarget(approval);
   return {
-    once: { label: "Allow once", description: "Allow this request once." },
+    once: HOST_APPROVAL_COPY.actions.generic.once,
     session: {
-      label: "Allow this session",
-      description: `Allow requests for ${target} until Vibestudio restarts.`,
+      label: HOST_APPROVAL_COPY.actions.generic.session.label,
+      description: `Allow requests for ${target} until you restart.`,
     },
     version: {
       label: trustVersionLabel(approval),
@@ -450,16 +407,40 @@ export function getStandardActionCopy(
   };
 }
 
+export function getStandardActionCopy(
+  approval: PendingCredentialApproval | PendingCapabilityApproval
+): ApprovalActionCopy {
+  const copy = buildStandardActionCopy(approval);
+  if (
+    !copy.version ||
+    !isIdentityScopedVersionApproval(approval) ||
+    identityTrustKind(approval) !== "agent"
+  ) {
+    return copy;
+  }
+  return {
+    ...copy,
+    version: {
+      ...copy.version,
+      description: `${copy.version.description} ${HOST_APPROVAL_COPY.trust.agentCodeReviewBoundary}`,
+    },
+  };
+}
+
 /**
- * The durable, code-identity-bound grant is the normal choice whenever the
- * approval supports one. This keeps trusted versions from repeatedly
- * interrupting the user while preserving once-only semantics for operations
- * (such as force pushes) that deliberately cannot be trusted durably.
+ * The durable reviewed-subject grant is the normal choice whenever the
+ * approval supports one: exact code identity for installed units, stable agent
+ * identity for agent-owned eval. Once-only operations such as force pushes do
+ * not offer either durable choice.
  */
 export function getRecommendedStandardDecision(
   approval: PendingCredentialApproval | PendingCapabilityApproval
-): "once" | "version" {
-  return getStandardActionCopy(approval).version ? "version" : "once";
+): "once" | "session" | "version" {
+  const allowed = approval.kind === "capability" ? approval.allowedDecisions : undefined;
+  const copy = getStandardActionCopy(approval);
+  if (copy.version && (!allowed || allowed.includes("version"))) return "version";
+  if (!allowed || allowed.includes("once")) return "once";
+  return "session";
 }
 
 export interface UnitBatchActionCopy {
@@ -471,47 +452,51 @@ export interface UnitBatchActionCopy {
 export function getUnitBatchActionCopy(approval: PendingUnitBatchApproval): UnitBatchActionCopy {
   const count = approval.units.length;
   const unitLabel = unitBatchLabel(approval).singular;
+  const composition = unitBatchComposition(approval);
   const isSourceChange = approval.trigger === "source-change";
   const isManagement = approval.trigger === "management";
 
   return {
     once: {
       label: isSourceChange
-        ? "Approve change"
+        ? HOST_APPROVAL_COPY.unitReview.actionLabels.sourceChange
         : isManagement
-          ? "Approve"
+          ? HOST_APPROVAL_COPY.unitReview.actionLabels.management
           : count > 0
-            ? "Approve all"
-            : "Allow",
+            ? HOST_APPROVAL_COPY.unitReview.actionLabels.all
+            : HOST_APPROVAL_COPY.unitReview.actionLabels.allow,
       description: isSourceChange
-        ? `Allow this ${unitLabel} source change.`
+        ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.sourceChange(unitLabel)
         : isManagement
-          ? `Allow this ${unitLabel} management request.`
+          ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.management(unitLabel)
           : count > 0
             ? unitBatchApproveDescription(approval, unitLabel)
-            : "Apply this workspace config change.",
+            : HOST_APPROVAL_COPY.unitReview.actionDescriptions.config,
     },
     ...(approval.trigger === "meta-change" || isSourceChange
       ? {
           session: {
-            label: "Dev session",
+            label: HOST_APPROVAL_COPY.unitReview.actionLabels.devSession,
             description: isSourceChange
-              ? `Allow ${unitLabel} source changes without asking again for the next 4 hours.`
-              : "Allow workspace-config changes without asking again for the next 4 hours.",
+              ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.sourceDevSession(unitLabel)
+              : HOST_APPROVAL_COPY.unitReview.actionDescriptions.configDevSession,
           },
         }
       : {}),
     deny: {
-      label: isSourceChange || isManagement ? "Deny" : count > 0 ? "Deny all" : "Deny",
+      label:
+        isSourceChange || isManagement || count === 0
+          ? HOST_APPROVAL_COPY.unitReview.actionLabels.deny
+          : HOST_APPROVAL_COPY.unitReview.actionLabels.denyAll,
       description: isSourceChange
-        ? "Reject this source change."
+        ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.rejectSource
         : isManagement
-          ? "Reject this management request."
+          ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.rejectManagement
           : count > 0
-            ? unitLabel === "unit"
-              ? "Do not approve these workspace units."
-              : `Do not install these ${unitLabel}${count === 1 ? "" : "s"}.`
-            : "Reject this workspace config change.",
+            ? unitLabel === HOST_APPROVAL_COPY.unitReview.kinds.mixed.singular
+              ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.rejectComposition(composition)
+              : HOST_APPROVAL_COPY.unitReview.actionDescriptions.rejectKind(unitLabel, count)
+            : HOST_APPROVAL_COPY.unitReview.actionDescriptions.rejectConfig,
     },
   };
 }
@@ -573,29 +558,23 @@ export function getApprovalCopy(approval: PendingApproval): {
   if (approval.kind === "unit-batch") {
     const count = approval.units.length;
     const unitLabel = unitBatchLabel(approval);
-    const fallbackTitle =
-      approval.trigger === "management"
-        ? `Manage ${count} workspace ${count === 1 ? unitLabel.singular : unitLabel.plural}`
-        : approval.trigger === "source-change"
-          ? `Update ${unitLabel.singular} source`
-          : approval.trigger === "meta-change"
-            ? "Apply workspace config change"
-            : count > 0
-              ? `Run ${count} workspace ${count === 1 ? unitLabel.singular : unitLabel.plural}`
-              : "Apply workspace config change";
-    const fallbackSummary =
-      count > 0
-        ? approval.trigger === "management"
-          ? `Manages ${count} workspace ${unitLabel.singular}${count === 1 ? "" : "s"}.`
-          : approval.trigger === "source-change"
-            ? unitLabel.nativeCode
-              ? `Updates trusted native extension source code.`
-              : `Updates trusted workspace app source code.`
-            : `Declares ${count} ${unitLabel.singular}${count === 1 ? "" : "s"} that need approval before they run.`
-        : "Changes workspace configuration.";
+    const composition = unitBatchComposition(approval);
+    const fallbackTitle = HOST_APPROVAL_COPY.unitReview.title(
+      approval.trigger,
+      count,
+      unitLabel.singular,
+      composition
+    );
+    const fallbackSummary = HOST_APPROVAL_COPY.unitReview.summary(
+      approval.trigger,
+      count,
+      unitLabel.singular,
+      unitLabel.nativeCode,
+      composition
+    );
     return {
-      title: approval.title || fallbackTitle,
-      summary: approval.description || fallbackSummary,
+      title: concreteBatchCopy(approval.title, fallbackTitle),
+      summary: concreteBatchCopy(approval.description, fallbackSummary),
       ...(count > 0 ? { warning: unitBatchWarning(approval) } : {}),
     };
   }
@@ -603,69 +582,51 @@ export function getApprovalCopy(approval: PendingApproval): {
     if (approval.capability === "workspace-main-advance") {
       const destination = approval.resource?.value ?? "this repository";
       if (approval.grantResourceKey?.startsWith("workspace-source-change:")) {
-        return {
-          title: `Update ${destination}`,
-          summary: `Updates workspace source in ${destination}.`,
-        };
+        return HOST_APPROVAL_COPY.headlines.workspaceSourceUpdate(destination);
       }
       if (destination === "meta") {
-        return {
-          title: "Edit workspace config",
-          summary: "Pushes changes to sensitive workspace config.",
-        };
+        return HOST_APPROVAL_COPY.headlines.workspaceConfigEdit;
       }
-      return {
-        title: `Write to ${destination}`,
-        summary: `Pushes changes to ${destination}.`,
-      };
+      return HOST_APPROVAL_COPY.headlines.repositoryWrite(destination);
     }
     if (approval.capability === "workspace-shared-git-remote") {
       const destination = approval.resource?.value ?? "this repository";
       const operation =
         approval.details?.find((detail) => detail.label === "Operation")?.value ??
         "change a shared remote";
-      return {
-        title: approval.title || `Configure shared remote for ${destination}`,
-        summary: `Wants to ${operation.toLowerCase()} for ${destination}.`,
-      };
+      const fallback = HOST_APPROVAL_COPY.headlines.sharedRemote(destination, operation);
+      return { ...fallback, title: approval.title || fallback.title };
     }
     if (approval.capability === "workspace-project-import") {
       const destination = approval.resource?.value ?? "this project";
-      return {
-        title: approval.title || `Import ${destination}`,
-        summary: `Imports ${destination} from a remote git repository.`,
-      };
+      const fallback = HOST_APPROVAL_COPY.headlines.projectImport(destination);
+      return { ...fallback, title: approval.title || fallback.title };
     }
     if (approval.capability === "external-network-fetch") {
       const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
-      return {
-        title: `Connect to ${destination}`,
-        summary:
-          approval.description ??
-          `Makes raw network requests to ${formatNetworkDestination(
-            approval.resource?.value ?? "this destination"
-          )}.`,
-      };
+      const fallback = HOST_APPROVAL_COPY.headlines.networkConnect(destination);
+      return { title: fallback.title, summary: approval.description ?? fallback.summary };
     }
     if (approval.capability === "cors-response-read") {
       const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
-      return {
-        title: `Read responses from ${destination}`,
-        summary: approval.description ?? `Reads cross-origin responses from ${destination}.`,
-      };
+      const fallback = HOST_APPROVAL_COPY.headlines.corsRead(destination);
+      return { title: fallback.title, summary: approval.description ?? fallback.summary };
     }
     if (approval.capability === "workerd.inspector") {
       const target = approval.resource?.value ?? approval.operation?.object?.value ?? "workerd";
+      const fallback = HOST_APPROVAL_COPY.headlines.inspectRuntime(target);
       return {
-        title: targetAwareGenericTitle(approval.title, `Inspect ${target}`),
-        summary: approval.description ?? `Attaches the workerd inspector to ${target}.`,
+        title: targetAwareGenericTitle(approval.title, fallback.title),
+        summary: approval.description ?? fallback.summary,
       };
     }
     if (approval.capability === "context.boundary") {
       const owner = approval.details?.find((d) => d.label === "Owner")?.value;
       const target =
         approval.resource?.value ?? approval.operation?.object?.value ?? "another context";
-      const subject = owner ? `the workspace branch owned by ${owner}` : `workspace branch ${target}`;
+      const subject = owner
+        ? `the workspace branch owned by ${owner}`
+        : `workspace branch ${target}`;
       const fallbackTitle = contextBoundaryFallbackTitle(
         approval.operation?.verb ?? approval.title,
         subject
@@ -673,58 +634,44 @@ export function getApprovalCopy(approval: PendingApproval): {
       return {
         title: targetAwareGenericTitle(approval.title, fallbackTitle),
         summary:
-          approval.description ??
-          `Requests access to ${subject}, including its repository state and running work.`,
-        warning: "This can affect another workspace branch and the work running in it.",
+          approval.description ?? HOST_APPROVAL_COPY.headlines.contextBoundarySummary(subject),
+        warning: HOST_APPROVAL_COPY.headlines.contextBoundaryWarning,
       };
     }
     if (approval.capability === "client-config-delete") {
       const target = approval.resource?.value ?? "this service configuration";
+      const fallback = HOST_APPROVAL_COPY.headlines.disableService(formatServiceName(target));
       return {
-        title: targetAwareGenericTitle(approval.title, `Disable ${formatServiceName(target)}`),
-        summary: approval.description ?? `Disables ${formatServiceName(target)}.`,
+        title: targetAwareGenericTitle(approval.title, fallback.title),
+        summary: approval.description ?? fallback.summary,
       };
     }
     if (isBrowserOpenApproval(approval)) {
       const isOAuth = isOAuthExternalApproval(approval);
       const destination = formatCapabilityDestination(approval, isOAuth);
       if (isOAuth) {
-        return {
-          title: `Sign in at ${destination}`,
-          summary: `Opens a sign-in flow at ${destination} in your browser.`,
-        };
+        return HOST_APPROVAL_COPY.headlines.browserSignIn(destination);
       }
-      return {
-        title: `Open ${destination}`,
-        summary: `Opens ${destination} in your system browser.`,
-      };
+      return HOST_APPROVAL_COPY.headlines.browserOpen(destination);
     }
     const target = genericCapabilityTarget(approval);
+    const fallback = HOST_APPROVAL_COPY.headlines.genericCapability(target);
     return {
-      title: targetAwareGenericTitle(approval.title, `Allow ${target}`),
-      summary: approval.description ?? `Requests access to ${target}.`,
+      title: targetAwareGenericTitle(approval.title, fallback.title),
+      summary: approval.description ?? fallback.summary,
     };
   }
   if (approval.kind === "client-config") {
-    return {
-      title: `Set up ${formatServiceName(approval.configId)}`,
-      summary:
-        "Saves OAuth client settings. Secrets stay encrypted and are only used for OAuth token exchange and refresh.",
-    };
+    return HOST_APPROVAL_COPY.headlines.setupService(formatServiceName(approval.configId));
   }
   if (approval.kind === "credential-input") {
     const audience = formatCredentialInputAudienceSummary(approval);
-    return {
-      title: `Add ${approval.credentialLabel}`,
-      summary: `Saves ${approval.credentialLabel} for ${audience}. Secrets stay encrypted and are only sent to matching requests.`,
-    };
+    return HOST_APPROVAL_COPY.headlines.credentialInput(approval.credentialLabel, audience);
   }
   if (approval.kind === "secret-input") {
     return {
       title: approval.title,
-      summary:
-        approval.description ??
-        "Requests a secret for one privileged operation. The value is not stored.",
+      summary: approval.description ?? HOST_APPROVAL_COPY.headlines.secretInputFallback,
       warning: approval.warning,
     };
   }
@@ -744,19 +691,15 @@ export function getApprovalCopy(approval: PendingApproval): {
     // The headline names the operation the linked agent wants to run; the
     // description (from the agent) is retained for push/summary surfaces. The
     // preview renders as a monospace block on the card itself.
-    return {
-      title: `External agent wants to run ${approval.operationName}`,
-      summary:
-        approval.description ?? `A linked external agent wants to run ${approval.operationName}.`,
-    };
+    const fallback = HOST_APPROVAL_COPY.headlines.externalAgent(approval.operationName);
+    return { title: fallback.title, summary: approval.description ?? fallback.summary };
   }
   if (approval.kind === "device-code") {
-    return {
-      title: `Sign in to ${approval.credentialLabel}`,
-      summary:
-        `Enter code ${approval.userCode} at ${originForUrl(approval.verificationUri)} ` +
-        `to finish connecting ${approval.credentialLabel}.`,
-    };
+    return HOST_APPROVAL_COPY.headlines.deviceSignIn(
+      approval.credentialLabel,
+      approval.userCode,
+      originForUrl(approval.verificationUri)
+    );
   }
 
   const audience = formatAudienceSummary(approval);
@@ -766,41 +709,42 @@ export function getApprovalCopy(approval: PendingApproval): {
     const label = operation?.label ?? "git operation";
     if (operation?.force) {
       const count = operation.overwrites?.count ?? 0;
-      return {
-        title: `Overwrite upstream commits on ${remote}`,
-        summary:
-          count > 0
-            ? `Overwrite ${count} upstream commit${count === 1 ? "" : "s"} on ${remote} using ${approval.credentialLabel}.`
-            : `Force push to ${remote} using ${approval.credentialLabel}.`,
-        warning:
-          count > 0
-            ? `Those commit${count === 1 ? "" : "s"} will be lost on the remote.`
-            : "This force push may overwrite remote history.",
-      };
+      return HOST_APPROVAL_COPY.headlines.forcePush(remote, approval.credentialLabel, count);
     }
-    return {
-      title: operation?.action === "write" ? `Push to ${remote}` : `Read from ${remote}`,
-      summary: `Wants to ${label} on ${remote} using ${approval.credentialLabel}.`,
-    };
+    return HOST_APPROVAL_COPY.headlines.git(
+      operation?.action === "write" ? "write" : "read",
+      remote,
+      label,
+      approval.credentialLabel
+    );
   }
   if (isOAuthCredentialConnectionApproval(approval)) {
     return {
-      title: `Connect ${approval.credentialLabel}`,
-      summary: approval.replacementCredentialLabel
-        ? `Replaces your existing ${approval.replacementCredentialLabel} credential with ${approval.credentialLabel} for ${audience}.`
-        : `Connects ${approval.credentialLabel} for ${audience}.`,
+      ...HOST_APPROVAL_COPY.headlines.oauthConnect(
+        approval.credentialLabel,
+        audience,
+        approval.replacementCredentialLabel
+      ),
       warning: approval.oauthAudienceDomainMismatch
-        ? "The sign-in domain differs from the service domain."
+        ? HOST_APPROVAL_COPY.headlines.domainMismatch
         : undefined,
     };
   }
   return {
-    title: `Use ${approval.bindingLabel ?? approval.credentialLabel}`,
-    summary: `Uses ${approval.credentialLabel} with ${formatCredentialUseTarget(approval)}.`,
+    ...HOST_APPROVAL_COPY.headlines.credentialUse(
+      approval.bindingLabel ?? approval.credentialLabel,
+      approval.credentialLabel,
+      formatCredentialUseTarget(approval)
+    ),
     warning: approval.oauthAudienceDomainMismatch
-      ? "The sign-in domain differs from the service domain."
+      ? HOST_APPROVAL_COPY.headlines.domainMismatch
       : undefined,
   };
+}
+
+function concreteBatchCopy(value: string | undefined, fallback: string): string {
+  const candidate = value?.trim();
+  return candidate && !/\bunits?\b/iu.test(candidate) ? candidate : fallback;
 }
 
 function userlandCallerKindLabel(
@@ -812,9 +756,9 @@ function userlandCallerKindLabel(
     case "app":
       return "App";
     case "worker":
-      return "Worker";
+      return "Agent";
     case "do":
-      return "DO";
+      return "Agent";
     case "extension":
       return "Extension";
     case "system":
@@ -902,33 +846,54 @@ function unitBatchLabel(approval: PendingUnitBatchApproval): {
 } {
   const hasExtensions = approval.units.some((unit) => unit.unitKind === "extension");
   const hasApps = approval.units.some((unit) => unit.unitKind === "app");
+  const hasPanels = approval.units.some((unit) => unit.unitKind === "panel");
+  const hasWorkers = approval.units.some((unit) => unit.unitKind === "worker");
   const hasScheduledJobs = approval.units.some((unit) => unit.unitKind === "scheduled-job");
   const hasAgentHeartbeats = approval.units.some((unit) => unit.unitKind === "agent-heartbeat");
-  if (hasExtensions && !hasApps && !hasScheduledJobs && !hasAgentHeartbeats) {
-    return { singular: "extension", plural: "extensions", nativeCode: true, scheduledJob: false };
-  }
-  if (hasApps && !hasExtensions && !hasScheduledJobs && !hasAgentHeartbeats) {
-    return { singular: "app", plural: "apps", nativeCode: false, scheduledJob: false };
-  }
-  if (hasScheduledJobs && !hasApps && !hasExtensions && !hasAgentHeartbeats) {
+  const presentKindCount = [
+    hasExtensions,
+    hasApps,
+    hasPanels,
+    hasWorkers,
+    hasScheduledJobs,
+    hasAgentHeartbeats,
+  ].filter(Boolean).length;
+  if (hasExtensions && presentKindCount === 1) {
     return {
-      singular: "scheduled job",
-      plural: "scheduled jobs",
+      ...HOST_APPROVAL_COPY.unitReview.kinds.extension,
+      nativeCode: true,
+      scheduledJob: false,
+    };
+  }
+  if (hasApps && presentKindCount === 1) {
+    return { ...HOST_APPROVAL_COPY.unitReview.kinds.app, nativeCode: false, scheduledJob: false };
+  }
+  if (hasPanels && presentKindCount === 1) {
+    return { ...HOST_APPROVAL_COPY.unitReview.kinds.panel, nativeCode: false, scheduledJob: false };
+  }
+  if (hasWorkers && presentKindCount === 1) {
+    return {
+      ...HOST_APPROVAL_COPY.unitReview.kinds.worker,
+      nativeCode: false,
+      scheduledJob: false,
+    };
+  }
+  if (hasScheduledJobs && presentKindCount === 1) {
+    return {
+      ...HOST_APPROVAL_COPY.unitReview.kinds.scheduledJob,
       nativeCode: false,
       scheduledJob: true,
     };
   }
-  if (hasAgentHeartbeats && !hasApps && !hasExtensions && !hasScheduledJobs) {
+  if (hasAgentHeartbeats && presentKindCount === 1) {
     return {
-      singular: "agent heartbeat",
-      plural: "agent heartbeats",
+      ...HOST_APPROVAL_COPY.unitReview.kinds.agentHeartbeat,
       nativeCode: false,
       scheduledJob: true,
     };
   }
   return {
-    singular: "unit",
-    plural: "units",
+    ...HOST_APPROVAL_COPY.unitReview.kinds.mixed,
     nativeCode: hasExtensions,
     scheduledJob: hasScheduledJobs,
   };
@@ -937,41 +902,49 @@ function unitBatchLabel(approval: PendingUnitBatchApproval): {
 function unitBatchWarning(approval: PendingUnitBatchApproval): string {
   const hasExtensions = approval.units.some((unit) => unit.unitKind === "extension");
   const hasApps = approval.units.some((unit) => unit.unitKind === "app");
+  const hasPanels = approval.units.some((unit) => unit.unitKind === "panel");
+  const hasWorkers = approval.units.some((unit) => unit.unitKind === "worker");
   const hasScheduledJobs = approval.units.some((unit) => unit.unitKind === "scheduled-job");
   const hasAgentHeartbeats = approval.units.some((unit) => unit.unitKind === "agent-heartbeat");
   const warnings: string[] = [];
   if (hasExtensions) {
-    warnings.push("runs native code with filesystem, network, and process access");
+    warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.extension);
   }
   if (hasApps) {
-    warnings.push("allows these workspace apps to run in the app host");
+    warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.app);
+  }
+  if (hasPanels) {
+    warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.panel);
+  }
+  if (hasWorkers) {
+    warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.worker);
   }
   if (hasScheduledJobs) {
-    warnings.push("allows these scheduled jobs to run automatically");
+    warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.scheduledJob);
   }
   if (hasAgentHeartbeats) {
-    warnings.push("allows these agent heartbeats to run unattended and invoke agent tools");
+    warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.agentHeartbeat);
   }
-  if (warnings.length === 1) return `Approving ${warnings[0]}.`;
-  if (warnings.length === 0) return "Approving these workspace units.";
-  return `Approving ${warnings.slice(0, -1).join("; ")}; and ${warnings[warnings.length - 1]}.`;
+  return HOST_APPROVAL_COPY.unitReview.warning(warnings);
 }
 
-function unitBatchUnitKinds(approval: PendingUnitBatchApproval): string[] {
-  const kinds: string[] = [];
-  if (approval.units.some((unit) => unit.unitKind === "extension")) {
-    kinds.push("native extensions");
-  }
-  if (approval.units.some((unit) => unit.unitKind === "app")) {
-    kinds.push("workspace apps");
-  }
-  if (approval.units.some((unit) => unit.unitKind === "scheduled-job")) {
-    kinds.push("scheduled jobs");
-  }
-  if (approval.units.some((unit) => unit.unitKind === "agent-heartbeat")) {
-    kinds.push("agent heartbeats");
-  }
-  return kinds;
+function unitBatchComposition(approval: PendingUnitBatchApproval): string {
+  const labels = [
+    ["extension", HOST_APPROVAL_COPY.unitReview.kinds.extension],
+    ["app", HOST_APPROVAL_COPY.unitReview.kinds.app],
+    ["panel", HOST_APPROVAL_COPY.unitReview.kinds.panel],
+    ["worker", HOST_APPROVAL_COPY.unitReview.kinds.worker],
+    ["scheduled-job", HOST_APPROVAL_COPY.unitReview.kinds.scheduledJob],
+    ["agent-heartbeat", HOST_APPROVAL_COPY.unitReview.kinds.agentHeartbeat],
+  ] as const;
+  const parts = labels.flatMap(([kind, label]) => {
+    const count = approval.units.filter((entry) => entry.unitKind === kind).length;
+    return count === 0 ? [] : [`${count} ${count === 1 ? label.singular : label.plural}`];
+  });
+  if (parts.length === 0) return "this workspace configuration change";
+  if (parts.length === 1) return parts[0]!;
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
 }
 
 function unitBatchApproveDescription(
@@ -980,17 +953,22 @@ function unitBatchApproveDescription(
 ): string {
   const count = approval.units.length;
   if (unitLabel === "scheduled job") {
-    return `Approve ${count} scheduled job${count === 1 ? "" : "s"} to run automatically.`;
+    return HOST_APPROVAL_COPY.unitReview.actionDescriptions.scheduledJobs(count);
   }
   if (unitLabel === "agent heartbeat") {
-    return `Approve ${count} agent heartbeat${count === 1 ? "" : "s"} to run unattended.`;
+    return HOST_APPROVAL_COPY.unitReview.actionDescriptions.agentHeartbeats(count);
   }
-  if (unitLabel === "unit") {
-    const kinds = unitBatchUnitKinds(approval);
-    return `Approve ${count} workspace units${kinds.length > 0 ? ` (${kinds.join(", ")})` : ""}.`;
+  if (unitLabel === "panel") {
+    return HOST_APPROVAL_COPY.unitReview.actionDescriptions.panels(count);
+  }
+  if (unitLabel === "worker") {
+    return HOST_APPROVAL_COPY.unitReview.actionDescriptions.workers(count);
+  }
+  if (unitLabel === HOST_APPROVAL_COPY.unitReview.kinds.mixed.singular) {
+    return HOST_APPROVAL_COPY.unitReview.actionDescriptions.mixed(unitBatchComposition(approval));
   }
   const hasExtensions = approval.units.some((unit) => unit.unitKind === "extension");
-  return `Install and run ${count} ${unitLabel}${count === 1 ? "" : "s"}${hasExtensions ? " as native code" : ""}.`;
+  return HOST_APPROVAL_COPY.unitReview.actionDescriptions.install(count, unitLabel, hasExtensions);
 }
 
 export function originForUrl(raw: string): string {

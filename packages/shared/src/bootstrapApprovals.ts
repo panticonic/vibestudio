@@ -7,9 +7,10 @@ export function isBootstrapUnitApproval(
   return (
     approval.kind === "unit-batch" &&
     approval.units.length > 0 &&
-    approval.units.every((unit) => unit.unitKind === "app" || unit.unitKind === "extension") &&
-    (approval.trigger === "startup" ||
-      (approval.trigger === "meta-change" && approval.units.every((unit) => unit.unitKind === "app")))
+    ((approval.trigger === "startup" &&
+      approval.units.some((unit) => unit.unitKind === "app" || unit.unitKind === "extension")) ||
+      (approval.trigger === "meta-change" &&
+        approval.units.every((unit) => unit.unitKind === "app")))
   );
 }
 

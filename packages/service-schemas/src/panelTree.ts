@@ -45,9 +45,31 @@ function navigationAuthority(method: "navigate" | "navigateHistory") {
         capability: commitCapability,
         requirement: requirementForPrincipals(["code", "user", "host"], commitCapability),
         resource: { kind: "literal" as const, key: commitCapability },
-        evalAcquisition: { kind: "baseline" as const },
       },
     ],
+    prepared: panelBoundaryPrepared(method),
+  };
+}
+
+function panelBoundaryPrepared(method: string) {
+  return {
+    resolver: `panelTree.${method}.contextBoundary`,
+    leaves: [
+      {
+        capability: "context.boundary",
+        requirement: requirementForPrincipals(["code", "user", "host"], "context.boundary"),
+        tier: { selectedFrom: ["gated", "critical"] as const },
+      },
+    ],
+  };
+}
+
+function panelBoundaryAuthority(method: string) {
+  const capability = `service:panelTree.${method}`;
+  return {
+    requirement: requirementForPrincipals(["code", "user", "host"], capability),
+    resource: { kind: "literal" as const, key: capability },
+    prepared: panelBoundaryPrepared(method),
   };
 }
 
@@ -161,7 +183,7 @@ export const panelTreeMethods = defineServiceMethods({
     // `agent` (linked external sessions): tree enumeration is the discovery
     // step of the CLI panel screenshot/console loop. Read-only widening; every
     // mutating panelTree op stays closed to entity-only authority.
-    authority: { principals: ["code", "user", "host", "entity"] },
+    authority: { principals: ["code", "user", "host"] },
   },
   getFocusedPanelId: {
     description: "Return the id of the currently focused panel, or null if none is focused.",
@@ -174,6 +196,7 @@ export const panelTreeMethods = defineServiceMethods({
       "Create a new panel from a workspace source path, optionally nested under a parent and focused.",
     args: z.tuple([z.string(), PanelTreeCreateOptionsSchema]),
     returns: CreateResultSchema,
+    authority: panelBoundaryAuthority("create"),
     access: WRITE_ACCESS,
     examples: [{ args: ["panels/chat", { focus: true }] }],
   },
@@ -208,24 +231,28 @@ export const panelTreeMethods = defineServiceMethods({
       "Merge a patch into a panel's ordinary application state (null removes a key); returns the full resulting validated state. contextId is reserved for the panel's host-bound workspace branch and must be changed through explicit panel navigation, never state args.",
     args: z.tuple([PanelIdSchema, StateArgsSchema]),
     returns: JsonObjectSchema,
+    authority: panelBoundaryAuthority("setStateArgs"),
     access: WRITE_ACCESS,
   },
   reload: {
     description: "Reload a panel's view in place, keeping its current snapshot.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
+    authority: panelBoundaryAuthority("reload"),
     access: WRITE_ACCESS,
   },
   close: {
     description: "Close a panel, removing it (and its subtree) from the tree.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
+    authority: panelBoundaryAuthority("close"),
     access: CLOSE_ACCESS,
   },
   archive: {
     description: "Archive a panel, removing it from the active tree while preserving its history.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
+    authority: panelBoundaryAuthority("archive"),
     access: ARCHIVE_ACCESS,
   },
   archiveOwnedRoots: {
@@ -243,12 +270,14 @@ export const panelTreeMethods = defineServiceMethods({
       "Unload a panel's runtime/view to free resources while keeping the panel in the tree.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
+    authority: panelBoundaryAuthority("unload"),
     access: WRITE_ACCESS,
   },
   movePanel: {
     description: "Reparent and/or reposition a panel among its siblings (drag-and-drop move).",
     args: z.tuple([MovePanelRequestSchema]),
     returns: z.void(),
+    authority: panelBoundaryAuthority("movePanel"),
     access: WRITE_ACCESS,
     examples: [{ args: [{ panelId: "panel-1", newParentId: null, targetPosition: 0 }] }],
   },
@@ -275,24 +304,28 @@ export const panelTreeMethods = defineServiceMethods({
       "Take over a panel's runtime lease for the calling client, focusing it on this host.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelFocusResultSchema,
+    authority: panelBoundaryAuthority("takeOver"),
     access: WRITE_ACCESS,
   },
   openDevTools: {
     description: "Open developer tools for a panel, optionally docked to a side or detached.",
     args: z.tuple([PanelIdSchema, z.enum(["detach", "right", "bottom"]).optional()]),
     returns: z.void(),
+    authority: panelBoundaryAuthority("openDevTools"),
     access: WRITE_ACCESS,
   },
   rebuildPanel: {
     description: "Rebuild a panel's runtime artifacts from source without reloading its view.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
+    authority: panelBoundaryAuthority("rebuildPanel"),
     access: WRITE_ACCESS,
   },
   rebuildAndReload: {
     description: "Rebuild a panel's runtime artifacts from source and then reload its view.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelLifecycleResultSchema,
+    authority: panelBoundaryAuthority("rebuildAndReload"),
     access: WRITE_ACCESS,
   },
   updatePanelState: {
@@ -300,6 +333,7 @@ export const panelTreeMethods = defineServiceMethods({
       "Update a panel's live navigation state (url, page title, loading/back/forward flags) from the rendering surface.",
     args: z.tuple([PanelIdSchema, PanelNavigationStateSchema]),
     returns: z.void(),
+    authority: panelBoundaryAuthority("updatePanelState"),
     access: WRITE_ACCESS,
   },
   snapshot: {
@@ -314,6 +348,7 @@ export const panelTreeMethods = defineServiceMethods({
       "Invoke a panel's in-process agent method (e.g. _agent.snapshot/_agent.tree/_agent.setMode) with optional arguments.",
     args: z.tuple([PanelIdSchema, z.string(), z.array(z.unknown()).optional()]),
     returns: JsonValueSchema.optional(),
+    authority: panelBoundaryAuthority("callAgent"),
     access: WRITE_ACCESS,
     examples: [{ args: ["panel-1", "_agent.snapshot"] }],
   },
@@ -324,7 +359,7 @@ export const panelTreeMethods = defineServiceMethods({
     returns: PanelMetadataSchema.nullable(),
     access: READ_ACCESS,
     // Read-only widening for entity authority (see getTreeSnapshot).
-    authority: { principals: ["code", "user", "host", "entity"] },
+    authority: { principals: ["code", "user", "host"] },
   },
   getCollapsedIds: {
     description: "Return the ids of panels that are currently collapsed in the tree UI.",
@@ -336,6 +371,7 @@ export const panelTreeMethods = defineServiceMethods({
     description: "Set whether a panel is collapsed in the tree UI.",
     args: z.tuple([PanelIdSchema, z.boolean()]),
     returns: z.void(),
+    authority: panelBoundaryAuthority("setCollapsed"),
     access: WRITE_ACCESS,
     examples: [{ args: ["panel-1", true] }],
   },
@@ -343,6 +379,7 @@ export const panelTreeMethods = defineServiceMethods({
     description: "Expand (un-collapse) a set of panels in the tree UI.",
     args: z.tuple([z.array(PanelIdSchema)]),
     returns: z.void(),
+    authority: panelBoundaryAuthority("expandIds"),
     access: WRITE_ACCESS,
     examples: [{ args: [["panel-1", "panel-2"]] }],
   },

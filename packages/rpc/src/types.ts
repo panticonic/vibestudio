@@ -522,10 +522,20 @@ export type RpcContract = Record<
 export interface RpcClientConfig {
   selfId: string;
   transport: EnvelopeRpcTransport;
-  /** Default deadline for the response HEAD and subsequent body-frame silence. */
-  streamIdleTimeoutMs?: number;
+  /**
+   * Optional default deadline for the response HEAD and subsequent body-frame
+   * silence. Omitted or `null` means unbounded; callers that own a bounded
+   * operation may opt in explicitly.
+   */
+  streamIdleTimeoutMs?: number | null;
   callerKind?: CallerKind | "unknown";
   provenance?: AuthenticatedCaller[];
+  /**
+   * Installed runtimes opt in to the P3 authority-acquisition loop. On a
+   * structured EACQUIRE response the client waits on authority.awaitDecision
+   * without a deadline, then retries the exact original invocation.
+   */
+  authorityAcquisition?: "wait";
 }
 
 /**

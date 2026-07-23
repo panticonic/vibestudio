@@ -49,17 +49,24 @@ export { RemoteRpcError, RpcBoundaryError, rpcErrorDataOf, rpcErrorKindOf } from
 export type {
   AuthorizationContext,
   AuthorizationOrigin,
-  CodeAuthorityChain,
   AuthorizationDecision,
+  InvocationSnapshot,
+  AcquisitionInfo,
+  AuthorityPreflightLeaf,
+  AuthorityPreflightResult,
   AuthorityGrant,
+  AuthorityGrantConstraints,
   AuthorityRequirement,
   CapabilityScope,
+  CodeLineageFact,
+  ContextIntegrityFact,
   DirectAuthorityAttestation,
+  EntityPrincipal,
   LiveWorkspaceRelationship,
   Principal,
   PrincipalKind,
   ResourceScope,
-  VerifiedDelegation,
+  SessionMissionFact,
 } from "./authority.js";
 export { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "./authority.js";
 
@@ -83,6 +90,8 @@ export {
   rpcExposedMethodNames,
   rpcMethodAuthority,
   type RpcAuthorityPolicy,
+  type RpcAuthorityEffect,
+  type ResolvedRpcAuthority,
   type ConnectionlessRpcClient,
   type ConnectionlessRpcConfig,
 } from "./connectionless.js";

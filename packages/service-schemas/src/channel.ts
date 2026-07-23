@@ -25,9 +25,11 @@ import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 /**
  * One record in the destructive `subscribe` response.
  *
- * The response body is the subscription resource. Cancelling its reader or
- * losing the routed RPC connection releases the exact participant generation
- * that produced it; there is deliberately no separate unsubscribe command.
+ * The response body is the subscription resource. Losing the routed RPC
+ * connection releases the exact participant generation that produced it.
+ * Cooperative runtimes additionally use the channel's acknowledged self-leave
+ * method before retirement; transport cancellation alone cannot prove that
+ * server-side membership cleanup and accepted deliveries have settled.
  */
 export type ChannelSubscriptionRecord<TResult = unknown, TMessage = unknown> =
   | { kind: "subscribed"; result: TResult }

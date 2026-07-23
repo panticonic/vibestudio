@@ -9,6 +9,10 @@ import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+
+export const EXTERNAL_OPEN_CAPABILITY = "external.open" as const;
+export const EXTERNAL_OPEN_AUTHORITY_RESOLVER = "externalOpen.openExternal.target" as const;
 
 // Opening the system browser is a side-effecting action; for code callers
 // (panel/app/worker/do) it is approval-gated and the open happens only after
@@ -18,7 +22,7 @@ const OPEN_EXTERNAL_ACCESS: MethodAccessDescriptor = {
   approval: [
     {
       when: "caller is panel/app/worker/do",
-      capability: "external-browser-open",
+      capability: EXTERNAL_OPEN_CAPABILITY,
       operation: { kind: "browser", verb: "Open external browser" },
       grantScopes: ["once", "session", "version"],
       reason: "Opening URLs in the system browser from code requires user consent.",
@@ -47,6 +51,20 @@ export const externalOpenMethods = defineServiceMethods({
       "Open an http(s) or mailto URL in the host OS browser; approval-gated for code callers, returning the persisted approval decision when one was made.",
     args: z.tuple([z.string(), openExternalOptionsSchema.optional()]),
     returns: openExternalResultSchema,
+    authority: {
+      requirement: requirementForPrincipals(["user", "host", "code"], EXTERNAL_OPEN_CAPABILITY),
+      resource: { kind: "literal", key: EXTERNAL_OPEN_CAPABILITY },
+      prepared: {
+        resolver: EXTERNAL_OPEN_AUTHORITY_RESOLVER,
+        leaves: [
+          {
+            capability: EXTERNAL_OPEN_CAPABILITY,
+            requirement: { kind: "selected", principals: ["code"] },
+            tier: "gated",
+          },
+        ],
+      },
+    },
     access: OPEN_EXTERNAL_ACCESS,
     examples: [
       { args: ["https://example.com"] },

@@ -51,7 +51,7 @@ External extensions clone into the same tree at install time. There is no per-us
 | `vibestudio.entry`                      | Source entry, default `index.ts`. The TypeScript source is what ships — the build produces the bundle.                                                 |
 | `vibestudio.sourcemap`                  | Must be `true` in v1 (inline maps; the build refuses to disable them).                                                                                 |
 | `vibestudio.extension`                  | Block presence marks the unit as an extension. Must be the only kind-block (no `vibestudio.worker` or `vibestudio.panel` alongside it).                |
-| `vibestudio.extension.activationEvents` | Only `["*"]` is accepted in v1 (eager activation). Other values fail validation.                                                                       |
+| `vibestudio.extension.activationEvents` | Exactly `["*"]` (start with the workspace) or `["onInvoke"]` (build after approval, start on first use).                                               |
 
 ### Dependency overrides
 
@@ -70,6 +70,14 @@ a fresh install.
 | ------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `vibestudio.displayName`              | package name | Human-readable name shown in the units panel.                                                                                          |
 | `vibestudio.extension.dependencyMode` | `"auto"`     | `"auto"` bundles plain JS deps, externalizes native/WASM ones. `"bundle"` forces bundling. `"external"` forces runtime install + load. |
+
+Use `activationEvents: ["onInvoke"]` for extensions whose API is only needed on
+demand, especially extensions that start native child processes or consume
+substantial memory. Invocation waits for that extension's own activation or
+crash recovery. It does not start unrelated extensions and it does not replay a
+failed method call, which preserves non-idempotent API semantics. Use `["*"]`
+only when the extension must continuously provide background behavior before
+any caller invokes it.
 
 ### Validation
 

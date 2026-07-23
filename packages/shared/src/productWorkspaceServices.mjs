@@ -10,8 +10,9 @@ export const PRODUCT_WORKSPACE_SERVICES = deepFreeze([
   {
     kind: "durable-object",
     name: "gad.workspace",
-    title: "GAD workspace graph",
-    description: "Product-sealed semantic workspace authority",
+    title: "Workspace history",
+    action: "read or update your workspace's collaboration history",
+    description: "Read or update your workspace's collaboration and version history.",
     protocols: ["vibestudio.gad.workspace.v1"],
     source: "vibestudio/internal",
     authority: { principals: ["host", "user", "code"] },

@@ -184,9 +184,13 @@ function validateExtensionBlock(
 
   const events = extension?.activationEvents;
   if (events !== undefined) {
-    if (!Array.isArray(events) || events.some((event) => event !== "*")) {
+    if (
+      !Array.isArray(events) ||
+      events.length !== 1 ||
+      (events[0] !== "*" && events[0] !== "onInvoke")
+    ) {
       throw new UnitManifestError(
-        `Extension ${options.unitName} only supports activationEvents: ["*"]`,
+        `Extension ${options.unitName} activationEvents must be exactly ["*"] or ["onInvoke"]`,
         "MANIFEST_ACTIVATION"
       );
     }

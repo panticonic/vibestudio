@@ -49,7 +49,10 @@ export function unitKindLabel(unit: UnitBatchEntry): string {
   if (unit.target === "terminal") return "Terminal";
   if (unit.unitKind === "agent-heartbeat") return "Agent heartbeat";
   if (unit.unitKind === "scheduled-job") return "Scheduled job";
-  return unit.unitKind === "extension" ? "Extension" : "App";
+  if (unit.unitKind === "extension") return "Extension";
+  if (unit.unitKind === "panel") return "Panel";
+  if (unit.unitKind === "worker") return "Worker";
+  return "App";
 }
 
 export function plural(count: number, singular: string, pluralLabel = `${singular}s`): string {

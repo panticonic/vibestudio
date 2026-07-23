@@ -187,9 +187,11 @@ export type WorkspaceServiceDecl = {
   source: string;
   name: string;
   title?: string;
+  /** Verb phrase completing "Allow X to …" — e.g. "send and receive messages". */
+  action?: string;
   description?: string;
   protocols?: string[];
-  authority: { principals: ("host" | "user" | "device" | "code" | "entity")[] };
+  authority: { principals: ("host" | "user" | "code" | "session" | "mission")[] };
 } & (
   | { durableObject: { className: string }; worker?: never }
   | { worker: { routePath: string }; durableObject?: never }

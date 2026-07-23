@@ -9,7 +9,7 @@ import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { HANDLE_PATTERN, RESERVED_HANDLES } from "@vibestudio/identity/types";
 
 const ACCOUNT_READ_POLICY: ServiceAuthorityPolicy = {
-  principals: ["host", "user", "code", "entity"],
+  principals: ["host", "user", "code"],
 };
 
 const READ_ACCESS: MethodAccessDescriptor = { sensitivity: "read" };

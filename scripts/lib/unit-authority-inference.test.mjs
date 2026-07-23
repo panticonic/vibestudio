@@ -6,9 +6,32 @@ import {
   inferDirectRpcCapabilities,
   inferExtensionContextCapabilities,
   inferHostedRuntimeCapabilities,
+  inferTypedServiceClientCapabilities,
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
 } from "./unit-authority-inference.mjs";
+
+describe("inferTypedServiceClientCapabilities", () => {
+  const host = new Set([
+    "service:autofill.confirmSave",
+    "service:autofill.listSavedPasswords",
+    "service:autofill.deleteSavedPassword",
+  ]);
+
+  it("charges selected methods, not every method in the client's schema", () => {
+    const inferred = inferTypedServiceClientCapabilities(
+      `
+        const autofillClient = createTypedServiceClient("autofill", autofillMethods, call);
+        export const autofill = {
+          confirmSave: (panelId, action) => autofillClient.confirmSave(panelId, action),
+        };
+      `,
+      host
+    );
+
+    assert.deepEqual([...inferred], ["service:autofill.confirmSave"]);
+  });
+});
 
 describe("inferDirectRpcCapabilities", () => {
   const direct = new Set(["rpc:publish", "rpc:subscribe", "rpc:subscribeChannel", "rpc:unknown"]);
@@ -90,7 +113,7 @@ describe("declared host-method capability dependencies", () => {
       )
     );
     const dependencies = declaredMethodCapabilityDependencies(matrix);
-    const expected = ["service:workspace-state.slot.commitPreparedNavigation"];
+    const expected = ["service:workspace-state.slot.commitPreparedNavigation", "context.boundary"];
 
     assert.deepEqual([...(dependencies.get("service:panelTree.navigate") ?? [])], expected);
     assert.deepEqual([...(dependencies.get("service:panelTree.navigateHistory") ?? [])], expected);

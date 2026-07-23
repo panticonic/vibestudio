@@ -12,259 +12,70 @@
     "authority": {
       "requests": [
         {
-          "capability": "service:events.watch",
+          "capability": "automations.control",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "service:workspace.ensureContextFolder",
+          "capability": "context.boundary",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "service:workspace.findUnitForPath",
+          "capability": "context.materialize",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "service:workspace.getActive",
+          "capability": "workspace-host.manage",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "service:workspace.getAgentsMd",
+          "capability": "workspace-units.manage",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "service:workspace.getConfig",
+          "capability": "workspace-units.publish",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "service:workspace.getInfo",
+          "capability": "workspace.configure",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.heartbeats.list",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.heartbeats.pause",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.heartbeats.resume",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.heartbeats.runNow",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.beginLaunch",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.cancelLaunchSession",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.clearSelection",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.getLaunchSession",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.getSelection",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.launch",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.list",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.preparePinnedRef",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.resolveLaunchSessionApproval",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.setSelection",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.versions",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.listSkills",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.readSkill",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.recurring.list",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.setConfigField",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.setInitPanels",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.sourceTree",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.bakeAppDist",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.diagnostics",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.inspector",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.list",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.logs",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.restart",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.rollback",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.versions",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ],
-      "delegations": []
+      "evalCeilings": []
     }
   },
   "dependencies": {

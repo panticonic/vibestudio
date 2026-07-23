@@ -134,7 +134,9 @@ singletonObjects:
 services:
   - source: workers/pubsub-channel
     name: channel
-    title: Workspace Channel Service
+    title: Conversations
+    action: send and receive messages in your conversations
+    description: Access your workspace's conversations, including sending messages and reading replies.
     protocols:
       - vibestudio.channel.v1
     authority:
@@ -142,12 +144,13 @@ services:
         - host
         - user
         - code
-        - entity
     durableObject:
       className: PubSubChannel
   - source: workers/model-settings
     name: models
-    title: Workspace Model Settings
+    title: AI model settings
+    action: read or change which AI models your workspace uses
+    description: Read or change the AI model and provider settings for this workspace.
     protocols:
       - vibestudio.models.v1
     authority:
@@ -159,7 +162,9 @@ services:
       className: ModelSettingsDO
   - source: workers/testkit-driver
     name: testkit-driver
-    title: Testkit Driver
+    title: Test runner
+    action: run workspace tests and record results
+    description: Run this workspace's test suite and record results.
     protocols:
       - vibestudio.testkit-driver.v1
     authority:

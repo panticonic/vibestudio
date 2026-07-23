@@ -50,7 +50,7 @@ export interface PanelListItem {
   buildKey?: string | null;
   executionDigest?: string | null;
   authorityRequests?: Panel["authorityRequests"];
-  authorityDelegations?: Panel["authorityDelegations"];
+  authorityEvalCeilings?: Panel["authorityEvalCeilings"];
 }
 
 export interface PanelRegistryOptions {
@@ -184,7 +184,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       buildKey: panel.buildKey ?? null,
       executionDigest: panel.executionDigest ?? null,
       authorityRequests: panel.authorityRequests,
-      authorityDelegations: panel.authorityDelegations,
+      authorityEvalCeilings: panel.authorityEvalCeilings,
       ref: getPanelRef(panel),
       build: {
         effectiveVersion: panel.effectiveVersion ?? null,
@@ -209,7 +209,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       buildKey: panel.buildKey ?? null,
       executionDigest: panel.executionDigest ?? null,
       authorityRequests: panel.authorityRequests,
-      authorityDelegations: panel.authorityDelegations,
+      authorityEvalCeilings: panel.authorityEvalCeilings,
     }));
   }
 
@@ -231,7 +231,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       buildKey: panel.buildKey ?? null,
       executionDigest: panel.executionDigest ?? null,
       authorityRequests: panel.authorityRequests,
-      authorityDelegations: panel.authorityDelegations,
+      authorityEvalCeilings: panel.authorityEvalCeilings,
     }));
   }
 

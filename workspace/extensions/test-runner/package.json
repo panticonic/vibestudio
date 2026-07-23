@@ -10,55 +10,31 @@
     "extension": {
       "dependencyMode": "external",
       "activationEvents": [
-        "*"
+        "onInvoke"
       ]
     },
     "authority": {
       "requests": [
         {
-          "capability": "service:extensions.health",
+          "capability": "context.boundary",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "service:extensions.log",
+          "capability": "user-approval.request",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
-        },
-        {
-          "capability": "service:extensions.ready",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:fs.ensureMaterialized",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:userlandApproval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.getInfo",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ],
-      "delegations": []
+      "evalCeilings": []
     }
   },
   "dependencies": {

@@ -1,7 +1,8 @@
 /** Wire-safe authority facts shared by host-service and direct-RPC dispatch. */
 
-export type PrincipalKind = "host" | "user" | "device" | "code" | "entity";
+export type PrincipalKind = "host" | "user" | "code" | "session" | "mission";
 export type Principal = `${PrincipalKind}:${string}`;
+export type EntityPrincipal = `entity:${string}`;
 
 export type ResourceScope =
   | { kind: "exact"; key: string }
@@ -15,18 +16,6 @@ export interface CapabilityScope {
   resource: ResourceScope;
 }
 
-export interface VerifiedDelegation {
-  id: string;
-  issuer: Principal;
-  subject: Principal;
-  audience: string;
-  purpose: string;
-  capabilities: readonly CapabilityScope[];
-  notBefore?: number;
-  expiresAt: number;
-  revokedAt?: number;
-}
-
 export interface LiveWorkspaceRelationship {
   workspaceId: string;
   member: boolean;
@@ -34,113 +23,96 @@ export interface LiveWorkspaceRelationship {
   revision: string;
 }
 
+/** Exactly one origin authorizes a call. Entity and device identity are facts, never grant subjects. */
 export type AuthorizationOrigin =
-  | { kind: "code"; principal: Principal }
-  | { kind: "user"; principal: Principal }
-  | { kind: "host"; principal: Principal }
-  | { kind: "device"; principal: Principal }
-  | { kind: "entity"; principal: Principal };
+  | { kind: "code"; principal: `code:${string}` }
+  | { kind: "user"; principal: `user:${string}` }
+  | { kind: "host"; principal: `host:${string}` }
+  | { kind: "session"; principal: `session:${string}` };
 
-export interface CodeAuthorityChain {
-  executor: {
-    principal: Principal;
-    requested: readonly CapabilityScope[];
-  } | null;
-  execution:
-    | {
-        phase: "preparation" | "run";
-        principal: Principal;
-        runId: string;
-        runDigest: string;
-        requested: readonly CapabilityScope[];
-      }
-    | null;
-  initiator:
-    | { kind: "code" | "interactive-user" | "host"; principal: Principal }
-    | null;
-  delegations: readonly VerifiedDelegation[];
+export interface ContextIntegrityFact {
+  class: "internal" | "external" | "not-applicable";
+  latchEpoch: number;
+  externalKeys: readonly string[];
+}
+
+export interface CodeLineageFact {
+  class: "internal" | "external" | "unknown";
+  externalKeys: readonly string[];
+}
+
+export interface SessionMissionFact {
+  missionId: string;
+  closureDigest: string;
+  harness: { unit: string; ev: string };
 }
 
 /**
  * Every field is constructed from authenticated transport and live host state.
- * Runtime shape is deliberately absent: routing facts are not authority facts.
+ * The harness is a conduit: its identity is a fact, while session/mission grants
+ * authorize eval calls directly.
  */
 export interface AuthorizationContext {
   authorizingOrigin: AuthorizationOrigin;
-  host: Principal | null;
-  actingUser: Principal | null;
-  device: Principal | null;
-  entity: Principal | null;
+  host: `host:${string}` | null;
+  actingUser: `user:${string}` | null;
+  entity: EntityPrincipal | null;
   incarnation: string | null;
-  codeAuthority: CodeAuthorityChain;
-  deviceOwnership: {
-    device: Principal;
-    user: Principal;
-    revision: string;
+  executingCode: {
+    principal: `code:${string}`;
+    requested: readonly CapabilityScope[];
+    sourceLineage: CodeLineageFact;
   } | null;
-  ownerChain: readonly Principal[];
-  agentBinding: { entity: Principal; contextId: string; channelId: string } | null;
+  initiatorChain: readonly string[];
+  ownerChain: readonly `user:${string}`[];
+  agentBinding: { entity: EntityPrincipal; contextId: string; channelId: string } | null;
   workspace: LiveWorkspaceRelationship | null;
   session: {
     id: string;
     audience: string;
     version: string;
     expiresAt: number;
+    mission?: SessionMissionFact;
+    mediatingHarness?: `code:${string}`;
+    taskRef?: string;
   };
+  contextIntegrity: ContextIntegrityFact | null;
+}
+
+export interface AuthorityGrantConstraints {
+  sessionId?: string;
+  invocationDigest?: string;
+  missionSubject?: `mission:${string}`;
+  envelopeId?: string;
+  lineageAtConsent?: readonly string[];
 }
 
 export interface AuthorityGrant extends CapabilityScope {
+  id?: string;
   subject: Principal;
   effect: "allow" | "deny";
-  issuedBy: Principal;
+  issuedBy: string;
   createdAt: number;
   expiresAt?: number;
   revokedAt?: number;
-  constraints?: {
-    sessionId?: string;
-    minVersion?: string;
-    maxVersion?: string;
-  };
-  binding:
-    | { kind: "principal" }
-    | { kind: "exact-execution"; repoPath: string; executionDigest: string }
-    | {
-        kind: "session";
-        sessionId: string;
-        repoPath: string;
-        executionDigest: string;
-      }
-    | {
-        kind: "selector";
-        repoPath: string;
-        selector: string;
-        resolvedExecutionDigest: string;
-      };
+  consumedAt?: number;
+  constraints?: AuthorityGrantConstraints;
   provenance: string;
 }
 
 export type AuthorityRequirement =
-  | {
-      kind: "capability";
-      principal: PrincipalKind;
-      capability: string;
-      delegation?: { audience: string; purpose: string; issuer?: Principal };
-    }
+  | { kind: "capability"; principal: PrincipalKind; capability: string; codeOnly?: true }
   | {
       kind: "relationship";
       name:
         | "workspace-member"
         | "workspace-role"
-        | "device-owned-by-user"
         | "entity-self"
         | "entity-owner"
-        | "entity-deputy"
-        | "channel-owner"
-        | "channel-editor"
-        | "channel-member"
         | "agent-binding"
         | "code-source"
-        | "delegation";
+        | "context-integrity"
+        | "closure-internal";
       value?: string;
     }
   | { kind: "session"; audience?: string; minVersion?: string }
@@ -155,21 +127,92 @@ export interface AuthorizationDecision {
     | "denied"
     | "missing-grant"
     | "not-requested"
-    | "delegation"
     | "relationship"
-    | "session";
+    | "session"
+    | "lineage";
   reason: string;
   requirement: AuthorityRequirement;
   principal?: Principal;
+  grantId?: string;
+  consumable?: boolean;
 }
 
-/** Fresh host mediation for one direct method and target object. */
+export interface InvocationSnapshot {
+  v: 1;
+  service: string;
+  method: string;
+  capability: string;
+  /** Additional live target-declaration requirement, composed with the method declaration. */
+  targetRequirement?: AuthorityRequirement;
+  targetCapability?: string;
+  resourceKey: string;
+  argsDigest: string;
+  preparedStateDigest: string;
+  callerPrincipal: Principal;
+  sessionId: string;
+  mission: `mission:${string}` | "-";
+  snippetDigest: string;
+  codeLineage: { class: CodeLineageFact["class"]; chain: readonly string[] };
+  contextLineage: ContextIntegrityFact | null;
+  initiatorChain: readonly string[];
+  at: number;
+}
+
+export interface AcquisitionInfo {
+  acquisitionId: string;
+  /** Exact runtime that originated the protected invocation. */
+  ownerRuntimeId: string;
+  snapshotDigest: string;
+  capability: string;
+  resourceKey: string;
+  tier: "gated" | "critical";
+  cardType: "permission.gated" | "permission.outside" | "confirm.critical";
+  renderedAction: string;
+  pending: boolean;
+  cooldownUntil?: number;
+  decidedBy?: "user" | "rule";
+}
+
+export interface AuthorityPreflightLeaf {
+  capability: string;
+  resourceKey: string;
+  status: "granted" | "consumable-once" | "acquirable" | "denied";
+  tier: "open" | "gated" | "critical";
+}
+
+export interface AuthorityPreflightResult {
+  decision: "allowed" | "acquirable" | "denied";
+  leaves: AuthorityPreflightLeaf[];
+  severityPreview?: "routine" | "sensitive" | "critical";
+  wouldPrompt?: {
+    cardType: "permission.gated" | "permission.outside" | "confirm.critical";
+    renderedAction: string;
+  };
+}
+
+/** Fresh host mediation for one direct method/event and target object. */
 export interface DirectAuthorityAttestation {
   audience: string;
   method: string;
+  /** Exact sealed receiver effect resolved by the host for this invocation. */
+  effect:
+    | { kind: "runtime-intrinsic" }
+    | { kind: "semantic"; capability: string }
+    | { kind: "workspace-service" };
+  /** Host-resolved authority identity for this exact receiver invocation. */
+  capability: string;
+  /** Live target-declaration requirement, composed with the receiver method policy. */
+  targetRequirement?: AuthorityRequirement;
+  /** Semantic capability naming the live target; distinct from a protected method effect. */
+  targetCapability?: string;
+  /** Tier of the live target declaration, evaluated independently of the method tier. */
+  targetTier?: "gated" | "critical";
+  /** Canonical protected invocation bound to a critical one-shot confirmation. */
+  invocationDigest?: string;
   resourceKey: string;
   issuedAt: number;
   expiresAt: number;
+  nonce: string;
   context: AuthorizationContext;
   grants: readonly AuthorityGrant[];
   /** Host-resolved containment, enforced by the receiver before method entry. */

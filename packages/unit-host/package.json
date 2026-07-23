@@ -12,7 +12,10 @@
   "scripts": {
     "test": "cd ../.. && vitest run packages/unit-host/src"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/shared": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "typescript": "^5.9.3"

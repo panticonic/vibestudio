@@ -22,756 +22,403 @@
     "authority": {
       "requests": [
         {
+          "capability": "account-providers.configure",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "account-providers.delete",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "account.profile.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "account.profile.update",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "accounts.connect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "accounts.disconnect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "agent.credentials.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "approvals.block",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "approvals.decide",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "approvals.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "automations.control",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "clipboard",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "connections.approve",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "context.boundary",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "context.materialize",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "credential.use",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "credentials.audit.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "devices.pair",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "devices.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "devices.revoke",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "external.open",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
           "capability": "keychain",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
           "capability": "notifications",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
           "capability": "open-external",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
           "capability": "panel-hosting",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "rpc:acknowledgeUserNotification",
+          "capability": "presence.read",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "rpc:getConfig",
+          "capability": "protected-input.submit",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "rpc:getContextId",
+          "capability": "push.manage",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "rpc:listUserNotificationsForMe",
+          "capability": "push.send",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "service:account.getProfile",
+          "capability": "users.revoke",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
         },
         {
-          "capability": "service:account.isMember",
+          "capability": "workspace-host.manage",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
-        },
-        {
-          "capability": "service:account.listWorkspaceMembers",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:account.resolveProfiles",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:auth.getConnectionInfo",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:auth.grantConnection",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:auth.mintAgentCredential",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:auth.revokeAgentCredential",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.audit",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.cancelOAuth",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.completeCapture",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.configureClient",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.connect",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.deleteClientConfig",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.forwardOAuthCallback",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.getClientConfigStatus",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.inspectStoredCredentials",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.listStoredCredentials",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.proxyFetch",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.proxyGitHttp",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.requestCredentialInput",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.resolveCredential",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.revokeCredential",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:credentials.storeCredential",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:events.watch",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:externalOpen.openExternal",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:gateway.fetch",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.addWorkspaceMember",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.createWorkspace",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.deleteWorkspace",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.ensureEphemeralWorkspace",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.getProfile",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.inviteUser",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.listDevices",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.listUserPresence",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.listWorkspaceMembers",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.listWorkspaces",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.pairDevice",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.removeWorkspaceMember",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.revokeDevice",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.revokeUser",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.routeWorkspace",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.setRole",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:hubControl.updateProfile",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:panelRuntime.acquire",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:panelRuntime.getSnapshot",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:panelRuntime.registerClient",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:panelRuntime.release",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:panelRuntime.takeOver",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:panelRuntime.unregisterClient",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:shellApproval.blockCapability",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:shellApproval.listPending",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:shellApproval.resolve",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:shellApproval.resolveBootstrap",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:shellApproval.resolveExternalAgent",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:shellApproval.resolveExternalAgentByRequest",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:shellApproval.resolveUserland",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:shellApproval.submitClientConfig",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:shellApproval.submitCredentialInput",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:shellApproval.submitSecretInput",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workers.resolveService",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.ensureContextFolder",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.findUnitForPath",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.getActive",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.getAgentsMd",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.getConfig",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.getInfo",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.heartbeats.list",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.heartbeats.pause",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.heartbeats.resume",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.heartbeats.runNow",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.beginLaunch",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.cancelLaunchSession",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.clearSelection",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.getLaunchSession",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.getSelection",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.launch",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.list",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.preparePinnedRef",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.resolveLaunchSessionApproval",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.setSelection",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.hostTargets.versions",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.listSkills",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.readSkill",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.recurring.list",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.setConfigField",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.setInitPanels",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.sourceTree",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.bakeAppDist",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.diagnostics",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.inspector",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.list",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.logs",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.restart",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.rollback",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:workspace.units.versions",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
           "capability": "workspace-service:gad.workspace",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-units.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-units.publish",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.configure",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.gateway.access",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.members.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.members.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.members.remove",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspaces.create",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspaces.delete",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspaces.open",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspaces.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ],
-      "delegations": []
+      "evalCeilings": []
     }
   },
   "dependencies": {

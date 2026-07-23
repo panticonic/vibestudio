@@ -413,6 +413,11 @@ export type FsVcsEditOp =
   | { kind: "delete"; path: string }
   | { kind: "chmod"; path: string; mode: number };
 
+export interface FsVcsMutationIntegrity {
+  class: "internal" | "external";
+  externalKeys: readonly string[];
+}
+
 /**
  * Bridge from the fs service to the workspace semantic VCS. When a sandboxed
  * context caller mutates a managed path, `edit` advances the working state and
@@ -431,15 +436,18 @@ export interface FsVcsBridge {
   isTracked(relPath: string): Promise<boolean>;
   edit(
     input: VcsEditInput,
-    causalParent: RpcCausalParent | null
+    causalParent: RpcCausalParent | null,
+    contextIntegrity: FsVcsMutationIntegrity
   ): Promise<VcsWorkingMutationResult>;
   move(
     input: VcsMoveInput,
-    causalParent: RpcCausalParent | null
+    causalParent: RpcCausalParent | null,
+    contextIntegrity: FsVcsMutationIntegrity
   ): Promise<VcsWorkingMutationResult>;
   copy(
     input: VcsCopyInput,
-    causalParent: RpcCausalParent | null
+    causalParent: RpcCausalParent | null,
+    contextIntegrity: FsVcsMutationIntegrity
   ): Promise<VcsWorkingMutationResult>;
   status(input: VcsStatusInput): Promise<VcsStatusResult>;
   inspect(input: VcsInspectInput): Promise<VcsInspectResult>;
@@ -585,6 +593,16 @@ export type FsContextAuthority =
 export interface FsServiceOptions {
   contextAuthority: FsContextAuthority;
   hostFsCapableExtensions?: Iterable<string>;
+  /** Monotone latch update that must settle before managed read bytes return. */
+  recordContextIngestion?: (
+    ctx: ServiceContext,
+    input: {
+      key: string;
+      via: string;
+      classification: "derived";
+      derivedClass: "internal" | "external";
+    }
+  ) => void | Promise<void>;
 }
 
 /**
@@ -1038,6 +1056,7 @@ export class FsService {
   private readonly hostFsCapableExtensions?: ReadonlySet<string>;
   /** Explicit semantic-workspace or scratch-only construction authority. */
   private readonly contextAuthority: FsContextAuthority;
+  private readonly recordContextIngestion?: FsServiceOptions["recordContextIngestion"];
 
   /** handleId → TrackedHandle */
   private readonly openHandles = new Map<number, TrackedHandle>();
@@ -1054,6 +1073,7 @@ export class FsService {
       ? new Set(opts.hostFsCapableExtensions)
       : undefined;
     this.contextAuthority = opts.contextAuthority;
+    this.recordContextIngestion = opts.recordContextIngestion;
   }
 
   private semanticBridge(scope: FsCallScope): FsVcsBridge | null {
@@ -1272,6 +1292,18 @@ export class FsService {
     const contextId = scope.contextId;
     const commandId = `fs:${ctx.idempotencyKey ?? ctx.requestId ?? randomBytes(16).toString("hex")}:${method}`;
     const causalParent = ctx.causalParent ?? null;
+    const mutationIntegrity = (): FsVcsMutationIntegrity => {
+      const fact = ctx.authorization?.contextIntegrity;
+      if (!fact) {
+        throw codedError(
+          "EACCES",
+          "Managed filesystem mutation requires resolved context-integrity authority"
+        );
+      }
+      return fact.class === "external"
+        ? { class: "external", externalKeys: [...fact.externalKeys] }
+        : { class: "internal", externalKeys: [] };
+    };
     const agentBinding =
       ctx.caller.agentBinding ??
       this.entityCache.resolveActive(ctx.caller.runtime.id)?.agentBinding ??
@@ -1292,7 +1324,15 @@ export class FsService {
     // Author one workspace-wide edit on the exact working state.
     const commit = (edits: FsVcsEditOp[]) => {
       requireManagedCause();
-      return this.commitRoutedEdits(bridge, router, contextId, commandId, edits, causalParent);
+      return this.commitRoutedEdits(
+        bridge,
+        router,
+        contextId,
+        commandId,
+        edits,
+        causalParent,
+        mutationIntegrity()
+      );
     };
     const importFile = async (sourceRel: string, sourceAbs: string, destinationRel: string) => {
       requireManagedCause();
@@ -1326,22 +1366,31 @@ export class FsService {
             },
           ],
         },
-        causalParent
+        causalParent,
+        mutationIntegrity()
       );
     };
-    const readWsFile = async (wsRel: string): Promise<FsVcsContent | null> => {
+    const readWsFile = async (
+      wsRel: string,
+      exposeToCaller = false
+    ): Promise<FsVcsContent | null> => {
       const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
       const routed = router.route(wsRel);
       const repository = managedRepository(snapshot, routed.repoPath);
-      return (
-        (
-          await bridge.readFile({
-            state: snapshot.state,
-            repositoryId: repository.repositoryId,
-            file: { kind: "path", path: routed.repoRelPath },
-          })
-        )?.content ?? null
-      );
+      const result = await bridge.readFile({
+        state: snapshot.state,
+        repositoryId: repository.repositoryId,
+        file: { kind: "path", path: routed.repoRelPath },
+      });
+      if (result && exposeToCaller && this.recordContextIngestion && ctx.caller.agentBinding) {
+        await this.recordContextIngestion(ctx, {
+          key: `file:${encodeURIComponent(result.repositoryId)}/${encodeURIComponent(result.fileId)}@${result.authoredChangeId}`,
+          via: "fs-read-file",
+          classification: "derived",
+          derivedClass: result.contentClass,
+        });
+      }
+      return result?.content ?? null;
     };
 
     switch (method) {
@@ -1349,7 +1398,7 @@ export class FsService {
         const userPath = args[0] as string;
         const rel = await relOf(userPath);
         if (!(await tracked(rel))) return { handled: false };
-        const content = await readWsFile(rel);
+        const content = await readWsFile(rel, true);
         if (!content) {
           throw codedError("ENOENT", `readFile: managed file not found: ${userPath}`);
         }
@@ -1481,7 +1530,8 @@ export class FsService {
                 },
               ],
             },
-            causalParent
+            causalParent,
+            mutationIntegrity()
           );
           return { handled: true };
         }
@@ -1562,7 +1612,8 @@ export class FsService {
               intentSummary: `Move ${srcRel} to ${dstRel}`,
               moves,
             },
-            causalParent
+            causalParent,
+            mutationIntegrity()
           );
           return { handled: true };
         }
@@ -1643,7 +1694,8 @@ export class FsService {
     contextId: string,
     commandId: string,
     edits: FsVcsEditOp[],
-    causalParent: RpcCausalParent | null
+    causalParent: RpcCausalParent | null,
+    contextIntegrity: FsVcsMutationIntegrity
   ): Promise<void> {
     if (edits.length === 0) return;
     const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
@@ -1749,7 +1801,8 @@ export class FsService {
         expectedWorkingHead: snapshot.state,
         changes: scoped,
       },
-      causalParent
+      causalParent,
+      contextIntegrity
     );
   }
 

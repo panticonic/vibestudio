@@ -4,7 +4,9 @@
   "description": "TypeScript/JSX code transformation and execution for Vibestudio",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./sandbox": "./src/sandbox.ts",
+    "./scope": "./src/scope.ts"
   },
   "scripts": {
     "test": "vitest run"

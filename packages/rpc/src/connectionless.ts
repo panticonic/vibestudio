@@ -59,29 +59,58 @@ type RpcExposedCtor = {
   [RPC_METHOD_AUTHORITIES]?: Map<string, RpcAuthorityPolicy>;
 };
 
+export type RpcAuthorityEffect =
+  | { kind: "runtime-intrinsic" }
+  | { kind: "semantic"; capability: string }
+  | { kind: "workspace-service" };
+
 /** Complete, compositional authority admitted to one direct RPC method. */
 export type RpcAuthorityPolicy = (
   | { principals: ReadonlyArray<PrincipalKind>; requires?: never }
-  | { requires: AuthorityRequirement; principals?: never }
+  | {
+      requires: AuthorityRequirement | ((self: object) => AuthorityRequirement);
+      principals?: never;
+    }
 ) & {
-  /** Direct-RPC effect classification. Unknown remains mutating by default. */
-  sensitivity?: "read" | "write" | "admin" | "destructive";
+  /** No default: omitting a tier is a registration/build error. */
+  tier: "open" | "gated" | "critical";
+  sensitivity: "read" | "write" | "admin" | "destructive";
+  /** Authorization identity at the receiver boundary; never inferred from the wire method. */
+  effect: RpcAuthorityEffect;
+  /** Existing code declarations admit eval sessions unless explicitly code-only. */
+  codeOnly?: boolean;
 };
+
+export type ResolvedRpcAuthority =
+  | (Omit<Extract<RpcAuthorityPolicy, { principals: ReadonlyArray<PrincipalKind> }>, "requires"> & {
+      requires?: never;
+    })
+  | (Omit<Extract<RpcAuthorityPolicy, { requires: unknown }>, "requires"> & {
+      requires: AuthorityRequirement;
+      principals?: never;
+    });
 
 type RpcMethodDecorator = <This, Args extends unknown[], Return>(
   value: (this: This, ...args: Args) => Return,
   context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Return>
 ) => void;
 
-function registerRpc(target: object, name: string, authority?: RpcAuthorityPolicy): void {
+function registerRpc(target: object, name: string, authority: RpcAuthorityPolicy): void {
+  if (authority.effect.kind === "runtime-intrinsic" && authority.tier !== "open") {
+    throw new Error(`@rpc ${name}: runtime-intrinsic effects must be open`);
+  }
+  if (
+    authority.effect.kind === "semantic" &&
+    (!authority.effect.capability || authority.effect.capability.startsWith("rpc:"))
+  ) {
+    throw new Error(`@rpc ${name}: semantic effect must name a non-transport capability`);
+  }
   const ctor = (target as { constructor: RpcExposedCtor }).constructor;
   (ctor[RPC_EXPOSED_METHODS] ??= new Set<string>()).add(name);
-  if (authority) {
-    (ctor[RPC_METHOD_AUTHORITIES] ??= new Map<string, RpcAuthorityPolicy>()).set(name, authority);
-  }
+  (ctor[RPC_METHOD_AUTHORITIES] ??= new Map<string, RpcAuthorityPolicy>()).set(name, authority);
 }
 
-function applyRpc(context: ClassMethodDecoratorContext, authority?: RpcAuthorityPolicy): void {
+function applyRpc(context: ClassMethodDecoratorContext, authority: RpcAuthorityPolicy): void {
   if (context.kind !== "method") {
     throw new Error(`@rpc may only decorate methods (got ${context.kind})`);
   }
@@ -95,28 +124,14 @@ function applyRpc(context: ClassMethodDecoratorContext, authority?: RpcAuthority
  * with no `@rpc` is private to the DO and cannot be invoked over the (intentionally open) relay, so
  * forgetting it fails *loud* ("not exposed", caught by tests) rather than silently exposing a helper.
  *
- * Two forms:
- *   - `@rpc method() {}` — exposed with no direct authority and therefore not callable through the
- *     workspace relay.
- *   - `@rpc({ principals: ["user", "code"] }) method() {}` — exposed with a complete principal
- *     requirement. The workspace realm evaluates it against fresh host-attested facts and grants.
+ * Every exposed method has a complete tier + principal/requirement declaration.
  *
  * Standard TC39 decorator (no `experimentalDecorators`, no reflect-metadata). It registers via
  * `addInitializer`, so inherited decorated methods land on the CONCRETE subclass's set (verified):
  * the base reads `rpcExposedMethodNames(this)` and exposes exactly those.
  */
-export function rpc<This, Args extends unknown[], Return>(
-  value: (this: This, ...args: Args) => Return,
-  context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Return>
-): void;
 export function rpc(authority: RpcAuthorityPolicy): RpcMethodDecorator;
-export function rpc(arg0: unknown, arg1?: unknown): void | RpcMethodDecorator {
-  // Bare usage: `@rpc method() {}` → (value, context).
-  if (arg1 && typeof arg1 === "object" && "kind" in (arg1 as object)) {
-    applyRpc(arg1 as ClassMethodDecoratorContext);
-    return;
-  }
-  const authority = arg0 as RpcAuthorityPolicy;
+export function rpc(authority: RpcAuthorityPolicy): RpcMethodDecorator {
   return (_value, context) => applyRpc(context as ClassMethodDecoratorContext, authority);
 }
 
@@ -130,9 +145,14 @@ export function rpcExposedMethodNames(instance: object): ReadonlySet<string> {
 export function rpcMethodAuthority(
   instance: object,
   method: string
-): RpcAuthorityPolicy | undefined {
+): ResolvedRpcAuthority | undefined {
   const ctor = (instance as { constructor: RpcExposedCtor }).constructor;
-  return ctor[RPC_METHOD_AUTHORITIES]?.get(method);
+  const policy = ctor[RPC_METHOD_AUTHORITIES]?.get(method);
+  if (!policy) return undefined;
+  if ("requires" in policy && typeof policy.requires === "function") {
+    return { ...policy, requires: policy.requires(instance) };
+  }
+  return policy as ResolvedRpcAuthority;
 }
 const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 
@@ -185,6 +205,7 @@ export function createConnectionlessRpcClient(
   const base = createRpcClient({
     selfId: config.selfId,
     transport,
+    authorityAcquisition: "wait",
     ...(config.callerKind ? { callerKind: config.callerKind } : {}),
   });
 

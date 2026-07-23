@@ -7,10 +7,16 @@ import type {
   UrlAudience,
 } from "@vibestudio/credential-client/types";
 import type { ApprovalDecisionId } from "./approvalContract.js";
+import type { InvocationSnapshot } from "@vibestudio/rpc";
+import type {
+  EvalAuthorityCeiling,
+  EvalCeilingPurpose,
+  UnitAuthorityRequest,
+} from "./authorityManifest.js";
 
 export type ApprovalDecision = ApprovalDecisionId;
 export type ApprovalConfigFieldType = "text" | "secret";
-export type ApprovalDetailFormat = "plain" | "markdown" | "code";
+export type ApprovalDetailFormat = "plain" | "markdown" | "code" | "tree";
 
 const CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
 // Multi-line fields (summary, detail values) legitimately carry "\n" for
@@ -64,7 +70,7 @@ export const userlandApprovalDetailSchema = z
   .object({
     label: approvalCleanString("detail label", { max: 40 }),
     value: approvalCleanString("detail value", { max: 1000, multiline: true }),
-    format: z.enum(["plain", "markdown", "code"]).optional(),
+    format: z.enum(["plain", "markdown", "code", "tree"]).optional(),
   })
   .strict();
 
@@ -486,6 +492,10 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
     value: string;
     format?: ApprovalDetailFormat;
   }>;
+  snapshot?: InvocationSnapshot;
+  cardType?: "permission.gated" | "permission.outside" | "confirm.critical";
+  /** Host-derived decisions this exact authority request can meaningfully mint. */
+  allowedDecisions?: ApprovalDecision[];
 }
 
 export interface UnitApprovalDiffStat {
@@ -506,7 +516,13 @@ export interface UnitApprovalCommit {
   timestamp: number;
 }
 
-export type UnitBatchEntryKind = "extension" | "app" | "scheduled-job" | "agent-heartbeat";
+export type UnitBatchEntryKind =
+  | "extension"
+  | "app"
+  | "panel"
+  | "worker"
+  | "scheduled-job"
+  | "agent-heartbeat";
 
 /**
  * One workspace-owned unit in a joint `unit-batch` approval. Carries the
@@ -522,6 +538,45 @@ export interface UnitBatchEntry {
   ev?: string | null;
   /** Native or host capabilities granted by running this unit. */
   capabilities: string[];
+  /** Exact, version-bound manifest review plus human-oriented change groups. */
+  authority?: {
+    requests: readonly UnitAuthorityRequest[];
+    evalCeilings: readonly EvalAuthorityCeiling[];
+    groups: Array<{
+      id: string;
+      label: string;
+      description: string;
+      requestCount: number;
+      addedCount: number;
+      items: Array<{
+        capability: string;
+        title: string;
+        description: string;
+        added: boolean;
+      }>;
+    }>;
+    removedCount: number;
+    /** Authority this version may expose to evaluated code. It is reviewed in
+     * the same decision, but remains a ceiling rather than a grant. */
+    eval: Array<{
+      purpose: EvalCeilingPurpose;
+      label: string;
+      groups: Array<{
+        id: string;
+        label: string;
+        description: string;
+        requestCount: number;
+        addedCount: number;
+        items: Array<{
+          capability: string;
+          title: string;
+          description: string;
+          added: boolean;
+        }>;
+      }>;
+      removedCount: number;
+    }>;
+  };
   dependencyEvs?: Record<string, string>;
   externalDeps?: Record<string, string>;
   integrity?: string | null;
@@ -537,11 +592,11 @@ export interface UnitBatchEntry {
 /**
  * Joint, informed-consent approval for the set of unapproved declared
  * workspace units. Raised at workspace startup (`trigger: "startup"`, system
- * principal) and when a committed `meta/` update adds units (`trigger:
- * "meta-change"`, with `configWrite` describing the workspace-config change the
- * same state advance performs). It is also used for one-unit source changes and
- * management actions so apps and extensions share a single privileged-unit
- * approval shape. One decision approves or denies the whole set.
+ * principal) and at the protected-main boundary whenever committed source,
+ * dependencies, providers, or workspace configuration change an exact unit
+ * identity (`trigger: "meta-change"`). The same accepted identity is handed to
+ * activation, so publication and activation never ask the same question twice.
+ * One decision approves or denies the whole set.
  */
 export interface PendingUnitBatchApproval extends PendingApprovalBase {
   kind: "unit-batch";

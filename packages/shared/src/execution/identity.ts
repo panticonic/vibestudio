@@ -43,14 +43,6 @@ export interface BuildRecipe {
   declaredEnvironment: Readonly<Record<string, string>>;
 }
 
-export interface ExecutionArtifactRef {
-  source: SourceRevisionRef;
-  recipeDigest: Sha256;
-  buildKey: Sha256;
-  artifactDigest: Sha256;
-  executionDigest: Sha256;
-}
-
 export type ExecutionSelector =
   | { kind: "head"; repoPath: string; head: "main" | { contextId: string } }
   | { kind: "state"; repoPath: string; stateHash: Sha256 }
@@ -279,63 +271,6 @@ export function createArtifactManifest(input: {
     ...entries.flatMap((entry) => [entry.path, entry.bytes] as const)
   );
   return { manifest, artifactDigest };
-}
-
-export function createExecutionArtifactRef(input: {
-  source: SourceRevisionRef;
-  recipe: BuildRecipe;
-  entries: readonly ArtifactBundleEntry[];
-}): { ref: ExecutionArtifactRef; manifest: ArtifactManifest } {
-  const recipeDigest = computeRecipeDigest(input.recipe);
-  const { manifest, artifactDigest } = createArtifactManifest({
-    source: input.source,
-    recipeDigest,
-    entries: input.entries,
-  });
-  const executionDigest = domainHash(
-    "vibestudio/execution/v1",
-    canonicalJson(canonicalSource(input.source)),
-    recipeDigest,
-    manifest.buildKey,
-    artifactDigest
-  );
-  return {
-    ref: {
-      source: canonicalSource(input.source),
-      recipeDigest,
-      buildKey: manifest.buildKey,
-      artifactDigest,
-      executionDigest,
-    },
-    manifest,
-  };
-}
-
-export function codePrincipal(ref: ExecutionArtifactRef): string {
-  verifyExecutionArtifactRef(ref);
-  return `code:${ref.source.repoPath}@${ref.executionDigest}`;
-}
-
-export function verifyExecutionArtifactRef(ref: ExecutionArtifactRef): void {
-  canonicalRepoPath(ref.source.repoPath);
-  parseSha256(ref.source.sourceEv, "source EV");
-  parseSha256(ref.source.stateHash, "state hash");
-  parseSha256(ref.recipeDigest, "recipe digest");
-  const expectedBuildKey = computeBuildKey(ref.source, ref.recipeDigest);
-  if (ref.buildKey !== expectedBuildKey) {
-    throw new Error(`Execution artifact build key mismatch: expected ${expectedBuildKey}`);
-  }
-  parseSha256(ref.artifactDigest, "artifact digest");
-  const expectedExecution = domainHash(
-    "vibestudio/execution/v1",
-    canonicalJson(canonicalSource(ref.source)),
-    ref.recipeDigest,
-    ref.buildKey,
-    ref.artifactDigest
-  );
-  if (ref.executionDigest !== expectedExecution) {
-    throw new Error(`Execution digest mismatch: expected ${expectedExecution}`);
-  }
 }
 
 function canonicalRepoPath(input: string): string {

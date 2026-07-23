@@ -100,7 +100,7 @@ To adopt dependency changes (a `@workspace/runtime` push, an `npm` version bump)
 | Symptom                             | Cause                                                                     | Fix                                                                           |
 | ----------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `MANIFEST_KIND`                     | `package.json` is missing `vibestudio.extension` (or has two kind blocks) | Add exactly one `vibestudio.extension` block                                  |
-| `MANIFEST_ACTIVATION`               | `activationEvents` is not `["*"]`                                         | Lazy activation is future work — must be `["*"]` in v1                        |
+| `MANIFEST_ACTIVATION`               | `activationEvents` is not exactly `["*"]` or `["onInvoke"]`               | Choose eager workspace startup or start-on-first-invocation                    |
 | Stays in `error` after update       | `activate()` threw                                                        | Check `lastError` on `workspace.units.list()`; look at the inspector log      |
 | `Cannot find module ...` at runtime | Dep was externalized but missing from runtime install                     | Set `dependencyMode: "external"` and confirm the package is in `dependencies` |
 | `Named export ... not found`        | ESM imported a named export from a CJS package                            | Use `import pkg from "x"; const { fn } = pkg;`                                |

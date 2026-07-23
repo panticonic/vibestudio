@@ -12,7 +12,7 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/pi-ai@0.80.6':
-    hash: 1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8
+    hash: c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092
     path: packages/harness/patches/@earendil-works__pi-ai@0.80.6.patch
   re2@1.24.0:
     hash: a4a166273fe3817fd493cfc042f1d966f4ada60f1234330cd306e798259b549b
@@ -83,6 +83,9 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       sql.js:
         specifier: ^1.14.0
@@ -346,6 +349,13 @@ importers:
         version: 5.9.3
 
   ../packages/unit-host:
+    dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -945,7 +955,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
       '@sinclair/typebox':
         specifier: ^0.27.8
         version: 0.27.10
@@ -1112,7 +1122,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -1143,6 +1153,9 @@ importers:
       unpdf:
         specifier: ^1.6.2
         version: 1.6.2
+      yaml:
+        specifier: ^2.8.1
+        version: 2.9.0
     devDependencies:
       '@types/diff':
         specifier: ^7.0.0
@@ -1281,7 +1294,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
       ignore:
         specifier: 7.0.5
         version: 7.0.5
@@ -2052,7 +2065,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
       '@vibestudio/trajectory-identity':
         specifier: workspace:*
         version: link:../../../packages/trajectory-identity
@@ -2112,7 +2125,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
@@ -8354,7 +8367,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.80.6(patch_hash=1a205576c83af17929e2841c37bb8ec7d4a9b5467e98a7328fb162f5bb3b73f8)(ws@8.21.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0

@@ -15,6 +15,10 @@
       "workerd": "./src/worker/index.ts",
       "default": "./src/worker/index.ts"
     },
+    "./panel": {
+      "vibestudio-panel": "./src/panel/index.ts",
+      "default": "./src/panel/index.ts"
+    },
     "./hosted": "./src/shared/hostedRuntime.ts",
     "./panel-runtime": "./src/shared/panelRuntime.ts",
     "./portable": "./src/shared/portable.ts",

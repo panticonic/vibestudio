@@ -74,6 +74,108 @@ const flushMicrotasks = async (): Promise<void> => {
 };
 
 describe("createRpcClient", () => {
+  it("waits for one structured authority acquisition and retries the exact invocation", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "code:worker",
+      callerKind: "worker",
+      transport: inProcessTransport("code:worker", network),
+      authorityAcquisition: "wait",
+    });
+    const server = createRpcClient({
+      selfId: "main",
+      callerKind: "server",
+      transport: inProcessTransport("main", network),
+    });
+    let approved = false;
+    const invocations: unknown[][] = [];
+    server.expose("protected.run", async ({ args }) => {
+      invocations.push(args);
+      if (!approved) {
+        throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
+          acquisition: { acquisitionId: "acq:exact", ownerRuntimeId: "code:worker" },
+        });
+      }
+      return "done";
+    });
+    server.expose("authority.awaitDecision", async ({ args }) => {
+      expect(args).toEqual([{ acquisitionId: "acq:exact" }]);
+      approved = true;
+      return { state: "decided" };
+    });
+
+    await expect(caller.call("main", "protected.run", ["same", 1])).resolves.toBe("done");
+    expect(invocations).toEqual([
+      ["same", 1],
+      ["same", 1],
+    ]);
+  });
+
+  it("does not attach an operation timeout to the human authority wait", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "code:worker",
+      callerKind: "worker",
+      transport: inProcessTransport("code:worker", network),
+      authorityAcquisition: "wait",
+    });
+    const server = createRpcClient({
+      selfId: "main",
+      callerKind: "server",
+      transport: inProcessTransport("main", network),
+    });
+    let release!: () => void;
+    const decision = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let approved = false;
+    server.expose("protected.run", async () => {
+      if (!approved) {
+        throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
+          acquisition: { acquisitionId: "acq:slow", ownerRuntimeId: "code:worker" },
+        });
+      }
+      return "done";
+    });
+    server.expose("authority.awaitDecision", async () => {
+      await decision;
+      approved = true;
+      return { state: "decided" };
+    });
+
+    const pending = caller.call("main", "protected.run", [], { timeoutMs: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    release();
+    await expect(pending).resolves.toBe("done");
+  });
+
+  it("does not acquire a nested invocation owned by another runtime", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "code:outer",
+      callerKind: "worker",
+      transport: inProcessTransport("code:outer", network),
+      authorityAcquisition: "wait",
+    });
+    const server = createRpcClient({
+      selfId: "main",
+      callerKind: "server",
+      transport: inProcessTransport("main", network),
+    });
+    const wait = vi.fn();
+    server.expose("protected.run", async () => {
+      throw new RpcBoundaryError("inner approval required", "access", "EACQUIRE", undefined, {
+        acquisition: { acquisitionId: "acq:inner", ownerRuntimeId: "code:inner" },
+      });
+    });
+    server.expose("authority.awaitDecision", wait);
+
+    await expect(caller.call("main", "protected.run", [])).rejects.toMatchObject({
+      code: "EACQUIRE",
+    });
+    expect(wait).not.toHaveBeenCalled();
+  });
+
   it("binds a caller signal to the original transport request", async () => {
     let requestSignal: AbortSignal | undefined;
     const transport: EnvelopeRpcTransport = {
@@ -444,6 +546,32 @@ describe("createRpcClient", () => {
       const body = response.text();
       await vi.advanceTimersByTimeAsync(100);
       await expect(body).resolves.toBe("later");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves streaming HEAD and body waits unbounded by default", async () => {
+    vi.useFakeTimers();
+    try {
+      const network = createInProcessNetwork();
+      const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
+      const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
+
+      b.exposeStreaming("slow", async (_req, sink) => {
+        await new Promise((resolve) => setTimeout(resolve, 100_000));
+        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        await new Promise((resolve) => setTimeout(resolve, 100_000));
+        await sink({ kind: "chunk", bytes: new TextEncoder().encode("eventually") });
+        await sink({ kind: "end", bytesIn: 10 });
+      });
+
+      const responsePromise = a.stream("b", "slow", []);
+      await vi.advanceTimersByTimeAsync(100_000);
+      const response = await responsePromise;
+      const body = response.text();
+      await vi.advanceTimersByTimeAsync(100_000);
+      await expect(body).resolves.toBe("eventually");
     } finally {
       vi.useRealTimers();
     }

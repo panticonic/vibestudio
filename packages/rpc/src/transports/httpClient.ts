@@ -1,7 +1,17 @@
 import type { EnvelopeRpcTransport, RpcEnvelope, RpcRequest } from "../types.js";
 import { decodeFramedResponseToStreaming } from "../protocol/streamCodec.js";
 
-const rpcFetch = globalThis.fetch.bind(globalThis);
+// Do not capture ambient network authority at module evaluation time. Library
+// bundles are routinely loaded inside confined eval realms even when the
+// caller supplies an explicit transport. Resolve the ambient primitive only
+// when that fallback is actually invoked.
+const ambientRpcFetch: typeof fetch = (input, init) => {
+  const fetchImpl = globalThis.fetch;
+  if (typeof fetchImpl !== "function") {
+    throw new Error("RPC HTTP transport requires an explicit fetch implementation");
+  }
+  return Reflect.apply(fetchImpl, globalThis, [input, init]) as Promise<Response>;
+};
 
 export interface HttpClientTransportConfig {
   selfId: string;
@@ -93,7 +103,7 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
   // produces a response envelope by calling `send()`, which resolves the
   // matching capture instead of POSTing it back to the server.
   const captures = new Map<string, (envelope: RpcEnvelope) => void>();
-  const fetchImpl = config.fetch ?? rpcFetch;
+  const fetchImpl = config.fetch ?? ambientRpcFetch;
   const runtimeIdHeader = config.runtimeIdHeader ?? "X-vibestudio-Runtime-Id";
   const rpcUrl = `${config.serverUrl}/rpc`;
   const streamUrl = `${config.serverUrl}/rpc/stream`;

@@ -9,70 +9,23 @@
     "sourcemap": true,
     "extension": {
       "activationEvents": [
-        "*"
+        "onInvoke"
       ],
       "dependencyMode": "external"
     },
     "authority": {
       "requests": [
         {
-          "capability": "service:extensions.health",
+          "capability": "context.boundary",
           "resource": {
             "kind": "prefix",
             "prefix": ""
-          }
-        },
-        {
-          "capability": "service:extensions.log",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:extensions.ready",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:fs.ensureMaterialized",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:fs.open",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:fs.readFile",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:fs.realpath",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
-        },
-        {
-          "capability": "service:fs.stat",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          }
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
         }
       ],
-      "delegations": []
+      "evalCeilings": []
     }
   },
   "dependencies": {

@@ -24,6 +24,26 @@ describe("validateUnitManifest", () => {
         { unitName: "@workspace-extensions/a" }
       )
     ).not.toThrow();
+
+    expect(() =>
+      validateUnitManifest(
+        extensionUnitManifestDescriptor,
+        { extension: { activationEvents: ["onInvoke"] } },
+        { unitName: "@workspace-extensions/lazy" }
+      )
+    ).not.toThrow();
+  });
+
+  it("rejects ambiguous or unknown extension activation policies", () => {
+    for (const activationEvents of [[], ["*", "onInvoke"], ["onCommand"]]) {
+      expect(() =>
+        validateUnitManifest(
+          extensionUnitManifestDescriptor,
+          { extension: { activationEvents } },
+          { unitName: "@workspace-extensions/a" }
+        )
+      ).toThrow(/exactly \["\*"\] or \["onInvoke"\]/);
+    }
   });
 
   it("rejects malformed provider contract namespaces", () => {

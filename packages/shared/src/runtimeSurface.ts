@@ -4,6 +4,7 @@ export type RuntimeSurfaceTarget = "panel" | "workerRuntime";
  * canonical Zod contract. Keeping this as data lets the host catalog expose
  * full child-method docs without importing or executing userland code. */
 export interface RuntimeSurfaceMethodDoc {
+  signature?: string;
   description?: string;
   access?: Record<string, unknown>;
   argsSchema?: Record<string, unknown>;

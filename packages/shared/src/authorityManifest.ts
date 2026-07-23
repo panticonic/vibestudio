@@ -1,6 +1,5 @@
 import type { CapabilityScope, ResourceScope } from "@vibestudio/rpc";
 import type { BuildRecipe, CanonicalBuildValue } from "./execution/identity.js";
-import extensionRuntimeAuthority from "./extensionRuntimeAuthority.json";
 
 export interface UnitAuthorityManifest {
   /**
@@ -8,55 +7,41 @@ export interface UnitAuthorityManifest {
    * A request is never a grant. Product/user grants still have to intersect it.
    * A trailing `*` is the only supported capability wildcard.
    */
-  requests: readonly CapabilityScope[];
-  /** Maximum host authority this exact artifact may delegate to evaluated code. */
-  delegations: readonly EvalAuthorityDelegation[];
+  requests: readonly UnitAuthorityRequest[];
+  /** Maximum authority this exact artifact may expose to evaluated code. Never a request or grant. */
+  evalCeilings: readonly EvalAuthorityCeiling[];
 }
 
-export type EvalDelegationPurpose = "agentic-code-execution" | "tool-eval" | "test-eval";
+export type AuthorityRequestTier = "gated" | "critical";
+export type AuthorityEvidenceClass = "exact" | "bounded-dynamic" | "intentional-broad";
 
-export interface EvalAuthorityDelegation {
+export interface UnitAuthorityRequest extends CapabilityScope {
+  tier: AuthorityRequestTier;
+  evidence: AuthorityEvidenceClass;
+  /** Dependency packages initially routed this endowment; absent means first-party code only. */
+  packages?: readonly string[];
+}
+
+export type EvalCeilingPurpose = "agentic-code-execution" | "tool-eval" | "test-eval";
+
+export interface EvalAuthorityCeiling {
   audience: "eval";
-  purpose: EvalDelegationPurpose;
-  capabilities: readonly CapabilityScope[];
+  purpose: EvalCeilingPurpose;
+  capabilities: readonly UnitAuthorityRequest[];
 }
 
-export const NO_AUTHORITY_REQUESTS: readonly CapabilityScope[] = Object.freeze([]);
+export const NO_AUTHORITY_REQUESTS: readonly UnitAuthorityRequest[] = Object.freeze([]);
 
 /**
  * Host runtime protocol used by every extension bundle, independently of the
  * extension's own source. These requests are sealed into the effective build
  * authority because childRuntime performs them as part of activation.
  */
-export const EXTENSION_RUNTIME_BASE_CAPABILITIES: readonly string[] = Object.freeze(
-  extensionRuntimeAuthority.capabilities.map((capability) => canonicalCapabilityPattern(capability))
-);
-
-export function withExtensionRuntimeAuthority(
-  authority: UnitAuthorityManifest,
-  label = "extension runtime authority"
-): UnitAuthorityManifest {
-  const requests = [...authority.requests];
-  for (const capability of EXTENSION_RUNTIME_BASE_CAPABILITIES) {
-    if (
-      requests.some(
-        (request) =>
-          request.capability === capability &&
-          request.resource.kind === "prefix" &&
-          request.resource.prefix === ""
-      )
-    ) {
-      continue;
-    }
-    requests.push({ capability, resource: { kind: "prefix", prefix: "" } });
-  }
-  return parseUnitAuthorityManifest({ requests, delegations: authority.delegations }, label);
-}
-
 export function parseAuthorityRequests(
   value: unknown,
-  label = "vibestudio.authority"
-): readonly CapabilityScope[] {
+  label = "vibestudio.authority",
+  options: { allowCapabilityWildcards?: boolean } = {}
+): readonly UnitAuthorityRequest[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object with a requests array`);
   }
@@ -70,41 +55,77 @@ export function parseAuthorityRequests(
       throw new Error(`${label}.requests[${index}] must be a capability scope`);
     }
     const candidate = request as Record<string, unknown>;
-    if (
-      Object.keys(candidate).some((key) => key !== "capability" && key !== "resource") ||
-      typeof candidate["capability"] !== "string"
-    ) {
-      throw new Error(`${label}.requests[${index}] has an invalid capability scope shape`);
+    const requestLabel = `${label}.requests[${index}]`;
+    const unknownKeys = Object.keys(candidate).filter(
+      (key) => !["capability", "resource", "tier", "evidence", "packages"].includes(key)
+    );
+    if (unknownKeys.length > 0) {
+      throw new Error(`${requestLabel} has unknown field(s): ${unknownKeys.join(", ")}`);
     }
-    const capability = canonicalCapabilityPattern(candidate["capability"]);
-    const resource = parseResourceScope(candidate["resource"], `${label}.requests[${index}]`);
-    const key = `${capability}\0${JSON.stringify(resource)}`;
+    if (typeof candidate["capability"] !== "string") {
+      throw new Error(`${requestLabel}.capability must be a string`);
+    }
+    if (!(["gated", "critical"] as const).includes(candidate["tier"] as never)) {
+      throw new Error(
+        `${requestLabel}.tier must be "gated" or "critical"; RPC receiver tier "open" is not a manifest request tier`
+      );
+    }
+    if (
+      !(["exact", "bounded-dynamic", "intentional-broad"] as const).includes(
+        candidate["evidence"] as never
+      )
+    ) {
+      throw new Error(
+        `${requestLabel}.evidence must be "exact", "bounded-dynamic", or "intentional-broad"`
+      );
+    }
+    const capability = canonicalCapabilityPattern(
+      candidate["capability"],
+      options.allowCapabilityWildcards === true
+    );
+    const resource = parseResourceScope(candidate["resource"], requestLabel);
+    const packages = parsePackages(candidate["packages"], requestLabel);
+    const evidence = candidate["evidence"] as AuthorityEvidenceClass;
+    if (evidence === "exact" && resource.kind !== "exact") {
+      throw new Error(`${label}.requests[${index}] exact evidence requires an exact resource`);
+    }
+    if (
+      evidence === "intentional-broad" &&
+      !(resource.kind === "prefix" && resource.prefix === "") &&
+      resource.kind !== "network"
+    ) {
+      throw new Error(`${label}.requests[${index}] intentional-broad evidence requires a broad resource`);
+    }
+    const tier = candidate["tier"] as AuthorityRequestTier;
+    const key = `${capability}\0${tier}\0${JSON.stringify(resource)}\0${JSON.stringify(packages)}`;
     if (seen.has(key)) throw new Error(`${label}.requests contains a duplicate scope`);
     seen.add(key);
-    return { capability, resource } satisfies CapabilityScope;
+    return {
+      capability,
+      resource,
+      tier,
+      evidence,
+      ...(packages ? { packages } : {}),
+    } satisfies UnitAuthorityRequest;
   });
   return Object.freeze(
-    requests.sort((a, b) =>
-      `${a.capability}\0${JSON.stringify(a.resource)}`.localeCompare(
-        `${b.capability}\0${JSON.stringify(b.resource)}`
-      )
-    )
+    requests.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
   );
 }
 
-export function parseAuthorityDelegations(
+export function parseAuthorityEvalCeilings(
   value: unknown,
   label = "vibestudio.authority"
-): readonly EvalAuthorityDelegation[] {
+): readonly EvalAuthorityCeiling[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be an object with a delegations array`);
+    throw new Error(`${label} must be an object with a evalCeilings array`);
   }
-  const raw = (value as Record<string, unknown>)["delegations"];
-  if (!Array.isArray(raw)) throw new Error(`${label} must contain a delegations array`);
+  const raw = (value as Record<string, unknown>)["evalCeilings"];
+  if (!Array.isArray(raw)) throw new Error(`${label} must contain a evalCeilings array`);
   const seen = new Set<string>();
-  const delegations = raw.map((entry, index) => {
+  const evalCeilings = raw.map((entry, index) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error(`${label}.delegations[${index}] must be an eval delegation`);
+      throw new Error(`${label}.evalCeilings[${index}] must be an eval ceiling`);
     }
     const record = entry as Record<string, unknown>;
     if (
@@ -115,24 +136,25 @@ export function parseAuthorityDelegations(
       !["agentic-code-execution", "tool-eval", "test-eval"].includes(String(record["purpose"])) ||
       !Array.isArray(record["capabilities"])
     ) {
-      throw new Error(`${label}.delegations[${index}] has an invalid shape`);
+      throw new Error(`${label}.evalCeilings[${index}] has an invalid shape`);
     }
     const capabilities = parseAuthorityRequests(
       { requests: record["capabilities"] },
-      `${label}.delegations[${index}].capabilities`
+      `${label}.evalCeilings[${index}].capabilities`,
+      { allowCapabilityWildcards: true }
     );
-    const delegation = {
+    const ceiling = {
       audience: "eval",
-      purpose: record["purpose"] as EvalDelegationPurpose,
+      purpose: record["purpose"] as EvalCeilingPurpose,
       capabilities,
-    } satisfies EvalAuthorityDelegation;
-    const key = JSON.stringify(delegation);
-    if (seen.has(key)) throw new Error(`${label}.delegations contains a duplicate declaration`);
+    } satisfies EvalAuthorityCeiling;
+    const key = JSON.stringify(ceiling);
+    if (seen.has(key)) throw new Error(`${label}.evalCeilings contains a duplicate declaration`);
     seen.add(key);
-    return delegation;
+    return ceiling;
   });
   return Object.freeze(
-    delegations.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+    evalCeilings.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
   );
 }
 
@@ -143,38 +165,49 @@ export function parseUnitAuthorityManifest(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
   }
-  const keys = Object.keys(value as Record<string, unknown>).sort();
-  if (keys.join(",") !== "delegations,requests") {
-    throw new Error(`${label} must contain exactly requests and delegations arrays`);
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  const unknownKeys = keys.filter((key) => key !== "requests" && key !== "evalCeilings");
+  if (unknownKeys.length > 0) {
+    throw new Error(`${label} has unknown field(s): ${unknownKeys.join(", ")}`);
+  }
+  if (keys.length === 0) {
+    throw new Error(`${label} must contain a requests or evalCeilings array`);
   }
   return Object.freeze({
-    requests: parseAuthorityRequests(value, label),
-    delegations: parseAuthorityDelegations(value, label),
+    requests:
+      record["requests"] === undefined
+        ? NO_AUTHORITY_REQUESTS
+        : parseAuthorityRequests(value, label),
+    evalCeilings:
+      record["evalCeilings"] === undefined
+        ? Object.freeze([])
+        : parseAuthorityEvalCeilings(value, label),
   });
 }
 
 export function authorityRequestsFromManifest(
   manifest: { authority?: unknown },
   label: string
-): readonly CapabilityScope[] {
+): readonly UnitAuthorityRequest[] {
   if (manifest.authority === undefined) {
     throw new Error(`${label} must declare vibestudio.authority.requests`);
   }
   return parseUnitAuthorityManifest(manifest.authority, `${label} vibestudio.authority`).requests;
 }
 
-export function authorityDelegationsFromManifest(
+export function authorityEvalCeilingsFromManifest(
   manifest: { authority?: unknown },
   label: string
-): readonly EvalAuthorityDelegation[] {
+): readonly EvalAuthorityCeiling[] {
   if (manifest.authority === undefined) {
-    throw new Error(`${label} must declare vibestudio.authority.delegations`);
+    throw new Error(`${label} must declare vibestudio.authority.evalCeilings`);
   }
   return parseUnitAuthorityManifest(manifest.authority, `${label} vibestudio.authority`)
-    .delegations;
+    .evalCeilings;
 }
 
-export function authorityRequestsFromRecipe(recipe: BuildRecipe): readonly CapabilityScope[] {
+export function authorityRequestsFromRecipe(recipe: BuildRecipe): readonly UnitAuthorityRequest[] {
   const raw = recipe.options["authorityRequests"];
   if (!Array.isArray(raw)) {
     throw new Error("Execution recipe is missing immutable authority requests");
@@ -185,25 +218,28 @@ export function authorityRequestsFromRecipe(recipe: BuildRecipe): readonly Capab
   );
 }
 
-export function authorityDelegationsFromRecipe(
+export function authorityEvalCeilingsFromRecipe(
   recipe: BuildRecipe
-): readonly EvalAuthorityDelegation[] {
-  const raw = recipe.options["authorityDelegations"];
+): readonly EvalAuthorityCeiling[] {
+  const raw = recipe.options["authorityEvalCeilings"];
   if (!Array.isArray(raw)) {
-    throw new Error("Execution recipe is missing immutable authority delegations");
+    throw new Error("Execution recipe is missing immutable authority evalCeilings");
   }
-  return parseAuthorityDelegations(
-    { delegations: raw },
-    `execution recipe ${recipe.target} authorityDelegations`
+  return parseAuthorityEvalCeilings(
+    { evalCeilings: raw },
+    `execution recipe ${recipe.target} authorityEvalCeilings`
   );
 }
 
 export function authorityRequestsAsBuildValue(
-  requests: readonly CapabilityScope[]
+  requests: readonly UnitAuthorityRequest[]
 ): readonly CanonicalBuildValue[] {
   return requests.map(
     (scope): CanonicalBuildValue => ({
       capability: scope.capability,
+      tier: scope.tier,
+      evidence: scope.evidence,
+      ...(scope.packages ? { packages: [...scope.packages] } : {}),
       resource:
         scope.resource.kind === "exact"
           ? { kind: "exact", key: scope.resource.key }
@@ -218,13 +254,33 @@ export function authorityRequestsAsBuildValue(
   );
 }
 
-export function authorityDelegationsAsBuildValue(
-  delegations: readonly EvalAuthorityDelegation[]
+function parsePackages(value: unknown, label: string): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some(
+      (entry) =>
+        typeof entry !== "string" ||
+        entry.length === 0 ||
+        entry !== entry.trim() ||
+        !/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(entry)
+    )
+  ) {
+    throw new Error(`${label}.packages must be a non-empty package-name array`);
+  }
+  const packages = [...new Set(value)].sort();
+  if (packages.length !== value.length) throw new Error(`${label}.packages contains duplicates`);
+  return Object.freeze(packages);
+}
+
+export function authorityEvalCeilingsAsBuildValue(
+  evalCeilings: readonly EvalAuthorityCeiling[]
 ): readonly CanonicalBuildValue[] {
-  return delegations.map((delegation) => ({
-    audience: delegation.audience,
-    purpose: delegation.purpose,
-    capabilities: authorityRequestsAsBuildValue(delegation.capabilities),
+  return evalCeilings.map((ceiling) => ({
+    audience: ceiling.audience,
+    purpose: ceiling.purpose,
+    capabilities: authorityRequestsAsBuildValue(ceiling.capabilities),
   }));
 }
 
@@ -233,13 +289,14 @@ export function capabilityPatternCovers(pattern: string, capability: string): bo
   return capability.startsWith(pattern.slice(0, -1));
 }
 
-function canonicalCapabilityPattern(value: string): string {
+function canonicalCapabilityPattern(value: string, allowWildcard = false): string {
   if (
     value.length === 0 ||
     value !== value.trim() ||
     value.includes("\0") ||
     !/^[A-Za-z0-9][A-Za-z0-9._:/#-]*(?:\*)?$/.test(value) ||
-    value.slice(0, -1).includes("*")
+    value.slice(0, -1).includes("*") ||
+    (!allowWildcard && value.endsWith("*"))
   ) {
     throw new Error(`Invalid capability pattern: ${JSON.stringify(value)}`);
   }

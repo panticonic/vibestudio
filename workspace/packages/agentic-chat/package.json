@@ -4,6 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
+    "./chat": "./components/AgenticChat.tsx",
+    "./error-boundary": "./components/ErrorBoundary.tsx",
     "./types": "./types.ts",
     "./styles.css": "./styles.css"
   },

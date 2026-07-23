@@ -10,6 +10,19 @@ export interface ServiceAuthorityPolicy {
 /** Restrictedness / destructiveness tier — drives read-only gating, UX, audit. */
 export type MethodSensitivity = "read" | "write" | "admin" | "destructive";
 
+/**
+ * Reviewed authority tier carried by the method contract itself. Runtime-only
+ * and workspace-discovered services cannot depend on a checkout-wide census;
+ * static host services may continue to use the reviewed host table as a
+ * fallback while they migrate to colocated declarations.
+ */
+export interface MethodTierPolicy {
+  tier: "open" | "gated" | "critical";
+  session: "family" | "codeOnly";
+  rationale: string;
+  scopeSplit?: string;
+}
+
 /** Human-facing explanation of a conditional principal narrowing. */
 export interface AccessRestriction {
   when: string;

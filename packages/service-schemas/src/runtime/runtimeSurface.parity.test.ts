@@ -36,6 +36,14 @@ describe("runtime surface schemaRef parity", () => {
     expect(credentials.description).toContain("fetch(url, init?, { credentialId? }?)");
   });
 
+  it("distinguishes workspace build health from live worker discovery", () => {
+    const workspace = portableExports["workspace"];
+    if (!workspace) throw new Error("missing workspace runtime surface");
+    expect(workspace.description).toContain("registered units and their build state");
+    expect(workspace.description).toContain("workers.listSources()");
+    expect(workspace.description).toContain("workers.list()");
+  });
+
   it("carries generated typed docs for every GAD runtime method", () => {
     const gad = portableExports["gad"];
     if (!gad) throw new Error("missing GAD runtime surface");

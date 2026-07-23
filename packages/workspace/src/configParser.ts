@@ -424,6 +424,11 @@ export function workspaceExtensionPackageName(source: string): string {
   return `${WORKSPACE_EXTENSION_PACKAGE_SCOPE}${repoPath.slice("extensions/".length)}`;
 }
 
+/** `extensions/name` | `@workspace-extensions/name` -> `extensions/name`. */
+export function workspaceExtensionRepoPath(source: string): string {
+  return canonicalUnitRepoPath(source, EXTENSION_UNIT, "extension source");
+}
+
 export const WORKSPACE_EXTENSION_PROVIDER_NAMES = [
   "browserData",
   "gitInterop",

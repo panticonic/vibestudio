@@ -127,6 +127,33 @@ describe("bootstrap approvals", () => {
     ).toEqual([]);
   });
 
+  it("keeps one mixed first-start review on the bootstrap surface", () => {
+    const mixedStartup = unitBatch("startup", {
+      target: "electron",
+      extraUnits: [
+        {
+          unitKind: "panel",
+          unitName: "@workspace-panels/chat",
+          displayName: "Chat",
+          source: { kind: "workspace-repo", repo: "panels/chat", ref: "HEAD" },
+          ev: "ev:panel",
+          capabilities: [],
+        },
+        {
+          unitKind: "worker",
+          unitName: "@workspace-workers/agent-worker",
+          displayName: "Agent worker",
+          source: { kind: "workspace-repo", repo: "workers/agent-worker", ref: "HEAD" },
+          ev: "ev:worker",
+          capabilities: [],
+        },
+      ],
+    });
+
+    expect(filterBootstrapApprovalsForTarget([mixedStartup], "electron")).toEqual([mixedStartup]);
+    expect(filterRuntimeApprovals([mixedStartup])).toEqual([]);
+  });
+
   it("can still narrow app meta approvals to one host target", () => {
     expect(
       filterBootstrapApprovalsForTarget(

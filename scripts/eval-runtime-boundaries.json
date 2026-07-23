@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "kernelCapabilities": [
+    "service:blobstore.getText",
+    "service:blobstore.putText",
+    "service:eval.beginCleanup",
+    "service:eval.renew",
+    "service:events.unsubscribeAll",
+    "service:runtime.cleanupEvalOwnedContext"
+  ],
+  "directSurfaceReachability": [
+    {
+      "runtimeSources": [
+        "workers/agent-worker",
+        "workers/explorer-agent",
+        "workers/gmail-agent",
+        "workers/linked-agent",
+        "workers/news-agent",
+        "workers/silent-agent-worker",
+        "workers/test-agent"
+      ],
+      "definitionSource": "packages/agentic-do",
+      "methods": [
+        "canFork",
+        "chatOp",
+        "deliverEffectOutcome",
+        "getModelExecutionEvidence",
+        "initFromTrajectoryFork",
+        "onChannelEnvelope",
+        "onDeferredResult",
+        "onEvalComplete",
+        "onEvalProgress",
+        "onMethodCall",
+        "onSubagentComplete",
+        "postClone",
+        "subscribeChannel",
+        "unsubscribeChannel"
+      ]
+    }
+  ]
+}

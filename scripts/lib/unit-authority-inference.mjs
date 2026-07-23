@@ -187,6 +187,36 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
 }
 
 /**
+ * Effects exposed by typed workspace API methods. Unlike transport literals in
+ * an implementation module, these are charged only at actual call sites in the
+ * executable module graph.
+ */
+export function inferTypedWorkspaceEffects(source) {
+  const effects = new Set();
+  const methodEffects = new Map([
+    ["removeMember", "channel.members.remove"],
+  ]);
+  for (const scriptKind of [ts.ScriptKind.TS, ts.ScriptKind.TSX]) {
+    const parsed = ts.createSourceFile(
+      scriptKind === ts.ScriptKind.TS ? "typed-effects.ts" : "typed-effects.tsx",
+      source,
+      ts.ScriptTarget.Latest,
+      false,
+      scriptKind
+    );
+    const visit = (node) => {
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+        const effect = methodEffects.get(node.expression.name.text);
+        if (effect) effects.add(effect);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(parsed);
+  }
+  return effects;
+}
+
+/**
  * EventsClient selects its service name in the constructor and performs the
  * eventual RPC through a dynamic method variable. Infer that typed wrapper at
  * the construction site so callers cannot silently receive an empty sealed
@@ -223,6 +253,59 @@ export function inferEventsClientCapabilities(source, serviceMethods) {
     ts.forEachChild(node, visit);
   };
   for (const sourceFile of sourceFiles) visit(sourceFile);
+  return capabilities;
+}
+
+/**
+ * Infer only methods actually selected from a literal typed-service client.
+ * Constructing a client over a schema does not make every schema member
+ * reachable: private clients are commonly wrapped by a deliberately smaller
+ * exported API. Charging the whole schema would turn a typing implementation
+ * detail into authority and inflate manifests whenever a host service grows.
+ */
+export function inferTypedServiceClientCapabilities(source, hostCapabilities) {
+  const capabilities = new Set();
+  for (const scriptKind of [ts.ScriptKind.TS, ts.ScriptKind.TSX]) {
+    const parsed = ts.createSourceFile(
+      scriptKind === ts.ScriptKind.TS ? "typed-clients.ts" : "typed-clients.tsx",
+      source,
+      ts.ScriptTarget.Latest,
+      false,
+      scriptKind
+    );
+    const clients = new Map();
+    const collect = (node) => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer &&
+        ts.isCallExpression(node.initializer) &&
+        ts.isIdentifier(node.initializer.expression) &&
+        node.initializer.expression.text === "createTypedServiceClient"
+      ) {
+        const service = node.initializer.arguments[0];
+        if (service && ts.isStringLiteralLike(service)) clients.set(node.name.text, service.text);
+      }
+      ts.forEachChild(node, collect);
+    };
+    collect(parsed);
+
+    const inspect = (node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression)
+      ) {
+        const service = clients.get(node.expression.expression.text);
+        if (service) {
+          const capability = `service:${service}.${node.expression.name.text}`;
+          if (hostCapabilities.has(capability)) capabilities.add(capability);
+        }
+      }
+      ts.forEachChild(node, inspect);
+    };
+    inspect(parsed);
+  }
   return capabilities;
 }
 

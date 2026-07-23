@@ -24,7 +24,7 @@ const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
 const USERLAND_READ_POLICY: ServiceAuthorityPolicy = {
-  principals: ["user", "code", "entity", "host"],
+  principals: ["user", "code", "host"],
 };
 const REGISTER_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",

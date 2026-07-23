@@ -4,6 +4,7 @@ export interface ProductDurableObjectWorkspaceService {
   readonly kind: "durable-object";
   readonly name: string;
   readonly title: string;
+  readonly action?: string;
   readonly description: string;
   readonly protocols: readonly string[];
   readonly source: string;
