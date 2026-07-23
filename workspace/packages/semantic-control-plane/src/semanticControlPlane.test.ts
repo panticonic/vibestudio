@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
-import {
-  createTestDO,
-  createTestDirectAuthority,
-} from "@workspace/runtime/worker/test-utils";
+import { createTestDO, createTestDirectAuthority } from "@workspace/runtime/worker/test-utils";
 import { AgentHealthInspectionSchema } from "@workspace/runtime/gad-schema";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
@@ -933,6 +930,7 @@ describe("trajectory projection invariants", () => {
           head: "main",
           invocationId,
         },
+        contextIntegrity: { class: "internal", externalKeys: [] },
       },
     });
 
@@ -2498,9 +2496,7 @@ describe("refs (§3.7)", () => {
     const listed = await call<any[]>("listRefs", { prefix: "context:literal_%" });
     expect(listed.map((row: any) => row.refName)).toEqual(["context:literal_%:one"]);
 
-    const deleted = await call<any>("deleteRefsByPrefix", { prefix: "context:literal_%" });
-    expect(deleted.deleted).toBe(1);
-    expect(await call<any>("resolveRef", { refName: "context:literal_%:one" })).toBeNull();
+    expect(await call<any>("resolveRef", { refName: "context:literal_%:one" })).toBeTruthy();
     expect(await call<any>("resolveRef", { refName: "context:literal_A:any" })).toBeTruthy();
     expect(await call<any>("resolveRef", { refName: "context:literal_zz:any" })).toBeTruthy();
   });

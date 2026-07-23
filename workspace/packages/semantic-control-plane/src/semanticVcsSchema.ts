@@ -230,6 +230,12 @@ export function createSemanticVcsSchema(sql: SqlStorage): void {
       ),
       intent_summary TEXT,
       external_snapshot_json TEXT,
+      content_class TEXT NOT NULL CHECK (content_class IN ('internal', 'external')),
+      external_lineage_json TEXT NOT NULL CHECK (
+        json_valid(external_lineage_json) = 1
+        AND json_type(external_lineage_json) IS 'array'
+        AND (content_class = 'external' OR json_array_length(external_lineage_json) = 0)
+      ),
       normalization_protocol TEXT NOT NULL,
       created_at TEXT NOT NULL,
       CHECK (

@@ -45,11 +45,17 @@ function noEffectApplication(input: {
 }): ApplicationPersistencePlan {
   const externalSnapshot = input.externalSnapshot ?? null;
   const kind = externalSnapshot ? ("import" as const) : ("edit" as const);
+  const contentClass = externalSnapshot ? ("external" as const) : ("internal" as const);
+  const externalKeys = externalSnapshot
+    ? [`repo:${externalSnapshot.sourceUri}@${externalSnapshot.snapshotRevision}`]
+    : [];
   const workUnitId = workUnitIdentity({
     commandId: input.commandId,
     kind,
     intentSummary: null,
     externalSnapshot,
+    contentClass,
+    externalKeys,
   });
   const applicationId = applicationIdentity({
     workUnitId,
@@ -68,6 +74,8 @@ function noEffectApplication(input: {
       authoredChangeIds: [],
       intentSummary: null,
       externalSnapshot,
+      contentClass,
+      externalKeys,
       normalizationProtocol: NORMALIZATION_PROTOCOL,
       createdAt: timestamp,
     },
@@ -238,6 +246,8 @@ describe("SemanticVcsStore reduced spine", () => {
         kind: "import",
         intentSummary: null,
         externalSnapshot: null,
+        contentClass: "internal",
+        externalKeys: [],
       })
     );
     store.applyApplication(plan);

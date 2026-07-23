@@ -32,7 +32,7 @@
     },
     {
       "path": "references/contexts-and-state.md",
-      "sha256": "62a159c10bf070f3c250861b6db03d5f54f0bbf6849dbdda05ccc00a9fcb9433"
+      "sha256": "b3ee3948ad2dc214d23bc2066325445f80ab67bb22cf745f6d0aba56fd8c70ab"
     },
     {
       "path": "references/external-snapshot-import.md",
@@ -48,7 +48,7 @@
     },
     {
       "path": "references/public-contract.json",
-      "sha256": "75b88d33f78b454ad2f0091179361aa94bb09686ec7f33de6c727d4b9db0c900"
+      "sha256": "e48006794f1750cdafb71dd07541c5d893f6dd980e335a939832635683fc9d10"
     },
     {
       "path": "references/public-contract.md",
@@ -71,5 +71,5 @@
       "sha256": "d6488e08f359f811916e2ca1f11f7cacd16e341b95a7e3cc3ffd8b46b964be57"
     }
   ],
-  "packageDigest": "0c0e8332685da58723b5c9871f71671d59f3a757fe5a30e4c4465faeddf70c40"
+  "packageDigest": "38b3529aec9f2532f51f82c1b1a64e8ec5b5505ea0f90cc452ae611417d043c3"
 }
