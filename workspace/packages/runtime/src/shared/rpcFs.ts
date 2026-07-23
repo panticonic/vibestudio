@@ -84,6 +84,11 @@ export function createRpcFs(rpc: Pick<RpcClient, "call">): RuntimeFs {
         async mktemp(prefix?: string): Promise<string> {
             return call<string>("mktemp", prefix);
         },
+        async mkdtemp(prefix?: string): Promise<string> {
+            const path = await call<string>("mktemp", prefix);
+            await call<string | undefined>("mkdir", path, { recursive: true });
+            return path;
+        },
         async readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer> {
             const result = await call<string | BinaryEnvelope>("readFile", path, encoding);
             if (isBinaryEnvelope(result)) {

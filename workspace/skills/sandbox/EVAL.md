@@ -579,7 +579,11 @@ Pass an encoding such as `"utf-8"` when reading text. Without an encoding,
 
 Use `await help("fs")` for the live surface. Common methods include `readFile`,
 `writeFile`, `appendFile`, `readdir`, `stat`, `mkdir`, `rm`, `exists`,
-`copyFile`, `rename`, `open`, `grep`, `glob`, and `mktemp`.
+`copyFile`, `rename`, `open`, `grep`, `glob`, `mktemp`, and `mkdtemp`.
+
+`mktemp(prefix?)` returns an uncreated unique file path. `mkdtemp(prefix?)`
+creates and returns a unique directory. Use the form matching what you intend
+to create instead of treating a file path as an existing parent directory.
 
 `fs.open(path, flags?, mode?)` returns the portable low-level file-handle
 contract `{ fd, read, write, stat, close }` in eval, panels, workers, and

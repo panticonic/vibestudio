@@ -132,8 +132,10 @@ export interface RuntimeFs {
    * itself is not created — callers use the returned path for atomic writes
    * (write to tmp → rename into place). Analogous to the pattern used around
    * `os.tmpdir()` in Node tools.
-   */
+  */
   mktemp(prefix?: string): Promise<string>;
+  /** Create and return a unique context-local directory under `/.tmp`. */
+  mkdtemp(prefix?: string): Promise<string>;
   readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
   writeFile(path: string, data: string | RuntimeBinaryData): Promise<void>;
   readdir(path: string): Promise<string[]>;

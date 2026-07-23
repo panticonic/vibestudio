@@ -34,6 +34,11 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
       "NOT Node's mkdtemp (which creates the directory), and .tmp paths are scratch space, not " +
       "tracked edit/VCS destinations.",
   },
+  "fs.mkdtemp": {
+    description:
+      "mkdtemp(prefix?) → creates and returns a unique temp DIRECTORY under .tmp/. This is the " +
+      "Node-style directory counterpart to mktemp; use mktemp when you only need a unique file path.",
+  },
   "vcs.commit": {
     description:
       "commit({ contextId, expectedWorkingHead, commandId, integratesEventId?, message? }) → one atomic workspace event containing the complete local application chain. Integration parents are derived from local decisions; pass integratesEventId only for a zero-change source or to confirm the derived source. There is no staging or selective commit; use another context for an independent boundary.",
@@ -42,7 +47,10 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
     description:
       "Prefer workers.create(source, options) for regular workers. The raw equivalent is " +
       'rpc.call("main", `runtime.createEntity`, [{ kind: "worker", source, key, contextId, env, stateArgs }]). ' +
-      "`key` names the instance (it maps to the worker entity key); pass " +
+      "`key` names an immutable instance identity: it cannot silently switch to a different code " +
+      "build. For disposable edit-and-run probes, generate a fresh key after each code change and " +
+      "always retire the returned handle in finally; for a stable key, retire the old instance " +
+      "before deliberately creating its replacement. Pass " +
       "`ref: ctx:${ctx.contextId}` only when deliberately resolving code from that semantic context, " +
       "and omit ref only when intentionally launching the current main build. The build resolver binds either selector to an exact source identity before compilation. `env` accepts extra string " +
       "bindings delivered to the worker fetch handler's WorkerEnv; successful creation proves the " +
@@ -57,6 +65,18 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
       "Prefer workers.destroy(entityOrId) for regular workers and disposable resolved Durable Objects. The raw equivalent is " +
       'rpc.call("main", `runtime.retireEntity`, [{ id }]), passing the entity id returned by ' +
       "runtime.createEntity or the targetId returned by workers.resolveDurableObject. Resolving a shared service does not transfer ownership; retire only entities whose lifecycle you own. Verify retirement with runtime.listEntities.",
+  },
+  "workers.create": {
+    description:
+      "create(source, options?) → worker handle { id, targetId, … }. options.key is an immutable " +
+      "instance identity and never silently changes code builds. Use a fresh key for each disposable " +
+      "edit-and-run probe, call the worker through handle.targetId, and await workers.destroy(handle) " +
+      "in finally. To reuse a stable key after a source update, retire its old instance first.",
+  },
+  "workers.destroy": {
+    description:
+      "destroy(handleOrId) retires one regular-worker instance. Await it from finally before " +
+      "reusing a stable key or finishing a disposable probe.",
   },
 };
 

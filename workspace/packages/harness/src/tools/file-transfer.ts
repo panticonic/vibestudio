@@ -18,12 +18,16 @@ import {
   type ToolFileTransferVcs,
   type ToolMutationContext,
 } from "./tool-vcs.js";
+import type { RuntimeFs } from "./runtime-fs.js";
 
 const fileTransferSchema = Type.Object(
   {
-    source: Type.String({ description: "Current workspace path of the managed source file." }),
+    source: Type.String({
+      description: "Current path of a managed workspace file or context-local .tmp file.",
+    }),
     destination: Type.String({
-      description: "Unoccupied destination path inside a managed workspace repository.",
+      description:
+        "Unoccupied destination path. Managed files preserve semantic identity/provenance; .tmp paths use context-local scratch storage.",
     }),
     intentSummary: Type.Optional(
       Type.String({ minLength: 1, description: "Optional semantic reason for the move or copy." })
@@ -44,12 +48,14 @@ interface FileDetails {
 
 export interface FileTransferToolDetails {
   operation: "moved" | "copied";
-  source: FileDetails;
-  destination: FileDetails;
-  commandId: string;
-  workUnitId: string;
-  applicationId: string;
-  changeId: string;
+  storage: "vcs" | "scratch" | "none";
+  source: FileDetails | { path: string };
+  destination: FileDetails | { path: string };
+  commandId?: string;
+  workUnitId?: string;
+  applicationId?: string;
+  changeId?: string;
+  diagnostic?: "cross-storage-transfer";
 }
 
 function missingSource(operation: "move_file" | "copy_file", path: string): NodeJS.ErrnoException {
@@ -74,7 +80,8 @@ function createFileTransferTool(
   kind: "move" | "copy",
   cwd: string,
   vcs: ToolFileTransferVcs,
-  context: ToolMutationContext
+  context: ToolMutationContext,
+  fs?: Pick<RuntimeFs, "copyFile" | "rename">
 ): AgentTool<typeof fileTransferSchema, FileTransferToolDetails> {
   const operation = kind === "move" ? "move_file" : "copy_file";
   return {
@@ -82,8 +89,8 @@ function createFileTransferTool(
     label: operation,
     description:
       kind === "move"
-        ? "Move one managed file atomically while preserving its stable file identity and history. Never emulate this with write/delete."
-        : "Copy one managed file atomically, minting a distinct file identity with explicit copy provenance. Never emulate this with read/write.",
+        ? "Move a file atomically. Managed workspace files preserve stable identity and history; .tmp files move within context-local scratch storage. Never emulate a managed move with write/delete."
+        : "Copy a file atomically. Managed workspace files mint distinct identity with explicit copy provenance; .tmp files copy within context-local scratch storage. Never emulate a managed copy with read/write.",
     parameters: fileTransferSchema,
     execute: async (
       _toolCallId,
@@ -96,9 +103,46 @@ function createFileTransferTool(
       }
       const sourcePath = canonicalizeWorkspaceFilePath(toVcsPath(input.source, cwd));
       const destinationPath = canonicalizeWorkspaceFilePath(toVcsPath(input.destination, cwd));
+      const sourceRoute = splitRepoPath(sourcePath);
       const destinationRoute = splitRepoPath(destinationPath);
-      if (!destinationRoute?.repoRelPath) {
-        throw new Error(`${input.destination} is not a file in a managed workspace repository`);
+
+      if (!sourceRoute && !destinationRoute && fs) {
+        if (kind === "move") await fs.rename(sourcePath, destinationPath);
+        else await fs.copyFile(sourcePath, destinationPath);
+        if (signal?.aborted) throw new Error("Operation aborted");
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${kind === "move" ? "Moved" : "Copied"} scratch file ${sourcePath} to ${destinationPath}.`,
+            },
+          ],
+          details: {
+            operation: kind === "move" ? "moved" : "copied",
+            storage: "scratch",
+            source: { path: sourcePath },
+            destination: { path: destinationPath },
+          },
+        };
+      }
+
+      if (!sourceRoute?.repoRelPath || !destinationRoute?.repoRelPath) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                "No file transferred: source and destination must both be managed workspace files or both be context-local scratch paths.",
+            },
+          ],
+          details: {
+            operation: kind === "move" ? "moved" : "copied",
+            storage: "none",
+            source: { path: sourcePath },
+            destination: { path: destinationPath },
+            diagnostic: "cross-storage-transfer",
+          },
+        };
       }
 
       const workingHead = await resolveToolWorkingState(vcs, context);
@@ -169,6 +213,7 @@ function createFileTransferTool(
         ],
         details: {
           operation: kind === "move" ? "moved" : "copied",
+          storage: "vcs",
           source: details(source),
           destination: details(produced),
           commandId,
@@ -184,15 +229,17 @@ function createFileTransferTool(
 export function createMoveFileTool(
   cwd: string,
   vcs: ToolFileTransferVcs,
-  context: ToolMutationContext
+  context: ToolMutationContext,
+  fs?: Pick<RuntimeFs, "copyFile" | "rename">
 ) {
-  return createFileTransferTool("move", cwd, vcs, context);
+  return createFileTransferTool("move", cwd, vcs, context, fs);
 }
 
 export function createCopyFileTool(
   cwd: string,
   vcs: ToolFileTransferVcs,
-  context: ToolMutationContext
+  context: ToolMutationContext,
+  fs?: Pick<RuntimeFs, "copyFile" | "rename">
 ) {
-  return createFileTransferTool("copy", cwd, vcs, context);
+  return createFileTransferTool("copy", cwd, vcs, context, fs);
 }

@@ -54,6 +54,7 @@ export interface RuntimeFs {
     readonly X_OK: 1;
   };
   mktemp(prefix?: string): Promise<string>;
+  mkdtemp(prefix?: string): Promise<string>;
   readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   readdir(path: string): Promise<string[]>;
@@ -67,6 +68,7 @@ export interface RuntimeFs {
   rm?(path: string, options?: RmOptions): Promise<void>;
   exists?(path: string): Promise<boolean>;
   access(path: string, mode?: number): Promise<void>;
+  copyFile(src: string, dest: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   realpath?(path: string): Promise<string>;
   symlink?(target: string, path: string, type?: "file" | "dir" | "junction"): Promise<void>;

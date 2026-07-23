@@ -73,6 +73,13 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(desc).toMatch(/mkdir|NOT Node's mkdtemp/);
   });
 
+  it("describes the composed temp-directory helper separately", () => {
+    const out = describeEvalBindingSurface("fs", ["mkdtemp"], fsService);
+    const desc = (out!.methods["mkdtemp"] as { description: string }).description;
+    expect(desc).toContain("temp DIRECTORY");
+    expect(desc).toContain("creates");
+  });
+
   it("documents the worker launch/retire path via runtime.createEntity/retireEntity", () => {
     const out = describeEvalBindingSurface("runtime", ["createEntity", "retireEntity"], {});
 
@@ -83,10 +90,24 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(createDesc).toContain("real manifest entry points");
     expect(createDesc).toContain("not that worker code observed");
     expect(createDesc).toContain("implemented by the worker under test");
+    expect(createDesc).toContain("immutable instance identity");
+    expect(createDesc).toContain("fresh key after each code change");
     expect(createDesc).toContain('rpc.call("main", `workers.listSources`, [])');
     const retireDesc = (out!.methods["retireEntity"] as { description: string }).description;
     expect(retireDesc).toContain("runtime.retireEntity");
     expect(retireDesc).toContain("runtime.listEntities");
+  });
+
+  it("documents immutable worker keys and awaited cleanup on the ergonomic surface", () => {
+    const out = describeEvalBindingSurface("workers", ["create", "destroy"], {});
+    const createDesc = (out!.methods["create"] as { description: string }).description;
+    expect(createDesc).toContain("immutable instance identity");
+    expect(createDesc).toContain("fresh key");
+    expect(createDesc).toContain("handle.targetId");
+    expect(createDesc).toContain("finally");
+    const destroyDesc = (out!.methods["destroy"] as { description: string }).description;
+    expect(destroyDesc).toContain("Await");
+    expect(destroyDesc).toContain("stable key");
   });
 
   it("falls back to a generic introspect note for a live method with no schema or override", () => {

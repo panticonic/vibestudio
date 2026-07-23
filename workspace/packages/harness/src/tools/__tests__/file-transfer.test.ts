@@ -123,6 +123,66 @@ describe("stable-identity file transfer tools", () => {
       })
     );
     expect(result.details.operation).toBe("copied");
+    expect(result.details.storage).toBe("vcs");
+  });
+
+  it("uses the same direct storage contract for scratch copies and moves", async () => {
+    const { vcs, copy, move } = fixture();
+    const fs = {
+      copyFile: vi.fn(async () => undefined),
+      rename: vi.fn(async () => undefined),
+    };
+    const context = {
+      contextId: "context:1",
+      commandId: "command:scratch",
+    };
+
+    const copied = await createCopyFileTool("/", vcs, context, fs).execute("call:scratch-copy", {
+      source: ".tmp/source.txt",
+      destination: ".tmp/copied.txt",
+    });
+    const moved = await createMoveFileTool("/", vcs, context, fs).execute("call:scratch-move", {
+      source: ".tmp/copied.txt",
+      destination: ".tmp/moved.txt",
+    });
+
+    expect(fs.copyFile).toHaveBeenCalledWith(".tmp/source.txt", ".tmp/copied.txt");
+    expect(fs.rename).toHaveBeenCalledWith(".tmp/copied.txt", ".tmp/moved.txt");
+    expect(copied.details).toMatchObject({
+      operation: "copied",
+      storage: "scratch",
+      source: { path: ".tmp/source.txt" },
+      destination: { path: ".tmp/copied.txt" },
+    });
+    expect(moved.details).toMatchObject({ operation: "moved", storage: "scratch" });
+    expect(copy).not.toHaveBeenCalled();
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it("returns a recoverable diagnostic instead of crossing storage boundaries", async () => {
+    const { vcs, copy } = fixture();
+    const fs = {
+      copyFile: vi.fn(async () => undefined),
+      rename: vi.fn(async () => undefined),
+    };
+    const tool = createCopyFileTool(
+      "/",
+      vcs,
+      { contextId: "context:1", commandId: "command:cross-storage" },
+      fs
+    );
+
+    const result = await tool.execute("call:cross-storage", {
+      source: ".tmp/source.txt",
+      destination: "packages/target/source.txt",
+    });
+
+    expect(result.details).toMatchObject({
+      storage: "none",
+      diagnostic: "cross-storage-transfer",
+    });
+    expect(fs.copyFile).not.toHaveBeenCalled();
+    expect(copy).not.toHaveBeenCalled();
   });
 
   it("reports a missing source without mutating", async () => {

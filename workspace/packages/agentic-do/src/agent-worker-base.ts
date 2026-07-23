@@ -307,8 +307,8 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createFindTool(cwd, fs, { rpc: toolRpc }),
       createEditTool(cwd, vcs, mutationContext, fs),
       createWriteTool(cwd, vcs, mutationContext, fs),
-      createMoveFileTool(cwd, vcs, mutationContext),
-      createCopyFileTool(cwd, vcs, mutationContext),
+      createMoveFileTool(cwd, vcs, mutationContext, fs),
+      createCopyFileTool(cwd, vcs, mutationContext, fs),
       createWorkspaceVcsTool(cwd, vcs, mutationContext),
       createCommitTool(vcs, mutationContext),
       createEvalTool(

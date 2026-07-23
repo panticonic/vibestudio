@@ -50,6 +50,25 @@ describe("createRpcFs binary file writes", () => {
   });
 });
 
+describe("createRpcFs temporary paths", () => {
+  it("composes Node-style mkdtemp from the scoped temp-path and mkdir operations", async () => {
+    const rpc = {
+      call: vi
+        .fn()
+        .mockResolvedValueOnce("/.tmp/probe-123")
+        .mockResolvedValueOnce(undefined),
+    };
+    const fs = createRpcFs(rpc as never);
+
+    await expect(fs.mkdtemp("probe")).resolves.toBe("/.tmp/probe-123");
+    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "fs.mktemp", ["probe"]);
+    expect(rpc.call).toHaveBeenNthCalledWith(2, "main", "fs.mkdir", [
+      "/.tmp/probe-123",
+      { recursive: true },
+    ]);
+  });
+});
+
 describe("createRpcFs FileHandle.write (Node-parity)", () => {
   it("encodes a string arg as utf-8 and treats the 2nd arg as the file position", async () => {
     const { rpc, calls } = mockRpc();
