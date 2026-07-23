@@ -113,6 +113,56 @@ describe("@workspace-extensions/file-tools", () => {
     expect(text).toContain("script.ts:1:");
   });
 
+  it("searches literal multiline fragments without exposing ripgrep flags", async () => {
+    const workspaceRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(workspaceRoot, "meta.yml"),
+      "services:\n  - source: workers/notes\n    name: notes\n"
+    );
+    const api = await activate({
+      workspace: {
+        getInfo: async () => ({
+          path: workspaceRoot,
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
+        }),
+      },
+      fs: { realpath: async () => workspaceRoot },
+      log: { info: vi.fn() },
+    });
+
+    const result = (await api.grep({
+      pattern: "services:\n  - source: workers/notes",
+      path: ".",
+    })) as TextToolResult;
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("meta.yml:1: services:");
+  });
+
+  it("treats leading-dash patterns as source text rather than ripgrep flags", async () => {
+    const workspaceRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(workspaceRoot, "meta.yml"),
+      "services:\n  - source: workers/pubsub-channel\n"
+    );
+    const api = await activate({
+      workspace: {
+        getInfo: async () => ({
+          path: workspaceRoot,
+          contextProjectionsPath: path.join(workspaceRoot, ".context-projections", "v5"),
+        }),
+      },
+      fs: { realpath: async () => workspaceRoot },
+      log: { info: vi.fn() },
+    });
+
+    const result = (await api.grep({
+      pattern: "- source: workers/pubsub-channel",
+      path: ".",
+    })) as TextToolResult;
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("meta.yml:2:");
+  });
+
   it("reports an invalid glob instead of rewriting the request", async () => {
     const workspaceRoot = await makeTempRoot();
     await fs.writeFile(path.join(workspaceRoot, "script.ts"), "const marker = 'glob-repair';\n");
