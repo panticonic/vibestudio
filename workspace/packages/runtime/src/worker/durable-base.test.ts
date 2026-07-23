@@ -33,6 +33,14 @@ class EchoDO extends DurableObjectBase {
   }
 }
 
+class UndeclaredProbeDO extends DurableObjectBase {
+  protected createTables(): void {}
+
+  hidden(): string {
+    return "unreachable";
+  }
+}
+
 class StreamProbeDO extends DurableObjectBase {
   protected createTables(): void {}
 
@@ -266,6 +274,114 @@ class TitleProbeDO extends DurableObjectBase {
 }
 
 describe("DurableObjectBase request parsing", () => {
+  it("returns structured provider remediation for an undeclared direct receiver", async () => {
+    const { instance } = await createTestDO(UndeclaredProbeDO, {
+      WORKER_SOURCE: "workers/test",
+      WORKER_CLASS_NAME: "UndeclaredProbeDO",
+      __objectKey: "test-key",
+    });
+    const target = "do:workers/test:UndeclaredProbeDO:test-key";
+    const caller = {
+      callerId: "panel:news",
+      callerKind: "panel" as const,
+      authorization: createTestDirectAuthority({
+        callerKind: "panel",
+        method: "hidden",
+        source: "workers/test",
+        className: "UndeclaredProbeDO",
+        objectKey: "test-key",
+      }),
+    };
+    const response = await (
+      instance as unknown as { fetch(request: Request): Promise<Response> }
+    ).fetch(
+      new Request("http://test/test-key/__rpc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: caller.callerId,
+          target,
+          delivery: { caller },
+          provenance: [],
+          message: {
+            type: "request",
+            requestId: "undeclared-1",
+            fromId: caller.callerId,
+            method: "hidden",
+            args: [],
+          },
+        }),
+      })
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      message: {
+        type: "response",
+        requestId: "undeclared-1",
+        errorCode: "EACCES",
+        errorKind: "access",
+        errorData: {
+          authorityFailure: {
+            reasonCode: "receiver-undeclared",
+            remediation: { kind: "declare-rpc-receiver" },
+          },
+        },
+      },
+    });
+  });
+
+  it("preserves structured provider remediation across the streaming HTTP boundary", async () => {
+    const { instance } = await createTestDO(UndeclaredProbeDO, {
+      WORKER_SOURCE: "workers/test",
+      WORKER_CLASS_NAME: "UndeclaredProbeDO",
+      __objectKey: "test-key",
+    });
+    const caller = {
+      callerId: "panel:news",
+      callerKind: "panel" as const,
+      authorization: createTestDirectAuthority({
+        callerKind: "panel",
+        method: "hidden",
+        source: "workers/test",
+        className: "UndeclaredProbeDO",
+        objectKey: "test-key",
+      }),
+    };
+    const response = await (
+      instance as unknown as { fetch(request: Request): Promise<Response> }
+    ).fetch(
+      new Request("http://test/test-key/__rpc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: caller.callerId,
+          target: "do:workers/test:UndeclaredProbeDO:test-key",
+          delivery: { caller },
+          provenance: [],
+          message: {
+            type: "stream-request",
+            requestId: "undeclared-stream-1",
+            fromId: caller.callerId,
+            method: "hidden",
+            args: [],
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      errorCode: "EACCES",
+      errorKind: "access",
+      errorData: {
+        authorityFailure: {
+          reasonCode: "receiver-undeclared",
+          remediation: { kind: "declare-rpc-receiver" },
+        },
+      },
+    });
+  });
+
   it("returns a streaming RPC method's raw response body from __rpc", async () => {
     const { instance } = await createTestDO(StreamProbeDO);
     const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
@@ -595,7 +711,14 @@ describe("DurableObjectBase lifecycle routing", () => {
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
       errorCode: "EACCES",
+      errorKind: "access",
       error: expect.stringMatching(/host attestation required/),
+      errorData: {
+        authorityFailure: {
+          reasonCode: "attestation-invalid",
+          remediation: { kind: "retry-through-host" },
+        },
+      },
     });
   });
 });
@@ -624,7 +747,14 @@ describe("DurableObjectBase durable replay protection", () => {
     expect(replay.status).toBe(403);
     await expect(replay.json()).resolves.toMatchObject({
       errorCode: "EACCES",
+      errorKind: "access",
       error: expect.stringMatching(/replayed/),
+      errorData: {
+        authorityFailure: {
+          reasonCode: "attestation-invalid",
+          remediation: { kind: "retry-through-host" },
+        },
+      },
     });
   });
 });

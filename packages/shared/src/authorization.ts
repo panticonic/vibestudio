@@ -1,6 +1,7 @@
 import type {
   AuthorizationContext,
   AuthorizationDecision,
+  AuthorityFailureInfo,
   AuthorityGrant,
   AuthorityRequirement,
   Principal,
@@ -40,6 +41,87 @@ export interface AuthorityEvaluationInput {
     resourceKey: string;
     now: number;
   }) => boolean;
+}
+
+/** Convert one canonical denial into stable agent/UI remediation data. */
+export function authorityFailureForDecision(
+  decision: AuthorizationDecision,
+  input: {
+    capability: string;
+    resourceKey: string;
+    tier: "open" | "gated" | "critical";
+  }
+): AuthorityFailureInfo {
+  if (decision.allowed || decision.code === "allowed") {
+    throw new Error("An allowed authority decision has no failure remediation");
+  }
+  const common = {
+    reasonCode: decision.code,
+    reason: decision.reason,
+    capability: input.capability,
+    resourceKey: input.resourceKey,
+  } as const;
+  switch (decision.code) {
+    case "missing-grant":
+    case "lineage":
+      return {
+        ...common,
+        remediation: {
+          kind: "request-user-approval",
+          message:
+            decision.code === "lineage"
+              ? "Request fresh user approval for the current outside-content lineage."
+              : "Request user approval, then retry the exact invocation.",
+        },
+      };
+    case "not-requested":
+      return {
+        ...common,
+        remediation: {
+          kind: "update-authority-manifest",
+          message:
+            "Add this authority request to the installed unit manifest or owning agent eval ceiling, then submit the new exact version for user review.",
+          request: {
+            capability: input.capability,
+            resource: { kind: "exact", key: input.resourceKey },
+            tier: input.tier === "critical" ? "critical" : "gated",
+          },
+        },
+      };
+    case "missing-principal":
+      return {
+        ...common,
+        remediation: {
+          kind: "use-admitted-principal",
+          message: "Invoke this method through a principal admitted by its receiver contract.",
+        },
+      };
+    case "relationship":
+      return {
+        ...common,
+        remediation: {
+          kind: "satisfy-relationship",
+          message: "Use the canonical route that establishes the receiver's required relationship.",
+        },
+      };
+    case "session":
+      return {
+        ...common,
+        remediation: {
+          kind: "refresh-session",
+          message: "Refresh the authenticated authority session and retry.",
+        },
+      };
+    case "denied":
+      return {
+        ...common,
+        remediation: {
+          kind: "respect-denial",
+          message:
+            "The user or policy explicitly denied this authority; do not retry automatically.",
+        },
+      };
+  }
 }
 
 export function capability(
@@ -243,7 +325,11 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         : builtinRelationship(input.context, requirement.name, requirement.value);
       return {
         allowed,
-        code: allowed ? "allowed" : requirement.name === "context-integrity" ? "lineage" : "relationship",
+        code: allowed
+          ? "allowed"
+          : requirement.name === "context-integrity"
+            ? "lineage"
+            : "relationship",
         reason: allowed
           ? `relationship ${requirement.name} satisfied`
           : `relationship ${requirement.name} not satisfied`,
@@ -430,7 +516,9 @@ export function scopeCovers(scope: ResourceScope, key: string): boolean {
       return key === scope.origin;
     case "domain": {
       const hostname = resourceHostname(key);
-      return Boolean(hostname && (hostname === scope.domain || hostname.endsWith(`.${scope.domain}`)));
+      return Boolean(
+        hostname && (hostname === scope.domain || hostname.endsWith(`.${scope.domain}`))
+      );
     }
     case "network":
       return true;
@@ -458,7 +546,11 @@ function builtinRelationship(
     case "entity-self":
       return context.entity !== null && (value === undefined || context.entity === value);
     case "entity-owner":
-      return context.entity !== null && context.actingUser !== null && context.ownerChain.includes(context.actingUser);
+      return (
+        context.entity !== null &&
+        context.actingUser !== null &&
+        context.ownerChain.includes(context.actingUser)
+      );
     case "agent-binding":
       return context.entity !== null && context.agentBinding?.entity === context.entity;
     case "code-source": {
@@ -466,7 +558,9 @@ function builtinRelationship(
       if (!code || value === undefined) return false;
       const match = /^code:([^@]+)@[0-9a-f]{64}$/.exec(code);
       const repoPath = match?.[1];
-      return Boolean(repoPath && (value.endsWith("/") ? repoPath.startsWith(value) : repoPath === value));
+      return Boolean(
+        repoPath && (value.endsWith("/") ? repoPath.startsWith(value) : repoPath === value)
+      );
     }
     case "context-integrity":
       return context.contextIntegrity?.class !== "external";
@@ -485,7 +579,10 @@ function requirementMatchesOrigin(
   }
   if (requirement.kind === "all") {
     const capabilities = requirement.requirements.filter(containsCapabilityRequirement);
-    return capabilities.length === 0 || capabilities.some((child) => requirementMatchesOrigin(child, context));
+    return (
+      capabilities.length === 0 ||
+      capabilities.some((child) => requirementMatchesOrigin(child, context))
+    );
   }
   if (requirement.kind === "any") {
     return requirement.requirements.some((child) => requirementMatchesOrigin(child, context));
@@ -508,11 +605,20 @@ function grantConstraintsMatch(
 ): boolean {
   const constraints = grant.constraints;
   if (!constraints) return true;
-  if (constraints.sessionId !== undefined && constraints.sessionId !== context.session.id) return false;
-  if (constraints.invocationDigest !== undefined && constraints.invocationDigest !== invocationDigest) return false;
+  if (constraints.sessionId !== undefined && constraints.sessionId !== context.session.id)
+    return false;
+  if (
+    constraints.invocationDigest !== undefined &&
+    constraints.invocationDigest !== invocationDigest
+  )
+    return false;
   if (constraints.missionSubject !== undefined) {
     const mission = context.session.mission;
-    if (!mission || constraints.missionSubject !== `mission:${mission.missionId}@${mission.closureDigest}`) return false;
+    if (
+      !mission ||
+      constraints.missionSubject !== `mission:${mission.missionId}@${mission.closureDigest}`
+    )
+      return false;
   }
   return true;
 }

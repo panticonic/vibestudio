@@ -1,5 +1,6 @@
 import type {
   AuthorizationContext,
+  AuthorityFailureInfo,
   AuthorityGrant,
   AuthorityRequirement,
   DirectAuthorityAttestation,
@@ -7,6 +8,7 @@ import type {
   RpcAuthorityEffect,
 } from "@vibestudio/rpc";
 import {
+  authorityFailureForDecision,
   bindMethodCapability,
   evaluateAuthority,
   requirementForPrincipals,
@@ -110,25 +112,56 @@ export interface DirectRpcCheckInput {
 export interface DirectRpcDenial {
   code: "EACCES" | "EVAL_READ_ONLY";
   reason: string;
+  failure: AuthorityFailureInfo;
 }
 
 export interface HostControlDenial {
   code: "EACCES";
   reason: string;
+  failure: AuthorityFailureInfo;
 }
 
 /** Pure declaration + fresh-attestation check shared by both DO bases. */
 export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | null {
   const { method, declaration, attestation } = input;
-  if (!method) return { code: "EACCES", reason: "direct RPC method is required" };
-  if (!declaration) {
+  if (!method) {
+    const reason = "direct RPC method is required";
     return {
       code: "EACCES",
-      reason: `${method}: refused — no direct authority declaration (RPC is default-deny)`,
+      reason,
+      failure: directRpcInvalidAttestationFailure(reason),
+    };
+  }
+  if (!declaration) {
+    const reason = `${method}: refused — no direct authority declaration (RPC is default-deny)`;
+    return {
+      code: "EACCES",
+      reason,
+      failure: {
+        reasonCode: "receiver-undeclared",
+        reason,
+        remediation: {
+          kind: "declare-rpc-receiver",
+          message:
+            "The receiver owner must add a reviewed @rpc authority declaration; caller approval cannot repair an undeclared receiver.",
+        },
+      },
     };
   }
   if (!attestation) {
-    return { code: "EACCES", reason: `${method}: fresh host authority attestation is required` };
+    const reason = `${method}: fresh host authority attestation is required`;
+    return {
+      code: "EACCES",
+      reason,
+      failure: {
+        reasonCode: "attestation-required",
+        reason,
+        remediation: {
+          kind: "retry-through-host",
+          message: "Retry through the host-mediated RPC route so it can issue a fresh attestation.",
+        },
+      },
+    };
   }
   const now = input.now ?? Date.now();
   if (
@@ -136,29 +169,44 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
     attestation.method !== method ||
     attestation.resourceKey !== input.resourceKey
   ) {
+    const reason =
+      `${method}: host authority attestation is bound to another invocation ` +
+      `(expected audience=${input.audience} method=${method} resource=${input.resourceKey}; ` +
+      `received audience=${attestation.audience} method=${attestation.method} resource=${attestation.resourceKey})`;
     return {
       code: "EACCES",
-      reason:
-        `${method}: host authority attestation is bound to another invocation ` +
-        `(expected audience=${input.audience} method=${method} resource=${input.resourceKey}; ` +
-        `received audience=${attestation.audience} method=${attestation.method} resource=${attestation.resourceKey})`,
+      reason,
+      failure: directRpcInvalidAttestationFailure(reason),
     };
   }
   if (!isAttestationNonce(attestation.nonce)) {
-    return { code: "EACCES", reason: `${method}: host authority attestation nonce is malformed` };
+    const reason = `${method}: host authority attestation nonce is malformed`;
+    return { code: "EACCES", reason, failure: directRpcInvalidAttestationFailure(reason) };
   }
   if (attestation.issuedAt > now || attestation.expiresAt <= now) {
+    const reason =
+      `${method}: host authority attestation was stale at trusted dispatch ingress ` +
+      `(issuedAt=${attestation.issuedAt} expiresAt=${attestation.expiresAt} acceptedAt=${now})`;
     return {
       code: "EACCES",
-      reason:
-        `${method}: host authority attestation was stale at trusted dispatch ingress ` +
-        `(issuedAt=${attestation.issuedAt} expiresAt=${attestation.expiresAt} acceptedAt=${now})`,
+      reason,
+      failure: directRpcInvalidAttestationFailure(reason),
     };
   }
   if (attestation.readOnly === true && declaration.sensitivity !== "read") {
+    const reason = `${method}: EVAL_READ_ONLY — direct method is ${declaration.sensitivity}`;
     return {
       code: "EVAL_READ_ONLY",
-      reason: `${method}: EVAL_READ_ONLY — direct method is ${declaration.sensitivity}`,
+      reason,
+      failure: {
+        reasonCode: "eval-read-only",
+        reason,
+        remediation: {
+          kind: "use-writable-session",
+          message:
+            "Run this write through an admitted writable task session; read-only evals cannot widen themselves.",
+        },
+      },
     };
   }
   const declaredCapability =
@@ -177,9 +225,11 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
         !attestation.targetRequirement)) ||
     (declaration.effect.kind === "runtime-intrinsic" && declaration.tier !== "open")
   ) {
+    const reason = `${method}: attested effect does not match the receiver declaration`;
     return {
       code: "EACCES",
-      reason: `${method}: attested effect does not match the receiver declaration`,
+      reason,
+      failure: directRpcInvalidAttestationFailure(reason),
     };
   }
   const methodRequirement = declaration.requires
@@ -201,11 +251,21 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
     return {
       code: "EACCES",
       reason: `${method}: ${methodDecision.reason} (${methodDecision.code})`,
+      failure: authorityFailureForDecision(methodDecision, {
+        capability: declaredCapability,
+        resourceKey: input.resourceKey,
+        tier: declaration.tier,
+      }),
     };
   }
   if (attestation.targetRequirement) {
     if (!attestation.targetTier || !attestation.targetCapability) {
-      return { code: "EACCES", reason: `${method}: target authority has no reviewed tier` };
+      const reason = `${method}: target authority has no reviewed tier`;
+      return {
+        code: "EACCES",
+        reason,
+        failure: directRpcInvalidAttestationFailure(reason),
+      };
     }
     const targetDecision = evaluateAuthority({
       context: attestation.context,
@@ -223,10 +283,27 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
       return {
         code: "EACCES",
         reason: `${method}: ${targetDecision.reason} (${targetDecision.code})`,
+        failure: authorityFailureForDecision(targetDecision, {
+          capability: attestation.targetCapability,
+          resourceKey: input.resourceKey,
+          tier: attestation.targetTier,
+        }),
       };
     }
   }
   return null;
+}
+
+export function directRpcInvalidAttestationFailure(reason: string): AuthorityFailureInfo {
+  return {
+    reasonCode: "attestation-invalid",
+    reason,
+    remediation: {
+      kind: "retry-through-host",
+      message:
+        "Discard this attestation and retry through the host-mediated RPC route; do not replay or modify it.",
+    },
+  };
 }
 
 /**
@@ -310,7 +387,14 @@ export function hostControlDenial(input: {
 }): HostControlDenial | null {
   const attestation = input.attestation;
   const now = input.now ?? Date.now();
-  if (!attestation) return { code: "EACCES", reason: `${input.method}: host attestation required` };
+  if (!attestation) {
+    const reason = `${input.method}: host attestation required`;
+    return {
+      code: "EACCES",
+      reason,
+      failure: directRpcInvalidAttestationFailure(reason),
+    };
+  }
   if (
     attestation.method !== input.method ||
     attestation.audience !== input.audience ||
@@ -320,7 +404,12 @@ export function hostControlDenial(input: {
     attestation.context.authorizingOrigin.kind !== "host" ||
     attestation.context.host === null
   ) {
-    return { code: "EACCES", reason: `${input.method}: valid host-bound attestation required` };
+    const reason = `${input.method}: valid host-bound attestation required`;
+    return {
+      code: "EACCES",
+      reason,
+      failure: directRpcInvalidAttestationFailure(reason),
+    };
   }
   return null;
 }

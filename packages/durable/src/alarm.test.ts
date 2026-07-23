@@ -86,7 +86,14 @@ describe("DurableObjectBase alarm dispatch", () => {
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
       errorCode: "EACCES",
+      errorKind: "access",
       error: expect.stringMatching(/host attestation required/),
+      errorData: {
+        authorityFailure: {
+          reasonCode: "attestation-invalid",
+          remediation: { kind: "retry-through-host" },
+        },
+      },
     });
   });
 
@@ -120,7 +127,14 @@ describe("DurableObjectBase alarm dispatch", () => {
     expect(replay.status).toBe(403);
     await expect(replay.json()).resolves.toMatchObject({
       errorCode: "EACCES",
+      errorKind: "access",
       error: expect.stringMatching(/replayed/),
+      errorData: {
+        authorityFailure: {
+          reasonCode: "attestation-invalid",
+          remediation: { kind: "retry-through-host" },
+        },
+      },
     });
   });
 

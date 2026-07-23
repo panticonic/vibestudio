@@ -12,6 +12,51 @@ const leafSchema = z
     resourceKey: z.string(),
     status: z.enum(["granted", "consumable-once", "acquirable", "denied"]),
     tier: z.enum(["open", "gated", "critical"]),
+    failure: z
+      .object({
+        reasonCode: z.enum([
+          "missing-principal",
+          "denied",
+          "missing-grant",
+          "not-requested",
+          "relationship",
+          "session",
+          "lineage",
+          "receiver-undeclared",
+          "attestation-required",
+          "attestation-invalid",
+          "eval-read-only",
+        ]),
+        reason: z.string(),
+        capability: z.string().optional(),
+        resourceKey: z.string().optional(),
+        remediation: z
+          .object({
+            kind: z.enum([
+              "request-user-approval",
+              "update-authority-manifest",
+              "declare-rpc-receiver",
+              "use-admitted-principal",
+              "satisfy-relationship",
+              "refresh-session",
+              "respect-denial",
+              "use-writable-session",
+              "retry-through-host",
+            ]),
+            message: z.string(),
+            request: z
+              .object({
+                capability: z.string(),
+                resource: z.object({ kind: z.literal("exact"), key: z.string() }).strict(),
+                tier: z.enum(["gated", "critical"]),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -29,10 +74,15 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   preflight: {
-    description: "Dry-run a service method's complete authority contract without prompting or consuming authority.",
+    description:
+      "Dry-run a service method's complete authority contract without prompting or consuming authority.",
     args: z.tuple([
       z
-        .object({ service: z.string().min(1), method: z.string().min(1), args: z.array(z.unknown()) })
+        .object({
+          service: z.string().min(1),
+          method: z.string().min(1),
+          args: z.array(z.unknown()),
+        })
         .strict(),
     ]),
     returns: z

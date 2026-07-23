@@ -43,6 +43,7 @@ import {
 } from "./authority/invocationSnapshot.js";
 import { capabilityPatternCovers } from "./authorityManifest.js";
 import {
+  authorityFailureForDecision,
   bindMethodCapability,
   evaluateAuthority,
   requirementForPrincipals,
@@ -1410,6 +1411,11 @@ export class ServiceDispatcher {
       const acquirable =
         reviewedTier !== "open" &&
         (decision.code === "missing-grant" || decision.code === "lineage");
+      const authorityFailure = authorityFailureForDecision(decision, {
+        capability,
+        resourceKey,
+        tier: reviewedTier,
+      });
       if (acquirable) {
         const tier = reviewedTier as "gated" | "critical";
         const renderedAction =
@@ -1418,7 +1424,13 @@ export class ServiceDispatcher {
           describeCapability(capability).action;
         if (preflight) {
           return {
-            leaf: { capability, resourceKey, status: "acquirable", tier },
+            leaf: {
+              capability,
+              resourceKey,
+              status: "acquirable",
+              tier,
+              failure: authorityFailure,
+            },
             wouldPrompt: {
               cardType:
                 tier === "critical"
@@ -1454,12 +1466,21 @@ export class ServiceDispatcher {
           if (outcome.state === "decided" && outcome.decision !== "deny") continue;
           presented = outcome.info;
           if (outcome.state === "decided" && outcome.decision === "deny") {
+            const deniedFailure = authorityFailureForDecision(
+              {
+                ...decision,
+                allowed: false,
+                code: "denied",
+                reason: "The authority request was denied",
+              },
+              { capability, resourceKey, tier: reviewedTier }
+            );
             throw new ServiceAccessError(
               service,
               method,
               `The authority request was denied${formatAccessHint(methodDef)}`,
               "EACCES",
-              { denied: true }
+              { denied: true, authorityFailure: deniedFailure }
             );
           }
         } else if (this.authorityAcquirer) {
@@ -1486,12 +1507,18 @@ export class ServiceDispatcher {
           method,
           `${decision.reason} (${decision.code})${formatAccessHint(methodDef)}`,
           "EACQUIRE",
-          { acquisition: acquisitionInfo }
+          { acquisition: acquisitionInfo, authorityFailure }
         );
       }
       if (preflight) {
         return {
-          leaf: { capability, resourceKey, status: "denied", tier: reviewedTier },
+          leaf: {
+            capability,
+            resourceKey,
+            status: "denied",
+            tier: reviewedTier,
+            failure: authorityFailure,
+          },
         };
       }
       throw new ServiceAccessError(
@@ -1499,7 +1526,10 @@ export class ServiceDispatcher {
         method,
         `${decision.reason} (${decision.code})${formatAccessHint(methodDef)}`,
         "EACCES",
-        decision.code === "denied" ? { denied: true } : undefined
+        {
+          ...(decision.code === "denied" ? { denied: true } : {}),
+          authorityFailure,
+        }
       );
     }
   }

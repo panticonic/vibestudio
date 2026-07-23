@@ -16,10 +16,12 @@ import {
 } from "@vibestudio/rpc";
 import {
   DurableDirectRpcNonceLedger,
+  directRpcInvalidAttestationFailure,
   directRpcDenial,
   eventIntakeAuthority,
   hostControlDenial,
   type EventIntakeRule,
+  type HostControlDenial,
 } from "@vibestudio/shared/directRpcEnforcement";
 import {
   migrateDurableObjectSchema,
@@ -448,7 +450,15 @@ export abstract class DurableObjectBase {
         return this.withCaller(verifiedCallerFromBody, async () => {
           const denial = this.hostControlDenial(method, authorityAcceptedAt);
           if (denial) {
-            return jsonResponse({ error: denial.reason, errorCode: denial.code }, 403);
+            return jsonResponse(
+              {
+                error: denial.reason,
+                errorCode: denial.code,
+                errorKind: "access",
+                errorData: { authorityFailure: denial.failure },
+              },
+              403
+            );
           }
           const result =
             method === "__lifecycle/prepare"
@@ -465,7 +475,15 @@ export abstract class DurableObjectBase {
         return this.withCaller(verifiedCallerFromBody, async () => {
           const denial = this.hostControlDenial(method, authorityAcceptedAt);
           if (denial) {
-            return jsonResponse({ error: denial.reason, errorCode: denial.code }, 403);
+            return jsonResponse(
+              {
+                error: denial.reason,
+                errorCode: denial.code,
+                errorKind: "access",
+                errorData: { authorityFailure: denial.failure },
+              },
+              403
+            );
           }
           return jsonResponse({ nextAlarm: await this.alarm() });
         });
@@ -538,10 +556,7 @@ export abstract class DurableObjectBase {
     }
   }
 
-  private hostControlDenial(
-    method: string,
-    authorityAcceptedAt: number
-  ): { code: "EACCES"; reason: string } | null {
+  private hostControlDenial(method: string, authorityAcceptedAt: number): HostControlDenial | null {
     const attestation = this.caller?.authorization ?? null;
     const denial = hostControlDenial({
       method,
@@ -554,7 +569,12 @@ export abstract class DurableObjectBase {
       !attestation ||
       !this.directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
     ) {
-      return { code: "EACCES", reason: `${method}: host authority attestation was replayed` };
+      const reason = `${method}: host authority attestation was replayed`;
+      return {
+        code: "EACCES",
+        reason,
+        failure: directRpcInvalidAttestationFailure(reason),
+      };
     }
     return null;
   }
@@ -606,14 +626,32 @@ export abstract class DurableObjectBase {
         capability: `event:${event.event}`,
         now: authorityAcceptedAt,
       });
-      if (denial) return jsonResponse({ error: denial.reason, errorCode: denial.code }, 403);
+      if (denial) {
+        return jsonResponse(
+          {
+            error: denial.reason,
+            errorCode: denial.code,
+            errorKind: "access",
+            errorData: { authorityFailure: denial.failure },
+          },
+          403
+        );
+      }
       const attestation = caller?.authorization;
       if (
         !attestation ||
         !this.directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
       ) {
+        const reason = `${method}: host authority attestation was replayed`;
         return jsonResponse(
-          { error: `${method}: host authority attestation was replayed`, errorCode: "EACCES" },
+          {
+            error: reason,
+            errorCode: "EACCES",
+            errorKind: "access",
+            errorData: {
+              authorityFailure: directRpcInvalidAttestationFailure(reason),
+            },
+          },
           403
         );
       }
@@ -675,19 +713,17 @@ export abstract class DurableObjectBase {
     const message = envelope.message as RpcRequest;
     const method = message?.method;
     const audience = this.rpcSelfId;
-    const denial = method
-      ? directRpcDenial({
-          kind: "call",
-          method,
-          caller,
-          attestation: caller?.authorization ?? null,
-          declaration: rpcMethodAuthority(this, method) ?? null,
-          audience,
-          resourceKey: audience,
-          capability: caller?.authorization?.capability ?? "",
-          now: authorityAcceptedAt,
-        })
-      : { code: "EACCES" as const, reason: "direct RPC method is required" };
+    const denial = directRpcDenial({
+      kind: "call",
+      method: method ?? "",
+      caller,
+      attestation: caller?.authorization ?? null,
+      declaration: method ? (rpcMethodAuthority(this, method) ?? null) : null,
+      audience,
+      resourceKey: audience,
+      capability: caller?.authorization?.capability ?? "",
+      now: authorityAcceptedAt,
+    });
     if (denial) {
       return {
         from: envelope.target,
@@ -699,6 +735,8 @@ export abstract class DurableObjectBase {
           requestId: message?.requestId ?? "",
           error: denial.reason,
           errorCode: denial.code,
+          errorKind: "access",
+          errorData: { authorityFailure: denial.failure },
         },
       } as RpcEnvelope;
     }
@@ -707,6 +745,7 @@ export abstract class DurableObjectBase {
       !attestation ||
       !this.directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
     ) {
+      const reason = `${method ?? "<unknown>"}: host authority attestation was replayed`;
       return {
         from: envelope.target,
         target: envelope.from,
@@ -715,8 +754,12 @@ export abstract class DurableObjectBase {
         message: {
           type: "response",
           requestId: message?.requestId ?? "",
-          error: `${method ?? "<unknown>"}: host authority attestation was replayed`,
+          error: reason,
           errorCode: "EACCES",
+          errorKind: "access",
+          errorData: {
+            authorityFailure: directRpcInvalidAttestationFailure(reason),
+          },
         },
       } as RpcEnvelope;
     }

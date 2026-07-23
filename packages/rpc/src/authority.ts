@@ -173,11 +173,51 @@ export interface AcquisitionInfo {
   decidedBy?: "user" | "rule";
 }
 
+export type AuthorityFailureReasonCode =
+  | Exclude<AuthorizationDecision["code"], "allowed">
+  | "receiver-undeclared"
+  | "attestation-required"
+  | "attestation-invalid"
+  | "eval-read-only";
+
+export type AuthorityRemediationKind =
+  | "request-user-approval"
+  | "update-authority-manifest"
+  | "declare-rpc-receiver"
+  | "use-admitted-principal"
+  | "satisfy-relationship"
+  | "refresh-session"
+  | "respect-denial"
+  | "use-writable-session"
+  | "retry-through-host";
+
+/**
+ * Machine-readable explanation for an authority refusal. Callers and agents
+ * must branch on this object rather than parsing the human diagnostic.
+ */
+export interface AuthorityFailureInfo {
+  reasonCode: AuthorityFailureReasonCode;
+  reason: string;
+  capability?: string;
+  resourceKey?: string;
+  remediation: {
+    kind: AuthorityRemediationKind;
+    message: string;
+    /** Exact manifest request suggested for reviewed installed/eval code. */
+    request?: {
+      capability: string;
+      resource: { kind: "exact"; key: string };
+      tier: "gated" | "critical";
+    };
+  };
+}
+
 export interface AuthorityPreflightLeaf {
   capability: string;
   resourceKey: string;
   status: "granted" | "consumable-once" | "acquirable" | "denied";
   tier: "open" | "gated" | "critical";
+  failure?: AuthorityFailureInfo;
 }
 
 export interface AuthorityPreflightResult {

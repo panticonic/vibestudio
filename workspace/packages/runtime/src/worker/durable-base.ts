@@ -44,10 +44,13 @@ import {
 import type { AuthorizationContext } from "@vibestudio/rpc";
 import {
   DurableDirectRpcNonceLedger,
+  directRpcInvalidAttestationFailure,
   directRpcDenial,
   eventIntakeAuthority,
   hostControlDenial,
+  type DirectRpcDenial,
   type EventIntakeRule,
+  type HostControlDenial,
 } from "@vibestudio/shared/directRpcEnforcement";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
@@ -839,10 +842,18 @@ export abstract class DurableObjectBase {
         try {
           const denial = this.inboundHostControlDenial(method, authorityAcceptedAt);
           if (denial) {
-            return new Response(JSON.stringify({ error: denial.reason, errorCode: denial.code }), {
-              status: 403,
-              headers: { "Content-Type": "application/json" },
-            });
+            return new Response(
+              JSON.stringify({
+                error: denial.reason,
+                errorCode: denial.code,
+                errorKind: "access",
+                errorData: { authorityFailure: denial.failure },
+              }),
+              {
+                status: 403,
+                headers: { "Content-Type": "application/json" },
+              }
+            );
           }
           const result =
             method === "__lifecycle/prepare"
@@ -867,10 +878,18 @@ export abstract class DurableObjectBase {
         try {
           const denial = this.inboundHostControlDenial(method, authorityAcceptedAt);
           if (denial) {
-            return new Response(JSON.stringify({ error: denial.reason, errorCode: denial.code }), {
-              status: 403,
-              headers: { "Content-Type": "application/json" },
-            });
+            return new Response(
+              JSON.stringify({
+                error: denial.reason,
+                errorCode: denial.code,
+                errorKind: "access",
+                errorData: { authorityFailure: denial.failure },
+              }),
+              {
+                status: 403,
+                headers: { "Content-Type": "application/json" },
+              }
+            );
           }
           const nextAlarm = await this.alarm();
           return new Response(JSON.stringify({ nextAlarm }), {
@@ -983,10 +1002,18 @@ export abstract class DurableObjectBase {
         now: authorityAcceptedAt,
       });
       if (denial) {
-        return new Response(JSON.stringify({ error: denial.reason, errorCode: denial.code }), {
-          status: 403,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            error: denial.reason,
+            errorCode: denial.code,
+            errorKind: "access",
+            errorData: { authorityFailure: denial.failure },
+          }),
+          {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
       }
       const attestation = caller?.authorization;
       if (
@@ -997,10 +1024,15 @@ export abstract class DurableObjectBase {
           authorityAcceptedAt
         )
       ) {
+        const reason = `${method}: host authority attestation was replayed`;
         return new Response(
           JSON.stringify({
-            error: `${method}: host authority attestation was replayed`,
+            error: reason,
             errorCode: "EACCES",
+            errorKind: "access",
+            errorData: {
+              authorityFailure: directRpcInvalidAttestationFailure(reason),
+            },
           }),
           { status: 403, headers: { "Content-Type": "application/json" } }
         );
@@ -1032,12 +1064,26 @@ export abstract class DurableObjectBase {
           { status: 500, headers: { "Content-Type": "application/json" } }
         );
       }
+      if (responseMessage?.type === "response" && "error" in responseMessage) {
+        const status =
+          responseMessage.errorCode === "EACCES" || responseMessage.errorCode === "EVAL_READ_ONLY"
+            ? 403
+            : 500;
+        return new Response(
+          JSON.stringify({
+            error: responseMessage.error,
+            errorKind: responseMessage.errorKind,
+            ...(responseMessage.errorCode ? { errorCode: responseMessage.errorCode } : {}),
+            ...(responseMessage.errorData !== undefined
+              ? { errorData: responseMessage.errorData }
+              : {}),
+          }),
+          { status, headers: { "Content-Type": "application/json" } }
+        );
+      }
       return new Response(
         JSON.stringify({
-          error:
-            responseMessage?.type === "response" && "error" in responseMessage
-              ? responseMessage.error
-              : `Streaming method ${message.method} did not produce a response`,
+          error: `Streaming method ${message.method} did not produce a response`,
         }),
         { status: 500, headers: { "Content-Type": "application/json" } }
       );
@@ -1053,15 +1099,12 @@ export abstract class DurableObjectBase {
     method: string | undefined,
     caller: AuthenticatedCaller | null,
     authorityAcceptedAt: number
-  ): string | null {
+  ): DirectRpcDenial | null {
     if (!method) return null;
-    const declaration = rpcMethodAuthority(this, method);
-    if (!declaration) {
-      return `${method}: refused — no direct authority declaration (workspace RPC is default-deny)`;
-    }
+    const declaration = rpcMethodAuthority(this, method) ?? null;
     const audience = this.directAuthorityAudience();
     const resourceKey = this.directAuthorityResource();
-    const denial = directRpcDenial({
+    return directRpcDenial({
       kind: "call",
       method,
       caller,
@@ -1072,7 +1115,6 @@ export abstract class DurableObjectBase {
       capability: caller?.authorization?.capability ?? "",
       now: authorityAcceptedAt,
     });
-    return denial?.reason ?? null;
   }
 
   private directAuthorityAudience(): string {
@@ -1086,7 +1128,7 @@ export abstract class DurableObjectBase {
   private inboundHostControlDenial(
     method: string,
     authorityAcceptedAt: number
-  ): { code: "EACCES"; reason: string } | null {
+  ): HostControlDenial | null {
     const attestation = this.caller?.authorization ?? null;
     const denial = hostControlDenial({
       method,
@@ -1099,7 +1141,12 @@ export abstract class DurableObjectBase {
       !attestation ||
       !this._directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
     ) {
-      return { code: "EACCES", reason: `${method}: host authority attestation was replayed` };
+      const reason = `${method}: host authority attestation was replayed`;
+      return {
+        code: "EACCES",
+        reason,
+        failure: directRpcInvalidAttestationFailure(reason),
+      };
     }
     return null;
   }
@@ -1145,8 +1192,10 @@ export abstract class DurableObjectBase {
           message: {
             type: "response",
             requestId: message?.requestId ?? "",
-            error: denial,
-            errorCode: denial.includes("EVAL_READ_ONLY") ? "EVAL_READ_ONLY" : "EACCES",
+            error: denial.reason,
+            errorCode: denial.code,
+            errorKind: "access",
+            errorData: { authorityFailure: denial.failure },
           },
         } as RpcEnvelope;
       }
@@ -1159,6 +1208,7 @@ export abstract class DurableObjectBase {
           authorityAcceptedAt
         )
       ) {
+        const reason = `${message?.method ?? "<unknown>"}: host authority attestation was replayed`;
         return {
           from: envelope.target,
           target: envelope.from,
@@ -1167,8 +1217,12 @@ export abstract class DurableObjectBase {
           message: {
             type: "response",
             requestId: message?.requestId ?? "",
-            error: `${message?.method ?? "<unknown>"}: host authority attestation was replayed`,
+            error: reason,
             errorCode: "EACCES",
+            errorKind: "access",
+            errorData: {
+              authorityFailure: directRpcInvalidAttestationFailure(reason),
+            },
           },
         } as RpcEnvelope;
       }

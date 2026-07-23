@@ -167,6 +167,17 @@ describe("dispatcher: access descriptor + JIT errors", () => {
           resourceKey: "test:dry.write",
           status: "acquirable",
           tier: "gated",
+          failure: {
+            reasonCode: "missing-grant",
+            reason:
+              "code:tests/service-dispatch@0000000000000000000000000000000000000000000000000000000000000000 lacks test:dry.write on test:dry.write",
+            capability: "test:dry.write",
+            resourceKey: "test:dry.write",
+            remediation: {
+              kind: "request-user-approval",
+              message: "Request user approval, then retry the exact invocation.",
+            },
+          },
         },
       ],
       severityPreview: "sensitive",
@@ -244,6 +255,17 @@ describe("dispatcher: access descriptor + JIT errors", () => {
           resourceKey: "do:workers/local:LocalDO:main",
           status: "acquirable",
           tier: "gated",
+          failure: {
+            reasonCode: "missing-grant",
+            reason:
+              "code:tests/service-dispatch@0000000000000000000000000000000000000000000000000000000000000000 lacks workspace-service:local on do:workers/local:LocalDO:main",
+            capability: "workspace-service:local",
+            resourceKey: "do:workers/local:LocalDO:main",
+            remediation: {
+              kind: "request-user-approval",
+              message: "Request user approval, then retry the exact invocation.",
+            },
+          },
         },
       ],
       severityPreview: "sensitive",

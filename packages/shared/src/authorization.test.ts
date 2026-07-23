@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allOf,
+  authorityFailureForDecision,
   capability,
   evaluateAuthority,
   relationship,
@@ -111,6 +112,55 @@ function grant(
 }
 
 describe("compositional authority", () => {
+  it("distinguishes an immutable manifest ceiling from a promptable missing grant", () => {
+    const undeclared = codeContext();
+    undeclared.executingCode = { ...undeclared.executingCode!, requested: [] };
+    const notRequested = evaluateAuthority({
+      context: undeclared,
+      requirement: capability("code", "fs.write"),
+      resourceKey: RESOURCE,
+      grants: [grant(code)],
+      now: 100,
+    });
+    expect(
+      authorityFailureForDecision(notRequested, {
+        capability: "fs.write",
+        resourceKey: RESOURCE,
+        tier: "gated",
+      })
+    ).toEqual({
+      reasonCode: "not-requested",
+      reason: notRequested.reason,
+      capability: "fs.write",
+      resourceKey: RESOURCE,
+      remediation: {
+        kind: "update-authority-manifest",
+        message:
+          "Add this authority request to the installed unit manifest or owning agent eval ceiling, then submit the new exact version for user review.",
+        request: {
+          capability: "fs.write",
+          resource: { kind: "exact", key: RESOURCE },
+          tier: "gated",
+        },
+      },
+    });
+
+    const missingGrant = evaluateAuthority({
+      context: codeContext(),
+      requirement: capability("code", "fs.write"),
+      resourceKey: RESOURCE,
+      grants: [],
+      now: 100,
+    });
+    expect(
+      authorityFailureForDecision(missingGrant, {
+        capability: "fs.write",
+        resourceKey: RESOURCE,
+        tier: "gated",
+      }).remediation.kind
+    ).toBe("request-user-approval");
+  });
+
   it("intersects installed-code grants with the sealed explicit request", () => {
     expect(
       evaluateAuthority({

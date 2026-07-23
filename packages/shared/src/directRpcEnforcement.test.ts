@@ -14,7 +14,11 @@ const context: AuthorizationContext = {
   actingUser: "user:test",
   entity: null,
   incarnation: null,
-  executingCode: { principal: code, requested: [], sourceLineage: { class: "internal", externalKeys: [] } },
+  executingCode: {
+    principal: code,
+    requested: [],
+    sourceLineage: { class: "internal", externalKeys: [] },
+  },
   initiatorChain: [code],
   ownerChain: ["user:test"],
   agentBinding: null,
@@ -23,7 +27,9 @@ const context: AuthorizationContext = {
   contextIntegrity: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
 };
 
-function attestation(overrides: Partial<DirectAuthorityAttestation> = {}): DirectAuthorityAttestation {
+function attestation(
+  overrides: Partial<DirectAuthorityAttestation> = {}
+): DirectAuthorityAttestation {
   return {
     audience: "do:x",
     method: "read",
@@ -40,6 +46,28 @@ function attestation(overrides: Partial<DirectAuthorityAttestation> = {}): Direc
 }
 
 describe("directRpcDenial", () => {
+  it("identifies an undeclared receiver as a provider defect, not an acquirable grant", () => {
+    expect(
+      directRpcDenial({
+        kind: "call",
+        method: "read",
+        caller: null,
+        attestation: attestation(),
+        declaration: null,
+        audience: "do:x",
+        resourceKey: "do:x",
+        capability: "rpc:read",
+        now: 100,
+      })
+    ).toMatchObject({
+      code: "EACCES",
+      failure: {
+        reasonCode: "receiver-undeclared",
+        remediation: { kind: "declare-rpc-receiver" },
+      },
+    });
+  });
+
   it("allows an open method without a manifest request or grant", () => {
     expect(
       directRpcDenial({
@@ -47,7 +75,12 @@ describe("directRpcDenial", () => {
         method: "read",
         caller: null,
         attestation: attestation(),
-        declaration: { tier: "open", principals: ["code"], sensitivity: "read", effect: { kind: "runtime-intrinsic" } },
+        declaration: {
+          tier: "open",
+          principals: ["code"],
+          sensitivity: "read",
+          effect: { kind: "runtime-intrinsic" },
+        },
         audience: "do:x",
         resourceKey: "do:x",
         capability: "rpc:read",
@@ -84,7 +117,12 @@ describe("directRpcDenial", () => {
         method: "read",
         caller: null,
         attestation: attestation({ [field]: "other" }),
-        declaration: { tier: "open", principals: ["code"], sensitivity: "read", effect: { kind: "runtime-intrinsic" } },
+        declaration: {
+          tier: "open",
+          principals: ["code"],
+          sensitivity: "read",
+          effect: { kind: "runtime-intrinsic" },
+        },
         audience: "do:x",
         resourceKey: "do:x",
         capability: "rpc:read",
@@ -100,13 +138,24 @@ describe("directRpcDenial", () => {
         method: "read",
         caller: null,
         attestation: attestation({ readOnly: true }),
-        declaration: { tier: "open", principals: ["code"], sensitivity: "write", effect: { kind: "runtime-intrinsic" } },
+        declaration: {
+          tier: "open",
+          principals: ["code"],
+          sensitivity: "write",
+          effect: { kind: "runtime-intrinsic" },
+        },
         audience: "do:x",
         resourceKey: "do:x",
         capability: "rpc:read",
         now: 100,
-      })?.code
-    ).toBe("EVAL_READ_ONLY");
+      })
+    ).toMatchObject({
+      code: "EVAL_READ_ONLY",
+      failure: {
+        reasonCode: "eval-read-only",
+        remediation: { kind: "use-writable-session" },
+      },
+    });
   });
 
   it("composes a live workspace-service declaration with receiver method authority", () => {
@@ -143,7 +192,12 @@ describe("directRpcDenial", () => {
         method: "read",
         caller: null,
         attestation: dynamic,
-        declaration: { tier: "open", principals: ["code", "user"], sensitivity: "read", effect: { kind: "workspace-service" } },
+        declaration: {
+          tier: "open",
+          principals: ["code", "user"],
+          sensitivity: "read",
+          effect: { kind: "workspace-service" },
+        },
         audience: "do:x",
         resourceKey: "do:x",
         capability,
@@ -159,7 +213,12 @@ describe("directRpcDenial", () => {
           ...dynamic,
           targetRequirement: { kind: "capability", principal: "user", capability },
         },
-        declaration: { tier: "open", principals: ["code", "user"], sensitivity: "read", effect: { kind: "workspace-service" } },
+        declaration: {
+          tier: "open",
+          principals: ["code", "user"],
+          sensitivity: "read",
+          effect: { kind: "workspace-service" },
+        },
         audience: "do:x",
         resourceKey: "do:x",
         capability,
@@ -183,17 +242,19 @@ describe("directRpcDenial", () => {
       capability,
       invocationDigest,
       context: criticalContext,
-      grants: [{
-        id: "grant-once",
-        subject: code,
-        effect: "allow",
-        capability,
-        resource: { kind: "exact", key: "do:x" },
-        issuedBy: "user:test",
-        provenance: "critical-confirmation",
-        constraints: { invocationDigest },
-        createdAt: 1,
-      }],
+      grants: [
+        {
+          id: "grant-once",
+          subject: code,
+          effect: "allow",
+          capability,
+          resource: { kind: "exact", key: "do:x" },
+          issuedBy: "user:test",
+          provenance: "critical-confirmation",
+          constraints: { invocationDigest },
+          createdAt: 1,
+        },
+      ],
     });
     const input = {
       kind: "call" as const,
@@ -236,7 +297,8 @@ describe("event intake", () => {
           tier: "open",
           sensitivity: "write",
           effect: { kind: "runtime-intrinsic" },
-          requires: () => ({ kind: "capability", principal: "host", capability: "ignored" }) as const,
+          requires: () =>
+            ({ kind: "capability", principal: "host", capability: "ignored" }) as const,
         },
       ] as const;
     }
@@ -253,7 +315,13 @@ describe("event intake", () => {
     expect(() =>
       assertEventIntakeRules({
         eventIntake: [
-          { topicPrefix: "*", tier: "open", sensitivity: "write", effect: { kind: "runtime-intrinsic" }, principals: ["host"] },
+          {
+            topicPrefix: "*",
+            tier: "open",
+            sensitivity: "write",
+            effect: { kind: "runtime-intrinsic" },
+            principals: ["host"],
+          },
         ],
       })
     ).toThrow(/cannot contain/);

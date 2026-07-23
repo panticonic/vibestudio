@@ -2066,7 +2066,14 @@ describe("RpcServer relay behavior", () => {
       })
     ).rejects.toMatchObject({
       code: "EACQUIRE",
-      errorData: { acquisition: { acquisitionId: "acq:remove-member" } },
+      errorData: {
+        acquisition: { acquisitionId: "acq:remove-member" },
+        authorityFailure: {
+          reasonCode: "missing-grant",
+          capability: "channel.members.remove",
+          remediation: { kind: "request-user-approval" },
+        },
+      },
     });
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2078,6 +2085,71 @@ describe("RpcServer relay behavior", () => {
         }),
       })
     );
+  });
+
+  it("returns a manifest remediation instead of prompting for unrequested direct authority", async () => {
+    const request = vi.fn();
+    const { server } = createServer({
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:channel",
+          methodEffect: { kind: "workspace-service" },
+          methodCapability: "workspace-service:channel",
+          methodTier: "open",
+          principals: ["code"],
+        },
+      ],
+      directAuthorityAcquirer: {
+        request,
+        acquire: vi.fn(),
+        consume: vi.fn(() => true),
+        invalidate: vi.fn(),
+      },
+    });
+    const caller = createVerifiedCaller("panel:news", "panel", {
+      callerId: "panel:news",
+      callerKind: "panel",
+      repoPath: "panels/news",
+      effectiveVersion: "ev-news",
+      executionDigest: "a".repeat(64),
+      requested: [],
+      evalCeilings: [],
+    });
+    caller.codeApproved = true;
+
+    await expect(
+      testServer(server).directDOAuthorization({
+        caller,
+        ref: {
+          source: "workers/pubsub-channel",
+          className: "PubSubChannel",
+          objectKey: "news",
+        },
+        method: "subscribe",
+        args: ["panel:news", {}],
+      })
+    ).rejects.toMatchObject({
+      code: "EACCES",
+      errorKind: "access",
+      errorData: {
+        authorityFailure: {
+          reasonCode: "not-requested",
+          capability: "workspace-service:channel",
+          remediation: {
+            kind: "update-authority-manifest",
+            request: {
+              capability: "workspace-service:channel",
+              resource: {
+                kind: "exact",
+                key: "do:workers/pubsub-channel:PubSubChannel:news",
+              },
+              tier: "gated",
+            },
+          },
+        },
+      },
+    });
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("preserves the active build's exact runtime-intrinsic effect in direct attestations", async () => {

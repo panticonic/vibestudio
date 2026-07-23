@@ -449,8 +449,28 @@ receiver enforcement and review its inclusion in the mission closure.
 - Search/open the live docs for the exact caller context.
 - Confirm the service declaration exists in that semantic context and the resolved
   provider/source is the intended one.
-- Distinguish `not requested` from `requested but not granted`, critical fresh
-  approval, receiver relationship failure, and outside-content lineage drift.
+- Use `authority.preflight` before a protected host-service call when the outcome
+  is uncertain. Read each leaf's structured `failure.reasonCode` and
+  `failure.remediation`; never parse the human error string.
+- Treat `missing-grant` and `lineage` with
+  `remediation.kind: "request-user-approval"` as dynamically acquirable. An
+  interactive agent/session call suspends on the existing acquisition rendezvous
+  when its context requests `authorityAcquisition: "wait"`; an installed-code call
+  receives `EACQUIRE` plus `errorData.acquisition` so its owning UI can present the
+  same user decision. Retry only after that exact acquisition resolves.
+- Treat `not-requested` with
+  `remediation.kind: "update-authority-manifest"` as an immutable ceiling failure,
+  not as a promptable permission. For installed panels/workers, add the returned
+  exact `remediation.request` to the owning unit manifest and submit the new sealed
+  version for review. For eval, update the owning agent's reviewed eval ceiling.
+- Treat `receiver-undeclared` with
+  `remediation.kind: "declare-rpc-receiver"` as a provider defect. Add the
+  appropriate reviewed `@rpc` contract to the receiver or route the operation
+  through its declared service/channel API. Caller grants and manifest requests
+  cannot authorize an undeclared method.
+- Treat relationship, principal, session, denial, and attestation reason codes as
+  terminal for that invocation and follow their explicit remediation. Never turn a
+  relationship or transport failure into a permission prompt.
 - Inspect the unit's sealed build metadata and execution digest, not only its mutable
   `package.json`.
 - Keep the original caller/session across closure legs. Never replace it with a host

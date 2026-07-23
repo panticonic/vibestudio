@@ -23,7 +23,12 @@ class ServerOnlyProbeDO extends DurableObjectBase {
 
   protected createTables(): void {}
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   echo(...args: unknown[]): unknown[] {
     return args;
   }
@@ -90,7 +95,7 @@ describe("assertInboundAllowed path distinction", () => {
   it("accepts an EVENT delivery from a non-server caller (event path)", async () => {
     const { instance } = await createTestDO(ServerOnlyProbeDO);
     // An event envelope (message.type != request) POSTed to __rpc by a channel DO.
-    const res = await post(instance, "test-key/__rpc", {
+    const envelope = {
       message: { type: "event", event: "vcs:publication", payload: { ok: true } },
       delivery: {
         caller: {
@@ -102,8 +107,52 @@ describe("assertInboundAllowed path distinction", () => {
           }),
         },
       },
-    });
+    };
+    const res = await post(instance, "test-key/__rpc", envelope);
     // The guard must NOT reject it — delivery returns 200 (no listener is fine).
     expect(res.status).toBe(200);
+
+    const replay = await post(instance, "test-key/__rpc", envelope);
+    expect(replay.status).toBe(403);
+    await expect(replay.json()).resolves.toMatchObject({
+      errorCode: "EACCES",
+      errorKind: "access",
+      error: expect.stringMatching(/replayed/),
+      errorData: {
+        authorityFailure: {
+          reasonCode: "attestation-invalid",
+          remediation: { kind: "retry-through-host" },
+        },
+      },
+    });
+  });
+
+  it("returns a structured denial for a replayed METHOD CALL", async () => {
+    const { instance } = await createTestDO(ServerOnlyProbeDO);
+    const body = {
+      args: ["hi"],
+      __instanceToken: "token",
+      __instanceId: "do:internal/WorkspaceDO:test-key",
+      __caller: {
+        callerId: "main",
+        callerKind: "server",
+        authorization: createTestDirectAuthority({ callerKind: "server", method: "echo" }),
+      },
+    };
+
+    expect((await post(instance, "test-key/echo", body)).status).toBe(200);
+    const replay = await post(instance, "test-key/echo", body);
+    expect(replay.status).toBe(500);
+    await expect(replay.json()).resolves.toMatchObject({
+      errorCode: "EACCES",
+      errorKind: "access",
+      error: expect.stringMatching(/replayed/),
+      errorData: {
+        authorityFailure: {
+          reasonCode: "attestation-invalid",
+          remediation: { kind: "retry-through-host" },
+        },
+      },
+    });
   });
 });

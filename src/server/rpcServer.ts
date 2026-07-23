@@ -84,7 +84,11 @@ import {
 import { StreamingRelay } from "./rpcServer/streamingRelay.js";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import { attestDirectRpc, attestWorkspaceDoRpc } from "./services/authorityRuntime.js";
-import { evaluateAuthority, requirementForPrincipals } from "@vibestudio/shared/authorization";
+import {
+  authorityFailureForDecision,
+  evaluateAuthority,
+  requirementForPrincipals,
+} from "@vibestudio/shared/authorization";
 import {
   createInvocationSnapshot,
   invocationSnapshotDigest,
@@ -2897,14 +2901,24 @@ export class RpcServer {
     result.invocationDigest = decisions[0]?.snapshotDigest;
     const denied = decisions.find(({ decision }) => !decision.allowed);
     if (denied) {
+      const authorityFailure = authorityFailureForDecision(denied.decision, {
+        capability: denied.leaf.capability,
+        resourceKey: result.resourceKey,
+        tier: denied.leaf.tier,
+      });
       const acquirable =
         denied.leaf.tier !== "open" &&
         (denied.decision.code === "missing-grant" || denied.decision.code === "lineage");
       if (!acquirable || !this.deps.directAuthorityAcquirer) {
-        throw createRelayError(
+        const error = createRelayError(
           `${input.method}: ${denied.decision.reason} (${denied.decision.code})`,
           "EACCES"
         );
+        Object.assign(error, {
+          errorKind: "access",
+          errorData: { authorityFailure },
+        });
+        throw error;
       }
       const acquisitionInput = {
         snapshot: denied.snapshot,
@@ -2928,11 +2942,41 @@ export class RpcServer {
         if (outcome.state === "decided" && outcome.decision !== "deny") {
           return this.directDOAuthorization(input);
         }
-        throw createRelayError(`${input.method}: authority acquisition was not granted`, "EACCES");
+        const deniedByUser = outcome.state === "decided" && outcome.decision === "deny";
+        const failure = deniedByUser
+          ? authorityFailureForDecision(
+              {
+                ...denied.decision,
+                allowed: false,
+                code: "denied",
+                reason: "The authority request was denied",
+              },
+              {
+                capability: denied.leaf.capability,
+                resourceKey: result.resourceKey,
+                tier: denied.leaf.tier,
+              }
+            )
+          : authorityFailure;
+        const error = createRelayError(
+          `${input.method}: authority acquisition was not granted`,
+          "EACCES"
+        );
+        Object.assign(error, {
+          errorKind: "access",
+          errorData: {
+            ...(deniedByUser ? { denied: true } : {}),
+            authorityFailure: failure,
+          },
+        });
+        throw error;
       }
       const acquisition = this.deps.directAuthorityAcquirer.request(acquisitionInput);
       const error = createRelayError(`${input.method}: authority acquisition required`, "EACQUIRE");
-      Object.assign(error, { errorKind: "access", errorData: { acquisition } });
+      Object.assign(error, {
+        errorKind: "access",
+        errorData: { acquisition, authorityFailure },
+      });
       throw error;
     }
     for (const { decision } of decisions) {
