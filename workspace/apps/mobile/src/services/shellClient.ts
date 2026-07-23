@@ -268,6 +268,9 @@ class MobilePanels implements PanelHost {
     await this.requireManager().syncSnapshot();
     await this.syncRuntimeLeases();
   }
+  applyTreeSnapshot(snapshot: PanelTreeSnapshot): boolean {
+    return this.requireManager().applyForestSnapshot(snapshot);
+  }
   getTreeSnapshot(): PanelTreeSnapshot {
     return this.registry.getPanelTreeSnapshot();
   }
@@ -670,7 +673,6 @@ export class ShellClient {
   ): () => void {
     return this.transport.on(event, ({ payload }) => listener(payload as EventPayloads[E]));
   }
-  private periodicSyncTimer: ReturnType<typeof setInterval> | null = null;
   private panelRecoveryUnsubs: Array<() => void> | null = null;
   private recoveryCompleteListeners = new Set<(kind: RecoveryKind) => void>();
   private workspaceInfo: WorkspaceInfo | null = null;
@@ -765,11 +767,10 @@ export class ShellClient {
     this.events.on("panel:runtimeLeaseChanged", (event) => {
       this.panels.handleRuntimeLeaseChanged(event as PanelRuntimeLeaseChangedEvent);
     });
-    // Reflect tree mutations made by ANY client (desktop/terminal/other mobile):
-    // the server broadcasts panel-tree-updated after every authoritative change
-    // (including the Phase 0 self-heal), so mobile re-syncs its mirror to match.
-    this.events.on("panel-tree-updated", () => {
-      void this.panels.refresh().catch(() => {});
+    // State-bearing full snapshots are self-contained. Apply them directly;
+    // only reconnect, foreground, and explicit recovery need an aggregate read.
+    this.events.on("panel-tree-updated", (event) => {
+      this.panels.applyTreeSnapshot(event as PanelTreeSnapshot);
     });
   }
   async init(): Promise<void> {
@@ -953,18 +954,6 @@ export class ShellClient {
     this.registerPanelRecoveryHandlers();
     this.panelsInitialized = true;
   }
-  startPeriodicSync(intervalMs = 30000): void {
-    this.stopPeriodicSync();
-    this.periodicSyncTimer = setInterval(() => {
-      void this.panels.refresh().catch(() => {});
-    }, intervalMs);
-  }
-  stopPeriodicSync(): void {
-    if (this.periodicSyncTimer) {
-      clearInterval(this.periodicSyncTimer);
-      this.periodicSyncTimer = null;
-    }
-  }
   reconnect(): void {
     this.transport.reconnect();
   }
@@ -1008,7 +997,6 @@ export class ShellClient {
     for (const listener of this.recoveryCompleteListeners) listener(kind);
   }
   dispose(): void {
-    this.stopPeriodicSync();
     for (const unsubscribe of this.panelRecoveryUnsubs ?? []) unsubscribe();
     this.panelRecoveryUnsubs = null;
     this.recoveryCompleteListeners.clear();

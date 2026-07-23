@@ -405,7 +405,7 @@ function hostAuthorityOf(url: string): string | null {
   return match?.[1]?.toLowerCase() ?? null;
 }
 
-export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(function PanelWebView(
+const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(function PanelWebView(
   {
     panelId,
     url,
@@ -987,6 +987,8 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
     </View>
   );
 });
+
+export const PanelWebView = React.memo(PanelWebViewImpl);
 
 const styles = StyleSheet.create({
   container: {

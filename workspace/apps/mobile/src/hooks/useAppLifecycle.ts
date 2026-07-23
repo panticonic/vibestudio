@@ -52,7 +52,7 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
           transport.reconnect();
         }
         // Resume periodic sync
-        shellClient.startPeriodicSync();
+        void shellClient.panels.refresh().catch(() => {});
       }
 
       // Transition to background or inactive.
@@ -64,7 +64,6 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
       // memory, and let the OS suspend the socket; the transport's own idle /
       // keepalive handling reports the drop and the "active" branch reconnects.
       if (nextAppState !== "active" && prevState === "active") {
-        shellClient.stopPeriodicSync();
         shellClient.trimMemory();
       }
     };

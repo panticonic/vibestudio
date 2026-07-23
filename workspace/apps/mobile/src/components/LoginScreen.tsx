@@ -123,7 +123,6 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
 
     const finishConnectedClient = (client: ShellClient, credentials: Credentials) => {
       smokePhase("workspace-connected");
-      client.startPeriodicSync();
 
       setShellClient(client);
       setServerUrlAtom(client.serverUrl);

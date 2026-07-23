@@ -6,6 +6,7 @@ import type {
   Panel,
   PanelNavigationState,
   PanelSnapshot,
+  PanelTreeSnapshot,
   ThemeAppearance,
 } from "@vibestudio/shared/types";
 import type { PanelSearchIndex } from "@vibestudio/shared/panelSearchTypes";
@@ -214,6 +215,7 @@ export class PanelManager {
     PanelSlotId,
     Map<string, PanelSnapshot["options"]>
   >();
+  private appliedForestRevision: number | null = null;
 
   constructor(deps: PanelManagerDeps) {
     this.registry = deps.registry;
@@ -243,6 +245,27 @@ export class PanelManager {
     await this.ensureViewStateLoaded();
     const tree = await this.fetchPanelTree();
     this.registry.repopulate(tree, [...this.collapsedIds]);
+    // The legacy aggregate read has no authoritative revision. The next
+    // state-bearing event must therefore be accepted even when its revision is
+    // zero; only events applied through applyForestSnapshot are comparable.
+    this.appliedForestRevision = null;
+  }
+
+  /**
+   * Apply a complete, authoritative forest event without re-reading every slot,
+   * history row, entity, and runtime lease. Full snapshots are self-contained,
+   * so skipped intermediate revisions are safe.
+   */
+  applyForestSnapshot(snapshot: PanelTreeSnapshot): boolean {
+    if (this.appliedForestRevision !== null && snapshot.revision <= this.appliedForestRevision) {
+      return false;
+    }
+    this.registry.repopulate(
+      snapshot.forest.flatMap((group) => group.rootPanels),
+      [...this.collapsedIds]
+    );
+    this.appliedForestRevision = snapshot.revision;
+    return true;
   }
 
   async loadTree(): Promise<{ collapsedIds: string[] }> {

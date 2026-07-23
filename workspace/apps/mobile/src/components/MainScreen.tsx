@@ -837,10 +837,8 @@ export function MainScreen() {
         .then(refreshTree)
         .catch(() => refreshTree());
     });
-    const treeTimer = setInterval(refreshTree, 60000);
     return () => {
       disposed = true;
-      clearInterval(treeTimer);
       unsubReconnect();
       unsubNavigate();
       unsubNav();

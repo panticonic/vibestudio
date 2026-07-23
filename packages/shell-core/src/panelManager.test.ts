@@ -1353,4 +1353,27 @@ describe("PanelManager", () => {
     await managerB.navigateHistory(created.panelId, -1);
     expect(getCurrentSnapshot(registryB.getPanel(created.panelId)!).source).toBe("panels/first");
   });
+
+  it("applies complete forest events directly and rejects stale revisions", async () => {
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const created = await manager.createBrowser(null, "https://example.test", {
+      name: "event-root",
+      addAsRoot: true,
+      ownerUserId: "usr_alice",
+    });
+    const forest = registry.getPanelTreeSnapshot().forest;
+
+    expect(manager.applyForestSnapshot({ revision: 7, forest })).toBe(true);
+    expect(registry.getPanel(created.panelId)).toBeDefined();
+    expect(manager.applyForestSnapshot({ revision: 7, forest: [] })).toBe(false);
+    expect(registry.getPanel(created.panelId)).toBeDefined();
+    expect(manager.applyForestSnapshot({ revision: 8, forest: [] })).toBe(true);
+    expect(registry.getRootPanels()).toEqual([]);
+  });
 });
