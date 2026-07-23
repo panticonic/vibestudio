@@ -115,7 +115,12 @@ export interface LocalToolPort {
     signal: AbortSignal;
     onProgress?(chunk: unknown): void;
   }): Promise<
-    | { result: unknown; summary?: string; isError: boolean }
+    | {
+        result: unknown;
+        summary?: string;
+        isError: boolean;
+        terminalReasonCode?: string;
+      }
     // A long-running local tool (the agent's `eval`) defers: it kicks off the work (eval.startRun)
     // and the result arrives out-of-band via `deliverEffectOutcome` (onEvalComplete). The driver
     // parks the leased row (deferRedrive backstop), exactly like channel_call/http_call.

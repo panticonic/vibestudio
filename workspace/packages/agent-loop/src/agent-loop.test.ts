@@ -307,8 +307,17 @@ describe("agent-loop core lifecycle", () => {
       result: { error: "missing" },
       isError: true,
       reason: "missing",
+      terminalReasonCode: "WorkingChangesPresent",
     });
 
+    expect(
+      s.log.find((row) => row.envelopeId === ids.invocationTerminal("tc-user"))
+    ).toMatchObject({
+      payload: {
+        terminalOutcome: "tool_error",
+        terminalReasonCode: "WorkingChangesPresent",
+      },
+    });
     expect(s.state.openTurn).not.toBeNull();
     expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
   });

@@ -281,6 +281,24 @@ describe("TestRunner", () => {
         }),
       },
       {
+        id: "invocation:call-2",
+        senderId: "agent",
+        kind: "message",
+        contentType: "invocation",
+        complete: true,
+        content: JSON.stringify({
+          id: "call-2",
+          name: "vcs",
+          execution: {
+            status: "error",
+            terminalOutcome: "tool_error",
+            terminalReasonCode: "WorkingChangesPresent",
+            result: { error: "Push requires a clean committed event" },
+            isError: true,
+          },
+        }),
+      },
+      {
         id: "answer-1",
         senderId: "agent",
         kind: "message",
@@ -304,6 +322,19 @@ describe("TestRunner", () => {
               status: "error",
               terminalOutcome: "tool_error",
               result: { error: "ReferenceError: missingVar is not defined" },
+              isError: true,
+            },
+          },
+          {
+            id: "call-2",
+            name: "vcs",
+            status: "error",
+            terminalReasonCode: "WorkingChangesPresent",
+            execution: {
+              status: "error",
+              terminalOutcome: "tool_error",
+              terminalReasonCode: "WorkingChangesPresent",
+              result: { error: "Push requires a clean committed event" },
               isError: true,
             },
           },
@@ -341,14 +372,22 @@ describe("TestRunner", () => {
       testsWithToolFailures: 1,
     });
     expect(suite.results[0]!.execution.error).toBeUndefined();
-    expect(suite.results[0]!.execution.toolFailures).toEqual([
-      expect.objectContaining({
-        name: "eval",
-        status: "error",
-        terminalOutcome: "tool_error",
-        error: "ReferenceError: missingVar is not defined",
-      }),
-    ]);
+    expect(suite.results[0]!.execution.toolFailures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "eval",
+          status: "error",
+          terminalOutcome: "tool_error",
+          error: "ReferenceError: missingVar is not defined",
+        }),
+        expect.objectContaining({
+          name: "vcs",
+          expected: true,
+          classification: "domain-rejection",
+          terminalReasonCode: "WorkingChangesPresent",
+        }),
+      ])
+    );
 
     const expectedSuite = await tester.runSuite([
       {
@@ -366,9 +405,16 @@ describe("TestRunner", () => {
       toolFailureCount: 0,
       testsWithToolFailures: 0,
     });
-    expect(expectedSuite.results[0]!.execution.toolFailures).toEqual([
-      expect.objectContaining({ name: "eval", expected: true }),
-    ]);
+    expect(expectedSuite.results[0]!.execution.toolFailures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "eval", expected: true }),
+        expect.objectContaining({
+          name: "vcs",
+          expected: true,
+          classification: "domain-rejection",
+        }),
+      ])
+    );
   });
 
   it("runs custom test orchestration through the normal validation path", async () => {

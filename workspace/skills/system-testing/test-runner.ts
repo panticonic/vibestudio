@@ -6,7 +6,10 @@ import type {
   TestSuiteResultEntry,
   ToolFailureSummary,
 } from "./types.js";
-import { isPreExecutionArgumentRejection } from "./tool-failure-classification.js";
+import {
+  isPreExecutionArgumentRejection,
+  isSafeVcsDomainRejection,
+} from "./tool-failure-classification.js";
 import type { HeadlessRunner } from "./runner.js";
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
@@ -760,6 +763,9 @@ function classifyExpectedToolFailures(
   return failures.map((failure) => {
     if (isPreExecutionArgumentRejection(failure.error, failure.resultSummary)) {
       return { ...failure, expected: true, classification: "argument-rejection" };
+    }
+    if (isSafeVcsDomainRejection(failure.name, failure.terminalReasonCode)) {
+      return { ...failure, expected: true, classification: "domain-rejection" };
     }
     if (!expected?.length) return failure;
     const text = `${failure.error ?? ""}\n${failure.resultSummary ?? ""}`.toLowerCase();

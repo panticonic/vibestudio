@@ -1092,9 +1092,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               isError: false,
             };
           } catch (err) {
+            const code =
+              err && typeof err === "object" && typeof (err as { code?: unknown }).code === "string"
+                ? (err as { code: string }).code
+                : undefined;
             return {
               result: err instanceof Error ? err.message : String(err),
               isError: true,
+              ...(code ? { terminalReasonCode: code } : {}),
             };
           }
         },

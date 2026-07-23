@@ -65,18 +65,31 @@ export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
       if ("deferred" in outcome && outcome.deferred) {
         return { deferred: true };
       }
-      const toolOutcome = outcome as { result: unknown; summary?: string; isError: boolean };
+      const toolOutcome = outcome as {
+        result: unknown;
+        summary?: string;
+        isError: boolean;
+        terminalReasonCode?: string;
+      };
       return { kind: "tool", ...toolOutcome } satisfies EffectOutcome;
     } catch (err) {
+      const terminalReasonCode = errorCode(err);
       return {
         kind: "tool",
         result: err instanceof Error ? err.message : String(err),
         isError: true,
         reason: err instanceof Error ? err.message : String(err),
+        ...(terminalReasonCode ? { terminalReasonCode } : {}),
       } satisfies EffectOutcome;
     }
   },
 };
+
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
 
 /** channel_call (§2.4.3): journaled call through the channel DO; the result
  *  arrives via the channel's terminal delivery → deliverEffectOutcome. */

@@ -331,6 +331,8 @@ export type EffectOutcome =
        * Successful outcomes ignore this field.
        */
       terminalOutcome?: "tool_error" | "infrastructure_error";
+      /** Stable typed reason preserved from the tool/service boundary. */
+      terminalReasonCode?: string;
     }
   | { kind: "approval"; granted: boolean; resolvedBy: ParticipantRef; reason?: string }
   | { kind: "credential"; resolved: boolean; reason?: string };
@@ -470,7 +472,10 @@ export function outcomeEvents(
               outcome.terminalOutcome ?? "tool_error",
               outcome.reason ?? "tool failed",
               {
-              error: outcome.result,
+                error: outcome.result,
+                ...(outcome.terminalReasonCode
+                  ? { terminalReasonCode: outcome.terminalReasonCode }
+                  : {}),
               }
             )
           : invocationCompletedPayload({
