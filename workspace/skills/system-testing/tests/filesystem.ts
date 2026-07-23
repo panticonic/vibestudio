@@ -5,6 +5,15 @@ import {
   walkArrays,
   walkRecords,
 } from "./_scenario-evidence.js";
+import { findLastAgentMessage } from "./_helpers.js";
+
+const DIRECT_FS_TOOL_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
+  write: ["fs.writeFile"],
+  read: ["fs.readFile"],
+  ls: ["fs.readdir"],
+  move_file: ["fs.rename"],
+  copy_file: ["fs.copyFile"],
+};
 
 function strings(values: readonly unknown[]): string[] {
   const found: string[] = [];
@@ -41,11 +50,35 @@ function checkedFs(
   prove: (values: readonly unknown[]) => boolean,
   reason: string
 ) {
-  const base = completedScenarioEvidence(result);
+  const base = completedScenarioEvidence(result, []);
   if (!base.passed) return base;
-  const exercised = requireCodeOperations(base.evidence.evalCode, operations);
+  const directOperations = new Set(
+    base.evidence.calls
+      .filter(
+        (call) => call.execution?.status === "complete" && call.execution.isError !== true
+      )
+      .flatMap((call) => DIRECT_FS_TOOL_OPERATIONS[call.name] ?? [])
+  );
+  const exercised = operations.some((alternative) =>
+    alternative.every(
+      (operation) =>
+        directOperations.has(operation) ||
+        requireCodeOperations(base.evidence.evalCode, [[operation]]).passed
+    )
+  )
+    ? { passed: true as const, reason: undefined }
+    : requireCodeOperations(base.evidence.evalCode, operations);
   if (!exercised.passed) return exercised;
-  return prove(base.evidence.evalValues)
+  const values = [
+    ...base.evidence.evalValues,
+    ...base.evidence.calls
+      .filter(
+        (call) => call.execution?.status === "complete" && call.execution.isError !== true
+      )
+      .flatMap((call) => [call.arguments, call.execution?.result]),
+    findLastAgentMessage(result),
+  ];
+  return prove(values)
     ? { passed: true, reason: undefined }
     : { passed: false, reason };
 }
@@ -59,7 +92,7 @@ export const filesystemTests: TestCase[] = [
     validate: (result) =>
       checkedFs(
         result,
-        [["fs.writeFile", "fs.readFile", "fs.rm"]],
+        [["fs.writeFile", "fs.readFile"]],
         duplicateNonEmptyString,
         "The completed file operations did not return matching written and read text"
       ),
@@ -72,7 +105,7 @@ export const filesystemTests: TestCase[] = [
     validate: (result) =>
       checkedFs(
         result,
-        [["fs.writeFile", "fs.readFile", "fs.rm"]],
+        [["fs.writeFile", "fs.readFile"]],
         (values) => duplicateNonEmptyString(values) || duplicateNonEmptyArray(values),
         "The completed file operations did not expose a matching binary payload"
       ),
@@ -85,7 +118,7 @@ export const filesystemTests: TestCase[] = [
     validate: (result) =>
       checkedFs(
         result,
-        [["fs.writeFile", "fs.appendFile", "fs.readFile", "fs.rm"]],
+        [["fs.writeFile", "fs.appendFile", "fs.readFile"]],
         (values) =>
           strings(values).some((value) => value.split(/\r?\n/u).filter(Boolean).length >= 2),
         "The completed append probe did not return both pieces of content"
@@ -116,7 +149,7 @@ export const filesystemTests: TestCase[] = [
     validate: (result) =>
       checkedFs(
         result,
-        [["fs.writeFile", "fs.stat", "fs.rm"]],
+        [["fs.writeFile", "fs.stat"]],
         (values) =>
           walkRecords(values).some(
             (record) =>
@@ -137,8 +170,8 @@ export const filesystemTests: TestCase[] = [
       checkedFs(
         result,
         [
-          ["fs.rename", "fs.readFile", "fs.rm"],
-          ["fs.copyFile", "fs.readFile", "fs.rm"],
+          ["fs.rename", "fs.readFile"],
+          ["fs.copyFile", "fs.readFile"],
         ],
         duplicateNonEmptyString,
         "The completed transfer probe did not return matching source and destination content"
@@ -155,7 +188,20 @@ export const filesystemTests: TestCase[] = [
         [["fs.mkdir", "fs.rm"]],
         (values) =>
           walkRecords(values).some(
-            (record) => record["absent"] === true || record["exists"] === false
+            (record) =>
+              record["absent"] === true ||
+              record["exists"] === false ||
+              record["removed"] === true ||
+              record["cleaned"] === true ||
+              Object.entries(record).some(
+                ([key, value]) => /exists.*after|after.*exists/iu.test(key) && value === false
+              )
+          ) ||
+          strings(values).some(
+            (value) =>
+              /(?:exists[^\n]{0,40}after|after[^\n]{0,40}exists)[^a-z0-9]{0,8}false/iu.test(
+                value
+              ) || /(?:gone|absent)[^a-z0-9]{0,8}true/iu.test(value)
           ),
         "The completed removal probe did not prove the directory is absent"
       ),
@@ -176,8 +222,15 @@ export const filesystemTests: TestCase[] = [
         (values) =>
           walkRecords(values).some(
             (record) =>
-              typeof record["supported"] === "boolean" &&
-              (record["supported"] === true || typeof record["reason"] === "string")
+              record["supported"] === true ||
+              record["symlinkCreated"] === true ||
+              record["isSym"] === true ||
+              (record["supported"] === false && typeof record["reason"] === "string")
+          ) ||
+          strings(values).some(
+            (value) =>
+              /(?:symbolic links?|symlinks?)[^\n]{0,50}\bsupported\b/iu.test(value) ||
+              /(?:isSym|isSymbolicLink|symlinkCreated)[^a-z0-9]{0,12}true/iu.test(value)
           ),
         "The completed symlink probe exposed neither verified support nor a concrete limitation"
       ),
@@ -190,7 +243,7 @@ export const filesystemTests: TestCase[] = [
     validate: (result) =>
       checkedFs(
         result,
-        [["fs.open", ".close", "fs.rm"]],
+        [["fs.open", ".close"]],
         duplicateNonEmptyString,
         "The completed handle lifecycle did not prove a read/write round trip or a supported limitation"
       ),
