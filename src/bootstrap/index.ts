@@ -25,7 +25,10 @@ import {
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
-import type { HostTargetLaunchSessionSnapshot } from "@vibestudio/shared/hostTargets";
+import type {
+  HostTargetLaunchSessionSnapshot,
+  HostTargetLaunchTimelinePhase,
+} from "@vibestudio/shared/hostTargets";
 import { parseConnectLink } from "@vibestudio/shared/connect";
 
 type ShellTransportBridge = {
@@ -41,10 +44,12 @@ type BootstrapBridge = {
   retryStartup: () => Promise<unknown>;
   chooseConnection: () => Promise<unknown>;
   openLog: (path: string) => Promise<unknown>;
+  onStateChanged?: (handler: (state: unknown) => void) => () => void;
 };
 
 type BootstrapConnectionState = {
   mode: "choose-connection" | "starting" | "connected" | "failed";
+  connectionKind: "local" | "remote" | null;
   localWorkspaces: Array<{ name: string; lastOpened: number }>;
   lastLocalWorkspaceName: string | null;
   isDev?: boolean;
@@ -67,6 +72,7 @@ const bootstrapApi = globals.__vibestudioBootstrap;
 const approvalsContainer = container;
 const launchCopy = document.getElementById("launch-copy");
 const bootstrapMain = document.querySelector("main");
+const bootstrapHeader = document.querySelector(".launch-header");
 const bootstrapEyebrow = document.getElementById("bootstrap-eyebrow");
 const bootstrapTitle = document.getElementById("bootstrap-title");
 
@@ -115,7 +121,9 @@ let rendering = false;
 let refreshInFlight = false;
 let refreshScheduled = false;
 let launchSession: HostTargetLaunchSessionSnapshot | null = null;
-let emptyLaunchText = "No workspace approval is pending. Starting the workspace...";
+/** Header copy for the current launch state; the initial value covers the frame
+ * rendered before the host answers with a session. */
+let emptyLaunchText = "Connecting to your workspace...";
 const decidingApprovalIds = new Set<string>();
 const openReviewApprovalIds = new Set<string>();
 let decisionError: string | null = null;
@@ -167,13 +175,14 @@ async function decide(
   if (decidingApprovalIds.has(approval.approvalId)) return;
   for (const item of pending) decidingApprovalIds.add(item.approvalId);
   decisionError = null;
-  if (launchCopy) {
-    launchCopy.textContent =
-      decision === "deny"
-        ? "Denying startup approval..."
-        : "Approval recorded. Starting the workspace...";
-  }
   render();
+  // After render(), which rewrites the header from the (still unresolved)
+  // session status - this is the more specific thing to say right now.
+  setHeaderCopy(
+    decision === "deny"
+      ? "Denying startup approval..."
+      : "Approval recorded. Starting the workspace..."
+  );
   try {
     const session = await getWorkspaceClient().hostTargets.resolveLaunchSessionApproval(
       sessionId,
@@ -296,12 +305,17 @@ function appendApprovalActions(card: HTMLElement, approval: PendingUnitBatchAppr
   }
 }
 
-function appendLaunchTimeline(parent: HTMLElement, session: HostTargetLaunchSessionSnapshot): void {
+function appendLaunchTimeline(
+  parent: HTMLElement,
+  phases: readonly HostTargetLaunchTimelinePhase[]
+): void {
+  if (phases.length === 0) return;
   const list = document.createElement("ol");
   list.className = "launch-timeline";
-  for (const phase of session.timeline) {
+  for (const phase of phases) {
     const item = document.createElement("li");
     item.className = `launch-phase ${phase.state}`;
+    if (phase.state === "active") item.setAttribute("aria-current", "step");
     const dot = document.createElement("span");
     dot.className = "launch-phase-dot";
     dot.setAttribute("aria-hidden", "true");
@@ -312,6 +326,98 @@ function appendLaunchTimeline(parent: HTMLElement, session: HostTargetLaunchSess
     list.append(item);
   }
   parent.append(list);
+}
+
+/**
+ * The pre-session half of the SAME timeline the host emits once a launch session
+ * exists (launchTimeline() in hostTargetLaunchCoordinator): same phase ids, same
+ * labels, same order. Startup used to show a single sentence here and only grew
+ * the step list once the host answered, so the window changed shape mid-launch.
+ * Rendering these phases from the first frame means the host snapshot is a
+ * continuation - the "Connect" row just flips from active to complete.
+ *
+ * The bootstrap window always launches the electron target, so the target-named
+ * labels are fixed to "desktop" (targetLabel("electron")).
+ */
+function startupTimeline(
+  detail: string | null | undefined,
+  connectState: HostTargetLaunchTimelinePhase["state"] = "active"
+): HostTargetLaunchTimelinePhase[] {
+  return [
+    {
+      id: "pair",
+      label: "Connect",
+      state: connectState,
+      ...(detail ? { detail } : {}),
+    },
+    { id: "review-trust", label: "Review trust", state: "pending" },
+    { id: "start-units", label: "Start privileged units", state: "pending" },
+    { id: "build-app", label: "Build desktop app", state: "pending" },
+    { id: "activate-target", label: "Activate desktop", state: "pending" },
+    { id: "connected", label: "Connected", state: "pending" },
+  ];
+}
+
+/**
+ * The header is the ONLY place the current status sentence appears; the body
+ * below it carries progress and controls. Both used to render the same sentence,
+ * which read as a stutter.
+ */
+function setHeader(
+  eyebrow: string,
+  title: string,
+  copy?: string | null,
+  tone: "normal" | "error" = "normal"
+): void {
+  if (bootstrapEyebrow) bootstrapEyebrow.textContent = eyebrow;
+  if (bootstrapTitle) bootstrapTitle.textContent = title;
+  if (tone === "error") bootstrapHeader?.setAttribute("data-tone", "error");
+  else bootstrapHeader?.removeAttribute("data-tone");
+  setHeaderCopy(copy ?? null);
+}
+
+function setHeaderCopy(copy: string | null): void {
+  if (!launchCopy) return;
+  launchCopy.textContent = copy ?? "";
+  launchCopy.hidden = !copy;
+}
+
+function launchSessionHeader(session: HostTargetLaunchSessionSnapshot): {
+  eyebrow: string;
+  title: string;
+  copy: string;
+  tone?: "error";
+} {
+  if (session.status === "approval-required") {
+    return {
+      eyebrow: "Workspace approval",
+      title: "Do you trust the code in this workspace?",
+      copy:
+        decisionError ?? "Review the workspace code that wants to run before Vibestudio starts.",
+    };
+  }
+  if (session.status === "denied") {
+    return {
+      eyebrow: "Startup denied",
+      title: "Nothing was started",
+      copy: session.message,
+      tone: "error",
+    };
+  }
+  if (session.status === "unavailable") {
+    return {
+      eyebrow: "Cannot start",
+      title: "Vibestudio could not start this workspace",
+      copy: [session.message, session.detail].filter(Boolean).join(" "),
+      tone: "error",
+    };
+  }
+  if (session.status === "ready") {
+    return { eyebrow: "Launching", title: "Opening your workspace", copy: session.message };
+  }
+  // starting / preparing: the phase rows carry the technical detail, so the
+  // header stays a single readable sentence.
+  return { eyebrow: "Starting", title: "Starting workspace", copy: session.message };
 }
 
 function launchSessionText(session: HostTargetLaunchSessionSnapshot): string {
@@ -331,23 +437,18 @@ function render(): void {
   rendering = true;
   try {
     approvalsContainer.replaceChildren();
-    if (pending.length === 0) {
-      approvalsContainer.className = "launch-card empty";
-      const message = document.createElement("div");
-      message.className = "empty-message";
-      message.textContent = emptyLaunchText;
-      approvalsContainer.append(message);
-      if (launchSession) appendLaunchTimeline(approvalsContainer, launchSession);
-      if (launchSession?.status === "denied") appendDeniedRecovery(approvalsContainer);
-      if (launchCopy) {
-        launchCopy.textContent = emptyLaunchText;
-      }
+    approvalsContainer.className = "launch-body";
+    if (!launchSession) {
+      setHeader("Starting", "Starting workspace", emptyLaunchText);
+      appendLaunchTimeline(approvalsContainer, startupTimeline(null));
       return;
     }
-    approvalsContainer.className = "launch-card";
-    if (launchCopy) {
-      launchCopy.textContent =
-        decisionError ?? "Review the workspace code that wants to run before Vibestudio starts.";
+    const header = launchSessionHeader(launchSession);
+    setHeader(header.eyebrow, header.title, header.copy, header.tone ?? "normal");
+    appendLaunchTimeline(approvalsContainer, launchSession.timeline);
+    if (pending.length === 0) {
+      if (launchSession.status === "denied") appendDeniedRecovery(approvalsContainer);
+      return;
     }
     for (const approval of pending) {
       const copy = getLaunchCopy(approval);
@@ -394,6 +495,17 @@ function appendDeniedRecovery(parent: HTMLElement): void {
   parent.append(explanation, actions);
 }
 
+/**
+ * Host-unreachable states keep the same shape as every other launch state: the
+ * header says what went wrong and the step list shows where it stopped.
+ */
+function renderLaunchError(title: string, detail: string): void {
+  setHeader("Cannot start", title, detail, "error");
+  approvalsContainer.className = "launch-body";
+  approvalsContainer.replaceChildren();
+  appendLaunchTimeline(approvalsContainer, startupTimeline(null, "failed"));
+}
+
 async function refresh(): Promise<void> {
   if (refreshInFlight) return;
   refreshInFlight = true;
@@ -404,8 +516,10 @@ async function refresh(): Promise<void> {
         : null) ?? (await getWorkspaceClient().hostTargets.beginLaunch(hostTarget));
     if (setLaunchSession(session)) render();
   } catch (err) {
-    approvalsContainer.className = "launch-card empty";
-    approvalsContainer.textContent = `Launch gate could not reach the host: ${err instanceof Error ? err.message : String(err)}`;
+    renderLaunchError(
+      "Launch gate could not reach the host",
+      err instanceof Error ? err.message : String(err)
+    );
   } finally {
     refreshInFlight = false;
   }
@@ -453,7 +567,12 @@ function isBootstrapConnectionState(value: unknown): value is BootstrapConnectio
   ) {
     return false;
   }
-  return Array.isArray(value["localWorkspaces"]);
+  return (
+    Array.isArray(value["localWorkspaces"]) &&
+    (value["connectionKind"] === "local" ||
+      value["connectionKind"] === "remote" ||
+      value["connectionKind"] === null)
+  );
 }
 
 function formatLastOpened(timestamp: number): string {
@@ -466,20 +585,13 @@ function formatLastOpened(timestamp: number): string {
   })}`;
 }
 
-function setBootstrapHeader(mode: "connection" | "approval"): void {
-  if (mode === "connection") {
-    bootstrapMain?.setAttribute("data-bootstrap-mode", "connection");
-    if (bootstrapEyebrow) bootstrapEyebrow.textContent = "Connect";
-    if (bootstrapTitle) bootstrapTitle.textContent = "Choose a server or workspace";
-    if (launchCopy) {
-      launchCopy.textContent =
-        "Pair with an existing server, reconnect to a saved server, or launch a local workspace.";
-    }
-    return;
-  }
-  bootstrapMain?.setAttribute("data-bootstrap-mode", "approval");
-  if (bootstrapEyebrow) bootstrapEyebrow.textContent = "Workspace Approval";
-  if (bootstrapTitle) bootstrapTitle.textContent = "Do you trust the code in this workspace?";
+function setConnectionHeader(): void {
+  bootstrapMain?.setAttribute("data-bootstrap-mode", "connection");
+  setHeader(
+    "Connect",
+    "Choose a server or workspace",
+    "Pair with an existing server, reconnect to a saved server, or launch a local workspace."
+  );
 }
 
 function connectionButton(
@@ -522,35 +634,38 @@ function connectionHandoffFor(actionId: string): { title: string; detail: string
 }
 
 function renderConnectionHandoff(): void {
-  setBootstrapHeader("approval");
-  approvalsContainer.className = "launch-card empty";
+  // Not the approval header: nothing is awaiting trust yet — we're connecting.
+  bootstrapMain?.setAttribute("data-bootstrap-mode", "approval");
+  setHeader(
+    "Starting",
+    connectionHandoff?.title ?? "Starting workspace",
+    connectionHandoff?.detail ?? "Preparing the selected workspace and startup approval gate..."
+  );
+  approvalsContainer.className = "launch-body";
   approvalsContainer.replaceChildren();
-  const message = document.createElement("div");
-  message.className = "empty-message";
-  message.textContent = connectionHandoff?.title ?? "Starting workspace";
-  const detail = document.createElement("div");
-  detail.className = "status";
-  detail.textContent =
-    connectionState?.startupDetail ??
-    connectionHandoff?.detail ??
-    "Preparing the selected workspace and startup approval gate...";
-  approvalsContainer.append(message, detail);
+  // The same step list the launch gate shows, so this state is the first leg of
+  // one journey rather than a different-looking screen. The live host progress
+  // rides on the active phase instead of being a second status line.
+  appendLaunchTimeline(approvalsContainer, startupTimeline(connectionState?.startupDetail));
   const elapsedMs = startupWaitBeganAt ? Date.now() - startupWaitBeganAt : 0;
-  if (elapsedMs >= 1_000) {
-    const elapsed = document.createElement("div");
-    elapsed.className = "status";
-    elapsed.textContent = `Elapsed: ${formatElapsed(elapsedMs)}`;
-    approvalsContainer.append(elapsed);
-  }
   const startupLogPath = connectionState?.serverLogPath ?? connectionState?.startupError?.logPath;
   if (elapsedMs >= 15_000 && startupLogPath) {
+    const actions = document.createElement("div");
+    actions.className = "toolbar";
     const logButton = document.createElement("button");
     logButton.textContent = "View server log";
     logButton.onclick = () => void bootstrapApi?.openLog(startupLogPath);
-    approvalsContainer.append(logButton);
+    actions.append(logButton);
+    approvalsContainer.append(actions);
   }
-  if (launchCopy) {
-    launchCopy.textContent = detail.textContent;
+  if (connectionState?.connectionKind === "remote") {
+    const actions = document.createElement("div");
+    actions.className = "toolbar";
+    const choose = document.createElement("button");
+    choose.textContent = "Choose another server or workspace";
+    choose.onclick = () => void bootstrapApi?.chooseConnection();
+    actions.append(choose);
+    approvalsContainer.append(actions);
   }
 }
 
@@ -568,8 +683,9 @@ async function runConnectionAction(actionId: string, action: () => Promise<void>
   try {
     await action();
     // No relaunch: the host resolves the choice and connects in THIS process and
-    // window. Show the starting state and poll the bootstrap state until the
-    // launch gate is ready (waitForConnectedBootstrapState drives the handoff).
+    // window. Show the starting state and watch the bootstrap state (host push
+    // + fallback poll) until the launch gate is ready.
+    startupWaitDone = false;
     renderStartingWorkspace();
     waitForConnectedBootstrapState();
   } catch (err) {
@@ -735,7 +851,7 @@ function appendLocalWorkspaces(parent: HTMLElement, state: BootstrapConnectionSt
 function renderConnectionChooser(state: BootstrapConnectionState): void {
   connectionHandoff = null;
   connectionState = state;
-  setBootstrapHeader("connection");
+  setConnectionHeader();
   approvalsContainer.className = "connection-grid";
   approvalsContainer.replaceChildren();
   appendConnectionStatus(approvalsContainer);
@@ -870,26 +986,27 @@ function renderStartingWorkspace(): void {
   renderConnectionHandoff();
 }
 
-function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1_000));
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
-}
-
 function renderStartupFailure(state: BootstrapConnectionState): void {
   connectionState = state;
-  setBootstrapHeader("connection");
-  if (bootstrapTitle) bootstrapTitle.textContent = "Vibestudio could not start";
+  bootstrapMain?.setAttribute("data-bootstrap-mode", "approval");
   const failure = state.startupError;
-  approvalsContainer.className = "launch-card";
+  setHeader(
+    "Cannot start",
+    failure?.message ?? "Workspace startup did not complete",
+    failure?.detail ?? "Retry, or choose a different server or workspace.",
+    "error"
+  );
+  approvalsContainer.className = "launch-body";
   approvalsContainer.replaceChildren();
-  const title = document.createElement("div");
-  title.className = "title";
-  title.textContent = failure?.message ?? "Workspace startup did not complete.";
-  const detail = document.createElement("div");
-  detail.className = "meta";
-  detail.textContent = failure?.detail ?? "Retry, or choose a different server or workspace.";
+  // Same step list, stopped where it broke — the failure keeps its place in the
+  // sequence instead of replacing it with a bare error card.
+  appendLaunchTimeline(approvalsContainer, startupTimeline(state.startupDetail, "failed"));
+  if (failure?.logPath) {
+    const path = document.createElement("code");
+    path.className = "log-path";
+    path.textContent = failure.logPath;
+    approvalsContainer.append(path);
+  }
   const actions = document.createElement("div");
   actions.className = "toolbar";
   const retry = document.createElement("button");
@@ -897,7 +1014,7 @@ function renderStartupFailure(state: BootstrapConnectionState): void {
   retry.textContent = "Retry startup";
   retry.onclick = () => void bootstrapApi?.retryStartup();
   const choose = document.createElement("button");
-  choose.textContent = "Choose another workspace";
+  choose.textContent = "Choose another server or workspace";
   choose.onclick = () => void bootstrapApi?.chooseConnection();
   actions.append(retry, choose);
   if (failure?.logPath) {
@@ -905,28 +1022,62 @@ function renderStartupFailure(state: BootstrapConnectionState): void {
     log.textContent = "View server log";
     log.onclick = () => void bootstrapApi?.openLog(failure.logPath ?? "");
     actions.append(log);
-    const path = document.createElement("code");
-    path.className = "log-path";
-    path.textContent = failure.logPath;
-    approvalsContainer.append(title, detail, path, actions);
-  } else {
-    approvalsContainer.append(title, detail, actions);
   }
-  if (launchCopy) launchCopy.textContent = detail.textContent;
+  approvalsContainer.append(actions);
+}
+
+let launchGateStarted = false;
+let startupWaitDone = false;
+
+/**
+ * Apply a bootstrap connection state from either transport (host push or the
+ * fallback poll). Returns "terminal" when the wait is over — connected, failed,
+ * or back at the chooser — so the poll loop knows to stop.
+ */
+async function applyBootstrapState(
+  state: BootstrapConnectionState
+): Promise<"terminal" | "waiting"> {
+  connectionState = state;
+  if (state.mode === "failed") {
+    startupWaitDone = true;
+    renderStartupFailure(state);
+    return "terminal";
+  }
+  if (state.mode === "connected") {
+    startupWaitDone = true;
+    // Both the push handler and an in-flight poll can observe "connected";
+    // the gate must open exactly once.
+    if (!launchGateStarted) {
+      launchGateStarted = true;
+      await startLaunchGate();
+    }
+    return "terminal";
+  }
+  if (state.mode === "choose-connection") {
+    startupWaitDone = true;
+    renderConnectionChooser(state);
+    return "terminal";
+  }
+  renderStartingWorkspace();
+  return "waiting";
 }
 
 function waitForConnectedBootstrapState(): void {
   window.setTimeout(async () => {
+    if (startupWaitDone) return;
     const state = await getBootstrapStateWithTimeout();
+    if (startupWaitDone) return;
     if (!isBootstrapConnectionState(state)) {
       if (Date.now() - startupWaitBeganAt >= STARTUP_POLL_TIMEOUT_MS) {
         renderStartupFailure({
           mode: "failed",
+          connectionKind: connectionState?.connectionKind ?? null,
           localWorkspaces: [],
           lastLocalWorkspaceName: null,
           startupError: {
             message: "Workspace startup stopped responding.",
-            detail: "The host did not report progress. Retry startup or choose another workspace.",
+            detail:
+              "The host did not report progress. Retry startup or choose another server or workspace.",
           },
           serverLogPath: connectionState?.serverLogPath,
         });
@@ -935,20 +1086,7 @@ function waitForConnectedBootstrapState(): void {
       waitForConnectedBootstrapState();
       return;
     }
-    connectionState = state;
-    if (state.mode === "failed") {
-      renderStartupFailure(state);
-      return;
-    }
-    if (state.mode === "connected") {
-      await startLaunchGate();
-      return;
-    }
-    if (state.mode === "choose-connection") {
-      renderConnectionChooser(state);
-      return;
-    }
-    renderStartingWorkspace();
+    if ((await applyBootstrapState(state)) === "terminal") return;
     if (Date.now() - startupWaitBeganAt >= STARTUP_POLL_TIMEOUT_MS) {
       renderStartupFailure({
         ...state,
@@ -963,7 +1101,18 @@ function waitForConnectedBootstrapState(): void {
       return;
     }
     waitForConnectedBootstrapState();
-  }, 500);
+    // Pushed state drives the UI; this poll is only a liveness fallback, so it
+    // can be slow.
+  }, 2_000);
+}
+
+/** Host-pushed state transitions land immediately (no poll latency). */
+function subscribeToBootstrapStatePush(): void {
+  bootstrapApi?.onStateChanged?.((state) => {
+    if (startupWaitDone) return;
+    if (!isBootstrapConnectionState(state)) return;
+    void applyBootstrapState(state);
+  });
 }
 
 async function getBootstrapStateWithTimeout(): Promise<unknown> {
@@ -975,17 +1124,22 @@ async function getBootstrapStateWithTimeout(): Promise<unknown> {
 }
 
 async function startLaunchGate(): Promise<void> {
-  setBootstrapHeader("approval");
+  bootstrapMain?.setAttribute("data-bootstrap-mode", "approval");
+  // Paint the step list right away: subscribing and fetching the session takes a
+  // round trip, and a launch window that shows nothing (or a trust question
+  // nobody has asked yet) for that beat is worse than showing where we are.
+  render();
   await subscribeToLaunchEvents().catch((err) => {
-    approvalsContainer.className = "launch-card empty";
-    approvalsContainer.textContent = `Launch gate could not subscribe to host events: ${
+    renderLaunchError(
+      "Launch gate could not subscribe to host events",
       err instanceof Error ? err.message : String(err)
-    }`;
+    );
   });
   await refresh();
 }
 
 async function init(): Promise<void> {
+  subscribeToBootstrapStatePush();
   const state = await getBootstrapStateWithTimeout();
   if (isBootstrapConnectionState(state) && state.mode === "choose-connection") {
     renderConnectionChooser(state);
@@ -1006,6 +1160,5 @@ async function init(): Promise<void> {
 }
 
 void init().catch((err) => {
-  approvalsContainer.className = "launch-card empty";
-  approvalsContainer.textContent = err instanceof Error ? err.message : String(err);
+  renderLaunchError("Vibestudio could not start", err instanceof Error ? err.message : String(err));
 });

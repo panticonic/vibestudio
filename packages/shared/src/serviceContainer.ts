@@ -73,7 +73,6 @@ export class ServiceContainer {
     }
 
     const order = this.topologicalSort();
-    const levels = this.startLevels(order);
     const started = new Set<string>();
     const activeWatchdogs = new Set<ReturnType<typeof setInterval>>();
     let startupAborted = false;
@@ -87,31 +86,6 @@ export class ServiceContainer {
         console.error(`[ServiceContainer] Cleanup error for "${name}":`, e);
       }
     };
-
-    const waitForLevel = (promises: Promise<void>[]): Promise<void> =>
-      new Promise((resolve, reject) => {
-        if (promises.length === 0) {
-          resolve();
-          return;
-        }
-        let remaining = promises.length;
-        let rejected = false;
-        for (const promise of promises) {
-          promise.then(
-            () => {
-              remaining -= 1;
-              if (!rejected && remaining === 0) resolve();
-            },
-            (error: unknown) => {
-              remaining -= 1;
-              if (!rejected) {
-                rejected = true;
-                reject(error);
-              }
-            }
-          );
-        }
-      });
 
     const startOne = async (name: string): Promise<void> => {
       const service = this.services.get(name)!;
@@ -136,6 +110,10 @@ export class ServiceContainer {
         activeWatchdogs.add(watchdog);
         try {
           const instance = await service.start(resolve);
+          const startDurationMs = Date.now() - startedAt;
+          if (startDurationMs >= 500) {
+            log.info(`[${name}] started in ${startDurationMs}ms`);
+          }
           if (startupAborted) {
             await stopStartedInstance(name, instance);
             return;
@@ -163,16 +141,49 @@ export class ServiceContainer {
       }
     };
 
+    // Per-node scheduling: each service starts the moment its own dependencies
+    // have started (no level barriers, so one slow start only delays its own
+    // dependents). A failed dependency rejects every transitive dependent
+    // before its start hook runs.
+    const startPromises = new Map<string, Promise<void>>();
+    let firstError: unknown = null;
+    const startService = (name: string): Promise<void> => {
+      const existing = startPromises.get(name);
+      if (existing) return existing;
+      const service = this.services.get(name)!;
+      const deps = [
+        ...(service.dependencies ?? []),
+        ...(service.optionalDependencies ?? []).filter((dep) => this.services.has(dep)),
+      ];
+      const promise = Promise.all(deps.map(startService)).then(async () => {
+        if (startupAborted) return;
+        try {
+          await startOne(name);
+        } catch (error) {
+          if (firstError === null) firstError = error;
+          startupAborted = true;
+          throw error;
+        }
+      });
+      // Fail-fast below abandons still-pending siblings; their eventual
+      // rejections must not surface as unhandled.
+      void promise.catch(() => {});
+      startPromises.set(name, promise);
+      return promise;
+    };
+
     try {
-      for (const level of levels) {
-        await waitForLevel(level.map((name) => startOne(name)));
-      }
+      // Rejects on the FIRST failure even while other starts are still in
+      // flight (a hung sibling must not delay abort). Late completions observe
+      // `startupAborted` and stop themselves inside startOne.
+      await Promise.all(order.map(startService));
 
       this.startOrder = order;
       this.started = true;
       log.info(`All ${order.length} services started`);
     } catch (error) {
       startupAborted = true;
+      const thrown = firstError ?? error;
       for (const watchdog of activeWatchdogs) clearInterval(watchdog);
       activeWatchdogs.clear();
       const startedInOrder = order.filter((name) => started.has(name));
@@ -181,7 +192,7 @@ export class ServiceContainer {
         await stopStartedInstance(name, this.instances.get(name));
       }
       this.instances.clear();
-      throw error;
+      throw thrown;
     }
   }
 
@@ -267,32 +278,5 @@ export class ServiceContainer {
     }
 
     return result;
-  }
-
-  /**
-   * Group the topologically sorted services into dependency layers. Services in
-   * one layer have no dependencies on each other, so they can start in parallel.
-   */
-  private startLevels(order: string[]): string[][] {
-    const depthMemo = new Map<string, number>();
-    const depth = (name: string): number => {
-      const memo = depthMemo.get(name);
-      if (memo !== undefined) return memo;
-      const service = this.services.get(name)!;
-      const deps = [
-        ...(service.dependencies ?? []),
-        ...(service.optionalDependencies ?? []).filter((dep) => this.services.has(dep)),
-      ];
-      const value = deps.length === 0 ? 0 : Math.max(...deps.map((dep) => depth(dep) + 1));
-      depthMemo.set(name, value);
-      return value;
-    };
-
-    const levels: string[][] = [];
-    for (const name of order) {
-      const level = depth(name);
-      (levels[level] ??= []).push(name);
-    }
-    return levels;
   }
 }
