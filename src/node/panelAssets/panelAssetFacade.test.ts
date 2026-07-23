@@ -107,15 +107,20 @@ describe("startPanelAssetFacade", () => {
         const res = await fetch(`http://127.0.0.1:${facade.port}${blocked}`, { method: "POST" });
         expect(res.status, blocked).toBe(403);
       }
-      // Worker routes and app artifacts stay reachable.
-      for (const allowed of ["/_r/w/workers/my-worker/hook", "/_a/build-key/index.html"]) {
+      // Worker routes, app artifacts, and the server's exact immutable shared
+      // style namespace stay reachable.
+      for (const allowed of [
+        "/_r/w/workers/my-worker/hook",
+        "/_a/build-key/index.html",
+        `/__vibestudio/shared-style/${"a".repeat(64)}.css`,
+      ]) {
         const res = await fetch(`http://127.0.0.1:${facade.port}${allowed}`);
         expect(res.status, allowed).toBe(200);
       }
     } finally {
       await facade.close();
     }
-    expect(stream).toHaveBeenCalledTimes(2); // only the two allowed paths hit the pipe
+    expect(stream).toHaveBeenCalledTimes(3); // only the allowed paths hit the pipe
   });
 
   it("responds 502 when the gateway.fetch stream rejects", async () => {

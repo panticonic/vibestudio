@@ -26,7 +26,8 @@
  *  - panel HTML/bundle assets: `/{source0}/{source1}/…` served by
  *    PanelHttpServer (`buildPanelUrl` → `/apps/shell/?contextId=…`), plus its
  *    index page, favicons, and runtime helpers (`/__loader.js`,
- *    `/__transport.js`)
+ *    `/__transport.js`) and content-addressed shared styles
+ *    (`/__vibestudio/shared-style/<sha256>.css`)
  *  - `/_r/w/<source>/…` — workspace-declared worker HTTP routes (the panel
  *    runtime's `gatewayFetch` exists for these)
  *  - `/_a/<build-key>/…` — approved workspace app artifacts (Electron-hosted
@@ -48,6 +49,8 @@ export const PANEL_GATEWAY_PATH_PREFIXES: readonly string[] = [
   "/_a/", // approved workspace app artifacts (Electron-hosted app webviews)
 ];
 
+const PANEL_SHARED_STYLE_PATH = /^\/__vibestudio\/shared-style\/[0-9a-f]{64}\.css$/u;
+
 /**
  * First path segments that live OUTSIDE the underscore-reserved namespace but
  * are still gateway surfaces, not panel assets.
@@ -67,6 +70,7 @@ const DENIED_FIRST_SEGMENTS: ReadonlySet<string> = new Set([
  */
 export function isPanelReachableGatewayPathname(pathname: string): boolean {
   if (PANEL_GATEWAY_EXACT_PATHS.has(pathname)) return true;
+  if (PANEL_SHARED_STYLE_PATH.test(pathname)) return true;
   for (const prefix of PANEL_GATEWAY_PATH_PREFIXES) {
     if (pathname.startsWith(prefix)) return true;
   }
@@ -134,7 +138,8 @@ export function checkPanelGatewayPath(rawPath: string): PanelGatewayPathDecision
       denied: "policy",
       reason:
         `path is not panel-reachable: ${url.pathname} — the panel origin may only ` +
-        `address panel assets, /_r/w/ worker routes, and /_a/ app artifacts ` +
+        `address panel assets, content-addressed shared styles, /_r/w/ worker routes, ` +
+        `and /_a/ app artifacts ` +
         `(management routes like /_r/s/ and /rpc are never proxied)`,
     };
   }
