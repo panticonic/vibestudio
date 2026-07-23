@@ -9,6 +9,11 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./assets/brand/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="./assets/brand/favicon-180.png" />
     <style>
+      /* One token layer, two themes. The palette mirrors the shell's brand
+         language (violet-to-magenta over mauve neutrals) so the launch window
+         and the workspace it hands off to read as the same product. Every rule
+         below styles against these variables; the light block only re-points
+         the variables. */
       :root {
         --macos-titlebar-control-reserve: 78px;
         color-scheme: dark;
@@ -20,17 +25,58 @@
           BlinkMacSystemFont,
           "Segoe UI",
           sans-serif;
-        background: #1f2123;
-        color: #f5f7f8;
+
+        --brand-gradient: linear-gradient(135deg, #7c3aed 0%, #a021d8 52%, #e0329f 100%);
+
+        --bg: #0f0917;
+        --titlebar-bg: rgb(21 13 32 / 82%);
+        --titlebar-border: rgb(196 162 255 / 12%);
+        --titlebar-text: #9b8cb0;
+
+        --panel-bg: rgb(32 21 47 / 86%);
+        --panel-border: rgb(196 162 255 / 15%);
+        --panel-shadow: 0 30px 70px rgb(5 2 12 / 55%);
+        --divider: rgb(196 162 255 / 13%);
+
+        --surface: rgb(255 255 255 / 4%);
+        --surface-strong: rgb(255 255 255 / 7%);
+        --surface-border: rgb(196 162 255 / 13%);
+        --surface-border-hover: rgb(196 162 255 / 30%);
+
+        --text: #f5f0fb;
+        --text-muted: #b3a5c6;
+        --text-soft: #8d7fa3;
+        --accent: #c9a7ff;
+
+        /* Steps progress along the brand gradient: done reads violet, the step
+           in flight reads magenta. A semantic green here looked borrowed from
+           another product. */
+        --step-done: #a78bfa;
+        --step-active: #f24bb0;
+        --danger: #ff9d9d;
+        --danger-border: rgb(255 120 120 / 30%);
+        --danger-surface: rgb(126 34 46 / 32%);
+
+        --focus-ring: rgb(168 116 255 / 24%);
+        --pulse-ring: rgb(242 75 176 / 26%);
+
+        background: var(--bg);
+        color: var(--text);
       }
       body {
         margin: 0;
         min-height: 100vh;
         box-sizing: border-box;
-        padding-top: 36px;
-        display: grid;
-        place-items: center;
-        background: linear-gradient(180deg, #26282b 0%, #1e2022 100%);
+        padding: 60px 22px 30px;
+        /* Flex + auto margins on the child, not place-items: center — centered
+           grid/flex items clip their own top edge once they outgrow the window,
+           and the approval state does exactly that on short screens. */
+        display: flex;
+        background:
+          radial-gradient(115% 85% at 10% -12%, rgb(124 58 237 / 26%) 0%, transparent 62%),
+          radial-gradient(95% 75% at 94% 4%, rgb(224 50 159 / 15%) 0%, transparent 64%),
+          linear-gradient(180deg, #1a1026 0%, #0d0814 100%);
+        background-attachment: fixed;
       }
       .bootstrap-titlebar {
         position: fixed;
@@ -43,11 +89,12 @@
         display: flex;
         align-items: center;
         padding: 0 14px 0 var(--macos-titlebar-control-reserve);
-        border-bottom: 1px solid rgb(255 255 255 / 7%);
-        background: rgb(33 35 38 / 80%);
-        color: #7f8a90;
+        border-bottom: 1px solid var(--titlebar-border);
+        background: var(--titlebar-bg);
+        color: var(--titlebar-text);
         font-size: 12px;
         font-weight: 650;
+        letter-spacing: 0.01em;
         user-select: none;
         /* Draggable — but this is ONLY safe because ViewManager fully detaches
            this view (removeChildView) on handoff to the hosted shell; see
@@ -68,34 +115,43 @@
         -webkit-app-region: no-drag;
       }
       main {
-        width: min(680px, calc(100vw - 40px));
+        width: min(600px, 100%);
+        margin: auto;
       }
       main[data-bootstrap-mode="connection"] {
-        width: min(860px, calc(100vw - 40px));
+        width: min(860px, 100%);
       }
-      h1 {
-        font-size: 28px;
-        line-height: 1.12;
-        font-weight: 720;
-        letter-spacing: 0;
-        margin: 2px 0 8px;
+
+      /* One surface holds the whole launch story: identity, what is happening,
+         and what you can do about it. Earlier this was a detached header plus a
+         floating card, which read as two unrelated things. */
+      .launch-panel {
+        position: relative;
+        overflow: hidden;
+        box-sizing: border-box;
+        border: 1px solid var(--panel-border);
+        border-radius: 16px;
+        padding: 28px;
+        background: var(--panel-bg);
+        box-shadow: var(--panel-shadow);
+        backdrop-filter: blur(14px);
       }
-      p {
-        color: #aab3b8;
-        line-height: 1.5;
-        margin: 0;
+      .launch-panel::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto;
+        height: 2px;
+        background: var(--brand-gradient);
       }
       .launch-header {
         display: grid;
-        grid-template-columns: 52px 1fr;
-        gap: 14px;
-        align-items: start;
-        margin-bottom: 20px;
+        justify-items: start;
       }
       .launch-mark {
-        width: 52px;
-        height: 52px;
-        filter: drop-shadow(0 10px 18px rgb(0 0 0 / 28%));
+        width: 40px;
+        height: 40px;
+        margin-bottom: 16px;
+        filter: drop-shadow(0 8px 18px rgb(124 58 237 / 40%));
       }
       .launch-mark img {
         display: block;
@@ -104,55 +160,90 @@
         object-fit: contain;
       }
       .eyebrow {
-        color: #8fbdb4;
-        font-size: 12px;
+        color: var(--accent);
+        font-size: 11px;
         font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0;
+        letter-spacing: 0.09em;
       }
-      .launch-card {
-        border: 1px solid #31383d;
-        background: #25272b;
-        border-radius: 8px;
-        padding: 18px;
-        box-shadow: 0 16px 40px rgb(0 0 0 / 24%);
+      .launch-header[data-tone="error"] .eyebrow {
+        color: var(--danger);
+      }
+      h1 {
+        font-size: 23px;
+        line-height: 1.2;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        margin: 8px 0 0;
+        text-wrap: balance;
+      }
+      p {
+        color: var(--text-muted);
+        font-size: 14px;
+        line-height: 1.55;
+        margin: 0;
+      }
+      #launch-copy {
+        margin-top: 8px;
+        max-width: 58ch;
+      }
+      #launch-copy[hidden] {
+        display: none;
+      }
+
+      /* The body only carries what the header does not already say: progress,
+         choices, and controls. Never a second copy of the status sentence. */
+      .launch-body {
+        display: grid;
+        gap: 14px;
+        color: var(--text-muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      /* Spacing lives on the id so every body mode (steps, approvals, the
+         connection grid) sits the same distance below the header. */
+      #approvals:empty {
+        display: none;
+      }
+      #approvals:not(:empty) {
+        margin-top: 20px;
+        border-top: 1px solid var(--divider);
+        padding-top: 18px;
       }
       .connection-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
+        gap: 14px;
       }
       .connection-option {
-        border: 1px solid #31383d;
-        background: #25272b;
-        border-radius: 8px;
+        border: 1px solid var(--surface-border);
+        background: var(--surface);
+        border-radius: 12px;
         padding: 16px;
-        min-height: 132px;
         display: grid;
         align-content: start;
         gap: 12px;
-        box-shadow: 0 16px 40px rgb(0 0 0 / 18%);
       }
       .connection-form {
         grid-row: span 2;
       }
       .connection-error {
         grid-column: 1 / -1;
-        border: 1px solid #763636;
-        background: #341c1e;
-        color: #ffd0d0;
-        border-radius: 8px;
+        border: 1px solid var(--danger-border);
+        background: var(--danger-surface);
+        color: var(--danger);
+        border-radius: 10px;
         padding: 10px 12px;
-        line-height: 1.4;
+        font-size: 13px;
+        line-height: 1.45;
       }
       .log-path {
         display: block;
-        margin-top: 12px;
-        padding: 9px 10px;
-        border: 1px solid #31383d;
-        border-radius: 6px;
-        color: #aab3b8;
-        background: #1f2124;
+        padding: 9px 11px;
+        border: 1px solid var(--surface-border);
+        border-radius: 8px;
+        color: var(--text-soft);
+        background: var(--surface);
         font-size: 11px;
         overflow-wrap: anywhere;
       }
@@ -163,25 +254,25 @@
       label {
         display: grid;
         gap: 6px;
-        color: #c4cdd2;
+        color: var(--text-muted);
         font-size: 12px;
         font-weight: 650;
       }
       input {
         width: 100%;
         box-sizing: border-box;
-        border: 1px solid #3a4349;
-        background: #1f2124;
-        color: #f5f7f8;
-        border-radius: 6px;
-        padding: 9px 10px;
+        border: 1px solid var(--surface-border);
+        background: var(--surface);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 10px 11px;
         font: inherit;
         font-size: 13px;
         outline: none;
       }
       input:focus {
-        border-color: #8bd8cb;
-        box-shadow: 0 0 0 3px rgb(139 216 203 / 14%);
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--focus-ring);
       }
       .workspace-list {
         display: grid;
@@ -192,20 +283,21 @@
         grid-template-columns: minmax(0, 1fr) auto;
         gap: 12px;
         align-items: center;
-        border: 1px solid #2b3237;
-        background: #232528;
-        border-radius: 6px;
-        padding: 10px;
+        border: 1px solid var(--surface-border);
+        background: var(--surface);
+        border-radius: 10px;
+        padding: 10px 12px;
       }
       .workspace-name {
-        font-weight: 700;
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 650;
         overflow-wrap: anywhere;
       }
       .inline-form {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
         gap: 8px;
-        margin-top: 2px;
       }
       .approval {
         display: grid;
@@ -214,14 +306,15 @@
       .unit-summary {
         display: grid;
         gap: 10px;
-        border: 1px solid #263136;
-        background: #202225;
-        border-radius: 6px;
+        border: 1px solid var(--surface-border);
+        background: var(--surface);
+        border-radius: 10px;
         padding: 12px;
       }
       .unit-summary-total {
-        color: #f5f7f8;
-        font-weight: 700;
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 650;
       }
       .unit-summary-chips {
         display: flex;
@@ -229,27 +322,29 @@
         gap: 6px;
       }
       .unit-chip {
-        border: 1px solid #27554f;
-        background: #172d2a;
-        color: #bcece3;
+        border: 1px solid var(--surface-border-hover);
+        background: var(--surface-strong);
+        color: var(--accent);
         border-radius: 999px;
-        padding: 3px 8px;
+        padding: 3px 9px;
         font-size: 12px;
         font-weight: 650;
         line-height: 1.35;
       }
       .unit-review {
-        border: 1px solid #2b3237;
-        background: #232528;
-        border-radius: 6px;
+        border: 1px solid var(--surface-border);
+        background: var(--surface);
+        border-radius: 10px;
       }
       .unit-review > summary {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 12px;
-        padding: 10px 12px;
+        padding: 11px 12px;
         cursor: pointer;
+        color: var(--text);
+        font-size: 13px;
         font-weight: 650;
         list-style: none;
       }
@@ -257,10 +352,10 @@
         display: none;
       }
       .unit-review[open] > summary {
-        border-bottom: 1px solid #2b3237;
+        border-bottom: 1px solid var(--divider);
       }
       .unit-review-hint {
-        color: #8d989e;
+        color: var(--text-soft);
         font-size: 12px;
         font-weight: 500;
         text-align: right;
@@ -277,25 +372,27 @@
         grid-template-columns: 1fr auto;
         gap: 12px;
         align-items: center;
-        border: 1px solid #2b3237;
-        background: #212427;
-        border-radius: 6px;
+        border: 1px solid var(--surface-border);
+        background: var(--surface);
+        border-radius: 8px;
         padding: 10px 12px;
       }
       .unit-name {
+        color: var(--text);
+        font-size: 13px;
         font-weight: 650;
       }
       .unit-meta {
-        color: #8d989e;
+        color: var(--text-soft);
         font-size: 12px;
       }
       .unit-capabilities {
-        color: #738087;
+        color: var(--text-soft);
         font-size: 12px;
         margin-top: 2px;
       }
       .unit-kind {
-        color: #96ccc2;
+        color: var(--accent);
         font-size: 12px;
         font-weight: 650;
       }
@@ -305,40 +402,65 @@
         gap: 8px;
       }
       .title {
-        font-weight: 700;
-        margin-bottom: 6px;
+        color: var(--text);
+        font-size: 15px;
+        font-weight: 650;
       }
       .meta {
-        color: #aab3b8;
+        color: var(--text-muted);
         font-size: 13px;
+        line-height: 1.5;
       }
       button {
-        border: 1px solid #474f55;
-        background: #2b2e32;
-        color: #f5f7f8;
-        border-radius: 6px;
-        padding: 8px 12px;
+        border: 1px solid var(--surface-border);
+        background: var(--surface-strong);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 9px 14px;
         font: inherit;
+        font-size: 13px;
+        font-weight: 650;
         margin: 0;
         display: inline-flex;
         align-items: center;
         gap: 8px;
         justify-content: center;
-        min-height: 36px;
+        min-height: 38px;
+        cursor: pointer;
+        transition:
+          border-color var(--motion, 140ms) ease,
+          background var(--motion, 140ms) ease,
+          transform var(--motion, 140ms) ease;
+      }
+      button:hover:not(:disabled) {
+        border-color: var(--surface-border-hover);
+      }
+      button:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+      button:focus-visible {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--focus-ring);
       }
       button.primary {
-        background: #9de3d4;
-        border-color: #9de3d4;
-        color: #09201c;
-        font-weight: 700;
+        border-color: transparent;
+        background: var(--brand-gradient);
+        color: #ffffff;
+        box-shadow: 0 6px 16px rgb(124 58 237 / 24%);
+      }
+      button.primary:hover:not(:disabled) {
+        border-color: transparent;
+        filter: brightness(1.07);
       }
       button.danger {
-        background: #3a1d1d;
-        border-color: #6e2b2b;
+        border-color: var(--danger-border);
+        background: var(--danger-surface);
+        color: var(--danger);
       }
       button:disabled {
         cursor: wait;
-        opacity: 0.72;
+        opacity: 0.62;
       }
       .spinner {
         width: 12px;
@@ -349,211 +471,130 @@
         animation: spin 0.8s linear infinite;
       }
       .status {
-        color: #96ccc2;
+        color: var(--accent);
         font-size: 13px;
-      }
-      .empty {
-        color: #aab3b8;
-      }
-      .empty-message {
-        color: #dbe3e6;
         line-height: 1.5;
       }
+
       .launch-timeline {
         display: grid;
-        gap: 8px;
-        margin: 14px 0 0;
+        gap: 2px;
+        margin: 0;
         padding: 0;
         list-style: none;
       }
       .launch-phase {
+        position: relative;
         display: grid;
-        grid-template-columns: 12px 1fr;
-        gap: 10px;
+        grid-template-columns: 14px 1fr;
+        gap: 12px;
         align-items: start;
-        color: #859198;
+        padding: 4px 0;
+        color: var(--text-soft);
         font-size: 13px;
         line-height: 1.45;
       }
+      /* Rail between consecutive dots, so the phases read as one sequence. */
+      .launch-phase:not(:last-child)::before {
+        content: "";
+        position: absolute;
+        top: 16px;
+        bottom: -2px;
+        left: 6.5px;
+        width: 1px;
+        background: var(--divider);
+      }
       .launch-phase-dot {
-        width: 8px;
-        height: 8px;
-        margin-top: 5px;
+        width: 7px;
+        height: 7px;
+        margin: 5px 3.5px;
         border-radius: 999px;
-        background: #434d54;
+        background: var(--text-soft);
+        opacity: 0.45;
       }
       .launch-phase.complete {
-        color: #a7d7cd;
+        color: var(--text-muted);
       }
       .launch-phase.complete .launch-phase-dot {
-        background: #74c7b8;
+        background: var(--step-done);
+        opacity: 1;
       }
       .launch-phase.active {
-        color: #f5f7f8;
+        color: var(--text);
       }
       .launch-phase.active .launch-phase-dot {
-        background: #f2c46d;
+        background: var(--step-active);
+        opacity: 1;
+        animation: dot-pulse 1.6s ease-out infinite;
       }
       .launch-phase.blocked,
       .launch-phase.failed {
-        color: #ffb3b3;
+        color: var(--danger);
       }
       .launch-phase.blocked .launch-phase-dot,
       .launch-phase.failed .launch-phase-dot {
-        background: #d56b6b;
+        background: var(--danger);
+        opacity: 1;
       }
+
       @media (prefers-color-scheme: light) {
         :root {
           color-scheme: light;
-          background: #f1f3f5;
-          color: #17202a;
+
+          --bg: #faf7ff;
+          --titlebar-bg: rgb(255 255 255 / 84%);
+          --titlebar-border: rgb(88 28 135 / 10%);
+          --titlebar-text: #6b5b7e;
+
+          --panel-bg: rgb(255 255 255 / 92%);
+          --panel-border: rgb(124 58 237 / 14%);
+          --panel-shadow: 0 26px 60px rgb(76 29 149 / 13%);
+          --divider: rgb(124 58 237 / 13%);
+
+          --surface: rgb(124 58 237 / 4%);
+          --surface-strong: rgb(124 58 237 / 7%);
+          --surface-border: rgb(124 58 237 / 15%);
+          --surface-border-hover: rgb(124 58 237 / 32%);
+
+          --text: #21132f;
+          --text-muted: #5f5273;
+          --text-soft: #7d7191;
+          --accent: #7c3aed;
+
+          --step-done: #7c3aed;
+          --step-active: #d61f8f;
+          --danger: #b4232d;
+          --danger-border: rgb(180 35 45 / 22%);
+          --danger-surface: rgb(255 241 242 / 90%);
+
+          --focus-ring: rgb(124 58 237 / 18%);
         }
         body {
-          background: linear-gradient(180deg, #f8fafb 0%, #eef1f4 100%);
-        }
-        .bootstrap-titlebar {
-          border-bottom-color: rgb(15 23 42 / 10%);
-          background: rgb(240 242 245 / 88%);
-          color: #687681;
-        }
-        p,
-        .meta,
-        .empty {
-          color: #64727d;
+          background:
+            radial-gradient(110% 80% at 8% -10%, rgb(124 58 237 / 14%) 0%, transparent 60%),
+            radial-gradient(95% 70% at 95% 2%, rgb(224 50 159 / 11%) 0%, transparent 62%),
+            linear-gradient(180deg, #fdfbff 0%, #f6efff 100%);
+          background-attachment: fixed;
         }
         .launch-mark {
-          filter: drop-shadow(0 8px 16px rgb(15 23 42 / 12%));
-        }
-        .launch-mark img {
-          filter: brightness(0) saturate(100%);
-        }
-        .eyebrow,
-        .status,
-        .unit-kind {
-          color: #0f766e;
-        }
-        .launch-card,
-        .connection-option,
-        .connection-form,
-        .approval {
-          border-color: #d7dde3;
-          background: #ffffff;
-          box-shadow: 0 12px 32px rgb(15 23 42 / 10%);
-        }
-        .connection-error {
-          border-color: #fecaca;
-          background: #fff1f2;
-          color: #b4232d;
-        }
-        label {
-          color: #475569;
-        }
-        input {
-          border-color: #c8d0d9;
-          background: #ffffff;
-          color: #17202a;
-        }
-        input:focus {
-          border-color: #0d9488;
-          box-shadow: 0 0 0 3px rgb(13 148 136 / 14%);
-        }
-        .workspace-row,
-        .unit-review {
-          border-color: #d7dde3;
-          background: #f7f9fa;
-        }
-        .unit-summary {
-          border-color: #d7dde3;
-          background: #f7f9fa;
-        }
-        .unit-summary-total {
-          color: #17202a;
-        }
-        .unit-chip {
-          border-color: #99e5d8;
-          background: #dff8f3;
-          color: #115e59;
-        }
-        .unit-review[open] > summary {
-          border-bottom-color: #d7dde3;
-        }
-        .workspace-list,
-        .unit-list,
-        .unit-review > summary {
-          border-color: #d7dde3;
-          background: #f7f9fa;
-        }
-        .unit-review-hint,
-        .unit-meta,
-        .unit-capabilities {
-          color: #64727d;
-        }
-        .unit-list li {
-          border-color: #d7dde3;
-          background: #ffffff;
-        }
-        button {
-          border-color: #c8d0d9;
-          background: #f7f9fa;
-          color: #26323d;
-        }
-        button.primary {
-          border-color: #5fc8b7;
-          background: #79d8c8;
-          color: #09201c;
-        }
-        button.danger {
-          border-color: #fecaca;
-          background: #fff1f2;
-          color: #b4232d;
-        }
-        .empty-message {
-          color: #334155;
-        }
-        .log-path {
-          border-color: #d7dde3;
-          background: #eef1f4;
-          color: #475569;
-        }
-        .launch-phase {
-          color: #71808b;
-        }
-        .launch-phase-dot {
-          background: #aab4bd;
-        }
-        .launch-phase.complete {
-          color: #0f766e;
-        }
-        .launch-phase.complete .launch-phase-dot {
-          background: #2ba693;
-        }
-        .launch-phase.active {
-          color: #17202a;
-        }
-        .launch-phase.active .launch-phase-dot {
-          background: #d89b22;
-        }
-        .launch-phase.blocked,
-        .launch-phase.failed {
-          color: #b4232d;
-        }
-        .launch-phase.blocked .launch-phase-dot,
-        .launch-phase.failed .launch-phase-dot {
-          background: #d04d58;
+          filter: drop-shadow(0 8px 16px rgb(124 58 237 / 22%));
         }
       }
+
       @media (max-width: 760px) {
         body {
           place-items: start center;
-          padding: 54px 0 28px;
+          padding: 52px 16px 24px;
         }
         .bootstrap-titlebar {
           height: 34px;
-          padding-left: var(--macos-titlebar-control-reserve);
         }
         main,
         main[data-bootstrap-mode="connection"] {
-          width: min(100vw - 28px, 680px);
+          width: min(100%, 600px);
+        }
+        .launch-panel {
+          padding: 22px 20px;
         }
         .connection-grid {
           grid-template-columns: 1fr;
@@ -570,9 +611,30 @@
           width: 100%;
         }
       }
+
       @keyframes spin {
         to {
           transform: rotate(360deg);
+        }
+      }
+      @keyframes dot-pulse {
+        0% {
+          box-shadow: 0 0 0 0 var(--pulse-ring);
+        }
+        70% {
+          box-shadow: 0 0 0 6px rgb(242 75 176 / 0%);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgb(242 75 176 / 0%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.001ms !important;
         }
       }
     </style>
@@ -580,17 +642,47 @@
   <body>
     <div class="bootstrap-titlebar">Vibestudio</div>
     <main data-bootstrap-launch-gate="true" data-bootstrap-mode="approval">
-      <section class="launch-header">
-        <div class="launch-mark">
-          <img src="./assets/brand/vibestudio-mark-on-dark.png" alt="" />
-        </div>
-        <div>
-          <p id="bootstrap-eyebrow" class="eyebrow">Workspace Approval</p>
-          <h1 id="bootstrap-title">Do you trust the code in this workspace?</h1>
-          <p id="launch-copy">Vibestudio needs your approval before it can run this workspace.</p>
-        </div>
+      <section class="launch-panel">
+        <header class="launch-header">
+          <span class="launch-mark">
+            <img src="./assets/brand/vibestudio-symbol.svg" alt="" />
+          </span>
+          <p id="bootstrap-eyebrow" class="eyebrow">Starting</p>
+          <h1 id="bootstrap-title">Starting workspace</h1>
+          <p id="launch-copy">Connecting to your workspace...</p>
+        </header>
+        <!-- The first paint already shows the launch sequence — index.ts replaces
+             these rows with live phase state, keeping the same shape. Mirrors
+             startupTimeline() there; keep the labels in sync. -->
+        <section id="approvals" class="launch-body">
+          <ol class="launch-timeline">
+            <li class="launch-phase active" aria-current="step">
+              <span class="launch-phase-dot" aria-hidden="true"></span>
+              <span class="launch-phase-text">Connect</span>
+            </li>
+            <li class="launch-phase pending">
+              <span class="launch-phase-dot" aria-hidden="true"></span>
+              <span class="launch-phase-text">Review trust</span>
+            </li>
+            <li class="launch-phase pending">
+              <span class="launch-phase-dot" aria-hidden="true"></span>
+              <span class="launch-phase-text">Start privileged units</span>
+            </li>
+            <li class="launch-phase pending">
+              <span class="launch-phase-dot" aria-hidden="true"></span>
+              <span class="launch-phase-text">Build desktop app</span>
+            </li>
+            <li class="launch-phase pending">
+              <span class="launch-phase-dot" aria-hidden="true"></span>
+              <span class="launch-phase-text">Activate desktop</span>
+            </li>
+            <li class="launch-phase pending">
+              <span class="launch-phase-dot" aria-hidden="true"></span>
+              <span class="launch-phase-text">Connected</span>
+            </li>
+          </ol>
+        </section>
       </section>
-      <section id="approvals" class="launch-card empty">Checking workspace approval...</section>
     </main>
     <script type="module" src="./bootstrap/index.js"></script>
   </body>
