@@ -23,8 +23,28 @@ body,
   height: 100%;
 }
 
+.vibestudio-terminal-host .xterm-viewport {
+  max-width: 100%;
+  overflow-x: hidden !important;
+  background-color: var(--gray-1) !important;
+}
+
+.vibestudio-terminal-host .xterm-screen {
+  overflow: hidden;
+}
+
 .vibestudio-terminal-host .xterm-screen,
 .vibestudio-terminal-host .xterm-rows,
 .vibestudio-terminal-host .xterm-rows > div {
   max-width: 100% !important;
+}
+
+@media (max-width: 640px) {
+  .terminal-pane-header {
+    padding-inline: var(--space-1) !important;
+  }
+
+  .terminal-pane-header__identity {
+    gap: var(--space-1) !important;
+  }
 }

@@ -64,6 +64,8 @@ export interface ScratchBuffer {
 }
 
 export interface TerminalState {
+  /** Stable panel-list title. Session titles and working directories are pane-local metadata. */
+  panelTitle: string;
   tree?: SplitNode;
   focusedSessionId?: string;
   zoomedSessionId?: string;

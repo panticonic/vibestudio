@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CommandLauncher } from "./CommandLauncher.js";
 import { ContextPicker, type CreatedContext, type PickedContextOptions } from "./ContextPicker.js";
 import { deriveContextOptions, type ContextOption, type LiveEntity } from "./contextPicker.js";
-import { documentTitleForSession } from "./documentTitle.js";
+import { documentTitleForPanel } from "./documentTitle.js";
 import { NotificationCenter } from "./NotificationCenter.js";
 import { ScratchOverlay } from "./ScratchOverlay.js";
 import { SCRATCH_BUFFER_MAX_COUNT } from "./migrateState.js";
@@ -296,8 +296,8 @@ export function TerminalApp() {
   );
 
   useEffect(() => {
-    document.title = documentTitleForSession(focusedSession);
-  }, [focusedSession]);
+    document.title = documentTitleForPanel(state.panelTitle);
+  }, [state.panelTitle]);
 
   useEffect(() => {
     latestStateRef.current = state;
@@ -794,6 +794,7 @@ export function TerminalApp() {
   const settingsControl = (
     <Settings
       open={settingsOpen}
+      panelTitle={state.panelTitle}
       fontSize={state.fontSize}
       fontFamily={state.fontFamily}
       scrollbackBytes={state.scrollbackBytes}
@@ -806,6 +807,18 @@ export function TerminalApp() {
         const message = settingsToastMessage(next);
         if (message) showToast(message);
         setState((prev) => ({ ...prev, ...next }));
+        if (next.panelTitle !== undefined) {
+          const title = documentTitleForPanel(next.panelTitle);
+          void panel
+            .setTitle(title, { explicit: true })
+            .catch((error: unknown) =>
+              console.warn(
+                `Failed to save panel name: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+              )
+            );
+        }
         if (next.scrollbackBytes) {
           for (const sessionId of Object.keys(sessions))
             void shell.setScrollbackLimit?.(sessionId, next.scrollbackBytes);
@@ -846,8 +859,8 @@ export function TerminalApp() {
   return (
     <Theme appearance={appearance} {...appTheme}>
       <Flex
-        height="100vh"
-        width="100vw"
+        height="100dvh"
+        width="100%"
         direction="column"
         style={{
           overflow: "hidden",
@@ -895,6 +908,7 @@ export function TerminalApp() {
               pasteMode={state.pasteMode}
               imagePasteRelative={state.imagePasteRelative}
               resizeKey={resizeKey}
+              settingsControl={settingsControl}
               onFocus={(sessionId) =>
                 setState((prev) => ({ ...prev, focusedSessionId: sessionId }))
               }
@@ -970,9 +984,6 @@ export function TerminalApp() {
               createContext={createSessionContext}
             />
           )}
-        </Box>
-        <Box style={{ position: "absolute", top: "0.25rem", right: "2.5rem", zIndex: 8 }}>
-          {settingsControl}
         </Box>
         {sessionOpenPendingLabel && visibleTree ? (
           <Box

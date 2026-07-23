@@ -1,12 +1,24 @@
-import type { PerSessionState, ScratchBuffer, SplitNode, TerminalNotification, TerminalState } from "./types.js";
-import { defaultKeybindings, sanitizeKeybindingOverrides, type KeybindingAction, type KeybindingOverrides } from "./keybindings.js";
+import type {
+  PerSessionState,
+  ScratchBuffer,
+  SplitNode,
+  TerminalNotification,
+  TerminalState,
+} from "./types.js";
+import {
+  defaultKeybindings,
+  sanitizeKeybindingOverrides,
+  type KeybindingAction,
+  type KeybindingOverrides,
+} from "./keybindings.js";
 
-export const TERMINAL_STATE_SCHEMA_VERSION = 2;
+export const TERMINAL_STATE_SCHEMA_VERSION = 3;
 export const SCRATCH_BUFFER_MAX_COUNT = 50;
 export const SCRATCH_BUFFER_MAX_TEXT_BYTES = 1_000_000;
 
 export function defaultTerminalState(): TerminalState {
   return {
+    panelTitle: "Terminal",
     tree: undefined,
     focusedSessionId: undefined,
     notifications: [],
@@ -44,40 +56,77 @@ export function migrateState(raw: unknown): TerminalState {
       : undefined;
   const restoredTree = migrateSplitNode(state.tree);
   const restoredFocus =
-    typeof state.focusedSessionId === "string" && containsSession(restoredTree, state.focusedSessionId)
+    typeof state.focusedSessionId === "string" &&
+    containsSession(restoredTree, state.focusedSessionId)
       ? state.focusedSessionId
       : undefined;
 
   return {
+    panelTitle: normalizePanelTitle(state.panelTitle),
     tree: restoredTree,
-    focusedSessionId: restoredFocus && containsSession(restoredTree, restoredFocus) ? restoredFocus : firstLeaf(restoredTree),
-    zoomedSessionId: typeof state.zoomedSessionId === "string" ? state.zoomedSessionId : defaults.zoomedSessionId,
-    notifications: (Array.isArray(state.notifications) ? state.notifications : []).map((notification) => ({
-      notifId: typeof notification.notifId === "string" && notification.notifId ? notification.notifId : crypto.randomUUID(),
-      sessionId: typeof notification.sessionId === "string" ? notification.sessionId : "",
-      severity: isNotificationSeverity(notification.severity) ? notification.severity : "info",
-      ...(typeof notification.title === "string" ? { title: notification.title } : {}),
-      message: typeof notification.message === "string" ? notification.message : "",
-      timestamp: clampNumber(notification.timestamp, 0, Number.MAX_SAFE_INTEGER, Date.now()),
-      read: typeof notification.read === "boolean" ? notification.read : false,
-      ...(isNotificationSource(notification.source) ? { source: notification.source } : {}),
-    })),
-    paletteHistory: Array.isArray(state.paletteHistory) ? state.paletteHistory.filter((item): item is string => typeof item === "string").slice(0, 20) : defaults.paletteHistory,
+    focusedSessionId:
+      restoredFocus && containsSession(restoredTree, restoredFocus)
+        ? restoredFocus
+        : firstLeaf(restoredTree),
+    zoomedSessionId:
+      typeof state.zoomedSessionId === "string" ? state.zoomedSessionId : defaults.zoomedSessionId,
+    notifications: (Array.isArray(state.notifications) ? state.notifications : []).map(
+      (notification) => ({
+        notifId:
+          typeof notification.notifId === "string" && notification.notifId
+            ? notification.notifId
+            : crypto.randomUUID(),
+        sessionId: typeof notification.sessionId === "string" ? notification.sessionId : "",
+        severity: isNotificationSeverity(notification.severity) ? notification.severity : "info",
+        ...(typeof notification.title === "string" ? { title: notification.title } : {}),
+        message: typeof notification.message === "string" ? notification.message : "",
+        timestamp: clampNumber(notification.timestamp, 0, Number.MAX_SAFE_INTEGER, Date.now()),
+        read: typeof notification.read === "boolean" ? notification.read : false,
+        ...(isNotificationSource(notification.source) ? { source: notification.source } : {}),
+      })
+    ),
+    paletteHistory: Array.isArray(state.paletteHistory)
+      ? state.paletteHistory.filter((item): item is string => typeof item === "string").slice(0, 20)
+      : defaults.paletteHistory,
     fontSize: clampNumber(state.fontSize, 9, 24, defaults.fontSize),
-    fontFamily: typeof state.fontFamily === "string" && state.fontFamily.trim() ? state.fontFamily : defaults.fontFamily,
-    scrollbackBytes: clampNumber(state.scrollbackBytes, 64 * 1024, 8 * 1024 * 1024, defaults.scrollbackBytes),
-    themeOverride: isThemeOverride(state.themeOverride) ? state.themeOverride : defaults.themeOverride,
-    notificationCenterOpen: typeof state.notificationCenterOpen === "boolean" ? state.notificationCenterOpen : defaults.notificationCenterOpen,
-    notificationFilter: isNotificationFilter(state.notificationFilter) ? state.notificationFilter : defaults.notificationFilter,
+    fontFamily:
+      typeof state.fontFamily === "string" && state.fontFamily.trim()
+        ? state.fontFamily
+        : defaults.fontFamily,
+    scrollbackBytes: clampNumber(
+      state.scrollbackBytes,
+      64 * 1024,
+      8 * 1024 * 1024,
+      defaults.scrollbackBytes
+    ),
+    themeOverride: isThemeOverride(state.themeOverride)
+      ? state.themeOverride
+      : defaults.themeOverride,
+    notificationCenterOpen:
+      typeof state.notificationCenterOpen === "boolean"
+        ? state.notificationCenterOpen
+        : defaults.notificationCenterOpen,
+    notificationFilter: isNotificationFilter(state.notificationFilter)
+      ? state.notificationFilter
+      : defaults.notificationFilter,
     perSession: migratePerSession(state.perSession),
     pasteMode: isPasteMode(state.pasteMode) ? state.pasteMode : defaults.pasteMode,
-    imagePasteRelative: typeof state.imagePasteRelative === "boolean" ? state.imagePasteRelative : defaults.imagePasteRelative,
+    imagePasteRelative:
+      typeof state.imagePasteRelative === "boolean"
+        ? state.imagePasteRelative
+        : defaults.imagePasteRelative,
     keybindings: migrateKeybindings(state.keybindings),
     scratchBuffers,
     scratchActiveBufferId,
     scratchOpen: false,
     schemaVersion: TERMINAL_STATE_SCHEMA_VERSION,
   };
+}
+
+function normalizePanelTitle(value: unknown): string {
+  if (typeof value !== "string") return "Terminal";
+  const title = value.trim().replace(/\s+/g, " ").slice(0, 80);
+  return title || "Terminal";
 }
 
 function migrateScratchBuffers(value: unknown): ScratchBuffer[] {
@@ -90,9 +139,10 @@ function migrateScratchBuffers(value: unknown): ScratchBuffer[] {
     if (!bufferId || text === null) continue;
     buffers.push({
       bufferId,
-      text: text.length > SCRATCH_BUFFER_MAX_TEXT_BYTES
-        ? text.slice(0, SCRATCH_BUFFER_MAX_TEXT_BYTES)
-        : text,
+      text:
+        text.length > SCRATCH_BUFFER_MAX_TEXT_BYTES
+          ? text.slice(0, SCRATCH_BUFFER_MAX_TEXT_BYTES)
+          : text,
       createdAt: clampNumber(entry["createdAt"], 0, Number.MAX_SAFE_INTEGER, Date.now()),
       updatedAt: clampNumber(entry["updatedAt"], 0, Number.MAX_SAFE_INTEGER, Date.now()),
     });
@@ -101,7 +151,9 @@ function migrateScratchBuffers(value: unknown): ScratchBuffer[] {
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, value))
+    : fallback;
 }
 
 function isThemeOverride(value: unknown): value is TerminalState["themeOverride"] {
@@ -109,14 +161,28 @@ function isThemeOverride(value: unknown): value is TerminalState["themeOverride"
 }
 
 function isNotificationFilter(value: unknown): value is TerminalState["notificationFilter"] {
-  return value === "all" || value === "approval" || value === "failure" || value === "waiting" || value === "done";
+  return (
+    value === "all" ||
+    value === "approval" ||
+    value === "failure" ||
+    value === "waiting" ||
+    value === "done"
+  );
 }
 
 function isNotificationSeverity(value: unknown): value is TerminalNotification["severity"] {
-  return value === "info" || value === "done" || value === "waiting" || value === "approval" || value === "failure";
+  return (
+    value === "info" ||
+    value === "done" ||
+    value === "waiting" ||
+    value === "approval" ||
+    value === "failure"
+  );
 }
 
-function isNotificationSource(value: unknown): value is NonNullable<TerminalNotification["source"]> {
+function isNotificationSource(
+  value: unknown
+): value is NonNullable<TerminalNotification["source"]> {
   return value === "osc" || value === "snug" || value === "system";
 }
 
@@ -132,24 +198,35 @@ function migratePerSession(value: unknown): TerminalState["perSession"] {
   if (!isRecord(value)) return {};
   return Object.fromEntries(
     Object.entries(value)
-      .filter((entry): entry is [string, Record<string, unknown>] => typeof entry[0] === "string" && !!entry[0] && isRecord(entry[1]))
+      .filter(
+        (entry): entry is [string, Record<string, unknown>] =>
+          typeof entry[0] === "string" && !!entry[0] && isRecord(entry[1])
+      )
       .map(([sessionId, item]) => {
         const next: PerSessionState = {
           ...(typeof item["label"] === "string" ? { label: item["label"] } : {}),
           cwd: typeof item["cwd"] === "string" && item["cwd"] ? item["cwd"] : ".",
-          ...(Array.isArray(item["originalArgv"]) ? { originalArgv: item["originalArgv"].filter((part: unknown): part is string => typeof part === "string") } : {}),
+          ...(Array.isArray(item["originalArgv"])
+            ? {
+                originalArgv: item["originalArgv"].filter(
+                  (part: unknown): part is string => typeof part === "string"
+                ),
+              }
+            : {}),
           readCursor: clampNumber(item["readCursor"], 0, Number.MAX_SAFE_INTEGER, 0),
           lastSeenAt: clampNumber(item["lastSeenAt"], 0, Number.MAX_SAFE_INTEGER, 0),
         };
         return [sessionId, next];
-      }),
+      })
   );
 }
 
 function migrateSplitNode(value: unknown): SplitNode | undefined {
   if (!isRecord(value)) return undefined;
   if (value["kind"] === "leaf") {
-    return typeof value["sessionId"] === "string" && value["sessionId"] ? { kind: "leaf", sessionId: value["sessionId"] } : undefined;
+    return typeof value["sessionId"] === "string" && value["sessionId"]
+      ? { kind: "leaf", sessionId: value["sessionId"] }
+      : undefined;
   }
   if (value["kind"] !== "split") return undefined;
   const a = migrateSplitNode(value["a"]);
@@ -189,6 +266,8 @@ function migrateKeybindings(value: unknown): KeybindingOverrides {
   }
   const sanitized = sanitizeKeybindingOverrides(candidates);
   return Object.fromEntries(
-    Object.entries(sanitized).filter(([action, chord]) => chord !== defaultKeybindings[action as KeybindingAction]),
+    Object.entries(sanitized).filter(
+      ([action, chord]) => chord !== defaultKeybindings[action as KeybindingAction]
+    )
   ) as KeybindingOverrides;
 }
