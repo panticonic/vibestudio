@@ -7,7 +7,6 @@
 
 import { useState, useEffect, useRef } from "react";
 import { CONTENT_TYPE_INLINE_UI } from "@workspace/pubsub";
-import { compileComponent } from "@workspace/eval";
 import type { LoadSourceFile, SandboxOptions } from "@workspace/eval";
 import { parseInlineUiData } from "../../components/InlineUiMessage";
 import type { ChatMessage, InlineUiComponentEntry } from "../../types";
@@ -22,8 +21,14 @@ export interface InlineUiState {
   inlineUiComponents: Map<string, InlineUiComponentEntry>;
 }
 
-export function useInlineUi({ messages, loadSourceFile, loadImport }: UseInlineUiOptions): InlineUiState {
-  const [inlineUiComponents, setInlineUiComponents] = useState<Map<string, InlineUiComponentEntry>>(new Map());
+export function useInlineUi({
+  messages,
+  loadSourceFile,
+  loadImport,
+}: UseInlineUiOptions): InlineUiState {
+  const [inlineUiComponents, setInlineUiComponents] = useState<Map<string, InlineUiComponentEntry>>(
+    new Map()
+  );
 
   // Compile inline UI messages
   useEffect(() => {
@@ -35,33 +40,51 @@ export function useInlineUi({ messages, loadSourceFile, loadImport }: UseInlineU
         if (inlineUiComponents.has(data.id)) continue;
 
         try {
-          const sourceCode = data.source.type === "file"
-            ? await loadSourceFile?.(data.source.path)
-            : data.source.code;
+          const sourceCode =
+            data.source.type === "file"
+              ? await loadSourceFile?.(data.source.path)
+              : data.source.code;
           if (!sourceCode) throw new Error(`Unable to load inline UI source for ${data.id}`);
           const sourcePath = data.source.type === "file" ? data.source.path : undefined;
-          const result = await compileComponent<NonNullable<InlineUiComponentEntry["Component"]>>(sourceCode, {
-            sourcePath,
-            loadSourceFile,
-            loadImport,
-          });
+          const { compileComponent } = await import("@workspace/eval/sandbox");
+          const result = await compileComponent<NonNullable<InlineUiComponentEntry["Component"]>>(
+            sourceCode,
+            {
+              sourcePath,
+              loadSourceFile,
+              loadImport,
+            }
+          );
           if (result.success) {
-            setInlineUiComponents(prev => {
+            setInlineUiComponents((prev) => {
               const updated = new Map(prev);
               updated.set(data.id, { Component: result.Component!, cacheKey: result.cacheKey! });
               return updated;
             });
           } else {
-            setInlineUiComponents(prev => {
+            console.error(
+              `[InlineUiMessage] Component "${data.id}" compilation failed` +
+                (data.source.type === "file" ? ` (${data.source.path})` : ""),
+              result.errorStack ?? result.error
+            );
+            setInlineUiComponents((prev) => {
               const updated = new Map(prev);
               updated.set(data.id, { cacheKey: sourceCode, error: result.error });
               return updated;
             });
           }
         } catch (err) {
-          setInlineUiComponents(prev => {
+          console.error(
+            `[InlineUiMessage] Component "${data.id}" source loading failed` +
+              (data.source.type === "file" ? ` (${data.source.path})` : ""),
+            err
+          );
+          setInlineUiComponents((prev) => {
             const updated = new Map(prev);
-            updated.set(data.id, { cacheKey: data.id, error: err instanceof Error ? err.message : String(err) });
+            updated.set(data.id, {
+              cacheKey: data.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
             return updated;
           });
         }
@@ -86,7 +109,7 @@ export function useInlineUi({ messages, loadSourceFile, loadImport }: UseInlineU
         if (data) referencedUiIds.add(data.id);
       }
     }
-    setInlineUiComponents(prevComponents => {
+    setInlineUiComponents((prevComponents) => {
       const next = new Map(prevComponents);
       let removedCount = 0;
       for (const [id, component] of prevComponents) {

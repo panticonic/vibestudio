@@ -637,7 +637,9 @@ export function useChatCore({
   useEffect(() => {
     return () => {
       try {
-        connection.disconnect();
+        void connection.disconnect().catch(() => {
+          /* connection errors are surfaced through ConnectionManager */
+        });
       } catch {
         /* best-effort */
       }

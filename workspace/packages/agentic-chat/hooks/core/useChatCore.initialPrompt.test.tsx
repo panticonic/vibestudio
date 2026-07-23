@@ -127,7 +127,7 @@ describe("useChatCore initial prompt", () => {
     );
 
     await agentIterator.return?.();
-    latest?.clientRef.current?.close();
+    await latest?.clientRef.current?.close();
     agent.close();
   });
 });

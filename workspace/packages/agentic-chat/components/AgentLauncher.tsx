@@ -4,7 +4,7 @@ import { PlusIcon } from "@radix-ui/react-icons";
 import { useIsMobile } from "@workspace/react/responsive";
 import { isAgentParticipantType } from "@workspace/agentic-core";
 import { useChatContext } from "../context/ChatContext";
-import { AgentDialog } from "./AgentDialog";
+import { LazyAgentDialog } from "./LazyAgentDialog";
 
 /**
  * Header entry point for adding/switching agents. The label adapts: before the
@@ -38,7 +38,7 @@ export function AgentLauncher() {
           {label}
         </Button>
       )}
-      <AgentDialog open={open} onOpenChange={setOpen} />
+      <LazyAgentDialog open={open} onOpenChange={setOpen} />
     </>
   );
 }

@@ -3,9 +3,9 @@ import { Flex } from "@radix-ui/themes";
 import { ChatHeader } from "./ChatHeader";
 import { ChatConnectionErrorBanner } from "./ChatConnectionErrorBanner";
 import { ChatDirtyRepoWarnings } from "./ChatDirtyRepoWarnings";
-import { ChatActionBar } from "./ChatActionBar";
+import { LazyChatActionBar } from "./LazyChatActionBar";
 import { ChatMessageArea } from "./ChatMessageArea";
-import { ChatFeedbackArea } from "./ChatFeedbackArea";
+import { LazyChatFeedbackArea } from "./LazyChatFeedbackArea";
 import { Outbox } from "./Outbox";
 import { PendingDeliveryQueue } from "./PendingDeliveryQueue";
 import { ChatInput } from "./ChatInput";
@@ -44,15 +44,16 @@ export const ChatLayout = React.memo(function ChatLayout() {
           boxSizing: "border-box",
           overflow: "hidden",
           gap: "var(--chat-root-gap)",
-          padding: "max(var(--chat-root-padding), env(safe-area-inset-top, 0)) max(var(--chat-root-padding), env(safe-area-inset-right, 0)) max(var(--chat-root-padding), env(safe-area-inset-bottom, 0)) max(var(--chat-root-padding), env(safe-area-inset-left, 0))",
+          padding:
+            "max(var(--chat-root-padding), env(safe-area-inset-top, 0)) max(var(--chat-root-padding), env(safe-area-inset-right, 0)) max(var(--chat-root-padding), env(safe-area-inset-bottom, 0)) max(var(--chat-root-padding), env(safe-area-inset-left, 0))",
         }}
       >
         <ChatHeader />
         <ChatConnectionErrorBanner />
         <ChatDirtyRepoWarnings />
-        <ChatActionBar />
+        <LazyChatActionBar />
         <ChatMessageArea />
-        <ChatFeedbackArea />
+        <LazyChatFeedbackArea />
         <PendingDeliveryQueue />
         <Outbox />
         <ChatInput />

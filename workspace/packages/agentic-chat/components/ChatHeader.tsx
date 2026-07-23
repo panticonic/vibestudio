@@ -15,7 +15,7 @@ import { ParticipantBadgeMenu } from "./ParticipantBadgeMenu";
 import { PendingAgentBadge } from "./PendingAgentBadge";
 import { ToolPermissionsDropdown } from "./ToolPermissionsDropdown";
 import { AgentLauncher } from "./AgentLauncher";
-import { AgentDialog } from "./AgentDialog";
+import { LazyAgentDialog } from "./LazyAgentDialog";
 import { ForkSwitcher } from "./ForkSwitcher";
 import { ChannelPeopleMenu } from "./ChannelPeopleMenu";
 
@@ -545,9 +545,9 @@ function ChatHeaderOverflowMenu({
           )}
         </DropdownMenu.Content>
       </DropdownMenu.Root>
-      <AgentDialog open={addAgentOpen} onOpenChange={setAddAgentOpen} />
+      <LazyAgentDialog open={addAgentOpen} onOpenChange={setAddAgentOpen} />
       {settingsParticipantId && (
-        <AgentDialog
+        <LazyAgentDialog
           open
           onOpenChange={(open) => {
             if (!open) setSettingsParticipantId(null);

@@ -1,24 +1,6 @@
-import React, { type ComponentType, type ReactNode, useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import React, { Suspense, lazy, type ReactNode } from "react";
 import { Text } from "@radix-ui/themes";
-import * as runtime from "react/jsx-runtime";
-
-// Lazy-loaded MDX module (~200-500KB deferred until first JSX message)
-let mdxModule: typeof import("@mdx-js/mdx") | null = null;
-async function getMdx() {
-  if (!mdxModule) {
-    try { mdxModule = await import("@mdx-js/mdx"); }
-    catch (e) { throw new Error(`Failed to load MDX: ${e instanceof Error ? e.message : e}`); }
-  }
-  return mdxModule;
-}
-import {
-  createMdxComponents,
-  markdownComponents,
-  streamingMarkdownComponents,
-  type MdxActionHandlers,
-} from "./markdownComponents";
+import type { MdxActionHandlers } from "./markdownComponents";
 
 interface MessageContentProps {
   content: string;
@@ -26,26 +8,23 @@ interface MessageContentProps {
   mdxActions?: MdxActionHandlers;
 }
 
-const remarkPlugins = [remarkGfm];
+// Markdown parsing, GFM, MDX, and syntax highlighting are progressive
+// enhancements. Keeping them behind a real import boundary lets an empty chat
+// (and the very common plain-text message) paint without parsing the markdown
+// toolchain first.
+const RichMessageContent = lazy(() =>
+  import("./RichMessageContent").then((module) => ({
+    default: module.RichMessageContent,
+  }))
+);
 
-class MdxRenderErrorBoundary extends React.Component<
-  { children: ReactNode; fallback: ReactNode },
-  { hasError: boolean }
-> {
-  state = { hasError: false };
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: unknown) {
-    console.debug("MDX render failed, using plain-text fallback:", error);
-  }
-
-  render() {
-    return this.state.hasError ? this.props.fallback : this.props.children;
-  }
-}
+// Match syntax that materially benefits from markdown rendering. Bare
+// punctuation does not qualify, so ordinary prose stays on the synchronous
+// plain-text path.
+const MARKDOWN_SYNTAX_RE =
+  /^[ \t]*#{1,6} |`[^`]|```|\*\*|__|\*[^\s*]|_[^\s_]|^[ \t]*[-*+] |^[ \t]*\d+\. |^[ \t]*>|~~|\[[^\]]*\]\(|!\[|.*\|.*\|/m;
+const GFM_AUTOLINK_LITERAL_RE =
+  /(?:https?:\/\/|www\.)[^\s<]+|[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+/iu;
 
 function PlainTextMessageContent({ content }: { content: string }) {
   return (
@@ -57,121 +36,50 @@ function PlainTextMessageContent({ content }: { content: string }) {
   );
 }
 
-// Lazy-loaded rehype-highlight plugin (~1.5MB highlight.js deferred until first render)
-type RehypeHighlightPlugin = typeof import("rehype-highlight").default;
-let rehypeHighlightPlugin: RehypeHighlightPlugin | null = null;
-let rehypeHighlightPromise: Promise<RehypeHighlightPlugin> | null = null;
+class RichRenderErrorBoundary extends React.Component<
+  { children: ReactNode; fallback: ReactNode; resetKey: string },
+  { failed: boolean }
+> {
+  state = { failed: false };
 
-function getRehypeHighlight(): Promise<RehypeHighlightPlugin> {
-  if (rehypeHighlightPlugin) {
-    return Promise.resolve(rehypeHighlightPlugin);
+  static getDerivedStateFromError() {
+    return { failed: true };
   }
-  if (!rehypeHighlightPromise) {
-    rehypeHighlightPromise = import("rehype-highlight").then((m) => {
-      rehypeHighlightPlugin = m.default;
-      return rehypeHighlightPlugin;
-    });
+
+  componentDidUpdate(previous: Readonly<{ resetKey: string }>) {
+    if (this.state.failed && previous.resetKey !== this.props.resetKey) {
+      this.setState({ failed: false });
+    }
   }
-  return rehypeHighlightPromise;
+
+  componentDidCatch(error: unknown) {
+    console.debug("Rich message renderer failed, using plain text:", error);
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
 }
 
-async function compileMdx(
-  content: string,
-  rehypeHighlight: RehypeHighlightPlugin,
-  mdxActions?: MdxActionHandlers,
-): Promise<ComponentType | null> {
-  const rehypePlugins: [RehypeHighlightPlugin, { ignoreMissing: boolean }][] = [[rehypeHighlight, { ignoreMissing: true }]];
-  const { evaluate } = await getMdx();
-  const { default: Component } = await evaluate(content, {
-    ...runtime,
-    development: false,
-    useMDXComponents: (() => createMdxComponents(mdxActions)) as never,
-    remarkPlugins,
-    rehypePlugins,
-  });
-  return Component as ComponentType;
-}
-
-// Regex to detect markdown syntax that benefits from ReactMarkdown rendering.
-// Must match actual syntax in context — not bare punctuation like `-`, `!`, `_`
-// which appear in normal English and would defeat the plain-text fast path.
-const MARKDOWN_SYNTAX_RE = /^[ \t]*#{1,6} |`[^`]|```|\*\*|__|\*[^\s*]|_[^\s_]|^[ \t]*[-*+] |^[ \t]*\d+\. |^[ \t]*>|~~|\[[^\]]*\]\(|!\[|.*\|.*\|/m;
-
-export const MessageContent = React.memo(function MessageContent({ content, isStreaming, mdxActions }: MessageContentProps) {
-  const [MdxComponent, setMdxComponent] = useState<ComponentType | null>(null);
-  const [highlightLoaded, setHighlightLoaded] = useState<RehypeHighlightPlugin | null>(rehypeHighlightPlugin);
-
-  // Lazy-load highlight.js on first render
-  useEffect(() => {
-    if (!rehypeHighlightPlugin) {
-      void getRehypeHighlight().then(setHighlightLoaded);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (isStreaming) {
-      setMdxComponent(null);
-      return;
-    }
-
-    const hasJsx = /<[A-Z]/.test(content);
-    if (!hasJsx) {
-      setMdxComponent(null);
-      return;
-    }
-
-    // Wait for highlight.js to load before compiling MDX
-    if (!highlightLoaded) return;
-
-    let cancelled = false;
-
-    // Try compilation
-    compileMdx(content, highlightLoaded, mdxActions)
-      .then((Component) => {
-        if (!cancelled) setMdxComponent(() => Component);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          console.debug("MDX compilation failed, using markdown fallback:", err);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [content, isStreaming, highlightLoaded, mdxActions]);
-
-  if (MdxComponent) {
-    return (
-      <MdxRenderErrorBoundary key={content} fallback={<PlainTextMessageContent content={content} />}>
-        <div className="message-prose">
-          <MdxComponent />
-        </div>
-      </MdxRenderErrorBoundary>
-    );
-  }
-
-  // Fast path: during streaming, if content has no markdown syntax yet,
-  // skip ReactMarkdown entirely and render as plain text
-  if (isStreaming && !MARKDOWN_SYNTAX_RE.test(content)) {
+export const MessageContent = React.memo(function MessageContent({
+  content,
+  isStreaming,
+  mdxActions,
+}: MessageContentProps) {
+  const needsRichRenderer =
+    /<[A-Z]/.test(content) ||
+    MARKDOWN_SYNTAX_RE.test(content) ||
+    (!isStreaming && GFM_AUTOLINK_LITERAL_RE.test(content));
+  if (!needsRichRenderer) {
     return <PlainTextMessageContent content={content} />;
   }
 
-  // Skip syntax highlighting during streaming — code blocks are incomplete
-  // and highlight.js work is wasted. Full highlighting applies on final render.
-  const rehypePlugins = !isStreaming && highlightLoaded
-    ? ([[highlightLoaded, { ignoreMissing: true }]] as [RehypeHighlightPlugin, { ignoreMissing: boolean }][])
-    : [];
-
+  const fallback = <PlainTextMessageContent content={content} />;
   return (
-    <div className="message-prose">
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        components={isStreaming ? streamingMarkdownComponents : markdownComponents}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
+    <RichRenderErrorBoundary fallback={fallback} resetKey={content}>
+      <Suspense fallback={fallback}>
+        <RichMessageContent content={content} isStreaming={isStreaming} mdxActions={mdxActions} />
+      </Suspense>
+    </RichRenderErrorBoundary>
   );
 });

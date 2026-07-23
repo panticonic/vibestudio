@@ -77,7 +77,7 @@ function Probe({
     metadata: { name: "Chat Panel", type: "panel", handle: "alice" },
     sandbox: {
       rpc: config.rpc,
-      loadImport: vi.fn(async () => ""),
+      loadImport: vi.fn(async () => ({ bundle: "", format: "cjs" as const })),
     },
   });
   onContext?.(contextValue);

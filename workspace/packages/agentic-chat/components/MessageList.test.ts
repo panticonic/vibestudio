@@ -165,7 +165,7 @@ describe("MessageList typing indicators (roster-based)", () => {
     expect(screen.getByText("Edit src/config.ts")).toBeTruthy();
   });
 
-  it("renders expanded thinking details as markdown", () => {
+  it("renders expanded thinking details as markdown", async () => {
     render(
       React.createElement(MessageList, {
         messages: [
@@ -185,10 +185,10 @@ describe("MessageList typing indicators (roster-based)", () => {
     fireEvent.click(screen.getByLabelText("Thinking: **Check:** - read files - run tests"));
 
     expect(document.body.textContent).toContain("Check:");
-    expect(document.body.querySelectorAll("li")).toHaveLength(2);
+    await waitFor(() => expect(document.body.querySelectorAll("li")).toHaveLength(2));
   });
 
-  it("renders compact thinking previews as markdown", () => {
+  it("renders compact thinking previews as markdown", async () => {
     render(
       React.createElement(MessageList, {
         messages: [
@@ -205,7 +205,9 @@ describe("MessageList typing indicators (roster-based)", () => {
       } as never)
     );
 
-    expect(document.body.querySelector(".rt-r-weight-bold")?.textContent).toBe("repo");
+    await waitFor(() =>
+      expect(document.body.querySelector(".rt-r-weight-bold")?.textContent).toBe("repo")
+    );
   });
 
   it("renders lifecycle recovery notices as compact system status", () => {

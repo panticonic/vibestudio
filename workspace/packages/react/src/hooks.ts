@@ -6,7 +6,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import * as runtime from "@workspace/runtime";
 import { Rpc } from "@workspace/runtime";
-import type { PanelHandle, PaletteCommand, ThemeAppearance, ThemeConfig } from "@workspace/runtime";
+import type { PanelHandle, PaletteCommand } from "@workspace/runtime";
 
 /**
  * Get the panel API object.
@@ -23,48 +23,6 @@ import type { PanelHandle, PaletteCommand, ThemeAppearance, ThemeConfig } from "
  */
 export function usePanel() {
   return runtime;
-}
-
-/**
- * Get the current panel's theme and subscribe to theme changes.
- *
- * @example
- * ```tsx
- * function MyPanel() {
- *   const theme = usePanelTheme();
- *   return <div>Current theme: {theme}</div>;
- * }
- * ```
- */
-export function usePanelTheme(): ThemeAppearance {
-  const [theme, setTheme] = useState<ThemeAppearance>(() => runtime.panel.getTheme());
-
-  useEffect(() => {
-    const unsubscribe = runtime.panel.onThemeChange((nextTheme) => {
-      setTheme(nextTheme);
-    });
-    return unsubscribe;
-  }, []);
-
-  return theme;
-}
-
-/**
- * Get the app-wide theme identity (accent/radius/scaling/surface) and subscribe
- * to live changes pushed from the shell. Pair with `usePanelTheme()` for
- * appearance.
- */
-export function usePanelThemeConfig(): ThemeConfig {
-  const [config, setConfig] = useState<ThemeConfig>(() => runtime.panel.getThemeConfig());
-
-  useEffect(() => {
-    const unsubscribe = runtime.panel.onThemeConfigChange((next) => {
-      setConfig(next);
-    });
-    return unsubscribe;
-  }, []);
-
-  return config;
 }
 
 /**
@@ -393,7 +351,8 @@ export function useStateArgs<T = Record<string, unknown>>(): T {
       setArgs(event.detail as T);
     };
     window.addEventListener("vibestudio:stateArgsChanged", handler as EventListener);
-    return () => window.removeEventListener("vibestudio:stateArgsChanged", handler as EventListener);
+    return () =>
+      window.removeEventListener("vibestudio:stateArgsChanged", handler as EventListener);
   }, []);
 
   return args;

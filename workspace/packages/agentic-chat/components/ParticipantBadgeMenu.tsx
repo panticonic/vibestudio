@@ -13,7 +13,7 @@ import type { AccountProfile } from "../hooks/useAccountProfiles";
 import { MethodArgumentsModal } from "./MethodArgumentsModal";
 import { schemaHasRequiredParams } from "./JsonSchemaForm";
 import { ContextUsageRing } from "./ContextUsageRing";
-import { AgentDialog } from "./AgentDialog";
+import { LazyAgentDialog } from "./LazyAgentDialog";
 
 export interface ParticipantBadgeMenuProps {
   participant: Participant<ChatParticipantMetadata>;
@@ -393,7 +393,7 @@ export function ParticipantBadgeMenu({
       )}
 
       {showSettings && (
-        <AgentDialog
+        <LazyAgentDialog
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
           editParticipantId={participant.id}
