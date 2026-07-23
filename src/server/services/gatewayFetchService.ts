@@ -43,6 +43,8 @@
  */
 
 import { z } from "zod";
+import * as http from "node:http";
+import { Readable } from "node:stream";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
@@ -79,6 +81,76 @@ const fetchDescriptorSchema = z
   .strict();
 
 const MOBILE_APP_BOOTSTRAP_PATH = "/_r/s/auth/mobile-app-bootstrap";
+const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+function rawLoopbackFetch(
+  port: number,
+  target: string,
+  descriptor: GatewayFetchDescriptor,
+  body: ReadableStream<Uint8Array> | undefined
+): Promise<Response> {
+  return new Promise<Response>((resolve, reject) => {
+    const headers = { ...descriptor.headers, "accept-encoding": "gzip" };
+    const request = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: target,
+        method: descriptor.method ?? "GET",
+        headers,
+      },
+      (incoming) => {
+        const responseHeaders = new Headers();
+        for (let i = 0; i < incoming.rawHeaders.length; i += 2) {
+          const name = incoming.rawHeaders[i];
+          const value = incoming.rawHeaders[i + 1];
+          if (!name || value === undefined) continue;
+          if (!HOP_BY_HOP_RESPONSE_HEADERS.has(name.toLowerCase())) {
+            responseHeaders.append(name, value);
+          }
+        }
+        resolve(
+          new Response(Readable.toWeb(incoming) as ReadableStream<Uint8Array>, {
+            status: incoming.statusCode ?? 502,
+            statusText: incoming.statusMessage,
+            headers: responseHeaders,
+          })
+        );
+      }
+    );
+    request.once("error", reject);
+    if (body) {
+      void (async () => {
+        const reader = body.getReader();
+        try {
+          for (;;) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            if (!request.write(chunk.value)) {
+              await new Promise<void>((resume) => request.once("drain", resume));
+            }
+          }
+          request.end();
+        } catch (error) {
+          request.destroy(error instanceof Error ? error : new Error(String(error)));
+        } finally {
+          reader.releaseLock();
+        }
+      })();
+    } else {
+      request.end();
+    }
+  });
+}
 
 const gatewayFetchMethods = {
   fetch: {
@@ -178,25 +250,37 @@ export function createGatewayFetchService(deps: {
         // message-size limit, and the request body (ctx.body, plan §1.6) streams in
         // from the same channel. A buffered base64 body in either direction would
         // exceed that limit for real payloads (MB).
-        const response = await fetch(url, {
-          method: descriptor.method ?? "GET",
-          headers: descriptor.headers,
-          ...(ctx.body
-            ? // undici requires half-duplex to be declared for stream bodies.
-              { body: ctx.body, duplex: "half" }
-            : {}),
-        } as RequestInit);
+        const requestHasRange = hasRangeRequestHeader(descriptor.headers);
+        const response =
+          descriptor.gzip && !requestHasRange
+            ? await rawLoopbackFetch(port, target, descriptor, ctx.body)
+            : await fetch(url, {
+                method: descriptor.method ?? "GET",
+                headers: descriptor.headers,
+                ...(ctx.body
+                  ? // undici requires half-duplex to be declared for stream bodies.
+                    { body: ctx.body, duplex: "half" }
+                  : {}),
+              } as RequestInit);
 
         const hasRangeSemantics =
-          hasRangeRequestHeader(descriptor.headers) ||
-          response.status === 206 ||
-          response.headers.has("content-range");
+          requestHasRange || response.status === 206 || response.headers.has("content-range");
         if (descriptor.gzip && response.ok && response.body && !hasRangeSemantics) {
-          // Compress on the wire (see schema). The body is re-streamed through a gzip
-          // transform; the caller decompresses. Drop content-length — the recompressed
-          // length differs and the stream carries no length anyway.
           const headers = new Headers(response.headers);
           headers.set(GZIP_MARKER_HEADER, "1");
+          if (headers.get("content-encoding")?.toLowerCase() === "gzip") {
+            // The raw Node request deliberately bypasses fetch's transparent
+            // decompression. Forward the gateway's encoded bytes unchanged.
+            headers.delete("content-encoding");
+            return new Response(response.body, {
+              status: response.status,
+              statusText: response.statusText,
+              headers,
+            });
+          }
+
+          // The gateway returned identity despite Accept-Encoding. Preserve the
+          // streaming fallback, but only pay the compression cost in this cold case.
           headers.delete("content-length");
           return new Response(response.body.pipeThrough(new CompressionStream("gzip")), {
             status: response.status,

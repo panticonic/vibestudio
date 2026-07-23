@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as http from "node:http";
+import { gzipSync, gunzipSync } from "node:zlib";
 import type { AddressInfo } from "node:net";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { GZIP_MARKER_HEADER } from "@vibestudio/shared/panel/assetHeaders";
@@ -11,6 +12,7 @@ interface CapturedRequest {
   method: string;
   url: string;
   contentType: string | undefined;
+  acceptEncoding: string | undefined;
   body: string;
 }
 
@@ -37,6 +39,7 @@ async function startFakeGateway(
         method: req.method ?? "",
         url: req.url ?? "",
         contentType: req.headers["content-type"],
+        acceptEncoding: req.headers["accept-encoding"],
         body: body.toString("utf-8"),
       });
       if (respond) {
@@ -130,6 +133,33 @@ describe("gatewayFetchService — §1.6 upload path", () => {
     expect(response.headers.get("content-length")).toBeNull();
   });
 
+  it("forwards an upstream gzip representation without recompressing it", async () => {
+    const source = Buffer.from("large panel asset ".repeat(256));
+    const encoded = gzipSync(source, { level: 6 });
+    const gateway = await startFakeGateway((req, res) => {
+      expect(req.headers["accept-encoding"]).toBe("gzip");
+      res.writeHead(200, {
+        "content-type": "application/javascript",
+        "content-encoding": "gzip",
+        "content-length": encoded.byteLength,
+      });
+      res.end(encoded);
+    });
+    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
+
+    const response = (await service.handler(ctxWithBody(), "fetch", [
+      { path: "/apps/shell/bundle.js", gzip: true },
+    ])) as Response;
+    const received = Buffer.from(await response.arrayBuffer());
+
+    expect(gateway.requests[0]?.acceptEncoding).toBe("gzip");
+    expect(response.headers.get(GZIP_MARKER_HEADER)).toBe("1");
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("content-length")).toBe(String(encoded.byteLength));
+    expect(received).toEqual(encoded);
+    expect(gunzipSync(received)).toEqual(source);
+  });
+
   it("does not gzip range requests or partial-content responses", async () => {
     const gateway = await startFakeGateway((_req, res) => {
       res.writeHead(206, {
@@ -149,6 +179,7 @@ describe("gatewayFetchService — §1.6 upload path", () => {
     ])) as Response;
 
     expect(response.status).toBe(206);
+    expect(gateway.requests[0]?.acceptEncoding).not.toBe("gzip");
     expect(response.headers.get(GZIP_MARKER_HEADER)).toBeNull();
     expect(response.headers.get("content-range")).toBe("bytes 0-3/10");
     expect(await response.text()).toBe("0123");

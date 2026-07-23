@@ -10,6 +10,7 @@
 import { describe, it, expect } from "vitest";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "http";
 import { gunzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // extractSourcePath is module-private, so we test the regex logic directly.
@@ -250,6 +251,87 @@ describe("PanelHttpServer build cache", () => {
 
     server.storeBuild("panels/my-app", buildResult);
     expect(onBuildComplete).toHaveBeenCalledWith("panels/my-app");
+  });
+
+  it("does not read lazy artifact payloads while activating a panel build", () => {
+    const server = new PanelHttpServer();
+    const lazyArtifact = {
+      path: "chunk-lazy.js",
+      role: "asset" as const,
+      contentType: "text/javascript; charset=utf-8",
+      encoding: "utf8" as const,
+      byteLength: 10_000,
+      integrity: `sha256-${"a".repeat(64)}`,
+    } as import("./buildV2/buildStore.js").BuildResult["artifacts"][number];
+    Object.defineProperty(lazyArtifact, "content", {
+      enumerable: true,
+      get() {
+        throw new Error("lazy payload was read");
+      },
+    });
+
+    expect(() =>
+      server.storeBuild("panels/my-app", {
+        ...buildResult,
+        artifacts: [...buildResult.artifacts, lazyArtifact],
+        metadata: {
+          ...buildResult.metadata,
+          bundleReport: {
+            version: 2,
+            mode: "report-only",
+            entryOutput: "bundle.js",
+            initialArtifacts: ["bundle.js"],
+            initial: { requests: 1, bytes: 1, jsBytes: 1, cssBytes: 0 },
+            lazy: { requests: 1, bytes: 10_000, jsBytes: 10_000, cssBytes: 0 },
+            total: { requests: 2, bytes: 10_001, jsBytes: 10_001, cssBytes: 0 },
+            largestJsChunkBytes: 10_000,
+            largestInitialInputs: [],
+            largestLazyInputs: [],
+          },
+        },
+      })
+    ).not.toThrow();
+  });
+
+  it("serves shared styles from one digest-addressed URL across panel sources", async () => {
+    const server = new PanelHttpServer();
+    const content = "body { color: rebeccapurple; }";
+    const digest = createHash("sha256").update(content).digest("hex");
+    const sharedBuild = {
+      ...buildResult,
+      artifacts: [
+        ...buildResult.artifacts,
+        {
+          path: `shared-style-${digest}.css`,
+          role: "shared-style",
+          contentType: "text/css; charset=utf-8",
+          encoding: "utf8",
+          integrity: `sha256-${digest}`,
+          content,
+        },
+      ],
+      metadata: {
+        ...buildResult.metadata,
+        sharedStyles: [
+          {
+            digest,
+            contentType: "text/css; charset=utf-8",
+            url: `../../__vibestudio/shared-style/${digest}.css`,
+          },
+        ],
+      },
+    } as import("./buildV2/buildStore.js").BuildResult;
+    server.storeBuild("panels/my-app", sharedBuild);
+    server.storeBuild("panels/other", {
+      ...sharedBuild,
+      metadata: { ...sharedBuild.metadata, sourcePath: "panels/other" },
+    });
+
+    const response = await handlePanelRequest(server, `/__vibestudio/shared-style/${digest}.css`);
+
+    expect(response.statusCodeWritten).toBe(200);
+    expect(response.body).toBe(content);
+    expect(response.headersWritten?.["Cache-Control"]).toBe("public, max-age=31536000, immutable");
   });
 
   it("does not synthesize build refs from panel context ids", async () => {

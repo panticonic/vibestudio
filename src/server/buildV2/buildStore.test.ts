@@ -173,6 +173,31 @@ describe("build artifact helpers", () => {
     }
   });
 
+  it("defers full payload hashing until artifact content is consumed", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
+    try {
+      setUserDataPath(root);
+      const original = build();
+      put(
+        "lazy-build",
+        { entries: original.artifacts },
+        {
+          ...original.metadata,
+          buildKey: "lazy-build",
+        }
+      );
+      const artifactPath = path.join(root, "builds", "lazy-build", "worker.js");
+      const bytes = fs.readFileSync(artifactPath, "utf8");
+      fs.writeFileSync(artifactPath, "x".repeat(Buffer.byteLength(bytes)));
+
+      const cached = get("lazy-build");
+      expect(cached).not.toBeNull();
+      expect(() => cached?.artifacts[0]?.content).toThrow(/integrity mismatch/i);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects unsealed or mismatched workspace build identities", () => {
     const artifacts = { entries: build().artifacts };
     expect(() =>

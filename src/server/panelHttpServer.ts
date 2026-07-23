@@ -15,9 +15,11 @@ import type {
   BuildResult,
   BuildMetadata,
 } from "./buildV2/buildStore.js";
+import { artifactFilePath } from "./buildV2/buildStore.js";
 import type { CdpBridge } from "./cdpBridge.js";
 import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
 import { assertPresent } from "../lintHelpers";
+import { TransportDerivativeCache } from "./buildV2/transportDerivativeCache.js";
 
 const log = createDevLogger("PanelHttpServer");
 
@@ -100,6 +102,7 @@ export interface PanelHttpCallbacks {
 
 /** Build output cached by source path (shared across panels) */
 interface CachedBuild {
+  dir: string;
   artifacts: Array<BuildArtifactManifestEntry & { content: string }>;
   htmlArtifact: BuildArtifactManifestEntry & { content: string };
   metadata: BuildMetadata;
@@ -195,11 +198,22 @@ function compressArtifact(body: Buffer, encoding: PanelContentEncoding): Promise
 // ---------------------------------------------------------------------------
 
 export class PanelHttpServer {
+  constructor(private readonly transportDerivativeCache = new TransportDerivativeCache()) {}
+
   /** Serving cache: source/ref -> resolved build (for fast sub-resource serving within a page load) */
   private servingCache = new Map<string, CachedBuild>();
 
   /** Immutable activated artifacts. Never invalidated by a later source build. */
   private activatedBuildCache = new Map<string, CachedBuild>();
+
+  /** Digest-addressed base styles shared by every panel URL. */
+  private sharedStyleAssets = new Map<
+    string,
+    {
+      build: CachedBuild;
+      artifact: BuildArtifactManifestEntry & { content: string };
+    }
+  >();
 
   /** Builds currently in flight (dedup concurrent requests) */
   private buildInFlight = new Map<string, Promise<void>>();
@@ -301,6 +315,7 @@ export class PanelHttpServer {
 
     const revision = ++this.buildRevisionCounter;
     const cachedBuild = {
+      dir: buildResult.dir,
       artifacts: buildResult.artifacts,
       htmlArtifact,
       metadata: buildResult.metadata,
@@ -309,6 +324,8 @@ export class PanelHttpServer {
     };
     this.servingCache.set(this.buildCacheKey(source, ref), cachedBuild);
     this.activatedBuildCache.set(buildResult.buildKey, cachedBuild);
+    this.registerSharedStyles(cachedBuild);
+    this.scheduleTransportDerivatives(cachedBuild);
 
     log.info(`Stored build: ${this.buildCacheKey(source, ref)}`);
 
@@ -412,6 +429,19 @@ export class PanelHttpServer {
   ): Promise<void> {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const pathname = url.pathname;
+
+    const sharedStyleMatch = pathname.match(/^\/__vibestudio\/shared-style\/([0-9a-f]{64})\.css$/u);
+    if (sharedStyleMatch) {
+      const digest = assertPresent(sharedStyleMatch[1]);
+      const shared = this.sharedStyleAssets.get(digest);
+      if (!shared) {
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Shared style not found");
+        return;
+      }
+      await this.writeArtifact(req, res, shared.build, shared.artifact);
+      return;
+    }
 
     // ── Static runtime helpers ────────────────────────────────────────────
     if (this.serveRuntimeHelper(pathname, res)) {
@@ -651,6 +681,7 @@ export class PanelHttpServer {
         return;
       }
       build = {
+        dir: result.dir,
         artifacts: result.artifacts,
         htmlArtifact,
         metadata: result.metadata,
@@ -658,6 +689,8 @@ export class PanelHttpServer {
         compressedArtifacts: new Map<string, Promise<Buffer>>(),
       };
       this.activatedBuildCache.set(buildKey, build);
+      this.registerSharedStyles(build);
+      this.scheduleTransportDerivatives(build);
     }
 
     if (build.metadata.kind !== "panel" || build.metadata.sourcePath !== source) {
@@ -845,6 +878,50 @@ export class PanelHttpServer {
     return build.artifacts.find((artifact) => artifact.path === normalized) ?? null;
   }
 
+  private registerSharedStyles(build: CachedBuild): void {
+    for (const style of build.metadata.sharedStyles ?? []) {
+      if (
+        !/^[0-9a-f]{64}$/u.test(style.digest) ||
+        style.url !== `../../__vibestudio/shared-style/${style.digest}.css`
+      ) {
+        throw new Error(`Build ${build.metadata.buildKey} has an invalid shared style reference`);
+      }
+      const artifact = build.artifacts.find(
+        (candidate) =>
+          candidate.role === "shared-style" &&
+          candidate.contentType === style.contentType &&
+          candidate.integrity === `sha256-${style.digest}`
+      );
+      if (!artifact) {
+        throw new Error(`Build ${build.metadata.buildKey} is missing shared style ${style.digest}`);
+      }
+      const existing = this.sharedStyleAssets.get(style.digest);
+      if (existing && existing.artifact.content !== artifact.content) {
+        throw new Error(`Shared style digest collision for ${style.digest}`);
+      }
+      this.sharedStyleAssets.set(style.digest, { build, artifact });
+    }
+  }
+
+  private scheduleTransportDerivatives(build: CachedBuild): void {
+    const initialArtifacts = new Set(build.metadata.bundleReport?.initialArtifacts ?? []);
+    for (const artifact of build.artifacts) {
+      if (
+        artifact.role === "html" ||
+        artifact.encoding !== "utf8" ||
+        (artifact.byteLength ?? 0) < 1_024 ||
+        (artifact.role !== "shared-style" && !initialArtifacts.has(artifact.path)) ||
+        !artifact.integrity
+      ) {
+        continue;
+      }
+      this.transportDerivativeCache.scheduleFile(
+        artifact.integrity,
+        artifactFilePath({ dir: build.dir }, artifact)
+      );
+    }
+  }
+
   private async writeArtifact(
     req: import("http").IncomingMessage,
     res: import("http").ServerResponse,
@@ -873,19 +950,24 @@ export class PanelHttpServer {
       body.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
     let compressedBody: Buffer | null = null;
     if (encoding) {
-      const cacheKey = `${encoding}:${artifact.path}`;
-      let compressed = build.compressedArtifacts.get(cacheKey);
-      if (!compressed) {
-        compressed = compressArtifact(body, encoding);
-        build.compressedArtifacts.set(cacheKey, compressed);
+      if (artifact.integrity) {
+        compressedBody = await this.transportDerivativeCache.get(artifact.integrity, encoding);
       }
-      try {
-        compressedBody = await compressed;
-      } catch (error) {
-        build.compressedArtifacts.delete(cacheKey);
-        log.warn(
-          `Failed to ${encoding}-compress panel artifact ${artifact.path}: ${String(error)}`
-        );
+      const cacheKey = `${encoding}:${artifact.path}`;
+      if (!compressedBody) {
+        let compressed = build.compressedArtifacts.get(cacheKey);
+        if (!compressed) {
+          compressed = compressArtifact(body, encoding);
+          build.compressedArtifacts.set(cacheKey, compressed);
+        }
+        try {
+          compressedBody = await compressed;
+        } catch (error) {
+          build.compressedArtifacts.delete(cacheKey);
+          log.warn(
+            `Failed to ${encoding}-compress panel artifact ${artifact.path}: ${String(error)}`
+          );
+        }
       }
     }
     res.writeHead(200, {

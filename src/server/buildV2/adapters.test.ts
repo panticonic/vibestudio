@@ -43,13 +43,18 @@ describe("reactAdapter", () => {
     expect(adapter.dedupePackages).toContain("@radix-ui/themes");
   });
 
-  it("generates an entry that mounts via autoMountReactPanel and imports radix styles", () => {
+  it("mounts through autoMountReactPanel and declares shared base styles separately", () => {
     const entry = adapter.generateEntry("expose", "entry");
     // References the focused React auto-mount entry rather than the full hooks barrel.
     expect(entry).toContain("autoMountReactPanel");
     expect(entry).toContain("@workspace/react/auto-mount");
-    // Imports the radix design-system stylesheet so panels render without a CDN.
-    expect(entry).toContain("@radix-ui/themes/styles.css");
+    // Base styles are a separate builder input so they can load before
+    // panel/component CSS without coupling style delivery to JS execution.
+    expect(adapter.sharedStyles).toEqual([
+      "@radix-ui/themes/styles.css",
+      "@workspace/ui/tokens.css",
+    ]);
+    expect(entry).not.toContain("@radix-ui/themes/styles.css");
     // Imports both the expose side-effect file and the user entry module.
     expect(entry).toContain('"expose"');
     expect(entry).toContain('"entry"');

@@ -74,25 +74,25 @@ describe("generateExposeModuleCode", () => {
     expect(code).not.toContain("__mod0__");
   });
 
-  it("emits import + register lines for each exposed module", () => {
+  it("emits literal lazy loaders for each exposed panel module", () => {
     const code = generateExposeModuleCode(["@workspace/runtime", "zod"]);
-    expect(code).toContain('import * as __mod0__ from "@workspace/runtime"');
-    expect(code).toContain('import * as __mod1__ from "zod"');
-    expect(code).toContain('globalThis.__vibestudioModuleMap__["@workspace/runtime"] = __mod0__');
-    expect(code).toContain('globalThis.__vibestudioModuleMap__["zod"] = __mod1__');
+    expect(code).toContain('import("@workspace/runtime")');
+    expect(code).toContain('import("zod")');
+    expect(code).not.toContain("import * as");
+    expect(code).toContain('globalThis.__vibestudioModuleMap__["zod"] = mod');
   });
 
   it("panel target does not preload the lightweight CDP client when runtime is exposed", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "panel");
-    expect(code).toContain('import * as __mod0__ from "@workspace/runtime"');
+    expect(code).toContain('import("@workspace/runtime")');
     expect(code).not.toContain("@workspace/cdp-client");
   });
 
   it("preserves the order of exposed modules in the generated code", () => {
     const code = generateExposeModuleCode(["a", "b", "c"]);
-    const aIdx = code.indexOf("__mod0__");
-    const bIdx = code.indexOf("__mod1__");
-    const cIdx = code.indexOf("__mod2__");
+    const aIdx = code.indexOf('import("a")');
+    const bIdx = code.indexOf('import("b")');
+    const cIdx = code.indexOf('import("c")');
     expect(aIdx).toBeGreaterThan(-1);
     expect(bIdx).toBeGreaterThan(aIdx);
     expect(cIdx).toBeGreaterThan(bIdx);
@@ -121,7 +121,24 @@ describe("generateExposeModuleCode", () => {
   it("panel target produces the panel-flavored bootstrap", () => {
     const code = generateExposeModuleCode(["react"], "panel");
     expect(code).toContain("__vibestudioRequireAsync__");
-    expect(code).toContain('import * as __mod0__ from "react"');
+    expect(code).toContain('import("react")');
+  });
+
+  it("routes runtime and fs aliases through one lazy runtime flight", () => {
+    const code = generateExposeModuleCode(["@workspace/runtime"], "panel");
+    expect(code).toContain("__vibestudioRuntimeLoadPromise__");
+    expect(code).toContain(
+      'globalThis.__vibestudioModuleLoaders__["fs"] = __vibestudioLoadRuntime__'
+    );
+    expect(code).toContain(
+      'globalThis.__vibestudioModuleLoaders__["node:fs/promises"] = __vibestudioLoadRuntime__'
+    );
+  });
+
+  it("admits only declared import-map externals to the native dynamic-import fallback", () => {
+    const code = generateExposeModuleCode([], "panel", ["external-lib"]);
+    expect(code).toContain('__vibestudioNativeImportSpecifiers__.add("external-lib")');
+    expect(code).toContain("has no generated loader or import-map external");
   });
 });
 
@@ -203,6 +220,35 @@ describe("injectHtmlTransforms", () => {
       '<script src="./__loader.js" data-bundle-src="./bundle-ABC123.js"></script>'
     );
     expect(html).not.toContain('href="./bundle.css"');
+  });
+
+  it("loads shared base styles before panel-specific CSS", () => {
+    const sharedHref =
+      "../../__vibestudio/shared-style/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.css";
+    const html = injectHtmlTransforms(
+      '<html><head><link rel="stylesheet" href="./bundle.css" /></head><body><script src="./bundle.js"></script></body></html>',
+      "/panels/chat/",
+      true,
+      undefined,
+      "Agentic Chat",
+      true,
+      {
+        bundleSrc: "./bundle-ABC123.js",
+        cssHref: "./bundle-XYZ789.css",
+        sharedStyleHrefs: [sharedHref],
+      }
+    );
+
+    const shared = html.indexOf(`href="${sharedHref}"`);
+    const panel = html.indexOf('href="./bundle-XYZ789.css"');
+    expect(shared).toBeGreaterThan(-1);
+    expect(panel).toBeGreaterThan(shared);
+    expect(new URL(sharedHref, "http://localhost/panels/chat/").pathname).toBe(
+      "/__vibestudio/shared-style/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.css"
+    );
+    expect(new URL(sharedHref, "http://localhost/_workspace/dev/panels/chat/").pathname).toBe(
+      "/_workspace/dev/__vibestudio/shared-style/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.css"
+    );
   });
 });
 

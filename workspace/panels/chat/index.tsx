@@ -18,9 +18,8 @@ import {
 } from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
-import { AgenticChat } from "@workspace/agentic-chat/chat";
 import { ErrorBoundary } from "@workspace/agentic-chat/error-boundary";
 import type {
   ConnectionConfig,
@@ -54,6 +53,10 @@ import {
   sanitizeHandle,
 } from "./bootstrap.js";
 import { createAndSubscribeAgent } from "./agentLifecycle.js";
+
+const AgenticChat = lazy(() =>
+  import("@workspace/agentic-chat/chat").then((module) => ({ default: module.AgenticChat }))
+);
 
 function detectHostPlatform(): "mobile" | "electron" {
   const explicitPlatform = (globalThis as { __vibestudioHostPlatform?: unknown })
@@ -1085,25 +1088,35 @@ export default function ChatPanel() {
           </Callout.Root>
         </Theme>
       )}
-      <AgenticChat
-        config={config}
-        channelName={channelName}
-        channelConfig={stateArgs.channelConfig}
-        contextId={resolvedContextId}
-        metadata={panelMetadata}
-        tools={toolProvider}
-        actions={chatActions}
-        theme={theme}
-        installedAgents={installedAgents}
-        initialPrompt={initialPromptCaptured.current}
-        forceInitialPrompt={stateArgs.forceInitialPrompt}
-        forkNav={forkNav}
-        sandbox={sandboxConfig}
-        initialActionBarFile={stateArgs.actionBarFile ?? undefined}
-        initialActionBarProps={stateArgs.actionBarProps ?? undefined}
-        initialActionBarMaxHeight={stateArgs.actionBarMaxHeight ?? undefined}
-        onActionBarFileChange={handleActionBarFileChange}
-      />
+      <Suspense
+        fallback={
+          <Theme appearance={theme} {...appTheme}>
+            <Flex align="center" justify="center" style={{ minHeight: "100dvh" }}>
+              <Spinner size="1" />
+            </Flex>
+          </Theme>
+        }
+      >
+        <AgenticChat
+          config={config}
+          channelName={channelName}
+          channelConfig={stateArgs.channelConfig}
+          contextId={resolvedContextId}
+          metadata={panelMetadata}
+          tools={toolProvider}
+          actions={chatActions}
+          theme={theme}
+          installedAgents={installedAgents}
+          initialPrompt={initialPromptCaptured.current}
+          forceInitialPrompt={stateArgs.forceInitialPrompt}
+          forkNav={forkNav}
+          sandbox={sandboxConfig}
+          initialActionBarFile={stateArgs.actionBarFile ?? undefined}
+          initialActionBarProps={stateArgs.actionBarProps ?? undefined}
+          initialActionBarMaxHeight={stateArgs.actionBarMaxHeight ?? undefined}
+          onActionBarFileChange={handleActionBarFileChange}
+        />
+      </Suspense>
     </>
   );
 }

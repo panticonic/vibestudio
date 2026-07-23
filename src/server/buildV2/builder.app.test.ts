@@ -413,6 +413,80 @@ describe("buildUnit app builds", () => {
     expect(html).not.toContain('src="./bundle.js"');
   });
 
+  it("keeps exposed namespace barrels outside the panel startup graph", async () => {
+    const heavyDir = path.join(workspaceRoot, "packages", "heavy");
+    fs.mkdirSync(heavyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(heavyDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/heavy",
+        version: "0.1.0",
+        type: "module",
+        exports: { ".": "./index.ts" },
+      })
+    );
+    fs.writeFileSync(
+      path.join(heavyDir, "index.ts"),
+      `export const payload = ${JSON.stringify("heavy payload ".repeat(2048))};\n`
+    );
+    git(heavyDir, ["init", "-b", "main"]);
+    git(heavyDir, ["add", "."]);
+    git(heavyDir, [
+      "-c",
+      "user.name=Vibestudio Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-m",
+      "initial heavy package",
+    ]);
+
+    const panelDir = path.join(workspaceRoot, "panels", "lazy-expose");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-panels/lazy-expose",
+        version: "0.1.0",
+        type: "module",
+        vibestudio: {
+          entry: "index.ts",
+          exposeModules: ["@workspace/heavy"],
+        },
+        dependencies: { "@workspace/heavy": "workspace:*" },
+      })
+    );
+    fs.writeFileSync(path.join(panelDir, "index.ts"), "document.body.dataset.ready = 'true';\n");
+    git(panelDir, ["init", "-b", "main"]);
+    git(panelDir, ["add", "."]);
+    git(panelDir, [
+      "-c",
+      "user.name=Vibestudio Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-m",
+      "initial lazy expose panel",
+    ]);
+
+    const graph = discoverPackageGraph(workspaceRoot);
+    const result = await buildUnit(
+      graph.get("@workspace-panels/lazy-expose"),
+      "f".repeat(64),
+      graph,
+      workspaceRoot,
+      "state:test"
+    );
+    const primary = result.artifacts.find((artifact) => artifact.role === "primary");
+    const lazyArtifacts = result.artifacts.filter(
+      (artifact) => artifact.role === "asset" && artifact.path.endsWith(".js")
+    );
+
+    expect(primary?.content).not.toContain("heavy payload");
+    expect(lazyArtifacts.some((artifact) => artifact.content.includes("heavy payload"))).toBe(true);
+    expect(result.metadata.bundleReport?.lazy.bytes).toBeGreaterThan(0);
+  });
+
   it("rejects dist as an app build target", async () => {
     const appDir = path.join(workspaceRoot, "apps", "prebuilt");
     fs.mkdirSync(appDir, { recursive: true });

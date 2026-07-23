@@ -14,6 +14,12 @@ export interface FrameworkAdapter {
   /** Packages to deduplicate across chunks (e.g., react, react-dom) */
   readonly dedupePackages: readonly string[];
 
+  /**
+   * Globally order-safe base styles emitted as one content-addressed asset.
+   * Panel-specific/component styles stay in the panel CSS output.
+   */
+  readonly sharedStyles?: readonly string[];
+
   /** esbuild jsx mode */
   readonly jsx?: "automatic" | "preserve" | "transform";
 

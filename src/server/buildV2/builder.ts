@@ -82,6 +82,7 @@ import type {
   BuildProviderInput,
 } from "@vibestudio/shared/buildProvider";
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
+import { createPanelBundleReport } from "./panelBundleReport.js";
 
 const transformModulesCommonJs = createRequire(path.join(process.cwd(), "package.json"))(
   "@babel/plugin-transform-modules-commonjs"
@@ -1091,7 +1092,11 @@ export function injectHtmlTransforms(
   externals?: Record<string, string>,
   title?: string,
   usePanelLoader = true,
-  assetPaths: { bundleSrc?: string; cssHref?: string } = {}
+  assetPaths: {
+    bundleSrc?: string;
+    cssHref?: string;
+    sharedStyleHrefs?: readonly string[];
+  } = {}
 ): string {
   let result = html;
   const bundleSrc = assetPaths.bundleSrc ?? "./bundle.js";
@@ -1133,19 +1138,30 @@ export function injectHtmlTransforms(
       `$1\n  <base href="${escapeHtml(effectiveBaseHref)}">`
     );
   }
-  // If esbuild emitted CSS for imported component styles, make custom panel
-  // templates load it too. The fallback HTML path already includes this link.
-  if (hasCss) {
+  // Globally order-safe base styles must precede panel/component CSS so the
+  // existing cascade remains intact.
+  const sharedStyleLinks = (assetPaths.sharedStyleHrefs ?? [])
+    .map((href) => `<link rel="stylesheet" href="${escapeHtml(href)}" />`)
+    .join("\n  ");
+  if (hasCss || sharedStyleLinks) {
     const bundleCssLink =
       /(<link\b[^>]*\bhref\s*=\s*["'])(?:\.\/)?bundle\.css(?:\?[^"']*)?(["'][^>]*>)/i;
-    if (bundleCssLink.test(result)) {
-      result = result.replace(bundleCssLink, `$1${escapeHtml(cssHref)}$2`);
+    if (hasCss && bundleCssLink.test(result)) {
+      result = result.replace(
+        bundleCssLink,
+        `${sharedStyleLinks ? `${sharedStyleLinks}\n  ` : ""}$1${escapeHtml(cssHref)}$2`
+      );
     } else {
-      const cssLink = `<link rel="stylesheet" href="${escapeHtml(cssHref)}" />`;
+      const links = [
+        sharedStyleLinks,
+        ...(hasCss ? [`<link rel="stylesheet" href="${escapeHtml(cssHref)}" />`] : []),
+      ]
+        .filter(Boolean)
+        .join("\n  ");
       if (/<\/head>/i.test(result)) {
-        result = result.replace(/<\/head>/i, `  ${cssLink}\n</head>`);
+        result = result.replace(/<\/head>/i, `  ${links}\n</head>`);
       } else {
-        result = `${cssLink}\n${result}`;
+        result = `${links}\n${result}`;
       }
     }
   }
@@ -1182,6 +1198,7 @@ function generatePanelHtml(
     usePanelLoader?: boolean;
     bundleSrc?: string;
     cssHref?: string;
+    sharedStyleHrefs?: readonly string[];
   }
 ): string {
   const usePanelLoader = options.usePanelLoader ?? true;
@@ -1199,14 +1216,19 @@ function generatePanelHtml(
       options.externals,
       title,
       usePanelLoader,
-      { bundleSrc, cssHref }
+      { bundleSrc, cssHref, sharedStyleHrefs: options.sharedStyleHrefs }
     );
   }
 
   // Adapter-generated fallback HTML
-  const cssLink = options.hasCss
-    ? `\n  <link rel="stylesheet" href="${escapeHtml(cssHref)}" />`
-    : "";
+  const cssLink = [
+    ...(options.sharedStyleHrefs ?? []).map(
+      (href) => `<link rel="stylesheet" href="${escapeHtml(href)}" />`
+    ),
+    ...(options.hasCss ? [`<link rel="stylesheet" href="${escapeHtml(cssHref)}" />`] : []),
+  ]
+    .map((link) => `\n  ${link}`)
+    .join("");
   const importMapScript =
     options.externals && Object.keys(options.externals).length > 0
       ? `<script type="importmap">${JSON.stringify({ imports: options.externals })}</script>\n  `
@@ -1259,7 +1281,10 @@ function generatePanelHtml(
  */
 export type BootstrapTarget = "panel" | "worker";
 
-export function generateModuleMapBootstrap(target: BootstrapTarget = "panel"): string {
+export function generateModuleMapBootstrap(
+  target: BootstrapTarget = "panel",
+  nativeImportSpecifiers: readonly string[] = []
+): string {
   const base = `globalThis.__vibestudioModuleMap__ = globalThis.__vibestudioModuleMap__ || {};
 globalThis.__vibestudioRequire__ = function(id) {
   const mod = globalThis.__vibestudioModuleMap__[id];
@@ -1270,11 +1295,25 @@ globalThis.__vibestudioRequire__ = function(id) {
   if (target === "worker") return base;
 
   return `${base}
+globalThis.__vibestudioModuleLoaders__ = globalThis.__vibestudioModuleLoaders__ || {};
 globalThis.__vibestudioModuleLoadingPromises__ = globalThis.__vibestudioModuleLoadingPromises__ || {};
+globalThis.__vibestudioNativeImportSpecifiers__ = globalThis.__vibestudioNativeImportSpecifiers__ || new Set();
+${nativeImportSpecifiers
+  .map(
+    (specifier) =>
+      `globalThis.__vibestudioNativeImportSpecifiers__.add(${JSON.stringify(specifier)});`
+  )
+  .join("\n")}
 globalThis.__vibestudioRequireAsync__ = async function(id) {
   if (globalThis.__vibestudioModuleMap__[id]) return globalThis.__vibestudioModuleMap__[id];
   if (globalThis.__vibestudioModuleLoadingPromises__[id]) return globalThis.__vibestudioModuleLoadingPromises__[id];
-  const loadPromise = import(id).then((mod) => {
+  const loader = globalThis.__vibestudioModuleLoaders__[id];
+  const canImportNatively = globalThis.__vibestudioNativeImportSpecifiers__.has(id) ||
+    /^(?:https?:|data:|blob:|\\/|\\.{1,2}\\/)/.test(id);
+  if (!loader && !canImportNatively) {
+    throw new Error('Module "' + id + '" has no generated loader or import-map external');
+  }
+  const loadPromise = (loader ? loader() : import(id)).then((mod) => {
     globalThis.__vibestudioModuleMap__[id] = mod;
     return mod;
   }).finally(() => {
@@ -1287,7 +1326,8 @@ globalThis.__vibestudioRequireAsync__ = async function(id) {
 
 export function generateExposeModuleCode(
   exposeModules: string[],
-  target: BootstrapTarget = "panel"
+  target: BootstrapTarget = "panel",
+  nativeImportSpecifiers: readonly string[] = []
 ): string {
   let effectiveExposeModules = exposeModules;
   if (target === "worker" && exposeModules.includes(RUNTIME_MODULE)) {
@@ -1298,6 +1338,57 @@ export function generateExposeModuleCode(
       }
     }
   }
+  if (target === "panel") {
+    const loaderLines: string[] = [];
+    for (const dep of effectiveExposeModules) {
+      if (dep === RUNTIME_MODULE) continue;
+      loaderLines.push(
+        `globalThis.__vibestudioModuleLoaders__[${JSON.stringify(dep)}] = function() {
+  return import(${JSON.stringify(dep)}).then(function(mod) {
+    globalThis.__vibestudioModuleMap__[${JSON.stringify(dep)}] = mod;
+    return mod;
+  });
+};`
+      );
+    }
+
+    if (effectiveExposeModules.includes(RUNTIME_MODULE)) {
+      loaderLines.push(`var __vibestudioRuntimeLoadPromise__;
+function __vibestudioLoadRuntime__() {
+  if (__vibestudioRuntimeLoadPromise__) return __vibestudioRuntimeLoadPromise__;
+  __vibestudioRuntimeLoadPromise__ = import(${JSON.stringify(RUNTIME_MODULE)}).then(function(mod) {
+    var map = globalThis.__vibestudioModuleMap__;
+    map[${JSON.stringify(RUNTIME_MODULE)}] = mod;
+    var _fs = mod["fs"];
+    if (_fs) {
+      var fsShim = { promises: _fs, default: null, constants: {} };
+      var methods = ["readFile","writeFile","readdir","stat","lstat","mkdir","rmdir","unlink","rename","copyFile","access","rm","symlink","readlink","realpath","appendFile","chmod","truncate","utimes","open"];
+      methods.forEach(function(method) {
+        if (_fs[method]) fsShim[method] = function() { return _fs[method].apply(_fs, arguments); };
+      });
+      fsShim.default = fsShim;
+      map["fs"] = fsShim; map["node:fs"] = fsShim;
+      map["fs/promises"] = _fs; map["node:fs/promises"] = _fs;
+    }
+    return mod;
+  }).catch(function(error) {
+    __vibestudioRuntimeLoadPromise__ = undefined;
+    throw error;
+  });
+  return __vibestudioRuntimeLoadPromise__;
+}
+globalThis.__vibestudioModuleLoaders__[${JSON.stringify(RUNTIME_MODULE)}] = __vibestudioLoadRuntime__;
+globalThis.__vibestudioModuleLoaders__["fs"] = __vibestudioLoadRuntime__;
+globalThis.__vibestudioModuleLoaders__["node:fs"] = __vibestudioLoadRuntime__;
+globalThis.__vibestudioModuleLoaders__["fs/promises"] = __vibestudioLoadRuntime__;
+globalThis.__vibestudioModuleLoaders__["node:fs/promises"] = __vibestudioLoadRuntime__;`);
+    }
+
+    return `${generateModuleMapBootstrap(target, nativeImportSpecifiers)}
+${loaderLines.join("\n")}
+`;
+  }
+
   const importLines = effectiveExposeModules.map(
     (dep, index) => `import * as __mod${index}__ from ${JSON.stringify(dep)};`
   );
@@ -1788,7 +1879,10 @@ async function buildPanel(
 
   // Generate expose/wrapper entries.
   const exposePath = path.join(outdir, "_expose.js");
-  fs.writeFileSync(exposePath, generateExposeModuleCode(exposeModules, "panel"));
+  fs.writeFileSync(
+    exposePath,
+    generateExposeModuleCode(exposeModules, "panel", externalSpecifiers)
+  );
 
   const wrapperCode = generatePanelEntry(
     exposePath,
@@ -1799,11 +1893,24 @@ async function buildPanel(
   const wrapperPath = path.join(outdir, "_entry.js");
   fs.writeFileSync(wrapperPath, wrapperCode);
 
-  // Keep all eagerly imported code in the primary entry. `splitting: true`
-  // still emits chunks for genuine dynamic imports, but synthetic entry points
-  // for exposed/heavy modules turned eager dependencies into a remote startup
-  // waterfall without making any of them lazy.
-  const entryPoints: Record<string, string> = { bundle: wrapperPath };
+  const sharedStyles =
+    node.kind === "app" ? [] : normalizeManifestSpecList([...(adapter.sharedStyles ?? [])]);
+  const sharedStyleEntryPath =
+    sharedStyles.length > 0 ? path.join(outdir, "_shared-styles.css") : null;
+  if (sharedStyleEntryPath) {
+    fs.writeFileSync(
+      sharedStyleEntryPath,
+      `${sharedStyles.map((specifier) => `@import ${JSON.stringify(specifier)};`).join("\n")}\n`
+    );
+  }
+
+  // Exposed namespaces are literal dynamic imports in this same graph, so
+  // esbuild keeps barrel-only code lazy while sharing React, runtime
+  // initialization, and every other singleton with the panel entry.
+  const entryPoints: Record<string, string> = {
+    bundle: wrapperPath,
+    ...(sharedStyleEntryPath ? { "shared-styles": sharedStyleEntryPath } : {}),
+  };
 
   // Build plugins: resolve plugin uses materialized source paths.
   const plugins: esbuild.Plugin[] = [
@@ -1866,9 +1973,10 @@ async function buildPanel(
 
   try {
     const result = await esbuild.build(esbuildOptions);
+    const metafile = result.metafile;
 
-    if (isVerboseBuildLogEnabled() && result.metafile) {
-      const outputs = Object.entries(result.metafile.outputs);
+    if (isVerboseBuildLogEnabled() && metafile) {
+      const outputs = Object.entries(metafile.outputs);
       const jsChunks = outputs
         .filter(
           ([outputPath, meta]) =>
@@ -1887,11 +1995,19 @@ async function buildPanel(
     }
 
     // Read outputs
-    const outputPaths = Object.keys(result.metafile?.outputs ?? {});
+    const outputPaths = Object.keys(metafile?.outputs ?? {});
     const bundleOutputPath =
       outputPaths.find((outputPath) => isPanelEntryJsOutput(outputPath)) ??
       path.join(outdir, "bundle.js");
     const cssOutputPath = outputPaths.find((outputPath) => isPanelEntryCssOutput(outputPath));
+    const sharedStyleOutputPath = sharedStyleEntryPath
+      ? outputPaths.find(
+          (outputPath) =>
+            outputPath.endsWith(".css") &&
+            path.resolve(metafile?.outputs[outputPath]?.entryPoint ?? "") ===
+              path.resolve(sharedStyleEntryPath)
+        )
+      : undefined;
     const bundleArtifactPath = relativeBuildOutputPath(outdir, bundleOutputPath);
     const cssArtifactPath = cssOutputPath ? relativeBuildOutputPath(outdir, cssOutputPath) : null;
     const bundlePath = path.join(outdir, ...bundleArtifactPath.split("/"));
@@ -1899,6 +2015,26 @@ async function buildPanel(
 
     const bundle = fs.existsSync(bundlePath) ? fs.readFileSync(bundlePath, "utf-8") : "";
     const css = cssPath && fs.existsSync(cssPath) ? fs.readFileSync(cssPath, "utf-8") : undefined;
+    const rawBundleReport = metafile
+      ? createPanelBundleReport(
+          metafile,
+          bundleOutputPath,
+          cssOutputPath,
+          sharedStyleOutputPath ? [sharedStyleOutputPath] : []
+        )
+      : undefined;
+    const bundleReport = rawBundleReport
+      ? {
+          ...rawBundleReport,
+          entryOutput: bundleArtifactPath,
+          initialArtifacts: rawBundleReport.initialArtifacts.map((outputPath) =>
+            relativeBuildOutputPath(outdir, outputPath)
+          ),
+        }
+      : undefined;
+    if (bundleReport && isVerboseBuildLogEnabled()) {
+      console.log(`[BuildV2] ${node.name}: panel bundle report`, bundleReport);
+    }
 
     const artifactEntries: BuildArtifactInput[] = [
       {
@@ -1909,6 +2045,32 @@ async function buildPanel(
         content: bundle,
       },
     ];
+    let sharedStyleMetadata: BuildMetadata["sharedStyles"];
+    if (sharedStyleOutputPath) {
+      const sharedStyleContent = fs.readFileSync(path.resolve(sharedStyleOutputPath), "utf8");
+      const digest = createHash("sha256").update(sharedStyleContent).digest("hex");
+      const sharedStyleArtifactPath = `shared-style-${digest}.css`;
+      // Keep the shared URL relative to the two-segment panel source. An
+      // origin-absolute URL escapes routed workspaces (`/_workspace/:id/...`)
+      // and reaches the hub namespace instead of this workspace's panel server.
+      // Resolving ../../ from /panels/name/ yields the same workspace-local URL
+      // for every panel, preserving cross-panel browser caching.
+      const url = `../../__vibestudio/shared-style/${digest}.css`;
+      artifactEntries.push({
+        path: sharedStyleArtifactPath,
+        role: "shared-style",
+        contentType: "text/css; charset=utf-8",
+        encoding: "utf8",
+        content: sharedStyleContent,
+      });
+      sharedStyleMetadata = [
+        {
+          digest,
+          contentType: "text/css; charset=utf-8",
+          url,
+        },
+      ];
+    }
     if (css) {
       artifactEntries.push({
         path: cssArtifactPath ?? "bundle.css",
@@ -1920,8 +2082,8 @@ async function buildPanel(
     }
 
     // Collect assets (chunks, images, etc.)
-    if (result.metafile) {
-      for (const outputPath of Object.keys(result.metafile.outputs)) {
+    if (metafile) {
+      for (const outputPath of Object.keys(metafile.outputs)) {
         // esbuild metafile keys are relative to absWorkingDir (defaults to
         // process.cwd()), NOT relative to outdir.  path.resolve uses CWD,
         // matching esbuild's convention.
@@ -1929,7 +2091,12 @@ async function buildPanel(
 
         // Skip main bundle and CSS
         const relativeName = path.relative(outdir, absPath).replace(/\\/g, "/");
-        if (relativeName === bundleArtifactPath || relativeName === cssArtifactPath) continue;
+        if (
+          relativeName === bundleArtifactPath ||
+          relativeName === cssArtifactPath ||
+          outputPath === sharedStyleOutputPath
+        )
+          continue;
         if (!fs.existsSync(absPath)) continue;
 
         const ext = path.extname(absPath).toLowerCase();
@@ -1955,6 +2122,7 @@ async function buildPanel(
       usePanelLoader: node.kind !== "app",
       bundleSrc: relativeAssetHref(bundleArtifactPath),
       cssHref: cssArtifactPath ? relativeAssetHref(cssArtifactPath) : undefined,
+      sharedStyleHrefs: sharedStyleMetadata?.map((style) => style.url),
     });
 
     artifactEntries.push({
@@ -1975,6 +2143,8 @@ async function buildPanel(
       sourcemap,
       authority,
       framework: resolved.framework,
+      ...(bundleReport ? { bundleReport } : {}),
+      ...(sharedStyleMetadata ? { sharedStyles: sharedStyleMetadata } : {}),
       details:
         node.kind === "app"
           ? {

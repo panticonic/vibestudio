@@ -43,7 +43,14 @@ export interface BuildArtifacts {
   entries: BuildArtifactInput[];
 }
 
-export type BuildArtifactRole = "primary" | "asset" | "html" | "css" | "map" | "wasm";
+export type BuildArtifactRole =
+  | "primary"
+  | "asset"
+  | "html"
+  | "css"
+  | "shared-style"
+  | "map"
+  | "wasm";
 export type BuildArtifactEncoding = "utf8" | "base64";
 
 export interface BuildArtifactInput {
@@ -61,6 +68,8 @@ export interface BuildArtifactManifestEntry {
   role: BuildArtifactRole;
   contentType: string;
   encoding: BuildArtifactEncoding;
+  /** Stored byte length, used to reject truncation without loading the payload. */
+  byteLength?: number;
   platform?: string;
   integrity?: string;
 }
@@ -136,6 +145,14 @@ export interface BuildMetadata {
   sourceStateHash: string | null;
   sourcemap: boolean;
   framework?: string;
+  /** Deterministic report-only panel payload baseline derived from esbuild. */
+  bundleReport?: import("./panelBundleReport.js").PanelBundleReport;
+  /** Content-addressed base styles loaded before panel-specific CSS. */
+  sharedStyles?: Array<{
+    digest: string;
+    contentType: string;
+    url: string;
+  }>;
   /** Authority sealed from the exact materialized source manifest. */
   authority?: UnitAuthorityManifest;
   /**
@@ -158,7 +175,10 @@ export interface BuildResult {
   sourceStateHash: string | null;
   /** Build metadata */
   metadata: BuildMetadata;
-  /** Target-agnostic artifact manifest with content loaded. */
+  /**
+   * Target-agnostic artifact manifest. Persisted payloads are loaded and
+   * integrity-checked on first access to `content`, then retained in memory.
+   */
   artifacts: BuildArtifactWithContent[];
 }
 
@@ -315,12 +335,19 @@ function readArtifactContent(dir: string, entry: BuildArtifactManifestEntry): st
     : fs.readFileSync(filePath, "utf-8");
 }
 
+function artifactByteLength(entry: Pick<BuildArtifactInput, "content" | "encoding">): number {
+  return (entry.encoding ?? "utf8") === "base64"
+    ? Buffer.from(entry.content, "base64").byteLength
+    : Buffer.byteLength(entry.content, "utf8");
+}
+
 function manifestForEntry(entry: BuildArtifactInput): BuildArtifactManifestEntry {
   return {
     path: entry.path,
     role: entry.role,
     contentType: entry.contentType,
     encoding: entry.encoding ?? "utf8",
+    byteLength: artifactByteLength(entry),
     ...(entry.platform ? { platform: entry.platform } : {}),
     ...(entry.integrity ? { integrity: entry.integrity } : {}),
   };
@@ -348,6 +375,31 @@ function assertCanonicalArtifactManifestPaths(
     }
     seen.add(canonical);
   }
+}
+
+function lazyArtifactContent(
+  dir: string,
+  entry: BuildArtifactManifestEntry
+): BuildArtifactWithContent {
+  let loaded = false;
+  let content = "";
+  const artifact = { ...entry } as BuildArtifactWithContent;
+  Object.defineProperty(artifact, "content", {
+    enumerable: true,
+    configurable: false,
+    get() {
+      if (!loaded) {
+        const next = readArtifactContent(dir, entry);
+        if (entry.integrity !== artifactIntegrity({ ...entry, content: next })) {
+          throw new Error(`Build artifact integrity mismatch: ${entry.path}`);
+        }
+        content = next;
+        loaded = true;
+      }
+      return content;
+    },
+  });
+  return artifact;
 }
 
 function integrityHex(integrity: string): string | null {
@@ -500,9 +552,9 @@ function verifiedExecutionIdentity(
 }
 
 export function has(key: string): boolean {
-  // Cache presence means a fully verified immutable build, not merely a
-  // metadata sentinel. This is especially important during cache-schema
-  // migrations: state triggers must not announce legacy entries as complete.
+  // Cache presence means a complete, identity-verified manifest whose files
+  // exist at their sealed lengths. Payload hashes are verified when consumed.
+  // This keeps lazy artifacts off startup while rejecting partial cache trees.
   return get(key) !== null;
 }
 
@@ -538,22 +590,29 @@ function readBuildDir(dir: string, expectedBuildKey: string): BuildResult | null
     ) as BuildArtifactManifestEntry[];
     assertCanonicalArtifactManifestPaths(storedManifest);
     const artifacts = storedManifest.map((entry) => {
-      if (!fs.existsSync(path.join(dir, entry.path))) {
+      const artifactPath = path.join(dir, entry.path);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(artifactPath);
+      } catch {
         throw new Error(`Build artifact is missing: ${entry.path}`);
       }
-      const artifact = { ...entry, content: readArtifactContent(dir, entry) };
-      if (entry.integrity !== artifactIntegrity(artifact)) {
-        throw new Error(`Build artifact integrity mismatch: ${entry.path}`);
+      if (
+        !stat.isFile() ||
+        !Number.isSafeInteger(entry.byteLength) ||
+        (entry.byteLength ?? -1) < 0 ||
+        stat.size !== entry.byteLength
+      ) {
+        throw new Error(`Build artifact size mismatch: ${entry.path}`);
       }
-      return artifact;
+      return lazyArtifactContent(dir, entry);
     });
-    const artifactManifest = artifacts.map(({ content: _content, ...entry }) => entry);
-    verifiedExecutionIdentity(metadata, artifactManifest);
+    verifiedExecutionIdentity(metadata, storedManifest);
     return {
       dir,
       buildKey: expectedBuildKey,
       sourceStateHash: metadata.sourceStateHash,
-      metadata: metadataForEntries(metadata, artifactManifest),
+      metadata: metadataForEntries(metadata, storedManifest),
       artifacts,
     };
   } catch {
@@ -703,7 +762,7 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
   } catch (err: unknown) {
     if (isFileSystemErrorCode(err, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) {
       // Another build may have won the race. Accept it only after the same
-      // integrity + execution-identity verification used by normal reads.
+      // manifest + execution-identity verification used by normal reads.
       // Legacy or corrupt cache directories also have a metadata sentinel, so
       // sentinel presence alone must never prevent the current build replacing
       // them during an identity-schema migration.

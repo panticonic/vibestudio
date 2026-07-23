@@ -227,10 +227,10 @@ export function persistEvState(state: Omit<PersistedEvState, "version">): void {
  * Increment when build logic changes (plugins, esbuild options, shims) OR when
  * the build-key derivation itself changes, to invalidate all cached builds.
  *
- * "21": panel/browser bundles use linked external source maps, preload
- * runtime/bootstrap assets, and deduplicate shared React/Radix dependencies.
+ * "25": panel bundles keep lazy namespaces in one split ESM graph, record
+ * metadata-only payload reports, and persist byte-length-sealed lazy artifacts.
  */
-const BUILD_CACHE_VERSION = "22";
+const BUILD_CACHE_VERSION = "25";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the
