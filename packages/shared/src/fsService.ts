@@ -13,6 +13,7 @@ import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import * as path from "path";
 import { randomBytes } from "node:crypto";
+import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { FileHandle as NodeFileHandle } from "fs/promises";
 import type { ServiceContext } from "./serviceDispatcher.js";
 import type { RpcCausalParent } from "@vibestudio/rpc";
@@ -59,6 +60,23 @@ interface TrackedHandle {
   handle: NodeFileHandle;
   panelId: string;
   timer: ReturnType<typeof setTimeout>;
+  /** Exact semantic file versions whose bytes this handle can reveal. */
+  ingestion: ContextIngestionDescriptor[];
+  ingestionRecorded: boolean;
+}
+
+interface ContextIngestionDescriptor {
+  key: string;
+  derivedClass: "internal" | "external";
+}
+
+function ingestionDescriptorForVcsRead(
+  result: NonNullable<VcsReadFileResult>
+): ContextIngestionDescriptor {
+  return {
+    key: `file:${encodeURIComponent(result.repositoryId)}/${encodeURIComponent(result.fileId)}@${result.authoredChangeId}`,
+    derivedClass: result.contentClass,
+  };
 }
 
 interface FsCallScope {
@@ -576,6 +594,52 @@ async function managedWorkspaceFiles(
     } while (cursor);
   }
   return files;
+}
+
+async function managedWorkspaceFilesForPaths(
+  bridge: FsVcsBridge,
+  snapshot: ManagedWorkspaceSnapshot,
+  workspacePaths: ReadonlySet<string>
+): Promise<Array<ManagedWorkspaceRepository & VcsListFilesResult["files"][number]>> {
+  const files = new Map<string, ManagedWorkspaceRepository & VcsListFilesResult["files"][number]>();
+  for (const repository of snapshot.repositories) {
+    const prefixes = new Set<string>();
+    for (const workspacePath of workspacePaths) {
+      if (
+        workspacePath === repository.repoPath ||
+        repository.repoPath.startsWith(`${workspacePath}/`)
+      ) {
+        prefixes.clear();
+        prefixes.add("");
+        break;
+      }
+      if (workspacePath.startsWith(`${repository.repoPath}/`)) {
+        prefixes.add(workspacePath.slice(repository.repoPath.length + 1));
+      }
+    }
+    if (prefixes.size === 0) continue;
+
+    for (const prefix of prefixes) {
+      let cursor: string | undefined;
+      do {
+        const page = await bridge.listFiles({
+          state: snapshot.state,
+          repositoryId: repository.repositoryId,
+          ...(prefix ? { prefix } : {}),
+          limit: 500,
+          ...(cursor ? { cursor } : {}),
+        });
+        for (const file of page.files) {
+          files.set(`${repository.repositoryId}\u0000${file.fileId}`, {
+            ...repository,
+            ...file,
+          });
+        }
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+    }
+  }
+  return [...files.values()];
 }
 
 /**
@@ -1244,14 +1308,18 @@ export class FsService {
   // FileHandle helpers
   // =========================================================================
 
-  private trackHandle(handle: NodeFileHandle, panelId: string): number {
+  private trackHandle(
+    handle: NodeFileHandle,
+    panelId: string,
+    ingestion: ContextIngestionDescriptor[] = []
+  ): number {
     const id = this.nextHandleId++;
     const timer = setTimeout(() => {
       log.info(`Closing idle file handle ${id} for ${panelId}`);
       handle.close().catch(() => {});
       this.openHandles.delete(id);
     }, HANDLE_IDLE_TIMEOUT_MS);
-    this.openHandles.set(id, { handle, panelId, timer });
+    this.openHandles.set(id, { handle, panelId, timer, ingestion, ingestionRecorded: false });
     return id;
   }
 
@@ -1268,6 +1336,87 @@ export class FsService {
       this.openHandles.delete(handleId);
     }, HANDLE_IDLE_TIMEOUT_MS);
     return tracked;
+  }
+
+  /**
+   * Resolve caller-visible projected paths back to exact semantic file
+   * versions. A filename is content too, so directory paths cover every file
+   * beneath that returned entry. The VCS read supplies authorship/class facts
+   * missing from the deliberately lightweight list-files projection.
+   */
+  private async ingestionForProjectedPaths(
+    bridge: FsVcsBridge | null,
+    scope: FsCallScope,
+    ctx: ServiceContext,
+    absolutePaths: readonly string[]
+  ): Promise<ContextIngestionDescriptor[]> {
+    if (
+      !bridge ||
+      scope.unrestricted ||
+      !scope.contextId ||
+      !ctx.caller.agentBinding ||
+      !this.recordContextIngestion ||
+      absolutePaths.length === 0
+    ) {
+      return [];
+    }
+
+    const exposed = new Set(
+      absolutePaths.flatMap((absolutePath) => {
+        const relative = path.relative(scope.root, absolutePath).split(path.sep).join("/");
+        return relative === "" || relative === "." || relative.startsWith("../") ? [] : [relative];
+      })
+    );
+    if (exposed.size === 0) return [];
+
+    const snapshot = await managedWorkspaceSnapshot(bridge, scope.contextId);
+    const files = await managedWorkspaceFilesForPaths(bridge, snapshot, exposed);
+    const selected = files
+      .filter((file) => {
+        const workspacePath = `${file.repoPath}/${file.path}`;
+        for (const exposedPath of exposed) {
+          if (workspacePath === exposedPath || workspacePath.startsWith(`${exposedPath}/`)) {
+            return true;
+          }
+        }
+        return false;
+      })
+      .sort((a, b) => compareUtf16CodeUnits(`${a.repoPath}/${a.path}`, `${b.repoPath}/${b.path}`));
+
+    const descriptors = new Map<string, ContextIngestionDescriptor>();
+    for (const file of selected) {
+      const result = await bridge.readFile({
+        state: snapshot.state,
+        repositoryId: file.repositoryId,
+        file: { kind: "id", fileId: file.fileId },
+      });
+      if (!result) {
+        throw codedError(
+          "EINTEGRITY",
+          `Projected file ${JSON.stringify(`${file.repoPath}/${file.path}`)} disappeared from ` +
+            `the exact semantic state while resolving context lineage`
+        );
+      }
+      const descriptor = ingestionDescriptorForVcsRead(result);
+      descriptors.set(descriptor.key, descriptor);
+    }
+    return [...descriptors.values()];
+  }
+
+  private async recordProjectedIngestion(
+    ctx: ServiceContext,
+    via: string,
+    descriptors: readonly ContextIngestionDescriptor[]
+  ): Promise<void> {
+    if (!this.recordContextIngestion || !ctx.caller.agentBinding) return;
+    for (const descriptor of descriptors) {
+      await this.recordContextIngestion(ctx, {
+        key: descriptor.key,
+        via,
+        classification: "derived",
+        derivedClass: descriptor.derivedClass,
+      });
+    }
   }
 
   // =========================================================================
@@ -1383,11 +1532,12 @@ export class FsService {
         file: { kind: "path", path: routed.repoRelPath },
       });
       if (result && exposeToCaller && this.recordContextIngestion && ctx.caller.agentBinding) {
+        const descriptor = ingestionDescriptorForVcsRead(result);
         await this.recordContextIngestion(ctx, {
-          key: `file:${encodeURIComponent(result.repositoryId)}/${encodeURIComponent(result.fileId)}@${result.authoredChangeId}`,
+          key: descriptor.key,
           via: "fs-read-file",
           classification: "derived",
-          derivedClass: result.contentClass,
+          derivedClass: descriptor.derivedClass,
         });
       }
       return result?.content ?? null;
@@ -1952,21 +2102,64 @@ export class FsService {
         const recursive = opts?.recursive ?? false;
         if (opts?.withFileTypes) {
           const entries = await fs.readdir(p, { withFileTypes: true, recursive });
+          const ingestion = await this.ingestionForProjectedPaths(
+            bridge,
+            scope,
+            ctx,
+            entries.map((entry) => path.join(entry.parentPath, entry.name))
+          );
+          await this.recordProjectedIngestion(ctx, "fs-readdir", ingestion);
           // For recursive listings, report names relative to the listed
           // directory (Node's Dirent.name is just the basename).
           return entries.map((d) =>
             serializeDirent(d, recursive ? relativeDirentName(p, d) : d.name)
           );
         }
-        return fs.readdir(p, recursive ? { recursive } : undefined);
+        const entries = await fs.readdir(p, recursive ? { recursive } : undefined);
+        const ingestion = await this.ingestionForProjectedPaths(
+          bridge,
+          scope,
+          ctx,
+          entries.map((entry) => path.join(p, entry))
+        );
+        await this.recordProjectedIngestion(ctx, "fs-readdir", ingestion);
+        return entries;
       }
 
       case "grep": {
-        return this.grep(scope, args[0] as string, args[1] as GrepOptions | undefined);
+        const result = await this.grep(
+          scope,
+          args[0] as string,
+          args[1] as GrepOptions | undefined
+        );
+        const ingestion = await this.ingestionForProjectedPaths(
+          bridge,
+          scope,
+          ctx,
+          result.matches.map((match) =>
+            scope.unrestricted ? match.file : path.join(scope.root, match.file.replace(/^\/+/, ""))
+          )
+        );
+        await this.recordProjectedIngestion(ctx, "fs-grep", ingestion);
+        return result;
       }
 
       case "glob": {
-        return this.glob(scope, args[0] as string, args[1] as GlobOptions | undefined);
+        const result = await this.glob(
+          scope,
+          args[0] as string,
+          args[1] as GlobOptions | undefined
+        );
+        const ingestion = await this.ingestionForProjectedPaths(
+          bridge,
+          scope,
+          ctx,
+          result.map((file) =>
+            scope.unrestricted ? file : path.join(scope.root, file.replace(/^\/+/, ""))
+          )
+        );
+        await this.recordProjectedIngestion(ctx, "fs-glob", ingestion);
+        return result;
       }
 
       case "mkdir": {
@@ -2133,8 +2326,9 @@ export class FsService {
         const p = await resolveFsFilePath(scope, args[0] as string);
         const flags = (args[1] as string) ?? "r";
         const mode = args[2] as number | undefined;
+        const ingestion = await this.ingestionForProjectedPaths(bridge, scope, ctx, [p]);
         const handle = await fs.open(p, flags, mode);
-        const handleId = this.trackHandle(handle, panelId);
+        const handleId = this.trackHandle(handle, panelId, ingestion);
         return { handleId };
       }
 
@@ -2147,6 +2341,10 @@ export class FsService {
         const position = args[2] as number | null;
         const buf = Buffer.alloc(length);
         const result = await tracked.handle.read(buf, 0, length, position);
+        if (result.bytesRead > 0 && !tracked.ingestionRecorded) {
+          await this.recordProjectedIngestion(ctx, "fs-handle-read", tracked.ingestion);
+          tracked.ingestionRecorded = true;
+        }
         return {
           bytesRead: result.bytesRead,
           buffer: encodeBinary(buf.subarray(0, result.bytesRead)),

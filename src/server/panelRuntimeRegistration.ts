@@ -317,6 +317,18 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           }
           await deps.persistWorkspaceConfigField(ctx, key, value);
         },
+        contextFiles: {
+          readFile: async (ctx, filePath) => {
+            const fsService =
+              container.get<import("@vibestudio/shared/fsService").FsService>("fsService");
+            return (await fsService.handleCall(ctx, "readFile", [filePath, "utf8"])) as string;
+          },
+          glob: async (ctx, pattern, options) => {
+            const fsService =
+              container.get<import("@vibestudio/shared/fsService").FsService>("fsService");
+            return (await fsService.handleCall(ctx, "glob", [pattern, options])) as string[];
+          },
+        },
         recordContextIngestion: deps.recordContextIngestion,
         listUnits: deps.listWorkspaceUnits,
         restartUnit: deps.restartWorkspaceUnit,

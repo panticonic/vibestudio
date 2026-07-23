@@ -6,9 +6,9 @@
  * that control plane.
  */
 
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
@@ -23,7 +23,7 @@ import type {
   HostTargetSelection,
   HostTargetSelectionInput,
 } from "@vibestudio/shared/hostTargets";
-import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
+import { normalizeWorkspaceRepoPath, splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
 import type {
@@ -39,7 +39,7 @@ import type {
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { ContextIngestionRecorder } from "./contextIntegrityStore.js";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
-import { listWorkspaceSkillEntries } from "../vcsHost/workspaceSkills.js";
+import { parseSkillFrontmatter } from "../vcsHost/workspaceSkills.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 
 // Wire data types live in the shared schema module (single source of truth
@@ -66,6 +66,15 @@ export interface WorkspaceServiceDeps {
   treeScanner?: WorkspaceTreeScanner;
   getConfig: () => WorkspaceConfig;
   setConfigField: (key: string, value: unknown, ctx: ServiceContext) => void | Promise<void>;
+  /**
+   * Context-bound semantic file access. This is the single resource-loading
+   * path for agents and installed units; production delegates to FsService so
+   * exact VCS lineage is latched before any name or byte reaches the caller.
+   */
+  contextFiles: {
+    readFile: (ctx: ServiceContext, filePath: string) => Promise<string>;
+    glob: (ctx: ServiceContext, pattern: string, options?: { path?: string }) => Promise<string[]>;
+  };
   /** Durably advance a model session's content latch before read bytes are returned. */
   recordContextIngestion?: ContextIngestionRecorder;
   /** Workspace-unit operational status rows, including extension health. */
@@ -202,13 +211,13 @@ function normalizeWorkspaceRelativePath(input: string): string {
   return normalized;
 }
 
-async function resolveSkillMdPath(workspaceRoot: string, nameOrPath: string): Promise<string> {
+function resolveSkillMdPath(nameOrPath: string): string {
   if (typeof nameOrPath !== "string" || nameOrPath.length === 0) {
     throw new Error(`Invalid workspace repo path: ${nameOrPath}`);
   }
   try {
     const repoPath = normalizeWorkspaceRepoPath(nameOrPath);
-    return path.join(workspaceRoot, repoPath, "SKILL.md");
+    return `/${repoPath}/SKILL.md`;
   } catch {
     throw new Error(`Invalid workspace repo path: ${nameOrPath}`);
   }
@@ -466,21 +475,6 @@ async function requireWorkspaceApproval(
 }
 
 export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefinition {
-  const stampDerivedRead = async (
-    ctx: ServiceContext,
-    repositoryId: string,
-    fileId: string,
-    content: string,
-    via: string
-  ): Promise<void> => {
-    if (!deps.recordContextIngestion || !ctx.caller.agentBinding) return;
-    const digest = createHash("sha256").update(content, "utf8").digest("hex");
-    await deps.recordContextIngestion(ctx, {
-      key: `file:${encodeURIComponent(repositoryId)}/${encodeURIComponent(fileId)}@${digest}`,
-      via,
-      classification: "derived",
-    });
-  };
   const activeWorkspaceName = () => deps.activeWorkspaceName ?? deps.getConfig().id;
   const stampExternalUnitLogs = async (
     ctx: ServiceContext,
@@ -561,13 +555,8 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       // -----------------------------------------------------------------
 
       getAgentsMd: async (ctx) => {
-        // Read the workspace-level AGENTS.md from meta/. Missing file is not
-        // an error — an empty string lets the agent resource loader fall back.
-        const filePath = path.join(workspace.path, "meta", "AGENTS.md");
         try {
-          const content = await fs.readFile(filePath, "utf-8");
-          await stampDerivedRead(ctx, "meta", "AGENTS.md", content, "prompt-agents-md");
-          return content;
+          return await deps.contextFiles.readFile(ctx, "/meta/AGENTS.md");
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
           throw err;
@@ -575,26 +564,37 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       },
 
       listSkills: async (ctx) => {
-        const entries = await listWorkspaceSkillEntries(workspace.path);
-        for (const entry of entries) {
-          const content = await fs.readFile(path.join(workspace.path, entry.skillPath), "utf8");
-          await stampDerivedRead(ctx, entry.dirPath, "SKILL.md", content, "prompt-skill-index");
-        }
-        return entries;
+        const paths = [
+          ...(await deps.contextFiles.glob(ctx, "*/SKILL.md", { path: "/" })),
+          ...(await deps.contextFiles.glob(ctx, "*/*/SKILL.md", { path: "/" })),
+        ];
+        const entries = await Promise.all(
+          [...new Set(paths)].map(async (skillPath) => {
+            const relative = skillPath.replace(/^\/+/, "");
+            const split = splitRepoPath(relative);
+            if (!split || split.repoRelPath !== "SKILL.md") return null;
+            try {
+              normalizeWorkspaceRepoPath(split.repoPath);
+            } catch {
+              return null;
+            }
+            const content = await deps.contextFiles.readFile(ctx, `/${relative}`);
+            const frontmatter = parseSkillFrontmatter(content);
+            return {
+              name: frontmatter.name ?? path.posix.basename(split.repoPath),
+              description: frontmatter.description ?? "",
+              dirPath: split.repoPath,
+              skillPath: relative,
+            };
+          })
+        );
+        return entries
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+          .sort((left, right) => compareUtf16CodeUnits(left.dirPath, right.dirPath));
       },
 
       readSkill: async (ctx, [nameOrPath]) => {
-        const skillMdPath = await resolveSkillMdPath(workspace.path, nameOrPath);
-        const content = await fs.readFile(skillMdPath, "utf-8");
-        const relative = path.relative(workspace.path, skillMdPath).replaceAll(path.sep, "/");
-        await stampDerivedRead(
-          ctx,
-          path.posix.dirname(relative),
-          path.posix.basename(relative),
-          content,
-          "skill-read"
-        );
-        return content;
+        return deps.contextFiles.readFile(ctx, resolveSkillMdPath(nameOrPath));
       },
 
       sourceTree: () => {

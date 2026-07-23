@@ -29,7 +29,7 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { RpcCaller } from "@vibestudio/rpc";
@@ -101,6 +101,15 @@ function makeWorkspace() {
   };
 }
 
+const unavailableContextFiles = {
+  readFile: async (): Promise<string> => {
+    throw new Error("context files are outside this test");
+  },
+  glob: async (): Promise<string[]> => {
+    throw new Error("context files are outside this test");
+  },
+};
+
 function grantedApproval(): UserlandApprovalChoice {
   return { kind: "choice", choice: "allow" };
 }
@@ -108,6 +117,7 @@ function grantedApproval(): UserlandApprovalChoice {
 function makeService() {
   return createWorkspaceService({
     workspace: makeWorkspace(),
+    contextFiles: unavailableContextFiles,
     getConfig: () => makeConfig(),
     setConfigField: vi.fn(),
     approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
@@ -238,6 +248,7 @@ describe("workspace service handler", () => {
   it("getActive reports the catalog name when an ephemeral disk name/id differs", async () => {
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
       activeWorkspaceName: "dev",
       getConfig: () => makeConfig({ id: "ws_opaque" }),
       setConfigField: vi.fn(),
@@ -266,6 +277,7 @@ describe("workspace service handler", () => {
   it("units.inspector returns the inspector URL for a matching unit", async () => {
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       listUnits: vi.fn(() => [
@@ -298,6 +310,7 @@ describe("workspace service handler", () => {
     };
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       listUnitLogs: () => [log],
@@ -318,6 +331,7 @@ describe("workspace service handler", () => {
     const bakeAppDist = vi.fn(() => ({ build: { key: "app-key" } }));
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       bakeAppDist,
@@ -341,6 +355,7 @@ describe("workspace service handler", () => {
     const rollbackAppVersion = vi.fn(() => ({ ok: true }));
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       listUnits: vi.fn(() => [
@@ -368,6 +383,7 @@ describe("workspace service handler", () => {
     const rollbackAppVersion = vi.fn(() => ({ ok: true }));
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       listUnits: vi.fn(() => [
@@ -413,6 +429,7 @@ describe("workspace service handler", () => {
     const setConfigField = vi.fn();
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField,
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
@@ -429,6 +446,7 @@ describe("workspace service handler", () => {
     const setConfigField = vi.fn();
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField,
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
@@ -464,6 +482,7 @@ describe("workspace service handler", () => {
     ];
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       listRecurringJobs: vi.fn(() => jobs),
@@ -490,6 +509,32 @@ describe("workspace service agent resources", () => {
 
   // Build a service bound to a fresh tmpdir so filesystem reads are hermetic.
   function makeFsService(wsPath: string) {
+    const skillPaths = (): string[] => {
+      const result: string[] = [];
+      for (const section of readdirSync(wsPath, { withFileTypes: true })) {
+        if (!section.isDirectory()) continue;
+        const flatSkill = path.join(wsPath, section.name, "SKILL.md");
+        try {
+          readFileSync(flatSkill);
+          result.push(`/${section.name}/SKILL.md`);
+        } catch {
+          // No flat skill in this section.
+        }
+        for (const repo of readdirSync(path.join(wsPath, section.name), {
+          withFileTypes: true,
+        })) {
+          if (!repo.isDirectory()) continue;
+          const nestedSkill = path.join(wsPath, section.name, repo.name, "SKILL.md");
+          try {
+            readFileSync(nestedSkill);
+            result.push(`/${section.name}/${repo.name}/SKILL.md`);
+          } catch {
+            // No skill at this repo root.
+          }
+        }
+      }
+      return result;
+    };
     return createWorkspaceService({
       workspace: {
         path: wsPath,
@@ -501,6 +546,15 @@ describe("workspace service agent resources", () => {
         cachePath: path.join(wsPath, ".cache"),
         agentsPath: path.join(wsPath, "agents"),
         projectsPath: path.join(wsPath, "projects"),
+      },
+      contextFiles: {
+        readFile: async (_ctx, filePath) =>
+          readFileSync(path.join(wsPath, filePath.replace(/^\/+/, "")), "utf8"),
+        glob: async (_ctx, pattern) =>
+          skillPaths().filter((skillPath) => {
+            const depth = skillPath.replace(/^\/+/, "").split("/").length;
+            return pattern === "*/SKILL.md" ? depth === 2 : depth === 3;
+          }),
       },
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),

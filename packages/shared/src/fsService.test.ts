@@ -1253,6 +1253,108 @@ describe("FsService", () => {
       ]);
     });
 
+    it("records exact semantic lineage for names and search results before returning them", async () => {
+      const { bridge } = makeMockBridge();
+      const observed: Array<{
+        key: string;
+        via: string;
+        classification: "derived";
+        derivedClass: "internal" | "external";
+      }> = [];
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion: async (_ctx, input) => {
+          observed.push(input);
+        },
+      });
+      const contextId = "ctx-semantic-search-ingestion";
+      const agent = makeAgentCtx("semantic-search-ingestion", contextId);
+      const writer = makeWorkerCtx("do:semantic-search-ingestion-writer");
+      registerContext(writer.caller.runtime.id, "do", contextId);
+      await svc.handleCall(writer, "writeFile", [
+        "/packages/lib/match.txt",
+        "needle in semantic content\n",
+      ]);
+      await svc.handleCall(writer, "writeFile", [
+        "/packages/lib/other.txt",
+        "other semantic content\n",
+      ]);
+      const projectedRoot = path.join(tmpRoot, contextId, "packages", "lib");
+      mkdirSync(projectedRoot, { recursive: true });
+      writeFileSync(path.join(projectedRoot, "match.txt"), "needle in semantic content\n");
+      writeFileSync(path.join(projectedRoot, "other.txt"), "other semantic content\n");
+      _setRipgrepPathForTests(null);
+
+      await expect(svc.handleCall(agent, "readdir", ["/packages/lib"])).resolves.toEqual([
+        "match.txt",
+        "other.txt",
+      ]);
+      const listingRecords = observed.filter((entry) => entry.via === "fs-readdir");
+      expect(listingRecords).toHaveLength(2);
+      expect(listingRecords.map((entry) => entry.key)).toEqual([
+        expect.stringContaining("match.txt@"),
+        expect.stringContaining("other.txt@"),
+      ]);
+
+      const grep = (await svc.handleCall(agent, "grep", [
+        "needle",
+        { path: "/packages/lib" },
+      ])) as GrepResult;
+      expect(grep.matches.map((match) => match.file)).toEqual(["/packages/lib/match.txt"]);
+      expect(observed.filter((entry) => entry.via === "fs-grep")).toEqual([
+        expect.objectContaining({ key: expect.stringContaining("match.txt@") }),
+      ]);
+
+      await expect(
+        svc.handleCall(agent, "glob", ["match.*", { path: "/packages/lib" }])
+      ).resolves.toEqual(["/packages/lib/match.txt"]);
+      expect(observed.filter((entry) => entry.via === "fs-glob")).toEqual([
+        expect.objectContaining({ key: expect.stringContaining("match.txt@") }),
+      ]);
+    });
+
+    it("records a managed handle's exact semantic lineage on its first byte read", async () => {
+      const { bridge } = makeMockBridge();
+      const observed: Array<{
+        key: string;
+        via: string;
+        classification: "derived";
+        derivedClass: "internal" | "external";
+      }> = [];
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion: async (_ctx, input) => {
+          observed.push(input);
+        },
+      });
+      const contextId = "ctx-semantic-handle-ingestion";
+      const agent = makeAgentCtx("semantic-handle-ingestion", contextId);
+      const writer = makeWorkerCtx("do:semantic-handle-ingestion-writer");
+      registerContext(writer.caller.runtime.id, "do", contextId);
+      await svc.handleCall(writer, "writeFile", ["/packages/lib/handle.txt", "semantic bytes"]);
+      const projected = path.join(tmpRoot, contextId, "packages", "lib", "handle.txt");
+      mkdirSync(path.dirname(projected), { recursive: true });
+      writeFileSync(projected, "semantic bytes");
+
+      const { handleId } = (await svc.handleCall(agent, "open", [
+        "/packages/lib/handle.txt",
+        "r",
+      ])) as { handleId: number };
+      expect(observed).toEqual([]);
+
+      await svc.handleCall(agent, "handleRead", [handleId, 8, 0]);
+      await svc.handleCall(agent, "handleRead", [handleId, 8, 8]);
+      expect(observed).toEqual([
+        {
+          key: expect.stringContaining("handle.txt@"),
+          via: "fs-handle-read",
+          classification: "derived",
+          derivedClass: "internal",
+        },
+      ]);
+      await svc.handleCall(agent, "handleClose", [handleId]);
+    });
+
     it("leaves scratch-path writes (.tmp) on direct disk", async () => {
       const { bridge, applyCalls } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
