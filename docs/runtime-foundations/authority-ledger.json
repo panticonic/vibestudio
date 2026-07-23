@@ -11437,6 +11437,48 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:releaseSubscription",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "releaseSubscription",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "workspace-service:<live-declaration>",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,rpc:releaseSubscription),workspace-member),allOf(capability(code,rpc:releaseSubscription),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:removeMember",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/pubsub-channel/channel-do.ts",

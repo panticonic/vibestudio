@@ -3810,6 +3810,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/workers/pubsub-channel/channel-do.ts:releaseSubscription",
+    rpcPlane: "workspace-do",
+    capability: "workspace-service:<live-declaration>",
+    authorityPrincipals: ["code", "user"],
+    owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    source: "workers/pubsub-channel",
+    method: "releaseSubscription",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    },
+  },
+  {
     id: "direct:workspace/workers/pubsub-channel/channel-do.ts:removeMember",
     rpcPlane: "workspace-do",
     capability: "channel.members.remove",
